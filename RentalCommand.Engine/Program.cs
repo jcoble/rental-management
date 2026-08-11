@@ -222,6 +222,7 @@ builder.Services.AddScoped<IRecurringMaintenanceService, RecurringMaintenanceSer
 // Online-payments autopay charging (gated: no-op unless Stripe is configured).
 builder.Services.Configure<StripeConfig>(builder.Configuration.GetSection(StripeConfig.SectionName));
 builder.Services.AddScoped<IAutopayChargeService, AutopayChargeService>();
+builder.Services.AddScoped<IAutopayProviderClient, StripeAutopayProviderClient>();
 builder.Services.AddScoped<ILateFeeService, LateFeeService>();
 builder.Services.AddScoped<ITenantNoticeCandidateGenerationService, TenantNoticeCandidateGenerationService>();
 builder.Services.AddScoped<ITenantNoticeDraftSetStore, TenantNoticeDraftSetStore>();

@@ -136,6 +136,7 @@ internal static class TenantAccountModelConfiguration
             entity.Property(e => e.PreparedAtUtc).HasDefaultValueSql("clock_timestamp()");
             entity.Property(e => e.UpdatedAtUtc).HasDefaultValueSql("clock_timestamp()");
             entity.Property(e => e.ClaimOwner).HasMaxLength(200);
+            entity.Property(e => e.ProviderFenceToken);
             entity.Property(e => e.AttemptCount).HasDefaultValue(0);
 
             entity.HasIndex(e => e.PublicId).IsUnique();

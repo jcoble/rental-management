@@ -20,6 +20,7 @@ public sealed class AutopayChargeService : IAutopayChargeService
     private readonly StripeConfig _config;
     private readonly TimeProvider _timeProvider;
     private readonly IAtomicUnitOfWork _atomicUnitOfWork;
+    private readonly IAutopayProviderClient _provider;
     private readonly ILogger<AutopayChargeService> _logger;
 
     private static readonly AtomicJsonResultCodec<PrepareProviderPaymentCreateResult> PrepareCodec =
@@ -28,19 +29,23 @@ public sealed class AutopayChargeService : IAutopayChargeService
         new("finalize-provider-payment-create-result.v1");
     private static readonly AtomicJsonResultCodec<FailProviderPaymentCreateResult> FailCodec =
         new("fail-provider-payment-create-result.v1");
+    private static readonly AtomicJsonResultCodec<SubmitProviderPaymentCreateResult> SubmitCodec =
+        new("submit-provider-payment-create-result.v1");
 
     public AutopayChargeService(
         RentalCommandDbContext db,
         IOptions<StripeConfig> config,
         TimeProvider timeProvider,
         IAtomicUnitOfWork atomicUnitOfWork,
-        ILogger<AutopayChargeService> logger)
+        ILogger<AutopayChargeService> logger,
+        IAutopayProviderClient? provider = null)
     {
         _db = db;
         _config = config.Value;
         _timeProvider = timeProvider;
         _atomicUnitOfWork = atomicUnitOfWork;
         _logger = logger;
+        _provider = provider ?? new StripeAutopayProviderClient(config);
     }
 
     public async Task<int> ChargeDueAsync(CancellationToken ct = default)
@@ -52,13 +57,16 @@ public sealed class AutopayChargeService : IAutopayChargeService
         }
 
         var now = _timeProvider.UtcNow();
+        var deferredChargeIds = await ReconcileUnresolvedAsync(now, ct);
         // Eligibility, open-balance filtering, duplicate suppression, ordering, and paging remain
         // in this one translated SQL statement. The bounded materialized rows are remote-work inputs.
-        var candidates = await BuildCandidateQuery(_db).ToListAsync(ct);
+        var candidates = await BuildCandidateQuery(_db, deferredChargeIds).ToListAsync(ct);
         return await ChargeCandidatesAsync(candidates, now, ct);
     }
 
-    internal static IQueryable<AutopayChargeCandidate> BuildCandidateQuery(RentalCommandDbContext db) =>
+    internal static IQueryable<AutopayChargeCandidate> BuildCandidateQuery(
+        RentalCommandDbContext db,
+        IReadOnlyCollection<long>? excludedChargeIds = null) =>
         (from balance in db.TenantChargeBalanceProjections.AsNoTracking()
             join charge in db.TenantLedgerEntries.AsNoTracking()
                 on new { Id = balance.TenantLedgerEntryId, balance.PortfolioId, balance.TenantAccountId }
@@ -76,10 +84,12 @@ public sealed class AutopayChargeService : IAutopayChargeService
                 && account.ClosedAtUtc == null
                 && enrollment.CanceledAtUtc == null
                 && enrollment.Provider == "stripe"
+                && (excludedChargeIds == null || !excludedChargeIds.Contains(charge.Id))
                 && !db.TenantPaymentAttempts.Any(paymentAttempt =>
                     paymentAttempt.Provider == "stripe"
                     && paymentAttempt.ChargeLedgerEntryId == charge.Id
                     && (paymentAttempt.State == TenantPaymentAttemptState.Submitted
+                        || paymentAttempt.State == TenantPaymentAttemptState.Prepared
                         || paymentAttempt.State == TenantPaymentAttemptState.Succeeded))
             orderby charge.DueOn, charge.TenantAccountId, charge.Id
          select new AutopayChargeCandidate(
@@ -121,62 +131,10 @@ public sealed class AutopayChargeService : IAutopayChargeService
                 || string.IsNullOrWhiteSpace(prepared.Value.ProviderCustomerId)
                 || string.IsNullOrWhiteSpace(prepared.Value.ProviderPaymentMethodId))
                 continue;
-
-            try
-            {
-                var intent = await new PaymentIntentService().CreateAsync(new PaymentIntentCreateOptions
-                {
-                    Amount = (long)(prepared.Value.Amount * 100m),
-                    Currency = prepared.Value.Currency.ToLowerInvariant(),
-                    Customer = prepared.Value.ProviderCustomerId,
-                    PaymentMethod = prepared.Value.ProviderPaymentMethodId,
-                    Confirm = true,
-                    OffSession = true,
-                    Metadata = new Dictionary<string, string>
-                    {
-                        ["portfolioId"] = candidate.PortfolioId.ToString(),
-                        ["tenantAccountId"] = candidate.TenantAccountId.ToString(),
-                        ["chargeLedgerEntryId"] = candidate.ChargeLedgerEntryId.ToString(),
-                        ["paymentAttemptId"] = prepared.Value.PaymentAttemptId.ToString(),
-                        ["autopay"] = "1",
-                    },
-                }, new RequestOptions
-                {
-                    ApiKey = _config.SecretKey,
-                    IdempotencyKey = idempotencyKey,
-                }, ct);
-
-                var state = intent.Status switch
-                {
-                    "succeeded" => TenantPaymentAttemptState.Succeeded,
-                    "canceled" => TenantPaymentAttemptState.Canceled,
-                    _ => TenantPaymentAttemptState.Submitted,
-                };
-                await _atomicUnitOfWork.ExecuteAsync(
-                    new AtomicCommandIdentity("payments.provider-create.finalize", idempotencyKey),
-                    new FinalizeProviderPaymentCreateCommand(candidate.PortfolioId,
-                        candidate.TenantAccountId, prepared.Value.PaymentAttemptId, "stripe",
-                        idempotencyKey, intent.Id, state, null, _timeProvider.UtcNow()),
-                    FinalizeCodec,
-                    ct);
+            if (await ChargePreparedAttemptAsync(prepared.Value.PaymentAttemptId,
+                    candidate.PortfolioId, candidate.TenantAccountId, prepared.Value.ProviderCustomerId!,
+                    prepared.Value.ProviderPaymentMethodId!, now, ct))
                 charged++;
-                _logger.LogInformation(
-                    "Autopay submitted tenant account {TenantAccountId} charge {ChargeId} through PaymentIntent {IntentId} ({Status})",
-                    candidate.TenantAccountId, candidate.ChargeLedgerEntryId, intent.Id, intent.Status);
-            }
-            catch (StripeException ex)
-            {
-                await _atomicUnitOfWork.ExecuteAsync(
-                    new AtomicCommandIdentity("payments.provider-create.fail", idempotencyKey),
-                    new FailProviderPaymentCreateCommand(candidate.PortfolioId,
-                        candidate.TenantAccountId, prepared.Value.PaymentAttemptId, "stripe",
-                        idempotencyKey, ex.StripeError?.Code, ex.Message, _timeProvider.UtcNow()),
-                    FailCodec,
-                    ct);
-                _logger.LogWarning(ex,
-                    "Autopay provider call failed for tenant account {TenantAccountId} charge {ChargeId}",
-                    candidate.TenantAccountId, candidate.ChargeLedgerEntryId);
-            }
         }
 
         if (charged > 0)
@@ -186,4 +144,136 @@ public sealed class AutopayChargeService : IAutopayChargeService
 
     internal static string BuildIdempotencyKey(long chargeLedgerEntryId, int attemptNonce) =>
         $"autopay:tenant-charge:{chargeLedgerEntryId}:attempt:{attemptNonce}";
+
+    private async Task<IReadOnlySet<long>> ReconcileUnresolvedAsync(DateTime now, CancellationToken ct)
+    {
+        var deferredChargeIds = new HashSet<long>();
+        var unresolved = await (
+            from attempt in _db.TenantPaymentAttempts.AsNoTracking()
+            join enrollment in _db.TenantAutopayEnrollments.AsNoTracking()
+                on new { attempt.TenantAccountId, attempt.PortfolioId }
+                equals new { TenantAccountId = enrollment.TenantAccountId, enrollment.PortfolioId }
+            where attempt.Provider == "stripe"
+                && attempt.AttemptType == TenantPaymentAttemptType.Charge
+                && (attempt.State == TenantPaymentAttemptState.Prepared
+                    || attempt.State == TenantPaymentAttemptState.Submitted)
+                && enrollment.Provider == "stripe"
+                && enrollment.CanceledAtUtc == null
+                && enrollment.ProviderCustomerId != null
+                && enrollment.ProviderPaymentMethodId != null
+            select new AutopayUnresolvedAttempt(attempt,
+                enrollment.ProviderCustomerId!, enrollment.ProviderPaymentMethodId!))
+            .Take(BatchSize).ToListAsync(ct);
+
+        foreach (var item in unresolved)
+        {
+            ct.ThrowIfCancellationRequested();
+            var providerPayment = await _provider.ReconcileAsync(item.Attempt, ct);
+            if (providerPayment is not null)
+            {
+                deferredChargeIds.Add(item.Attempt.ChargeLedgerEntryId!.Value);
+                var submitted = await SubmitAttemptAsync(item.Attempt, now, ct);
+                await FinalizeAttemptAsync(item.Attempt, providerPayment, submitted.Value.ProviderFenceToken, ct);
+                continue;
+            }
+
+            if (item.Attempt.PreparedAtUtc <= now.AddHours(-24))
+            {
+                var fail = await _atomicUnitOfWork.ExecuteAsync(
+                    new AtomicCommandIdentity("payments.provider-create.fail", item.Attempt.IdempotencyKey),
+                    new FailProviderPaymentCreateCommand(item.Attempt.PortfolioId,
+                        item.Attempt.TenantAccountId, item.Attempt.Id, item.Attempt.Provider,
+                        item.Attempt.IdempotencyKey, "PROVIDER_RECONCILE_EXPIRED",
+                        "Provider reconciliation found no accepted payment after 24 hours.", now,
+                        item.Attempt.ProviderFenceToken),
+                    FailCodec, ct);
+                _logger.LogWarning("Autopay attempt {AttemptId} expired without provider reconciliation ({State}).",
+                    item.Attempt.Id, fail.Value.State);
+                deferredChargeIds.Add(item.Attempt.ChargeLedgerEntryId!.Value);
+                continue;
+            }
+
+            // A Prepared attempt has never crossed the provider boundary. Reuse its exact key;
+            // it must be submitted before the first create, never replaced by a count-derived key.
+            if (item.Attempt.State == TenantPaymentAttemptState.Prepared)
+                await ChargePreparedAttemptAsync(item.Attempt.Id, item.Attempt.PortfolioId,
+                    item.Attempt.TenantAccountId, item.ProviderCustomerId, item.ProviderPaymentMethodId,
+                    now, ct);
+        }
+
+        return deferredChargeIds;
+    }
+
+    private async Task<bool> ChargePreparedAttemptAsync(
+        long attemptId, int portfolioId, int tenantAccountId, string customerId,
+        string paymentMethodId, DateTime now, CancellationToken ct)
+    {
+        var attempt = await _db.TenantPaymentAttempts.AsNoTracking()
+            .SingleAsync(row => row.Id == attemptId, ct);
+        var submitted = await SubmitAttemptAsync(attempt, now, ct);
+        if (submitted.Value.Outcome != SubmitProviderPaymentCreateOutcome.Submitted)
+            return false;
+
+        attempt = await _db.TenantPaymentAttempts.AsNoTracking()
+            .SingleAsync(row => row.Id == attemptId, ct);
+        try
+        {
+            var payment = await _provider.CreateAsync(attempt, customerId, paymentMethodId, ct);
+            await FinalizeAttemptAsync(attempt, payment, submitted.Value.ProviderFenceToken, ct);
+            _logger.LogInformation(
+                "Autopay submitted tenant account {TenantAccountId} charge {ChargeId} through provider object {ProviderPaymentId} ({Status})",
+                tenantAccountId, attempt.ChargeLedgerEntryId, payment.ProviderPaymentId, payment.Status);
+            return true;
+        }
+        catch (StripeException ex) when (IsDefinitiveProviderFailure(ex))
+        {
+            await _atomicUnitOfWork.ExecuteAsync(
+                new AtomicCommandIdentity("payments.provider-create.fail", attempt.IdempotencyKey),
+                new FailProviderPaymentCreateCommand(portfolioId, tenantAccountId, attempt.Id,
+                    "stripe", attempt.IdempotencyKey, ex.StripeError?.Code, ex.Message,
+                    _timeProvider.UtcNow(), submitted.Value.ProviderFenceToken),
+                FailCodec, ct);
+            _logger.LogWarning(ex, "Autopay provider definitively declined attempt {AttemptId}", attempt.Id);
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // An unknown/transport failure is ambiguous. Leave Submitted fenced so the next sweep
+            // reconciles by metadata before any new create; never mark it Failed optimistically.
+            _logger.LogWarning(ex, "Autopay provider outcome is ambiguous for attempt {AttemptId}; reconciliation will retry.", attempt.Id);
+            return false;
+        }
+    }
+
+    private async Task<AtomicCommandOutcome<SubmitProviderPaymentCreateResult>> SubmitAttemptAsync(
+        TenantPaymentAttempt attempt, DateTime now, CancellationToken ct) =>
+        await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-create.submit", attempt.IdempotencyKey),
+            new SubmitProviderPaymentCreateCommand(attempt.PortfolioId, attempt.TenantAccountId,
+                attempt.Id, attempt.Provider, attempt.IdempotencyKey, now),
+            SubmitCodec, ct);
+
+    private async Task FinalizeAttemptAsync(
+        TenantPaymentAttempt attempt, AutopayProviderPayment payment, Guid? fence, CancellationToken ct)
+    {
+        var state = payment.Status switch
+        {
+            "succeeded" => TenantPaymentAttemptState.Succeeded,
+            "canceled" => TenantPaymentAttemptState.Canceled,
+            _ => TenantPaymentAttemptState.Submitted,
+        };
+        await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-create.finalize", attempt.IdempotencyKey),
+            new FinalizeProviderPaymentCreateCommand(attempt.PortfolioId, attempt.TenantAccountId,
+                attempt.Id, attempt.Provider, attempt.IdempotencyKey, payment.ProviderPaymentId,
+                state, null, _timeProvider.UtcNow(), fence),
+            FinalizeCodec, ct);
+    }
+
+    private static bool IsDefinitiveProviderFailure(StripeException ex) =>
+        ex.StripeError?.Type is "card_error" or "invalid_request_error"
+        && ex.StripeError?.Code is not "idempotency_key_in_use";
+
+    private sealed record AutopayUnresolvedAttempt(
+        TenantPaymentAttempt Attempt, string ProviderCustomerId, string ProviderPaymentMethodId);
 }

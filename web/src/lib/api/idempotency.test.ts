@@ -59,6 +59,30 @@ describe('idempotentMutation', () => {
 		assert.notEqual(replacementKey, abandonedKey);
 	});
 
+	it('releases the browser key only after the server returns a terminal reconciled attempt', async () => {
+		const scope = `idempotency-test:terminal:${crypto.randomUUID()}`;
+		let firstKey = '';
+		await assert.rejects(
+			idempotentMutation(scope, async (key) => {
+				firstKey = key;
+				throw {
+					status: 409,
+					extensions: {
+					paymentAttemptId: 44,
+					attemptState: 'Failed'
+					}
+				};
+			})
+		);
+
+		let replacementKey = '';
+		await idempotentMutation(scope, async (key) => {
+			replacementKey = key;
+			return 'new attempt';
+		});
+		assert.notEqual(replacementKey, firstKey);
+	});
+
 	it('sends the retained operation key as Idempotency-Key from every money endpoint', () => {
 		for (const [path, source] of endpointSources) {
 			assert.match(source, /idempotentMutation\(/, path);

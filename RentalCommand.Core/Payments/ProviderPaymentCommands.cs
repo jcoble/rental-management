@@ -29,7 +29,36 @@ public sealed record PrepareProviderPaymentCreateResult(
     string Provider,
     string IdempotencyKey,
     string? ProviderCustomerId,
-    string? ProviderPaymentMethodId);
+    string? ProviderPaymentMethodId,
+    TenantPaymentAttemptState State = TenantPaymentAttemptState.Prepared,
+    Guid? ProviderFenceToken = null,
+    string? ProviderPaymentId = null,
+    [property: AtomicFingerprintIgnore] DateTime? PreparedAtUtc = null);
+
+/// <summary>Claims the durable charge reservation immediately before a provider create.</summary>
+public sealed record SubmitProviderPaymentCreateCommand(
+    int PortfolioId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    string Provider,
+    string IdempotencyKey,
+    [property: AtomicFingerprintIgnore] DateTime SubmittedAtUtc) : IAtomicCommandData;
+
+public enum SubmitProviderPaymentCreateOutcome { Submitted, AlreadySubmitted, Succeeded, Failed, Canceled, NotFound }
+
+public sealed record SubmitProviderPaymentCreateResult(
+    SubmitProviderPaymentCreateOutcome Outcome,
+    int PortfolioId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    TenantPaymentAttemptState State,
+    decimal Amount,
+    string Currency,
+    string Provider,
+    string IdempotencyKey,
+    Guid? ProviderFenceToken,
+    string? ProviderPaymentId = null,
+    [property: AtomicFingerprintIgnore] DateTime? PreparedAtUtc = null);
 
 /// <summary>Creates a durable verification attempt before opening provider setup.</summary>
 public sealed record PrepareProviderAutopaySetupCommand(
@@ -52,7 +81,10 @@ public sealed record PrepareProviderAutopaySetupResult(
     int ActorUserId,
     long PaymentAttemptId,
     string Provider,
-    string IdempotencyKey);
+    string IdempotencyKey,
+    TenantPaymentAttemptState State = TenantPaymentAttemptState.Prepared,
+    Guid? ProviderFenceToken = null,
+    string? ProviderPaymentId = null);
 
 /// <summary>Durably binds the provider receipt returned outside the database transaction.</summary>
 public sealed record FinalizeProviderPaymentCreateCommand(
@@ -64,7 +96,8 @@ public sealed record FinalizeProviderPaymentCreateCommand(
     string ProviderPaymentId,
     TenantPaymentAttemptState State,
     string? FailureReason,
-    [property: AtomicFingerprintIgnore] DateTime RecordedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime RecordedAtUtc,
+    Guid? ProviderFenceToken = null) : IAtomicCommandData;
 
 public enum FinalizeProviderPaymentCreateOutcome { Applied, NotFound, AlreadyFinalized }
 
@@ -86,10 +119,30 @@ public sealed record FailProviderPaymentCreateCommand(
     string IdempotencyKey,
     string? FailureCode,
     string FailureReason,
-    [property: AtomicFingerprintIgnore] DateTime RecordedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime RecordedAtUtc,
+    Guid? ProviderFenceToken = null) : IAtomicCommandData;
 
 public sealed record FailProviderPaymentCreateResult(
     bool Found,
+    int PortfolioId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    TenantPaymentAttemptState State);
+
+/// <summary>Explicitly abandons an unresolved prepared attempt after provider reconciliation.</summary>
+public sealed record AbandonProviderPaymentAttemptCommand(
+    int PortfolioId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    string Provider,
+    string IdempotencyKey,
+    string Reason,
+    [property: AtomicFingerprintIgnore] DateTime AbandonedAtUtc) : IAtomicCommandData;
+
+public enum AbandonProviderPaymentAttemptOutcome { Applied, AlreadyTerminal, NotFound, ReconciliationRequired }
+
+public sealed record AbandonProviderPaymentAttemptResult(
+    AbandonProviderPaymentAttemptOutcome Outcome,
     int PortfolioId,
     int TenantAccountId,
     long PaymentAttemptId,

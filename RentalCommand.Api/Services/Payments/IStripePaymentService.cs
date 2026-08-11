@@ -52,29 +52,63 @@ public interface IStripePaymentService
 /// <summary>Result returned by the hosted-Checkout creation methods.</summary>
 public class CheckoutResult
 {
-    public enum Outcome { Ok, NotEnabled, NotFound }
+    public enum Outcome { Ok, NotEnabled, NotFound, AttemptPending, AttemptCanceled, AttemptFailed }
 
     public Outcome Result { get; init; }
     public string? CheckoutUrl { get; init; }
+    public long? PaymentAttemptId { get; init; }
+    public string? ProviderPaymentId { get; init; }
+    public string? AttemptState { get; init; }
 
     public static CheckoutResult NotEnabled() => new() { Result = Outcome.NotEnabled };
     public static CheckoutResult NotFound() => new() { Result = Outcome.NotFound };
-    public static CheckoutResult Ok(string checkoutUrl) => new() { Result = Outcome.Ok, CheckoutUrl = checkoutUrl };
+    public static CheckoutResult Ok(string checkoutUrl, long? paymentAttemptId = null) => new()
+    {
+        Result = Outcome.Ok, CheckoutUrl = checkoutUrl, PaymentAttemptId = paymentAttemptId,
+    };
+    public static CheckoutResult Pending(long attemptId, string state, string? providerPaymentId = null) => new()
+    {
+        Result = Outcome.AttemptPending, PaymentAttemptId = attemptId,
+        AttemptState = state, ProviderPaymentId = providerPaymentId,
+    };
+    public static CheckoutResult Canceled(long attemptId) => new()
+    {
+        Result = Outcome.AttemptCanceled, PaymentAttemptId = attemptId, AttemptState = "Canceled",
+    };
+    public static CheckoutResult Failed(long attemptId) => new()
+    {
+        Result = Outcome.AttemptFailed, PaymentAttemptId = attemptId, AttemptState = "Failed",
+    };
 }
 
 /// <summary>Result returned by <see cref="IStripePaymentService.CreatePaymentIntentAsync"/>.</summary>
 public class CreateIntentResult
 {
-    public enum Outcome { Ok, NotEnabled, NotFound }
+    public enum Outcome { Ok, NotEnabled, NotFound, AttemptPending, AttemptCanceled, AttemptFailed }
 
     public Outcome Result { get; init; }
     public string? ClientSecret { get; init; }
     public string? PublishableKey { get; init; }
     public long? PaymentAttemptId { get; init; }
+    public string? AttemptState { get; init; }
+    public string? ProviderPaymentId { get; init; }
 
     public static CreateIntentResult NotEnabled() => new() { Result = Outcome.NotEnabled };
     public static CreateIntentResult NotFound() => new() { Result = Outcome.NotFound };
     public static CreateIntentResult Ok(string clientSecret, string? publishableKey, long paymentAttemptId) =>
         new() { Result = Outcome.Ok, ClientSecret = clientSecret, PublishableKey = publishableKey,
             PaymentAttemptId = paymentAttemptId };
+    public static CreateIntentResult Pending(long attemptId, string state, string? providerPaymentId = null) => new()
+    {
+        Result = Outcome.AttemptPending, PaymentAttemptId = attemptId, AttemptState = state,
+        ProviderPaymentId = providerPaymentId,
+    };
+    public static CreateIntentResult Canceled(long attemptId) => new()
+    {
+        Result = Outcome.AttemptCanceled, PaymentAttemptId = attemptId, AttemptState = "Canceled",
+    };
+    public static CreateIntentResult Failed(long attemptId) => new()
+    {
+        Result = Outcome.AttemptFailed, PaymentAttemptId = attemptId, AttemptState = "Failed",
+    };
 }

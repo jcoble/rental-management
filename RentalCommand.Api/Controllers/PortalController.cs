@@ -271,6 +271,28 @@ public class PortalController : AuthenticatedPortfolioControllerBase
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
             CheckoutResult.Outcome.NotFound =>
                 NotFound(new { error = "Tenant account charge not found" }),
+            CheckoutResult.Outcome.AttemptPending =>
+                Conflict(new
+                {
+                    error = "This payment is still being reconciled. Resume it after the provider status is confirmed.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                    providerPaymentId = result.ProviderPaymentId,
+                }),
+            CheckoutResult.Outcome.AttemptCanceled =>
+                Conflict(new
+                {
+                    error = "This payment reservation was canceled by another account movement. Start a new payment attempt.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                }),
+            CheckoutResult.Outcome.AttemptFailed =>
+                Conflict(new
+                {
+                    error = "This payment attempt failed before provider acceptance. Start a new payment attempt.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                }),
             _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
         };
     }
@@ -331,6 +353,15 @@ public class PortalController : AuthenticatedPortfolioControllerBase
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
             CheckoutResult.Outcome.NotFound =>
                 NotFound(new { error = "Tenant account not found" }),
+            CheckoutResult.Outcome.AttemptPending or CheckoutResult.Outcome.AttemptCanceled
+                or CheckoutResult.Outcome.AttemptFailed =>
+                Conflict(new
+                {
+                    error = "This payment setup is still being reconciled or has ended. Resume only after provider status is confirmed.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                    providerPaymentId = result.ProviderPaymentId,
+                }),
             _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
         };
     }

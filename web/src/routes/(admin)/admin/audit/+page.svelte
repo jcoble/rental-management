@@ -25,6 +25,7 @@
 	const OPERATIONS = ['Created', 'Updated', 'Deleted', 'Approved', 'Rejected'] as const;
 	const ENTITY_TYPES = [
 		'Payment',
+		'TenantAccount',
 		'Expense',
 		'LeaseManagement',
 		'LeaseAgreement',
@@ -267,6 +268,22 @@
 
 								<!-- Forensic detail: simple changes plus reason, source, and raw before/after JSON -->
 								<div class="space-y-3 border-t border-border bg-muted/20 px-4 py-3 text-xs">
+									{#if entry.isProviderPaymentDeadLetter}
+										<div class="rounded border border-destructive/40 bg-destructive/5 p-2" data-testid="admin-audit-provider-dead-letter-{entry.id}">
+											<p class="font-semibold text-destructive">Provider payment dead letter</p>
+											<div class="mt-1 grid gap-x-3 gap-y-1 md:grid-cols-2">
+												<span>Event id: <strong>{entry.providerEventId || 'Not recorded'}</strong></span>
+												<span>PaymentIntent: <strong>{entry.paymentIntentId || 'Not recorded'}</strong></span>
+												<span>Amount: <strong>{entry.paymentAmount ?? 'Not recorded'} {entry.paymentCurrency || ''}</strong></span>
+													<span>Target charge: <strong>{entry.targetChargeLedgerEntryId ?? 'Not recorded'}</strong></span>
+													<span>Payment attempt: <strong>{entry.paymentAttemptId ?? 'Not recorded'}</strong></span>
+													<span>Provider received: <strong>{entry.providerReceivedAtUtc ? formatAbsolute(entry.providerReceivedAtUtc) : 'Not recorded'}</strong></span>
+													<span>Dead-lettered: <strong>{entry.providerDeadLetteredAtUtc ? formatAbsolute(entry.providerDeadLetteredAtUtc) : 'Not recorded'}</strong></span>
+													<span>Recovery: <strong>{entry.recoveryStatus || 'DeadLettered'}</strong></span>
+												</div>
+													<p class="mt-1 text-muted-foreground">Recovery action: {entry.recoveryAction || 'Reconcile the provider object before retrying.'}</p>
+										</div>
+									{/if}
 									<div class="grid gap-1 md:grid-cols-2">
 										<div data-testid="admin-audit-reason-{entry.id}">
 											<span class="font-semibold text-muted-foreground">Change reason:</span>

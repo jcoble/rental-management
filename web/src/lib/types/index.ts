@@ -1619,6 +1619,17 @@ export interface AdminAuditEntry extends AuditEntry {
 	oldValues?: string | null;
 	newValues?: string | null;
 	changeReason?: string | null;
+	isProviderPaymentDeadLetter?: boolean;
+	providerEventId?: string | null;
+	paymentIntentId?: string | null;
+	paymentAmount?: number | null;
+	paymentCurrency?: string | null;
+	targetChargeLedgerEntryId?: number | null;
+	paymentAttemptId?: number | null;
+	providerReceivedAtUtc?: string | null;
+	providerDeadLetteredAtUtc?: string | null;
+	recoveryStatus?: string | null;
+	recoveryAction?: string | null;
 }
 
 /**
