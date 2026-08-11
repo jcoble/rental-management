@@ -24,6 +24,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { ArrowRight, FileText, ScanLine, Users } from '@lucide/svelte';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 
 	let { dashboard, onScan }: { dashboard: UnitDashboard; onScan: () => void } = $props();
 	const queryClient = useQueryClient();
@@ -38,7 +39,7 @@
 	let accessDispositions = $state<Record<number, CancelPlannedAccessDisposition>>({});
 	let destinationUnitValue = $state('');
 	let destinationTemplateId = $state(0);
-	let effectiveOn = $state(new Date().toISOString().slice(0, 10));
+	let effectiveOn = $state(businessDateOrToday(undefined));
 	let giveDestinationPossessionNow = $state(false);
 	let plannedDestinationPossessionAtUtc = $state('');
 	let possessionAgreementExceptionReason = $state('');
@@ -66,6 +67,7 @@
 		queryFn: () => documentTemplates.listPage({ kind: 'Lease', status: 'Active', sort: 'name', take: 100 }),
 		enabled: transferOpen,
 	}));
+	const transferBusinessDate = $derived(businessDateOrToday(selected?.businessDate));
 
 	$effect(() => {
 		const accesses = cancelContextQuery.data?.activeTenantUserAccesses ?? [];
@@ -149,7 +151,10 @@
 	function choose(relationship: LeaseManagementSummary, action: 'cancel' | 'transfer' | 'close') {
 		selected = relationship;
 		if (action === 'cancel') cancelOpen = true;
-		if (action === 'transfer') transferOpen = true;
+		if (action === 'transfer') {
+			effectiveOn = businessDateOrToday(relationship.businessDate);
+			transferOpen = true;
+		}
 		if (action === 'close') closeOpen = true;
 	}
 </script>
@@ -289,7 +294,7 @@
 				</Select.Root>
 			</label>
 		{/if}
-		<label class="block space-y-1 text-sm"><span>Move effective date</span><DatePicker bind:value={effectiveOn} /></label>
+		<label class="block space-y-1 text-sm"><span>Move effective date</span><DatePicker bind:value={effectiveOn} todayValue={transferBusinessDate} /></label>
 		<label class="block space-y-1 text-sm"><span>Planned key handoff</span><DateTimePicker bind:value={plannedDestinationPossessionAtUtc} /></label>
 		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={giveDestinationPossessionNow} /> Give access to the new rental now</label>
 		{#if giveDestinationPossessionNow}<label class="block space-y-1 text-sm"><span>Why is access being given before the new lease is ready?</span><textarea bind:value={possessionAgreementExceptionReason} class="m3-field-surface min-h-20 w-full p-3"></textarea></label>{/if}

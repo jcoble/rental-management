@@ -15,6 +15,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 
 	const TARGETED_CREDIT_ERROR = "This credit is larger than what's left of the original charge. Enter it as a standalone credit instead.";
 
@@ -23,6 +24,7 @@
 		tenantAccountId,
 		currency = 'USD',
 		initialTargetEntryId = null,
+		businessDate = null,
 		onclose,
 		onsaved
 	}: {
@@ -30,14 +32,15 @@
 		tenantAccountId: number;
 		currency?: string;
 		initialTargetEntryId?: number | null;
+		businessDate?: string | null;
 		onclose: () => void;
 		onsaved: () => void;
 	} = $props();
 
-	const today = () => new Date().toISOString().slice(0, 10);
+	const moneyDate = $derived(businessDateOrToday(businessDate));
 	let form = $state({
 		amount: '',
-		effectiveOn: today(),
+		effectiveOn: businessDateOrToday(undefined),
 		reason: '',
 		applyToCharge: true,
 		targetChargeEntryId: '',
@@ -68,11 +71,11 @@
 	);
 
 	$effect(() => {
-		const nextKey = open ? String(initialTargetEntryId ?? 'new') : '';
+		const nextKey = open ? `${initialTargetEntryId ?? 'new'}` : '';
 		if (open && nextKey !== initializedKey) {
 			form = {
 				amount: '',
-				effectiveOn: today(),
+				effectiveOn: moneyDate,
 				reason: '',
 				applyToCharge: true,
 				targetChargeEntryId: initialTargetEntryId ? String(initialTargetEntryId) : '',
@@ -172,7 +175,7 @@
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="tenant-credit-date">
 				<span>Effective date</span>
-				<DatePicker id="tenant-credit-date" bind:value={form.effectiveOn} />
+				<DatePicker id="tenant-credit-date" testid="tenant-credit-date" bind:value={form.effectiveOn} todayValue={moneyDate} />
 				{#if errors.effectiveOn}<span class="block text-xs font-normal text-destructive">{errors.effectiveOn}</span>{/if}
 			</label>
 			<label class="space-y-1 text-sm font-medium sm:col-span-2" for="tenant-credit-reason">

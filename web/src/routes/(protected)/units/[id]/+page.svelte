@@ -49,6 +49,7 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 	import type { UnitLeaseSummary } from '$lib/types';
 	import { ArrowLeft } from '@lucide/svelte';
 
@@ -112,7 +113,7 @@
 	});
 	let showEditUnit = $state(false);
 	let showMoveInDialog = $state(false);
-	let moveInDepositEffectiveOn = $state(new Date().toISOString().slice(0, 10));
+	let moveInDepositEffectiveOn = $state(businessDateOrToday(undefined));
 	let moveInDepositPaymentMethod = $state('');
 	let moveInDepositReference = $state('');
 	let moveInDepositErrors = $state<Record<string, string>>({});
@@ -187,6 +188,12 @@
 	}));
 
 	const dashboard = $derived(dashboardQuery.data);
+	const moveInContextQuery = createQuery(() => ({
+		queryKey: ['prepare-move-in-context'],
+		enabled: page.url.searchParams.get('action') === 'confirm-move-in',
+		queryFn: () => leaseManagements.prepareMoveInContext()
+	}));
+	const moveInBusinessDate = $derived(businessDateOrToday(moveInContextQuery.data?.businessDate));
 	const unitInspectionsQuery = createQuery(() => ({
 		queryKey: ['unit-inspections', id, inspectionSearch, inspectionSort, inspectionSkip, maintenancePageSize],
 		enabled: !isNaN(id) && id > 0,
@@ -210,7 +217,11 @@
 
 	$effect(() => {
 		const isConfirmMoveInAction = page.url.searchParams.get('action') === 'confirm-move-in';
-		if (!dashboard || !isConfirmMoveInAction) return;
+		if (!isConfirmMoveInAction) {
+			handledMoveInActionKey = '';
+			return;
+		}
+		if (!dashboard || (!moveInContextQuery.data && moveInContextQuery.isPending)) return;
 
 		if (activeTab !== 'tenant-lease' || activeView !== 'agreements') {
 			const url = new URL(page.url);
@@ -228,7 +239,7 @@
 		const actionKey = `${id}:${dashboard.currentLease?.id ?? 'no-lease'}:${page.url.search}`;
 		if (untrack(() => handledMoveInActionKey) !== actionKey) {
 			handledMoveInActionKey = actionKey;
-			moveInDepositEffectiveOn = new Date().toISOString().slice(0, 10);
+			moveInDepositEffectiveOn = moveInBusinessDate;
 			moveInDepositPaymentMethod = '';
 			moveInDepositReference = '';
 			moveInDepositErrors = {};
@@ -661,7 +672,7 @@
 				<div class="space-y-3 border-t pt-3">
 					<div>
 						<span class="mb-1 block text-xs text-muted-foreground">Deposit received date</span>
-						<DatePicker bind:value={moveInDepositEffectiveOn} testid="unit-move-in-deposit-date" />
+						<DatePicker bind:value={moveInDepositEffectiveOn} todayValue={moveInBusinessDate} testid="unit-move-in-deposit-date" />
 						{#if moveInDepositErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{moveInDepositErrors.effectiveOn}</p>{/if}
 					</div>
 					<div>

@@ -78,7 +78,7 @@ describe('payment correction contract', () => {
 	});
 
 	it('prefills correction context and reason', () => {
-		const correction = paymentCorrectionContext(originalReceipt);
+		const correction = paymentCorrectionContext(originalReceipt, '2027-02-28T00:00:00Z');
 
 		assert.equal(PAYMENT_CORRECTION_REASON, 'Correction of original payment receipt');
 		assert.deepEqual(correction, {
@@ -89,12 +89,17 @@ describe('payment correction contract', () => {
 			unitNumber: '2B',
 			tenantName: 'Jordan Lee',
 			amount: 1275,
-			effectiveOn: new Date().toISOString().slice(0, 10),
+			effectiveOn: '2027-02-28',
 			reason: `${PAYMENT_CORRECTION_REASON}: July rent`,
 			paymentMethodSummary: 'Check 1042',
 			externalReference: 'payout-778',
 			sourceStoredFileId: 99
 		});
+	});
+
+	it('falls back to the local calendar date when no business date is supplied', () => {
+		const correction = paymentCorrectionContext(originalReceipt);
+		assert.match(correction.effectiveOn, /^\d{4}-\d{2}-\d{2}$/);
 	});
 
 	it('appends linked correction', () => {
