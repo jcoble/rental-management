@@ -186,9 +186,11 @@ public sealed class UpdateWorkOrderHandler
         UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);
-        await WorkOrderAppointmentSync.AcquireLinkedAppointmentLocksAsync(
+        var lockedAppointmentIds = await WorkOrderAppointmentSync.AcquireLinkedAppointmentLocksAsync(
             _db, command.PortfolioId, command.WorkOrderId, context, ct);
         await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
+        await WorkOrderAppointmentSync.EnsureLinkedAppointmentSetUnchangedAsync(
+            _db, command.PortfolioId, command.WorkOrderId, lockedAppointmentIds, ct);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
         var entity = await StaffOperationAuthorization.AuthorizedWorkOrders(
@@ -333,7 +335,7 @@ public sealed class UpdateWorkOrderHandler
 
 internal static class WorkOrderAppointmentSync
 {
-    internal static async Task AcquireLinkedAppointmentLocksAsync(
+    internal static async Task<int[]> AcquireLinkedAppointmentLocksAsync(
         RentalCommandDbContext db,
         int portfolioId,
         int workOrderId,
@@ -355,6 +357,25 @@ internal static class WorkOrderAppointmentSync
             .Select(item => item.Id)
             .ToArrayAsync(ct);
         if (!initialAppointmentIds.SequenceEqual(currentAppointmentIds))
+            throw new DomainValidationException("The linked appointment changed; refresh and retry.", 409);
+
+        return initialAppointmentIds;
+    }
+
+    internal static async Task EnsureLinkedAppointmentSetUnchangedAsync(
+        RentalCommandDbContext db,
+        int portfolioId,
+        int workOrderId,
+        IReadOnlyList<int> lockedAppointmentIds,
+        CancellationToken ct)
+    {
+        var currentAppointmentIds = await db.Set<Appointment>()
+            .AsNoTracking()
+            .Where(item => item.PortfolioId == portfolioId && item.WorkOrderId == workOrderId)
+            .OrderBy(item => item.Id)
+            .Select(item => item.Id)
+            .ToArrayAsync(ct);
+        if (!lockedAppointmentIds.SequenceEqual(currentAppointmentIds))
             throw new DomainValidationException("The linked appointment changed; refresh and retry.", 409);
     }
 
@@ -892,9 +913,11 @@ public sealed class CancelTenantWorkOrderHandler
         CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);
-        await WorkOrderAppointmentSync.AcquireLinkedAppointmentLocksAsync(
+        var lockedAppointmentIds = await WorkOrderAppointmentSync.AcquireLinkedAppointmentLocksAsync(
             _db, command.PortfolioId, command.WorkOrderId, context, ct);
         await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
+        await WorkOrderAppointmentSync.EnsureLinkedAppointmentSetUnchangedAsync(
+            _db, command.PortfolioId, command.WorkOrderId, lockedAppointmentIds, ct);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var entity = await TenantWorkOrderAuthorization.AuthorizedWorkOrders(
                 command.PortfolioId, command.TenantUserId, command.TenantAuthSessionId,

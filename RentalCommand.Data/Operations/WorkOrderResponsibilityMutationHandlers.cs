@@ -57,7 +57,7 @@ public sealed class CloseWorkOrderResponsibilityHandler
             .Select(item => item.AccessContextId)
             .SingleAsync(ct);
         if (affectedContextId != initiallyAffectedContextId)
-            throw new DomainValidationException("The responsibility context changed; refresh before retrying.");
+            throw new DomainValidationException("The responsibility context changed; refresh before retrying.", 409);
         if (command.AccessRevisionExpectations.Length != 1 ||
             command.AccessRevisionExpectations[0].AccessContextId != affectedContextId)
             throw new DomainValidationException("The access revision expectation must identify the assignee.");

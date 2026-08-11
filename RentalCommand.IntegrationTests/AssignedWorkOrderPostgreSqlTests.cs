@@ -6,6 +6,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -484,6 +485,182 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         (await _context.Db.WorkOrderResponsibilities.AsNoTracking()
             .CountAsync(row => row.WorkOrderId == scenario.WorkOrderId &&
                 row.EffectiveToUtc == null)).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task AssignResponsibilityChangedSetRejectsWith409_AndRollsBackAllState()
+    {
+        var scenario = await SeedResponsibilityAssignmentScenarioAsync("changed-set-409");
+        var setupNow = DateTime.UtcNow;
+        var thirdUser = User("responsibility-third-changed-set");
+        _context.Db.Add(thirdUser);
+        await _context.Db.SaveChangesAsync();
+        var thirdContext = AccessContext(thirdUser.Id, setupNow);
+        _context.Db.Add(thirdContext);
+        await _context.Db.SaveChangesAsync();
+        var technicianMembershipId = scenario.TechnicianMembershipId;
+
+        var probe = new ResponsibilityChangedSetProbe();
+        await using var services = BuildResponsibilityServices(
+            new FixedTimeProvider(BusinessNowUtc), probe);
+        using var scope = services.CreateScope();
+        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var command = new AssignWorkOrderResponsibilityCommand(
+            scenario.PortfolioId,
+            scenario.ManagerUserId,
+            scenario.ManagerSessionId,
+            scenario.ManagerAccessContextId,
+            scenario.ManagerAccessRevision,
+            scenario.WorkOrderId,
+            scenario.TechnicianMembershipId,
+            scenario.TechnicianRoleAssignmentId,
+            WorkOrderResponsibilityKind.Primary,
+            null,
+            [new WorkspaceAccessRevisionExpectation(
+                thirdContext.Id,
+                thirdContext.AccessRevision)],
+            "Assign primary technician.",
+            BusinessNowUtc,
+            "changed-set-409");
+        var identity = AssignIdentity(scenario, command);
+
+        var task = Task.Run(() => atomic.ExecuteAsync(identity, command, AssignCodec));
+        try
+        {
+            await probe.FirstContextLockReached.WaitAsync(TimeSpan.FromSeconds(10));
+
+            await _context.Db.WorkspaceMemberships
+                .Where(item => item.Id == technicianMembershipId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.AccessContextId, thirdContext.Id));
+
+            probe.Release();
+            var conflict = await Assert.ThrowsAsync<DomainValidationException>(async () => await task);
+            conflict.StatusCode.Should().Be(409);
+            conflict.Message.Should().Be("Affected responsibilities changed; refresh before retrying.");
+        }
+        finally
+        {
+            probe.Release();
+            await _context.Db.WorkspaceMemberships
+                .Where(item => item.Id == technicianMembershipId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.AccessContextId, scenario.TechnicianAccessContextId));
+            _context.Db.ChangeTracker.Clear();
+        }
+
+        (await _context.Db.WorkOrderResponsibilities.AsNoTracking()
+            .CountAsync(item => item.WorkOrderId == scenario.WorkOrderId)).Should().Be(0);
+        (await _context.Db.WorkspaceAccessContexts.AsNoTracking()
+            .Where(item => item.Id == scenario.ManagerAccessContextId ||
+                item.Id == scenario.TechnicianAccessContextId)
+            .Select(item => new { item.Id, item.AccessRevision })
+            .ToListAsync())
+            .Should().BeEquivalentTo([
+                new { Id = scenario.ManagerAccessContextId, AccessRevision = scenario.ManagerAccessRevision },
+                new { Id = scenario.TechnicianAccessContextId, AccessRevision = scenario.TechnicianAccessRevision },
+            ]);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking()
+            .CountAsync(item => item.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await _context.Db.OutboxMessages.AsNoTracking()
+            .CountAsync(item => item.IdempotencyKey.Contains(identity.IdempotencyKey))).Should().Be(0);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking()
+            .CountAsync(item => item.CommandType == identity.CommandType &&
+                item.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CloseResponsibilityContextChangeRejectsWith409_AndRollsBackAllState()
+    {
+        var scenario = await SeedResponsibilityAssignmentScenarioAsync("context-changed-409");
+        await using var assignServices = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc));
+        var assignCommand = AssignCommand(scenario, "context-changed-409-assign");
+        AssignWorkOrderResponsibilityResult assigned;
+        using (var assignScope = assignServices.CreateScope())
+        {
+            assigned = (await assignScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
+                .ExecuteAsync(AssignIdentity(scenario, assignCommand), assignCommand, AssignCodec)).Value;
+        }
+        var responsibilityId = assigned.ResponsibilityId;
+        var expectedTechnicianRevision = assigned.AccessRevisions.Single().ExpectedRevision;
+        var setupNow = DateTime.UtcNow;
+        var thirdUser = User("responsibility-third-context-change");
+        _context.Db.Add(thirdUser);
+        await _context.Db.SaveChangesAsync();
+        var thirdContext = AccessContext(thirdUser.Id, setupNow);
+        _context.Db.Add(thirdContext);
+        await _context.Db.SaveChangesAsync();
+
+        var probe = new ResponsibilityLockProbe(
+            scenario.WorkOrderId,
+            scenario.ManagerAccessContextId,
+            pauseAfterWorkOrder: true);
+        await using var services = BuildResponsibilityServices(
+            new FixedTimeProvider(BusinessNowUtc), probe);
+        using var scope = services.CreateScope();
+        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var identity = new AtomicCommandIdentity(
+            "work-order-responsibility.close",
+            "context-changed-409-close");
+        var command = new CloseWorkOrderResponsibilityCommand(
+            scenario.PortfolioId,
+            scenario.ManagerUserId,
+            scenario.ManagerSessionId,
+            scenario.ManagerAccessContextId,
+            scenario.ManagerAccessRevision,
+            scenario.WorkOrderId,
+            responsibilityId,
+            [new WorkspaceAccessRevisionExpectation(
+                scenario.TechnicianAccessContextId,
+                expectedTechnicianRevision)],
+            "Close changed responsibility context.",
+            BusinessNowUtc,
+            identity.IdempotencyKey);
+
+        var task = Task.Run(() => atomic.ExecuteAsync(identity, command, CloseCodec));
+        try
+        {
+            await probe.WorkOrderLockReached.WaitAsync(TimeSpan.FromSeconds(10));
+            _context.Db.ChangeTracker.Clear();
+            await _context.Db.WorkspaceMemberships
+                .Where(item => item.Id == scenario.TechnicianMembershipId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.AccessContextId, thirdContext.Id));
+
+            probe.ReleaseWorkOrder();
+            var conflict = await Assert.ThrowsAsync<DomainValidationException>(async () => await task);
+            conflict.StatusCode.Should().Be(409);
+            conflict.Message.Should().Be("The responsibility context changed; refresh before retrying.");
+        }
+        finally
+        {
+            probe.ReleaseWorkOrder();
+            await _context.Db.WorkspaceMemberships
+                .Where(item => item.Id == scenario.TechnicianMembershipId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.AccessContextId, scenario.TechnicianAccessContextId));
+            _context.Db.ChangeTracker.Clear();
+        }
+
+        var responsibility = await _context.Db.WorkOrderResponsibilities.AsNoTracking()
+            .SingleAsync(item => item.Id == responsibilityId);
+        responsibility.WorkspaceMembershipId.Should().Be(scenario.TechnicianMembershipId);
+        responsibility.EffectiveToUtc.Should().BeNull();
+        responsibility.EndedAtUtc.Should().BeNull();
+        var closeRevisions = await _context.Db.WorkspaceAccessContexts.AsNoTracking()
+            .Where(item => item.Id == scenario.TechnicianAccessContextId ||
+                item.Id == scenario.ManagerAccessContextId)
+            .Select(item => new { item.Id, item.AccessRevision })
+            .ToDictionaryAsync(item => item.Id, item => item.AccessRevision);
+        closeRevisions[scenario.TechnicianAccessContextId].Should().Be(expectedTechnicianRevision);
+        closeRevisions[scenario.ManagerAccessContextId].Should().Be(scenario.ManagerAccessRevision);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking()
+            .CountAsync(item => item.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await _context.Db.OutboxMessages.AsNoTracking()
+            .CountAsync(item => item.IdempotencyKey.Contains(identity.IdempotencyKey))).Should().Be(0);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking()
+            .CountAsync(item => item.CommandType == identity.CommandType &&
+                item.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
     }
 
     private async Task AssertDeniedAsync<TCommand, TResult>(
@@ -1026,6 +1203,53 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             return values.Length == 2 &&
                 values[0] == StableNamespaceKey(lockNamespace) &&
                 values[1] == aggregateId;
+        }
+
+        private static int StableNamespaceKey(string lockNamespace)
+        {
+            var digest = SHA256.HashData(Encoding.UTF8.GetBytes(lockNamespace));
+            return NamespaceKey ^ BinaryPrimitives.ReadInt32BigEndian(digest);
+        }
+    }
+
+    private sealed class ResponsibilityChangedSetProbe : DbCommandInterceptor
+    {
+        private const int NamespaceKey = 0x52434D44;
+        private readonly TaskCompletionSource _firstContextLockReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _contextLockCount;
+
+        public Task FirstContextLockReached => _firstContextLockReached.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        public override async ValueTask<int> NonQueryExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            int result,
+            CancellationToken cancellationToken = default)
+        {
+            await ObserveAsync(command, cancellationToken);
+            return await base.NonQueryExecutedAsync(command, eventData, result, cancellationToken);
+        }
+
+        private async Task ObserveAsync(DbCommand command, CancellationToken cancellationToken)
+        {
+            if (!command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.Ordinal) ||
+                !command.CommandText.Contains("@p", StringComparison.Ordinal))
+                return;
+
+            var values = command.Parameters.Cast<DbParameter>()
+                .Select(parameter => Convert.ToInt64(parameter.Value))
+                .ToArray();
+            if (values.Length == 2 && values[0] == StableNamespaceKey("WorkspaceAccessContext") &&
+                Interlocked.Increment(ref _contextLockCount) == 1)
+            {
+                _firstContextLockReached.TrySetResult();
+                await _release.Task.WaitAsync(cancellationToken);
+            }
         }
 
         private static int StableNamespaceKey(string lockNamespace)

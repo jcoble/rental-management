@@ -94,7 +94,7 @@ public sealed class AssignWorkOrderResponsibilityHandler
         if (!affectedContextIds.SequenceEqual(expectations.Select(item => item.AccessContextId)))
             throw new DomainValidationException("Expected access revisions must exactly cover affected assignees.");
         if (!initiallyAffectedContextIds.SequenceEqual(affectedContextIds))
-            throw new DomainValidationException("Affected responsibilities changed; refresh before retrying.");
+            throw new DomainValidationException("Affected responsibilities changed; refresh before retrying.", 409);
 
         var contexts = await _db.Set<WorkspaceAccessContext>()
             .Where(accessContext => affectedContextIds.Contains(accessContext.Id) &&
