@@ -147,7 +147,7 @@ services:
     ports:
       # Bind to a loopback-only address; the preview is never public. The local
       # stack (scripts/local/preview-stack-local.sh) sets this to 127.0.0.1.
-      - "${TAILSCALE_IP}:${PREVIEW_WEB_PORT}:8080"
+      - "${PREVIEW_BIND_IP}:${PREVIEW_WEB_PORT}:8080"
     volumes:
       - ./preview-nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:

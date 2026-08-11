@@ -55,12 +55,12 @@ require_prerequisites() {
   require_command openssl
   require_command lsof
   docker info >/dev/null
-  TAILSCALE_IP="$loopback_ip" PREVIEW_WEB_PORT="$preview_port" docker compose version >/dev/null
+  PREVIEW_BIND_IP="$loopback_ip" PREVIEW_WEB_PORT="$preview_port" docker compose version >/dev/null
   docker buildx version >/dev/null
 }
 
 compose() {
-  TAILSCALE_IP="$loopback_ip" PREVIEW_WEB_PORT="$preview_port" docker compose \
+  PREVIEW_BIND_IP="$loopback_ip" PREVIEW_WEB_PORT="$preview_port" docker compose \
     --project-name "$project_name" \
     --project-directory "$repo_root/deploy" \
     --env-file "$env_file" \
@@ -118,7 +118,7 @@ ENGINE_DB_PASSWORD=$ENGINE_DB_PASSWORD
 PREVIEW_POSTGRES_DATA=$postgres_data_dir
 WEB_ORIGIN=$web_origin
 PREVIEW_WEB_PORT=$preview_port
-TAILSCALE_IP=$loopback_ip
+PREVIEW_BIND_IP=$loopback_ip
 EOF
   )
   chmod 600 "$env_file"
