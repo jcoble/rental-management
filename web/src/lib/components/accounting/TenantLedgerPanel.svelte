@@ -32,6 +32,7 @@
 		type TenantLedgerRowAction
 	} from '$lib/accounting/tenant-ledger-action-flows';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -131,6 +132,7 @@
 	}));
 
 	const accountSummary = $derived(accountQuery.data);
+	const moneyDate = $derived(businessDateOrToday(accountSummary?.businessDate));
 	const ledgerSummary = $derived(ledgerSummaryQuery.data as TenantLedgerPeriodSummary | null | undefined);
 	const monthSummaries = $derived(monthSummaryQuery.data ?? []);
 	const currency = $derived(
@@ -275,7 +277,7 @@
 				const reversal = buildTenantLedgerReversalRequest(
 					tenantAccountId as number,
 					target,
-					new Date().toISOString().slice(0, 10)
+					moneyDate
 				);
 				if (target.type === 'OpeningBalance') {
 					return tenantMoney.reverseLedgerEntry(tenantAccountId as number, crypto.randomUUID(), {
@@ -426,6 +428,7 @@
 	tenantAccountId={tenantAccountId ?? 0}
 	currency={currency}
 	defaultPayerName={dashboard.currentTenant?.name ?? dashboard.currentTenants?.[0]?.name ?? ''}
+	businessDate={accountSummary?.businessDate}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />
@@ -438,6 +441,7 @@
 	unitLabel={`Unit ${dashboard.unit.unitNumber}`}
 	currentBalance={balanceDue}
 	currency={currency}
+	businessDate={accountSummary?.businessDate}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />
@@ -446,6 +450,7 @@
 	tenantAccountId={tenantAccountId ?? 0}
 	currency={currency}
 	initialTargetEntryId={creditTarget?.tenantLedgerEntryId ?? null}
+	businessDate={accountSummary?.businessDate}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />
@@ -456,6 +461,7 @@
 	propertyId={dashboard.unit.propertyId}
 	unitId={dashboard.unit.id}
 	schedule={recurringTarget}
+	businessDate={accountSummary?.businessDate}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />

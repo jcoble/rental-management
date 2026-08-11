@@ -8,6 +8,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 
 	export type PastDueOpenCharge = Pick<
 		TenantLedgerRow,
@@ -28,6 +29,7 @@
 		target,
 		openCharges = [],
 		totalOpenAmount,
+		businessDate = null,
 		openChargesLoading = false,
 		openChargesError = false,
 		pending = false,
@@ -38,6 +40,7 @@
 		target: PastDueLease | null;
 		openCharges?: PastDueOpenCharge[];
 		totalOpenAmount: number;
+		businessDate?: string | null;
 		openChargesLoading?: boolean;
 		openChargesError?: boolean;
 		pending?: boolean;
@@ -45,11 +48,7 @@
 		onsubmit: (data: PastDuePaymentSubmission) => void;
 	} = $props();
 
-	const todayLocal = (): string => {
-		const date = new Date();
-		const pad = (value: number) => String(value).padStart(2, '0');
-		return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-	};
+	const moneyDate = $derived(businessDateOrToday(businessDate));
 
 	const loadLastMethod = (): string => {
 		if (typeof localStorage === 'undefined') return '';
@@ -71,22 +70,23 @@
 
 	let form = $state({ amount: '', paidDate: '', method: '', externalReference: '', notes: '' });
 	let errors = $state<{ amount?: string; method?: string }>({});
-	let initializedAccountId = $state<number | null>(null);
+	let initializedKey = $state('');
 
 	$effect(() => {
 		const accountId = target?.tenantAccountId ?? null;
-		if (open && accountId !== null && initializedAccountId !== accountId) {
+		const nextKey = open && accountId !== null ? `${accountId}|${moneyDate}` : '';
+		if (open && accountId !== null && initializedKey !== nextKey) {
 			form = {
 				amount: totalOpenAmount.toFixed(2),
-				paidDate: todayLocal(),
+				paidDate: moneyDate,
 				method: loadLastMethod(),
 				externalReference: '',
 				notes: ''
 			};
 			errors = {};
-			initializedAccountId = accountId;
+			initializedKey = nextKey;
 		}
-		if (!open) initializedAccountId = null;
+		if (!open) initializedKey = '';
 	});
 
 	const allocationPreview = $derived.by(() => {
@@ -122,7 +122,7 @@
 		rememberLastMethod(form.method);
 		onsubmit({
 			amount,
-			paidDate: form.paidDate || todayLocal(),
+			paidDate: form.paidDate || moneyDate,
 			method: form.method,
 			externalReference: form.externalReference.trim() || undefined,
 			notes: form.notes.trim() || undefined,
@@ -187,7 +187,7 @@
 
 			<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-date-input" data-testid="past-due-mark-paid-date-field">
 				<span data-testid="past-due-mark-paid-date-label">Date received</span>
-				<DatePicker id="past-due-mark-paid-date-input" testid="past-due-mark-paid-date-input" bind:value={form.paidDate} placeholder="Date received" />
+				<DatePicker id="past-due-mark-paid-date-input" testid="past-due-mark-paid-date-input" bind:value={form.paidDate} placeholder="Date received" todayValue={moneyDate} />
 			</label>
 
 			<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-method-input" data-testid="past-due-mark-paid-method-field">

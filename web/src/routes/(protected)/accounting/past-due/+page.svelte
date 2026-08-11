@@ -311,6 +311,7 @@
 	target={markPaidTarget}
 	openCharges={openCharges}
 	totalOpenAmount={markPaidTarget?.totalOpenBalance ?? 0}
+	businessDate={result?.businessDate}
 	openChargesLoading={openChargesQuery.isLoading}
 	openChargesError={openChargesQuery.isError}
 	pending={markPaidMutation.isPending}

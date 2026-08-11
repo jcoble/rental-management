@@ -20,6 +20,7 @@
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 
 	export interface OneTimeChargeSeed {
 		description?: string;
@@ -37,6 +38,7 @@
 		currentBalance = null,
 		currency = 'USD',
 		seed = null,
+		businessDate = null,
 		onclose,
 		onsaved
 	}: {
@@ -48,16 +50,17 @@
 		currentBalance?: number | null;
 		currency?: string;
 		seed?: OneTimeChargeSeed | null;
+		businessDate?: string | null;
 		onclose: () => void;
 		onsaved: () => void;
 	} = $props();
 
-	const today = () => new Date().toISOString().slice(0, 10);
+	const moneyDate = $derived(businessDateOrToday(businessDate));
 	let form = $state({
 		chargeType: 'Other' as TenantChargeType,
 		amount: '',
-		effectiveOn: today(),
-		dueOn: today(),
+		effectiveOn: businessDateOrToday(undefined),
+		dueOn: businessDateOrToday(undefined),
 		servicePeriodStartOn: '',
 		servicePeriodEndOn: '',
 		description: '',
@@ -96,14 +99,14 @@
 
 	$effect(() => {
 		const nextKey = open
-			? `${seed?.description ?? ''}|${seed?.effectiveOn ?? ''}|${seed?.dueOn ?? ''}|${seed?.chargeType ?? ''}`
+			? `${moneyDate}|${seed?.description ?? ''}|${seed?.effectiveOn ?? ''}|${seed?.dueOn ?? ''}|${seed?.chargeType ?? ''}`
 			: '';
 		if (open && nextKey !== initializedKey) {
 			form = {
 				chargeType: seed?.chargeType ?? 'Other',
 				amount: '',
-				effectiveOn: seed?.effectiveOn ?? today(),
-				dueOn: seed?.dueOn ?? seed?.effectiveOn ?? today(),
+				effectiveOn: seed?.effectiveOn ?? moneyDate,
+				dueOn: seed?.dueOn ?? seed?.effectiveOn ?? moneyDate,
 				servicePeriodStartOn: '',
 				servicePeriodEndOn: '',
 				description: seed?.description ?? '',
@@ -211,6 +214,7 @@
 					id="one-time-charge-effective-date"
 					testid="one-time-charge-effective-date"
 					bind:value={form.effectiveOn}
+					todayValue={moneyDate}
 					bind:invalid={effectiveDateInvalid}
 				/>
 				{#if errors.effectiveOn}<span class="block text-xs font-normal text-destructive">{errors.effectiveOn}</span>{/if}
@@ -221,6 +225,7 @@
 					id="one-time-charge-due-date"
 					testid="one-time-charge-due-date"
 					bind:value={form.dueOn}
+					todayValue={moneyDate}
 					bind:invalid={dueDateInvalid}
 				/>
 				{#if errors.dueOn}<span class="block text-xs font-normal text-destructive">{errors.dueOn}</span>{/if}

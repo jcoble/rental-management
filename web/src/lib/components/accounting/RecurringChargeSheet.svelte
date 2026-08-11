@@ -14,6 +14,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 
 	let {
 		open,
@@ -22,6 +23,7 @@
 		propertyId = null,
 		unitId = null,
 		schedule = null,
+		businessDate = null,
 		onclose,
 		onsaved
 	}: {
@@ -31,16 +33,17 @@
 		propertyId?: number | null;
 		unitId?: number | null;
 		schedule?: RecurringTenantChargeRow | null;
+		businessDate?: string | null;
 		onclose: () => void;
 		onsaved: () => void;
 	} = $props();
 
-	const today = () => new Date().toISOString().slice(0, 10);
+	const moneyDate = $derived(businessDateOrToday(businessDate));
 	let form = $state({
 		displayName: '',
 		amount: '',
 		ledgerAccountId: null as number | null,
-		effectiveStartOn: today(),
+		effectiveStartOn: businessDateOrToday(undefined),
 		effectiveEndOn: '',
 		monthlyDueDay: '1'
 	});
@@ -55,14 +58,14 @@
 
 	$effect(() => {
 		const nextKey = open
-			? `${schedule?.id ?? 'new'}|${schedule?.nextRunDate ?? ''}`
+			? `${moneyDate}|${schedule?.id ?? 'new'}|${schedule?.nextRunDate ?? ''}`
 			: '';
 		if (open && nextKey !== initializedKey) {
 			form = {
 				displayName: schedule?.displayName ?? '',
 				amount: schedule ? String(schedule.amount) : '',
 				ledgerAccountId: schedule?.ledgerAccountId ?? null,
-				effectiveStartOn: schedule?.effectiveStartOn ?? today(),
+				effectiveStartOn: schedule?.effectiveStartOn ?? moneyDate,
 				effectiveEndOn: schedule?.effectiveEndOn ?? '',
 				monthlyDueDay: String(schedule?.monthlyDueDay ?? 1)
 			};
@@ -152,12 +155,12 @@
 			</div>
 			<label class="space-y-1 text-sm font-medium" for="recurring-charge-start">
 				<span>Starts</span>
-				<DatePicker id="recurring-charge-start" bind:value={form.effectiveStartOn} />
+				<DatePicker id="recurring-charge-start" testid="recurring-charge-start" bind:value={form.effectiveStartOn} todayValue={moneyDate} />
 				{#if errors.start}<span class="block text-xs font-normal text-destructive">{errors.start}</span>{/if}
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="recurring-charge-end">
 				<span>Ends <span class="font-normal text-muted-foreground">(optional)</span></span>
-				<DatePicker id="recurring-charge-end" bind:value={form.effectiveEndOn} />
+				<DatePicker id="recurring-charge-end" testid="recurring-charge-end" bind:value={form.effectiveEndOn} todayValue={moneyDate} />
 				{#if errors.end}<span class="block text-xs font-normal text-destructive">{errors.end}</span>{/if}
 			</label>
 			<div class="space-y-1 text-sm font-medium">

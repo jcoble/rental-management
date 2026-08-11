@@ -11,12 +11,14 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 
 	let {
 		open,
 		tenantAccountId,
 		currency = 'USD',
 		defaultPayerName = '',
+		businessDate = null,
 		onclose,
 		onsaved
 	}: {
@@ -24,14 +26,15 @@
 		tenantAccountId: number;
 		currency?: string;
 		defaultPayerName?: string;
+		businessDate?: string | null;
 		onclose: () => void;
 		onsaved: () => void;
 	} = $props();
 
-	const today = () => new Date().toISOString().slice(0, 10);
+	const moneyDate = $derived(businessDateOrToday(businessDate));
 	let form = $state({
 		amount: '',
-		effectiveOn: today(),
+		effectiveOn: businessDateOrToday(undefined),
 		method: '',
 		reference: '',
 		payerName: '',
@@ -41,7 +44,7 @@
 	});
 	let errors = $state<Record<string, string>>({});
 	let documentName = $state('');
-	let initialized = $state(false);
+	let initializedKey = $state('');
 	let operationKey = $state<string | null>(null);
 
 	const openChargesQuery = createQuery(() => ({
@@ -56,10 +59,11 @@
 	const openCharges = $derived(openChargesQuery.data?.items ?? []);
 
 	$effect(() => {
-		if (open && !initialized) {
+		const nextKey = open ? `${moneyDate}|${defaultPayerName}` : '';
+		if (open && nextKey !== initializedKey) {
 			form = {
 				amount: '',
-				effectiveOn: today(),
+				effectiveOn: moneyDate,
 				method: '',
 				reference: '',
 				payerName: defaultPayerName,
@@ -70,9 +74,9 @@
 			errors = {};
 			documentName = '';
 			operationKey = null;
-			initialized = true;
+			initializedKey = nextKey;
 		}
-		if (!open) initialized = false;
+		if (!open) initializedKey = '';
 	});
 
 	function close(): void {
@@ -133,7 +137,7 @@
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="record-payment-date">
 				<span>Date received</span>
-				<DatePicker id="record-payment-date" bind:value={form.effectiveOn} />
+				<DatePicker id="record-payment-date" testid="record-payment-date" bind:value={form.effectiveOn} todayValue={moneyDate} />
 				{#if errors.effectiveOn}<span class="block text-xs font-normal text-destructive">{errors.effectiveOn}</span>{/if}
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="record-payment-method">

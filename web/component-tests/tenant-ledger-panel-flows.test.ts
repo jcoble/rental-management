@@ -207,6 +207,32 @@ describe('rendered tenant ledger panel flow boundaries', () => {
 		await waitFor(() => expect(view.getByTestId('tenant-credit-sheet').textContent).toContain('Rent for February 2027'));
 	});
 
+	it('defaults every tenant ledger money sheet to the server business date', async () => {
+		const entry = row({ tenantLedgerEntryId: 48 });
+
+		let view = await renderPanel(entry);
+		await fireEvent.click(view.getByRole('button', { name: 'Record payment', exact: true }));
+		await waitFor(() => expect((view.getByTestId('record-payment-date') as HTMLInputElement).value).toBe('02/28/2027'));
+		view.unmount();
+
+		view = await renderPanel(entry);
+		await fireEvent.click(view.getByRole('button', { name: 'Add charge', exact: true }));
+		await waitFor(() => expect((view.getByTestId('one-time-charge-effective-date') as HTMLInputElement).value).toBe('02/28/2027'));
+		expect((view.getByTestId('one-time-charge-due-date') as HTMLInputElement).value).toBe('02/28/2027');
+		view.unmount();
+
+		view = await renderPanel(entry);
+		await fireEvent.click(view.getByRole('button', { name: 'Give credit', exact: true }));
+		await waitFor(() => expect((view.getByTestId('tenant-credit-date') as HTMLInputElement).value).toBe('02/28/2027'));
+		view.unmount();
+
+		view = await renderPanel(entry);
+		await fireEvent.click(view.getByRole('button', { name: /Recurring charge/ }));
+		await fireEvent.click(view.getByRole('menuitem', { name: '+ New recurring charge' }));
+		await waitFor(() => expect((view.getByTestId('recurring-charge-start') as HTMLInputElement).value).toBe('02/28/2027'));
+		view.unmount();
+	});
+
 	it('invokes every offered action for every supported charge class', async () => {
 		for (const [index, entryType] of (['RentCharge', 'AddendumCharge', 'LateFeeCharge', 'ManualCharge'] as const).entries()) {
 			const entry = row({
@@ -350,7 +376,7 @@ describe('rendered tenant ledger panel flow boundaries', () => {
 		await fireEvent.click(view.getByRole('button', { name: 'Continue' }));
 		await waitFor(() => expect(mocks.reverseCharge).toHaveBeenCalledOnce());
 		const [, , , body] = mocks.reverseCharge.mock.calls[0];
-		expect(body).toEqual({ effectiveOn: expect.any(String), reason: 'Reverse charge: Rent for February 2027' });
+		expect(body).toEqual({ effectiveOn: '2027-02-28', reason: 'Reverse charge: Rent for February 2027' });
 	});
 
 	it('calls the generic opening-balance reversal endpoint with the exact body', async () => {
@@ -369,7 +395,7 @@ describe('rendered tenant ledger panel flow boundaries', () => {
 		const [, , body] = mocks.reverseLedgerEntry.mock.calls[0];
 		expect(body).toEqual({
 			reversesEntryId: 46,
-			effectiveOn: expect.any(String),
+			effectiveOn: '2027-02-28',
 			reason: 'Reverse opening balance: Opening balance for July 2026'
 		});
 	});

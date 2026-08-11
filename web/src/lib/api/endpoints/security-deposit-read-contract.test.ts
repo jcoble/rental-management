@@ -41,7 +41,7 @@ describe('security deposit tenant-account read contract', () => {
 	});
 
 	it('uses the API business date for deposit money date defaults and Today shortcuts', () => {
-		assert.match(detailPageSource, /const businessDate = \$derived\(deposit\?\.businessDate\?\.slice\(0, 10\) \|\| today\(\)\)/);
+		assert.match(detailPageSource, /businessDateOrToday\(deposit\?\.businessDate\)/);
 		assert.match(detailPageSource, /fundEffectiveOn = businessDate/);
 		assert.match(detailPageSource, /deductionEffectiveOn = businessDate/);
 		assert.match(detailPageSource, /refundEffectiveOn = businessDate/);

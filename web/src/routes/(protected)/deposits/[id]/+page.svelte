@@ -23,10 +23,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { FileText, Image as ImageIcon, Upload } from '@lucide/svelte';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 
 	const queryClient = useQueryClient();
 	const tenantAccountId = $derived(parseInt(page.params.id ?? '0', 10));
-	const today = () => new Date().toISOString().slice(0, 10);
 	function positiveQueryInt(value: string | null): number | null {
 		if (!value) return null;
 		const parsed = Number(value);
@@ -43,7 +43,7 @@
 
 	const deposit = $derived(depositQuery.data);
 	const securityDepositAccountId = $derived(deposit?.securityDepositAccountId ?? 0);
-	const businessDate = $derived(deposit?.businessDate?.slice(0, 10) || today());
+	const businessDate = $derived(businessDateOrToday(deposit?.businessDate));
 
 	function invalidateDeposit() {
 		queryClient.invalidateQueries({ queryKey: ['deposit', tenantAccountId] });
@@ -67,7 +67,7 @@
 	// Funding records actual money received into the account prepared during move-in.
 	let showFundForm = $state(false);
 	let fundAmount = $state('');
-	let fundEffectiveOn = $state(today());
+	let fundEffectiveOn = $state(businessDateOrToday(undefined));
 	let fundDescription = $state('Security deposit received');
 	let fundPaymentMethod = $state('');
 	let fundReference = $state('');
@@ -137,7 +137,7 @@
 	let deductionReason = $state('');
 	let deductionAmount = $state('');
 	let deductionNotes = $state('');
-	let deductionEffectiveOn = $state(today());
+	let deductionEffectiveOn = $state(businessDateOrToday(undefined));
 	let deductionErrors = $state<Record<string, string>>({});
 	let deductionOperation = $state({ fingerprint: '', key: '' });
 
@@ -194,7 +194,7 @@
 	// A blank refund amount deliberately means "refund the full currently held balance".
 	let showRefundForm = $state(false);
 	let refundAmount = $state('');
-	let refundEffectiveOn = $state(today());
+	let refundEffectiveOn = $state(businessDateOrToday(undefined));
 	let refundDescription = $state('Security deposit refund');
 	let refundReference = $state('');
 	let refundErrors = $state<Record<string, string>>({});
