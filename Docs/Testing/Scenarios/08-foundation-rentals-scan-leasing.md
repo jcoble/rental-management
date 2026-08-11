@@ -54,7 +54,7 @@ state, URLs, request/response behavior, console errors, and persisted identifier
 ## Preconditions
 
 1. Preview points to the exact source SHA recorded in the run summary and is reachable at
-   `https://rental-command.chimp-map.ts.net`.
+   `http://127.0.0.1:15667` (start it with `./scripts/local/preview-stack-local.sh`).
 2. Sign in through the visible login UI as a management user. Do not bypass login with an API cookie.
 3. Use a portfolio where setup can be exercised without destroying another tester's data. Do not
    reset shared sample data while another scenario is active.
