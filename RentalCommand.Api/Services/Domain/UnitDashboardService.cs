@@ -932,8 +932,9 @@ public class UnitDashboardService : IUnitDashboardService
 
     /// <summary>
     /// All bounded Unit Command Center overview lists as one server-side UNION ALL statement. Every
-    /// branch retains its own authorization predicate, ordering, and cap; the response layer only
-    /// demultiplexes the tagged rows into the existing DTO lists.
+    /// branch retains its own authorization predicate, ordering, and cap where the legacy response was
+    /// bounded; the current-tenant branch remains complete. The response layer only demultiplexes the
+    /// tagged rows into the existing DTO lists.
     /// </summary>
     private IQueryable<UnitDashboardItemReadRow> BuildUnitDashboardItemsQuery(
         int portfolioId,
@@ -955,7 +956,6 @@ public class UnitDashboardService : IUnitDashboardService
                 : party.Role == LeaseManagementPartyRole.Occupant ? 2
                 : 3)
             .ThenBy(party => party.Id)
-            .Take(OverviewTake)
             .Select(party => new UnitDashboardItemReadRow
             {
                 Kind = UnitDashboardItemKind.Tenant,
@@ -969,6 +969,14 @@ public class UnitDashboardService : IUnitDashboardService
                 DateValue1 = DateTime.UnixEpoch,
                 DateValue2 = DateTime.UnixEpoch,
                 DecimalValue1 = 0m,
+                SortRole = party.Role == LeaseManagementPartyRole.PrimaryTenant ? 0
+                    : party.Role == LeaseManagementPartyRole.CoTenant ? 1
+                    : party.Role == LeaseManagementPartyRole.Occupant ? 2
+                    : 3,
+                SortIdAscending = party.Id,
+                SortIdDescending = 0L,
+                SortDateDescending = DateTime.UnixEpoch,
+                SortDateAscending = DateTime.UnixEpoch,
             });
 
         var documentRows = BuildUnitDocumentsQuery(portfolioId, unitId)
@@ -987,6 +995,11 @@ public class UnitDashboardService : IUnitDashboardService
                 DateValue1 = file.UploadedAt,
                 DateValue2 = DateTime.UnixEpoch,
                 DecimalValue1 = 0m,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = 0L,
+                SortDateDescending = file.UploadedAt,
+                SortDateAscending = DateTime.UnixEpoch,
             });
 
         var documentCountRows = BuildUnitDocumentsQuery(portfolioId, unitId)
@@ -1004,6 +1017,11 @@ public class UnitDashboardService : IUnitDashboardService
                 DateValue1 = DateTime.UnixEpoch,
                 DateValue2 = DateTime.UnixEpoch,
                 DecimalValue1 = 0m,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = 0L,
+                SortDateDescending = DateTime.UnixEpoch,
+                SortDateAscending = DateTime.UnixEpoch,
             });
 
         var appointmentRows = _db.Appointments
@@ -1027,6 +1045,11 @@ public class UnitDashboardService : IUnitDashboardService
                 DateValue1 = appointment.ScheduledStart,
                 DateValue2 = DateTime.UnixEpoch,
                 DecimalValue1 = 0m,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = 0L,
+                SortDateDescending = DateTime.UnixEpoch,
+                SortDateAscending = appointment.ScheduledStart,
             });
 
         var paymentRows = _db.TenantLedgerEntries
@@ -1051,6 +1074,11 @@ public class UnitDashboardService : IUnitDashboardService
                 DateValue1 = entry.PostedAtUtc,
                 DateValue2 = entry.PostedAtUtc,
                 TextValue4 = string.Empty,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = entry.Id,
+                SortDateDescending = entry.PostedAtUtc,
+                SortDateAscending = DateTime.UnixEpoch,
             });
 
         var workOrderRows = _db.WorkOrders
@@ -1076,6 +1104,11 @@ public class UnitDashboardService : IUnitDashboardService
                 DateValue1 = workOrder.RequestedAt,
                 DateValue2 = DateTime.UnixEpoch,
                 DecimalValue1 = 0m,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = workOrder.Id,
+                SortDateDescending = workOrder.RequestedAt,
+                SortDateAscending = DateTime.UnixEpoch,
             });
 
         return tenantRows
@@ -1083,7 +1116,13 @@ public class UnitDashboardService : IUnitDashboardService
             .Concat(documentCountRows)
             .Concat(appointmentRows)
             .Concat(paymentRows)
-            .Concat(workOrderRows);
+            .Concat(workOrderRows)
+            .OrderBy(row => row.Kind)
+            .ThenBy(row => row.SortRole)
+            .ThenBy(row => row.SortIdAscending)
+            .ThenByDescending(row => row.SortDateDescending)
+            .ThenBy(row => row.SortDateAscending)
+            .ThenByDescending(row => row.SortIdDescending);
     }
 
     /// <summary>
@@ -1291,6 +1330,11 @@ public class UnitDashboardService : IUnitDashboardService
         public DateTime? DateValue1 { get; init; }
         public DateTime? DateValue2 { get; init; }
         public decimal? DecimalValue1 { get; init; }
+        public int SortRole { get; init; }
+        public long SortIdAscending { get; init; }
+        public long SortIdDescending { get; init; }
+        public DateTime SortDateDescending { get; init; }
+        public DateTime SortDateAscending { get; init; }
     }
 
     private sealed class TimelineReadRow
