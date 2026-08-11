@@ -62,6 +62,15 @@ describe('canonical portal money contract', () => {
 		assert.match(pageSource, /queryKey: \['portal-autopay', selectedAccountId\]/);
 	});
 
+	it('carries the durable Checkout attempt through cancel and terminal success recovery', () => {
+		assert.match(endpointSource, /cancelPaymentAttempt:/);
+		assert.match(endpointSource, /payment-attempts\/\$\{paymentAttemptId\}\/cancel/);
+		assert.match(pageSource, /paymentAttemptId/);
+		assert.match(pageSource, /cancelPaymentAttempt\(accountId, attemptId\)/);
+		assert.match(pageSource, /canceled\.alreadyPaid/);
+		assert.match(pageSource, /checkout\.alreadyPaid/);
+	});
+
 	it('uses stable loaders and retry actions for payment reads', () => {
 		assert.match(pageSource, /LoadingState/);
 		assert.match(pageSource, /portal-payment-accounts-loading/);

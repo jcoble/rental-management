@@ -328,6 +328,11 @@ public class AuditQueryService : IAuditQueryService
             EF.Functions.ILike(a.EntityType, like)
             || (a.ActorLabel != null && EF.Functions.ILike(a.ActorLabel, like))
             || (a.IpAddress != null && EF.Functions.ILike(a.IpAddress, like))
+            // Provider dead-letter event ids, PaymentIntent ids, and recovery reasons are captured
+            // in the audit JSON. Keep the predicate in this same translated PostgreSQL query so an
+            // operator can paste either identifier and find the linked TenantAccount row directly.
+            || (a.ChangeReason != null && EF.Functions.ILike(a.ChangeReason, like))
+            || (a.NewValues != null && EF.Functions.ILike(a.NewValues, like))
             // Entity / actor id as integer equality (sargable) instead of LIKE on its text form.
             || (parsedId != null && a.EntityId == parsedId.Value)
             || (parsedId != null && a.UserId != null && a.UserId == parsedId.Value)

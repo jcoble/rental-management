@@ -38,6 +38,13 @@ public class TenantPaymentAttempt : IAuditable, IPortfolioScoped
     public string? ClaimOwner { get; set; }
     public Guid? ClaimToken { get; set; }
     public DateTime? ClaimExpiresAtUtc { get; set; }
+    /// <summary>
+    /// Durable charge-level provider fence. Unlike ClaimToken, this survives the prepare
+    /// transaction and the provider call boundary. A provider caller must present it when it
+    /// advances the attempt to Submitted or binds the provider object.
+    /// </summary>
+    public Guid? ProviderFenceToken { get; set; }
+    public DateTime? ProviderFenceAcquiredAtUtc { get; set; }
     public int AttemptCount { get; set; }
     public DateTime? NextAttemptAtUtc { get; set; }
     public int CreatedByUserId { get; set; }

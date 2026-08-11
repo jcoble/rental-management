@@ -1,3 +1,4 @@
+using System.Text.Json;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -171,6 +172,17 @@ public sealed class AdminAuditEntryResponse
     public string? OldValues { get; set; }
     public string? NewValues { get; set; }
     public string? ChangeReason { get; set; }
+    public bool IsProviderPaymentDeadLetter { get; set; }
+    public string? ProviderEventId { get; set; }
+    public string? PaymentIntentId { get; set; }
+    public decimal? PaymentAmount { get; set; }
+    public string? PaymentCurrency { get; set; }
+    public long? TargetChargeLedgerEntryId { get; set; }
+    public long? PaymentAttemptId { get; set; }
+    public DateTime? ProviderReceivedAtUtc { get; set; }
+    public DateTime? ProviderDeadLetteredAtUtc { get; set; }
+    public string? RecoveryStatus { get; set; }
+    public string? RecoveryAction { get; set; }
 
     public string TestId => $"admin-audit-{Id}";
 
@@ -179,7 +191,10 @@ public sealed class AdminAuditEntryResponse
         AuditDescriber describer,
         string? resolvedActorName = null,
         int? unitId = null,
-        AuditDiffBuilder? diff = null) => new()
+        AuditDiffBuilder? diff = null)
+    {
+        var provider = ProviderPaymentAuditFields.Parse(e);
+        return new()
         {
             Id = e.Id,
             PortfolioId = e.PortfolioId,
@@ -198,5 +213,83 @@ public sealed class AdminAuditEntryResponse
             OldValues = e.OldValues,
             NewValues = e.NewValues,
             ChangeReason = e.ChangeReason,
+            IsProviderPaymentDeadLetter = provider.IsDeadLetter,
+            ProviderEventId = provider.EventId,
+            PaymentIntentId = provider.PaymentIntentId,
+            PaymentAmount = provider.Amount,
+            PaymentCurrency = provider.Currency,
+            TargetChargeLedgerEntryId = provider.TargetChargeLedgerEntryId,
+            PaymentAttemptId = provider.PaymentAttemptId,
+            ProviderReceivedAtUtc = provider.ReceivedAtUtc,
+            ProviderDeadLetteredAtUtc = provider.DeadLetteredAtUtc,
+            RecoveryStatus = provider.RecoveryStatus,
+            RecoveryAction = provider.RecoveryAction,
         };
+    }
+
+    private sealed record ProviderPaymentAuditFields(
+        bool IsDeadLetter,
+        string? EventId,
+        string? PaymentIntentId,
+        decimal? Amount,
+        string? Currency,
+        long? TargetChargeLedgerEntryId,
+        long? PaymentAttemptId,
+        DateTime? ReceivedAtUtc,
+        DateTime? DeadLetteredAtUtc,
+        string? RecoveryStatus,
+        string? RecoveryAction)
+    {
+        internal static ProviderPaymentAuditFields Parse(AtomicAuditLog audit)
+        {
+            if (audit.EntityType != nameof(TenantAccount)
+                || (audit.ChangeReason?.Contains("dead-lettered", StringComparison.OrdinalIgnoreCase) != true
+                    && audit.NewValues?.Contains("DeadLettered", StringComparison.OrdinalIgnoreCase) != true))
+                return new(false, null, null, null, null, null, null, null, null, null, null);
+
+            try
+            {
+                using var doc = JsonDocument.Parse(audit.NewValues ?? "{}");
+                var root = doc.RootElement;
+                return new(true,
+                    StringValue(root, "ProviderEventId") ?? ExtractEventId(audit.ChangeReason),
+                    StringValue(root, "ProviderObjectId"),
+                    DecimalValue(root, "Amount"),
+                    StringValue(root, "Currency"),
+                    LongValue(root, "ChargeLedgerEntryId"),
+                    LongValue(root, "Id"),
+                    DateTimeValue(root, "ProviderReceivedAtUtc"),
+                    DateTimeValue(root, "ProviderDeadLetteredAtUtc"),
+                    StringValue(root, "RecoveryStatus") ?? "DeadLettered",
+                    StringValue(root, "RecoveryAction"));
+            }
+            catch (JsonException)
+            {
+                return new(true, ExtractEventId(audit.ChangeReason), null, null, null,
+                    null, null, null, null, "DeadLettered", null);
+            }
+        }
+
+        private static string? StringValue(JsonElement root, string name) =>
+            root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString() : null;
+        private static long? LongValue(JsonElement root, string name) =>
+            root.TryGetProperty(name, out var value) && value.TryGetInt64(out var result)
+                ? result : null;
+        private static decimal? DecimalValue(JsonElement root, string name) =>
+            root.TryGetProperty(name, out var value) && value.TryGetDecimal(out var result)
+                ? result : null;
+        private static DateTime? DateTimeValue(JsonElement root, string name) =>
+            root.TryGetProperty(name, out var value) && value.TryGetDateTime(out var result)
+                ? result : null;
+        private static string? ExtractEventId(string? reason)
+        {
+            const string marker = "provider event ";
+            var index = reason?.IndexOf(marker, StringComparison.OrdinalIgnoreCase) ?? -1;
+            if (index < 0) return null;
+            var start = index + marker.Length;
+            var end = reason!.IndexOf(' ', start);
+            return (end < 0 ? reason[start..] : reason[start..end]).TrimEnd(':');
+        }
+    }
 }
