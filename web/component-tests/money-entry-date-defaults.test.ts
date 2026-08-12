@@ -65,7 +65,8 @@ describe('money-entry date defaults', () => {
 		expect(businessDateOrToday(undefined)).toBe('2027-02-28');
 
 		const expensesTab = source('../src/lib/components/unit/tabs/ExpensesTab.svelte');
-		expect(expensesTab.includes('incurredAt: businessDateOrToday(undefined)')).toBe(true);
+		expect(expensesTab.includes('const moneyDate = $derived(businessDateOrToday(businessDate))')).toBe(true);
+		expect(expensesTab.includes('incurredAt: moneyDate')).toBe(true);
 		expect(expensesTab.includes('new Date().toISOString().slice(0, 10)')).toBe(false);
 
 		const onboardingPage = source('../src/routes/(protected)/onboarding/+page.svelte');

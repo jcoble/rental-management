@@ -31,11 +31,15 @@
 
 	let {
 		dashboard,
+		businessDate = null,
+		businessDatePending = false,
 		onScan,
 		tabQuery = 'expenses',
 		ledgerQuery,
 	}: {
 		dashboard: UnitDashboard;
+		businessDate?: string | null;
+		businessDatePending?: boolean;
 		onScan: (context?: Partial<ScanContext>) => void;
 		tabQuery?: string;
 		ledgerQuery?: string;
@@ -164,7 +168,8 @@
 	}
 
 	// ── Inline "add expense" form (reuses expenseSchema + the app's form conventions; sets UnitId) ──
-	const emptyCreate = () => ({ description: '', amount: '', incurredAt: businessDateOrToday(undefined), category: 'Repairs', status: 'Pending' });
+	const moneyDate = $derived(businessDateOrToday(businessDate));
+	const emptyCreate = () => ({ description: '', amount: '', incurredAt: moneyDate, category: 'Repairs', status: 'Pending' });
 	const createSteps: FormStepperStep[] = [
 		{ id: 'details', label: 'Details', description: 'Amount and date' },
 		{ id: 'context', label: 'Context', description: 'Category and status' },
@@ -277,7 +282,13 @@
 	/>
 {:else}
 	<div class="flex flex-wrap justify-end gap-2">
-		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="expenses-create">
+		<Button
+			class="gap-2"
+			disabled={!showCreate && businessDatePending}
+			aria-busy={!showCreate && businessDatePending}
+			onclick={() => (showCreate ? closeCreate() : openCreate())}
+			data-testid="expenses-create"
+		>
 			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> Add expense{/if}
 		</Button>
 		<Button variant="outline" class="gap-2" onclick={() => onScan({ type: 'Expense', returnTo: unitUrl() })} data-testid="expenses-scan">
