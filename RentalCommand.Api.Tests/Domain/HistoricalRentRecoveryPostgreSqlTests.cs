@@ -141,6 +141,7 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
                 row.DebitEntryId,
                 row.CreditEntryId,
                 row.Amount,
+                row.EffectiveOn,
                 row.ReversesAllocationId,
                 row.BusinessKey,
             })
@@ -149,7 +150,8 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
         allocations.Should().Contain(row =>
             row.Id == first.Value.ReversedAllocationId
             && row.Amount == -1_377.42m
-            && row.ReversesAllocationId == graph.AllocationId);
+            && row.ReversesAllocationId == graph.AllocationId
+            && row.EffectiveOn == new DateOnly(2027, 01, 01));
         allocations.Should().Contain(row =>
             row.Id == first.Value.ReplacementAllocationId
             && row.DebitEntryId == first.Value.ReplacementRentChargeEntryId
@@ -169,6 +171,20 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
             .SingleAsync();
         balance.Total.Should().Be(2_902.42m);
         balance.Open.Should().Be(0m);
+
+        SetFrozenBusinessDate(setup.Db, new DateTime(2026, 12, 31, 12, 00, 00, DateTimeKind.Utc));
+        var beforeRecoveryBoundary = await setup.Db.TenantAccountBalanceProjections
+            .AsNoTracking()
+            .SingleAsync(row => row.TenantAccountId == graph.TenantAccountId);
+        beforeRecoveryBoundary.BusinessDate.Should().Be(new DateOnly(2026, 12, 31));
+        beforeRecoveryBoundary.UnappliedCredit.Should().Be(0m);
+
+        SetFrozenBusinessDate(setup.Db, new DateTime(2027, 01, 01, 12, 00, 00, DateTimeKind.Utc));
+        var onRecoveryBoundary = await setup.Db.TenantAccountBalanceProjections
+            .AsNoTracking()
+            .SingleAsync(row => row.TenantAccountId == graph.TenantAccountId);
+        onRecoveryBoundary.BusinessDate.Should().Be(new DateOnly(2027, 01, 01));
+        onRecoveryBoundary.UnappliedCredit.Should().Be(1_377.42m);
 
         (await setup.Db.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == Identity(command).CommandType
@@ -274,8 +290,23 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
         compensation.Amount.Should().Be(-1_377.42m);
         compensation.DebitEntryId.Should().Be(graph.ProratedRentEntryId);
         compensation.CreditEntryId.Should().Be(graph.ReceiptEntryId);
+        compensation.EffectiveOn.Should().Be(new DateOnly(2027, 01, 06));
         compensation.BusinessKey.Should().Be(
             $"refunded-allocation-recovery:{scope.PortfolioId}:{graph.TenantAccountId}:{graph.AllocationId}");
+
+        SetFrozenBusinessDate(setup.Db, new DateTime(2027, 01, 05, 12, 00, 00, DateTimeKind.Utc));
+        var beforeRefundBoundary = await setup.Db.TenantAccountBalanceProjections
+            .AsNoTracking()
+            .SingleAsync(row => row.TenantAccountId == graph.TenantAccountId);
+        beforeRefundBoundary.BusinessDate.Should().Be(new DateOnly(2027, 01, 05));
+        beforeRefundBoundary.UnappliedCredit.Should().Be(147.58m);
+
+        SetFrozenBusinessDate(setup.Db, new DateTime(2027, 01, 06, 12, 00, 00, DateTimeKind.Utc));
+        var onRefundBoundary = await setup.Db.TenantAccountBalanceProjections
+            .AsNoTracking()
+            .SingleAsync(row => row.TenantAccountId == graph.TenantAccountId);
+        onRefundBoundary.BusinessDate.Should().Be(new DateOnly(2027, 01, 06));
+        onRefundBoundary.UnappliedCredit.Should().Be(0m);
         (await setup.Db.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == RefundedAllocationIdentity(command).CommandType
             && row.IdempotencyKey == RefundedAllocationIdentity(command).IdempotencyKey))
@@ -721,7 +752,10 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
             refundPaymentAttemptId);
     }
 
-    private static void SeedFrozenBusinessDate(RentalCommandDbContext db)
+    private static void SeedFrozenBusinessDate(RentalCommandDbContext db) =>
+        SetFrozenBusinessDate(db, SeededAtUtc);
+
+    private static void SetFrozenBusinessDate(RentalCommandDbContext db, DateTime frozenAtUtc)
     {
         var clock = db.SimulationClocks.SingleOrDefault(clock => clock.Id == 1);
         if (clock is null)
@@ -731,10 +765,10 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
         }
 
         clock.Mode = ClockMode.Frozen;
-        clock.SimAnchorUtc = SeededAtUtc;
-        clock.RealAnchorUtc = SeededAtUtc;
+        clock.SimAnchorUtc = frozenAtUtc;
+        clock.RealAnchorUtc = frozenAtUtc;
         clock.TimeZoneId = "UTC";
-        clock.UpdatedAtRealUtc = SeededAtUtc;
+        clock.UpdatedAtRealUtc = frozenAtUtc;
         db.SaveChanges();
         db.ChangeTracker.Clear();
     }

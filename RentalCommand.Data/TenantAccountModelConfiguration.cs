@@ -391,6 +391,7 @@ internal static class TenantAccountModelConfiguration
             entity.HasAlternateKey(e => new { e.Id, e.TenantAccountId, e.PortfolioId });
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.AllocatedAtUtc).HasDefaultValueSql("clock_timestamp()");
+            entity.Property(e => e.EffectiveOn).HasColumnType("date");
             entity.Property(e => e.BusinessKey).IsRequired().HasMaxLength(200);
 
             entity.HasIndex(e => new { e.TenantAccountId, e.BusinessKey }).IsUnique();

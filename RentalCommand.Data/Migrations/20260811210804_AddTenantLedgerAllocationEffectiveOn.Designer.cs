@@ -3,6 +3,7 @@ using System;
 using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RentalCommand.Data;
@@ -12,9 +13,11 @@ using RentalCommand.Data;
 namespace RentalCommand.Data.Migrations
 {
     [DbContext(typeof(RentalCommandDbContext))]
-    partial class RentalCommandDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260811210804_AddTenantLedgerAllocationEffectiveOn")]
+    partial class AddTenantLedgerAllocationEffectiveOn
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -6725,19 +6728,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime?>("WorkerClaimExpiresAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTime?>("WorkerClaimLastFailureAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("WorkerClaimLastFailureReason")
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)");
-
                     b.Property<string>("WorkerClaimOwner")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
-
-                    b.Property<DateTime?>("WorkerClaimQuarantinedAtUtc")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("WorkerClaimToken")
                         .HasColumnType("uuid");

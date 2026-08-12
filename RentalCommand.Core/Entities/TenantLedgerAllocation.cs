@@ -13,6 +13,7 @@ public class TenantLedgerAllocation : IPortfolioScoped
     public decimal Amount { get; set; }
     public long? ReversesAllocationId { get; set; }
     public DateTime AllocatedAtUtc { get; set; }
+    public DateOnly? EffectiveOn { get; set; }
     public string BusinessKey { get; set; } = string.Empty;
     public int CreatedByUserId { get; set; }
 

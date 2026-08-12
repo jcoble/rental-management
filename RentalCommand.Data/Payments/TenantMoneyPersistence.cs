@@ -642,11 +642,12 @@ internal static class TenantMoneyPersistence
             ), inserted_allocation_reversal AS (
                 INSERT INTO "TenantLedgerAllocations" (
                     "PortfolioId", "TenantAccountId", "DebitEntryId", "CreditEntryId",
-                    "Amount", "AllocatedAtUtc", "BusinessKey", "ReversesAllocationId",
+                    "Amount", "AllocatedAtUtc", "EffectiveOn", "BusinessKey", "ReversesAllocationId",
                     "CreatedByUserId")
                 SELECT validation."PortfolioId", validation.tenant_account_id,
                        validation.charge_id, validation.receipt_id, -validation.allocation_amount,
-                       {postedAtUtc}, {allocationReversalBusinessKey}, validation.allocation_id,
+                       {postedAtUtc}, {rentPeriodStartOn}, {allocationReversalBusinessKey},
+                       validation.allocation_id,
                        {actorUserId}
                 FROM validation
                 WHERE validation.is_valid
@@ -1046,11 +1047,11 @@ internal static class TenantMoneyPersistence
             inserted_allocation_reversals AS (
                 INSERT INTO "TenantLedgerAllocations" (
                     "PortfolioId", "TenantAccountId", "DebitEntryId", "CreditEntryId",
-                    "Amount", "AllocatedAtUtc", "BusinessKey", "ReversesAllocationId",
+                    "Amount", "AllocatedAtUtc", "EffectiveOn", "BusinessKey", "ReversesAllocationId",
                     "CreatedByUserId")
                 SELECT allocation."PortfolioId", allocation."TenantAccountId",
                        allocation."DebitEntryId", allocation."CreditEntryId",
-                       -allocation."Amount", {postedAtUtc},
+                       -allocation."Amount", {postedAtUtc}, target."EffectiveOn",
                        'late-fee-recovery:' || {reference} || ':allocation-reverse:'
                            || allocation."Id"::text,
                        allocation."Id", {actorUserId}
@@ -1340,7 +1341,8 @@ internal static class TenantMoneyPersistence
                        allocation."DebitEntryId",
                        allocation."CreditEntryId",
                        allocation."Amount",
-                       refund."Id" AS refund_payment_attempt_id
+                       refund."Id" AS refund_payment_attempt_id,
+                       refund_entry."EffectiveOn" AS refund_effective_on
                 FROM "TenantLedgerAllocations" AS allocation
                 JOIN "TenantLedgerEntries" AS debit
                   ON debit."Id" = allocation."DebitEntryId"
@@ -1355,6 +1357,12 @@ internal static class TenantMoneyPersistence
                  AND refund."TenantAccountId" = allocation."TenantAccountId"
                  AND refund."PortfolioId" = allocation."PortfolioId"
                  AND refund."RefundsPaymentAttemptId" = credit."ProviderPaymentAttemptId"
+                JOIN "TenantLedgerEntries" AS refund_entry
+                  ON refund_entry."ProviderPaymentAttemptId" = refund."Id"
+                 AND refund_entry."TenantAccountId" = allocation."TenantAccountId"
+                 AND refund_entry."PortfolioId" = allocation."PortfolioId"
+                 AND refund_entry."EntryType" = 'Refund'
+                 AND refund_entry."Direction" = 'Debit'
                 WHERE allocation."Id" = {existingAllocationId}
                   AND allocation."PortfolioId" = {portfolioId}
                   AND allocation."TenantAccountId" = {tenantAccountId}
@@ -1380,10 +1388,11 @@ internal static class TenantMoneyPersistence
             ), inserted AS (
                 INSERT INTO "TenantLedgerAllocations" (
                     "PortfolioId", "TenantAccountId", "DebitEntryId", "CreditEntryId",
-                    "Amount", "AllocatedAtUtc", "BusinessKey", "ReversesAllocationId",
+                    "Amount", "AllocatedAtUtc", "EffectiveOn", "BusinessKey", "ReversesAllocationId",
                     "CreatedByUserId")
                 SELECT source."PortfolioId", source."TenantAccountId", source."DebitEntryId",
                        source."CreditEntryId", -source."Amount", {allocatedAtUtc},
+                       source.refund_effective_on,
                        {businessKey}, source."Id", {actorUserId}
                 FROM valid_source AS source
                 ON CONFLICT ("TenantAccountId", "BusinessKey") DO NOTHING
@@ -1413,6 +1422,7 @@ internal static class TenantMoneyPersistence
         int portfolioId,
         int tenantAccountId,
         long ledgerEntryId,
+        DateOnly effectiveOn,
         string businessKeyPrefix,
         int createdByUserId,
         DateTime allocatedAtUtc,
@@ -1429,10 +1439,11 @@ internal static class TenantMoneyPersistence
             WITH inserted AS (
                 INSERT INTO "TenantLedgerAllocations" (
                     "PortfolioId", "TenantAccountId", "DebitEntryId", "CreditEntryId",
-                    "Amount", "AllocatedAtUtc", "BusinessKey", "ReversesAllocationId",
+                    "Amount", "AllocatedAtUtc", "EffectiveOn", "BusinessKey", "ReversesAllocationId",
                     "CreatedByUserId")
                 SELECT source."PortfolioId", source."TenantAccountId", source."DebitEntryId",
                        source."CreditEntryId", -source."Amount", {allocatedAtUtc},
+                       {effectiveOn},
                        {businessKeyPrefix} || ':' || source."Id"::text, source."Id",
                        {createdByUserId}
                 FROM "TenantLedgerAllocations" AS source

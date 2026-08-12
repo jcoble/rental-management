@@ -634,7 +634,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             Direction = TenantLedgerDirection.Credit,
             Amount = 50m,
             Currency = "USD",
-            EffectiveOn = new DateOnly(2027, 01, 08),
+            EffectiveOn = new DateOnly(2027, 01, 09),
             PostedAtUtc = SeededAtUtc,
             Description = "Late fee payment",
             BusinessKey = $"manual-receipt:{Guid.NewGuid():N}",
@@ -675,7 +675,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             CreatedByUserId = scope.UserId,
         };
         _ctx.Db.TenantLedgerEntries.Add(existingReversal);
-        _ctx.Db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        var allocation = new TenantLedgerAllocation
         {
             PortfolioId = PortfolioId,
             TenantAccountId = graph.TenantAccountId,
@@ -685,7 +685,8 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             AllocatedAtUtc = SeededAtUtc,
             BusinessKey = $"{receipt.BusinessKey}:{wrongLateFee.Id}",
             CreatedByUserId = scope.UserId,
-        });
+        };
+        _ctx.Db.TenantLedgerAllocations.Add(allocation);
         await _ctx.Db.SaveChangesAsync();
         _ctx.Db.ChangeTracker.Clear();
 
@@ -780,6 +781,25 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         allocationSummary.Net.Should().Be(0m);
         allocationSummary.Reversed.Should().Be(50m);
         allocationSummary.Replacement.Should().Be(50m);
+
+        var compensation = await _ctx.Db.TenantLedgerAllocations
+            .AsNoTracking()
+            .SingleAsync(row => row.ReversesAllocationId == allocation.Id);
+        compensation.EffectiveOn.Should().Be(new DateOnly(2027, 01, 08));
+
+        SetFrozenBusinessDate(new DateTime(2027, 01, 07, 12, 00, 00, DateTimeKind.Utc));
+        var beforeRecoveryBoundary = await _ctx.Db.TenantAccountBalanceProjections
+            .AsNoTracking()
+            .SingleAsync(row => row.TenantAccountId == graph.TenantAccountId);
+        beforeRecoveryBoundary.BusinessDate.Should().Be(new DateOnly(2027, 01, 07));
+        beforeRecoveryBoundary.UnappliedCredit.Should().Be(0m);
+
+        SetFrozenBusinessDate(new DateTime(2027, 01, 08, 12, 00, 00, DateTimeKind.Utc));
+        var onRecoveryBoundary = await _ctx.Db.TenantAccountBalanceProjections
+            .AsNoTracking()
+            .SingleAsync(row => row.TenantAccountId == graph.TenantAccountId);
+        onRecoveryBoundary.BusinessDate.Should().Be(new DateOnly(2027, 01, 08));
+        onRecoveryBoundary.UnappliedCredit.Should().Be(50m);
     }
 
     [Fact]
