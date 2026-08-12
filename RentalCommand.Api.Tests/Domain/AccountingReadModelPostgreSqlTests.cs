@@ -11,6 +11,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Core.Time;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -229,6 +230,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         setup.Db.TenantLedgerAllocations.Add(compensating);
         await setup.Db.SaveChangesAsync();
         setup.Db.ChangeTracker.Clear();
+        FreezeBusinessClock(setup, new DateTime(2027, 1, 2, 12, 0, 0, DateTimeKind.Utc));
         await setup.ActivateApiScopeAsync(scope);
         commands.Reset();
 
@@ -571,8 +573,15 @@ public sealed class AccountingReadModelPostgreSqlTests
             CreatedByUserId = scope.UserId,
         });
         await setup.Db.SaveChangesAsync();
+        FreezeBusinessClock(setup, new DateTime(2027, 6, 15, 12, 0, 0, DateTimeKind.Utc));
         await setup.ActivateApiScopeAsync(scope);
         var service = new AccountingLedgerReadModelService(setup.Db);
+
+        var chargeBalances = await setup.Db.TenantChargeBalanceProjections
+            .Where(row => row.TenantAccountId == account.Id)
+            .ToDictionaryAsync(row => row.TenantLedgerEntryId);
+        chargeBalances[settledCharge.Id].OpenAmount.Should().Be(0m);
+        chargeBalances[openCharge.Id].OpenAmount.Should().Be(120m);
 
         commands.Reset();
         var ledger = await service.GetTenantLedgerAsync(scope, account.Id,
@@ -1266,6 +1275,26 @@ public sealed class AccountingReadModelPostgreSqlTests
         setup.Db.AddRange(property, unit, relationship, account);
         await setup.Db.SaveChangesAsync();
         return account;
+    }
+
+    private static void FreezeBusinessClock(
+        MigratedPostgreSqlTestContext setup,
+        DateTime businessNowUtc)
+    {
+        var clock = setup.Db.SimulationClocks.SingleOrDefault(row => row.Id == 1);
+        if (clock is null)
+        {
+            setup.Db.SimulationClocks.Add(new SimulationClock { Id = 1 });
+            clock = setup.Db.SimulationClocks.Local.Single(row => row.Id == 1);
+        }
+
+        clock.Mode = ClockMode.Frozen;
+        clock.SimAnchorUtc = businessNowUtc;
+        clock.RealAnchorUtc = businessNowUtc;
+        clock.TimeZoneId = "UTC";
+        clock.UpdatedAtRealUtc = businessNowUtc;
+        setup.Db.SaveChanges();
+        setup.Db.ChangeTracker.Clear();
     }
 
     private static async Task<LedgerAccount> AccountAsync(

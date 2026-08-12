@@ -245,13 +245,15 @@ public class DashboardRecentActivityTests : IAsyncLifetime
             command.Contains("active_accounts AS MATERIALIZED", StringComparison.OrdinalIgnoreCase)).Subject;
         accountingSql.Should().NotContain("vw_tenant_account_balances",
             "receivable work must not expand the whole-portfolio account-balance view");
-        accountingSql.Should().NotContain("vw_tenant_charge_balances",
-            "the canonical charge formula must run only after the authorized active-account seed");
+        accountingSql.Should().Contain("vw_tenant_charge_balances",
+            "receivable facts must use the canonical effective-date-bounded charge projection");
+        accountingSql.IndexOf("active_accounts AS MATERIALIZED", StringComparison.OrdinalIgnoreCase)
+            .Should().BeLessThan(
+                accountingSql.IndexOf("vw_tenant_charge_balances", StringComparison.OrdinalIgnoreCase),
+                "the canonical charge projection must be joined only after the authorized active-account seed");
         accountingSql.Should().Contain(
-            "entry.\"TenantAccountId\" = active_account.\"TenantAccountId\"",
-            "ledger work must be keyed by the bounded authorized account seed");
-        accountingSql.Should().Contain("charge_facts AS MATERIALIZED",
-            "charge, reversal, and allocation facts must be combined without cross-expanding relations");
+            "balance.\"TenantAccountId\" = active_account.\"TenantAccountId\"",
+            "canonical charge facts must be keyed by the bounded authorized account seed");
         accountingSql.Should().Contain("portfolio.\"DeletedAt\" IS NULL",
             "raw child joins must preserve the DbContext portfolio visibility filter");
         accountingSql.Should().Contain("property_row.\"DeletedAt\" IS NULL",

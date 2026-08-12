@@ -319,6 +319,168 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
     }
 
     [Fact]
+    public async Task FutureEffectiveReversal_AllLiveReadModelsMatchCanonicalViewsAcrossBoundary()
+    {
+        await using var context = await postgres.CreateContextAsync();
+        var scope = context.Db.SeedAdministratorScope(
+            1,
+            nameof(FutureEffectiveReversal_AllLiveReadModelsMatchCanonicalViewsAcrossBoundary));
+        var beforeUtc = DateTime.UtcNow.AddMinutes(1);
+        var beforeOn = DateOnly.FromDateTime(beforeUtc);
+        var boundaryUtc = beforeUtc.AddDays(5);
+        var boundaryOn = DateOnly.FromDateTime(boundaryUtc);
+        SeedFrozenBusinessDate(context, beforeUtc);
+        var property = SeedProperty(context, "H6 boundary property", beforeUtc);
+        var unit = SeedUnit(context, property, "H6", beforeUtc);
+        var account = SeedTenantAccount(context, property, unit, beforeUtc);
+        var charge = new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.ManualCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 100m,
+            Currency = "USD",
+            EffectiveOn = beforeOn.AddDays(-9),
+            DueOn = beforeOn.AddDays(-9),
+            PostedAtUtc = beforeUtc,
+            Description = "Paid charge with future reversal",
+            BusinessKey = $"h6-twin-charge:{Guid.NewGuid():N}",
+            CreatedByUserId = scope.UserId,
+        };
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 100m,
+            Currency = "USD",
+            EffectiveOn = beforeOn,
+            PostedAtUtc = beforeUtc,
+            Description = "Payment for H6 charge",
+            BusinessKey = $"h6-twin-receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = scope.UserId,
+        };
+        context.Db.TenantLedgerEntries.AddRange(charge, receipt);
+        await context.Db.SaveChangesAsync();
+        var originalAllocation = new TenantLedgerAllocation
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = 100m,
+            AllocatedAtUtc = beforeUtc,
+            BusinessKey = $"h6-twin-allocation:{Guid.NewGuid():N}",
+            CreatedByUserId = scope.UserId,
+        };
+        context.Db.TenantLedgerAllocations.Add(originalAllocation);
+        await context.Db.SaveChangesAsync();
+        context.Db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.Reversal,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 100m,
+            Currency = "USD",
+            EffectiveOn = boundaryOn,
+            PostedAtUtc = beforeUtc,
+            Description = "Future charge reversal",
+            BusinessKey = $"h6-twin-reversal:{Guid.NewGuid():N}",
+            ReversesEntryId = charge.Id,
+            CreatedByUserId = scope.UserId,
+        });
+        context.Db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = -100m,
+            ReversesAllocation = originalAllocation,
+            AllocatedAtUtc = beforeUtc,
+            EffectiveOn = boundaryOn,
+            BusinessKey = $"h6-twin-allocation-reversal:{Guid.NewGuid():N}",
+            CreatedByUserId = scope.UserId,
+        });
+        await context.Db.SaveChangesAsync();
+        context.Db.ChangeTracker.Clear();
+        await context.ActivateApiScopeAsync(scope);
+
+        await AssertReadModelsAsync(beforeUtc, expectedDueThisMonth: 100m, expectedUnappliedCredit: 0m,
+            expectedAllocationDates: [beforeOn]);
+
+        await context.Db.Database.ExecuteSqlRawAsync("RESET SESSION AUTHORIZATION");
+        SeedFrozenBusinessDate(context, boundaryUtc);
+        await ActivateApiScopeAsync(context, scope);
+
+        await AssertReadModelsAsync(boundaryUtc, expectedDueThisMonth: 0m, expectedUnappliedCredit: 100m,
+            expectedAllocationDates: [beforeOn, boundaryOn]);
+
+        async Task AssertReadModelsAsync(
+            DateTime businessNowUtc,
+            decimal expectedDueThisMonth,
+            decimal expectedUnappliedCredit,
+            DateOnly[] expectedAllocationDates)
+        {
+            var canonical = await new TenantAccountQueryService(context.Db, TimeProvider.System)
+                .GetAsync(scope, account.Id);
+            canonical.Should().NotBeNull();
+            canonical!.PastDueAmount.Should().Be(0m);
+            canonical.UnappliedCredit.Should().Be(expectedUnappliedCredit);
+
+            var canonicalCharge = await context.Db.TenantChargeBalanceProjections
+                .SingleAsync(row => row.TenantLedgerEntryId == charge.Id);
+            canonicalCharge.OpenAmount.Should().Be(0m);
+            canonicalCharge.IsPastDue.Should().BeFalse();
+
+            var ledgerService = new AccountingLedgerReadModelService(context.Db);
+            var ledger = await ledgerService.GetTenantLedgerAsync(
+                scope, account.Id, new TenantLedgerQuery { Take = 20 });
+            var ledgerCharge = ledger!.Items.Single(row => row.TenantLedgerEntryId == charge.Id);
+            ledgerCharge.OpenAmount.Should().Be(canonicalCharge.OpenAmount);
+            ledgerCharge.Status.Should().Be("Settled");
+            ledgerCharge.Allocations.Select(row => row.EffectiveOn)
+                .Should().Equal(expectedAllocationDates);
+
+            var month = await ledgerService.GetTenantMonthSummaryAsync(
+                scope,
+                account.Id,
+                new TenantMonthSummaryQuery
+                {
+                    From = new DateOnly(beforeOn.Year, beforeOn.Month, 1),
+                    To = new DateOnly(
+                        beforeOn.Year,
+                        beforeOn.Month,
+                        DateTime.DaysInMonth(beforeOn.Year, beforeOn.Month)),
+                    Take = 20,
+                });
+            var monthCharge = month!.SelectMany(row => row.Rows)
+                .Single(row => row.TenantLedgerEntryId == charge.Id);
+            monthCharge.OpenAmount.Should().Be(canonicalCharge.OpenAmount);
+            monthCharge.Status.Should().Be("Settled");
+            monthCharge.Allocations.Select(row => row.EffectiveOn)
+                .Should().Equal(expectedAllocationDates);
+
+            var summary = await ledgerService.GetTenantLedgerPeriodSummaryAsync(1, account.Id, 3);
+            summary.Should().NotBeNull();
+            (summary!.AgingCurrent + summary.Aging1To30 + summary.Aging31To60
+                + summary.Aging61To90 + summary.Aging90Plus).Should().Be(canonical.PastDueAmount);
+
+            var dashboard = await new DashboardService(
+                    context.Db,
+                    new AuditDescriber(),
+                    new FixedTimeProvider(businessNowUtc))
+                .GetDashboardAsync(scope);
+            dashboard.Should().NotBeNull();
+            dashboard!.Accounting.OverdueAmount.Should().Be(canonical.PastDueAmount);
+            dashboard.Accounting.DueThisMonthAmount.Should().Be(expectedDueThisMonth);
+        }
+    }
+
+    [Fact]
     public async Task RentLedger_ExecutesCanonicalCapabilityScopePipelineOnPostgreSql()
     {
         await using var context = await postgres.CreateContextAsync();

@@ -599,101 +599,20 @@ public class DashboardService : IDashboardService
                   AND (management."PossessionReturnedAtUtc" IS NULL
                        OR management."PossessionReturnedAtUtc" > active_portfolio."NowUtc")
             ),
-            account_entries AS MATERIALIZED (
-                SELECT
-                    entry."PortfolioId" AS "PortfolioId",
-                    entry."TenantAccountId" AS "TenantAccountId",
-                    entry."Id" AS "TenantLedgerEntryId",
-                    entry."EntryType" AS "EntryType",
-                    entry."Direction" AS "Direction",
-                    entry."EffectiveOn" AS "EffectiveOn",
-                    entry."DueOn" AS "DueOn",
-                    entry."Amount" AS "Amount",
-                    entry."ReversesEntryId" AS "ReversesEntryId",
-                    active_account."BusinessDate" AS "BusinessDate"
-                FROM active_accounts AS active_account
-                INNER JOIN "TenantLedgerEntries" AS entry
-                    ON entry."PortfolioId" = active_account."PortfolioId"
-                   AND entry."TenantAccountId" = active_account."TenantAccountId"
-                INNER JOIN active_portfolio
-                    ON active_portfolio."PortfolioId" = entry."PortfolioId"
-                WHERE entry."PortfolioId" = @portfolioId
-            ),
-            debit_allocations AS MATERIALIZED (
-                SELECT
-                    allocation."PortfolioId" AS "PortfolioId",
-                    allocation."TenantAccountId" AS "TenantAccountId",
-                    allocation."DebitEntryId" AS "TenantLedgerEntryId",
-                    sum(allocation."Amount") AS "NetAllocations"
-                FROM active_accounts AS active_account
-                INNER JOIN "TenantLedgerAllocations" AS allocation
-                    ON allocation."PortfolioId" = active_account."PortfolioId"
-                   AND allocation."TenantAccountId" = active_account."TenantAccountId"
-                INNER JOIN active_portfolio
-                    ON active_portfolio."PortfolioId" = allocation."PortfolioId"
-                WHERE allocation."PortfolioId" = @portfolioId
-                GROUP BY
-                    allocation."PortfolioId",
-                    allocation."TenantAccountId",
-                    allocation."DebitEntryId"
-            ),
-            charge_facts AS MATERIALIZED (
-                SELECT
-                    entry."PortfolioId" AS "PortfolioId",
-                    entry."TenantAccountId" AS "TenantAccountId",
-                    entry."TenantLedgerEntryId" AS "TenantLedgerEntryId",
-                    entry."DueOn" AS "DueOn",
-                    entry."BusinessDate" AS "BusinessDate",
-                    entry."Amount" AS "OriginalAmount",
-                    0::numeric AS "ReversedAmount",
-                    0::numeric AS "NetAllocations"
-                FROM account_entries AS entry
-                WHERE entry."Direction" = 'Debit'
-                  AND entry."EffectiveOn" <= entry."BusinessDate"
-                  AND entry."EntryType" NOT IN ('Refund', 'Reversal', 'TransferOut')
-
-                UNION ALL
-
-                SELECT
-                    reversal."PortfolioId",
-                    reversal."TenantAccountId",
-                    reversal."ReversesEntryId",
-                    NULL::date,
-                    NULL::date,
-                    0::numeric,
-                    reversal."Amount",
-                    0::numeric
-                FROM account_entries AS reversal
-                WHERE reversal."EntryType" = 'Reversal'
-
-                UNION ALL
-
-                SELECT
-                    allocation."PortfolioId",
-                    allocation."TenantAccountId",
-                    allocation."TenantLedgerEntryId",
-                    NULL::date,
-                    NULL::date,
-                    0::numeric,
-                    0::numeric,
-                    allocation."NetAllocations"
-                FROM debit_allocations AS allocation
-            ),
             charge_rows AS MATERIALIZED (
                 SELECT
-                    charge_fact."PortfolioId",
-                    charge_fact."TenantAccountId",
-                    charge_fact."TenantLedgerEntryId",
-                    max(charge_fact."DueOn") AS "DueOn",
-                    max(charge_fact."BusinessDate") AS "BusinessDate",
-                    sum(charge_fact."OriginalAmount") AS "OriginalAmount",
-                    sum(charge_fact."ReversedAmount") AS "ReversedAmount",
-                    sum(charge_fact."NetAllocations") AS "NetAllocations"
-                FROM charge_facts AS charge_fact
-                GROUP BY
-                    charge_fact."PortfolioId",
-                    charge_fact."TenantAccountId",
-                    charge_fact."TenantLedgerEntryId"
+                    balance."PortfolioId",
+                    balance."TenantAccountId",
+                    balance."TenantLedgerEntryId",
+                    balance."DueOn",
+                    balance."BusinessDate",
+                    balance."OriginalAmount",
+                    balance."ReversedAmount",
+                    balance."NetAllocations"
+                FROM active_accounts AS active_account
+                INNER JOIN "vw_tenant_charge_balances" AS balance
+                    ON balance."PortfolioId" = active_account."PortfolioId"
+                   AND balance."TenantAccountId" = active_account."TenantAccountId"
             )
             SELECT
                 COALESCE(sum(
