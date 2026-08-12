@@ -6,7 +6,11 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Automation;
 
-public sealed record ScheduledAutomationClaim(int Id, int PortfolioId, Guid ClaimToken);
+public sealed record ScheduledAutomationClaim(
+    int Id,
+    int PortfolioId,
+    Guid ClaimToken,
+    int AttemptCount = 0);
 
 public interface IScheduledAutomationClaimStore
 {
@@ -18,6 +22,12 @@ public interface IScheduledAutomationClaimStore
         CancellationToken ct = default);
     Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringMaintenanceAsync(
         string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
+        CancellationToken ct = default);
+    Task<bool> RecordRecurringMaintenanceFailureAsync(
+        ScheduledAutomationClaim claim,
+        DateTime failedAtUtc,
+        string failureReason,
+        int quarantineAfterAttempts,
         CancellationToken ct = default);
 }
 
@@ -103,7 +113,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
             "WorkerClaimAttemptCount" = loan."WorkerClaimAttemptCount" + 1
         FROM candidates
         WHERE loan."Id" = candidates."Id"
-        RETURNING loan."Id", loan."PortfolioId", loan."WorkerClaimToken";
+        RETURNING loan."Id", loan."PortfolioId", loan."WorkerClaimToken", loan."WorkerClaimAttemptCount";
         """;
 
     private const string ExpenseSql = """
@@ -125,7 +135,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
             "WorkerClaimAttemptCount" = template."WorkerClaimAttemptCount" + 1
         FROM candidates
         WHERE template."Id" = candidates."Id"
-        RETURNING template."Id", template."PortfolioId", template."WorkerClaimToken";
+        RETURNING template."Id", template."PortfolioId", template."WorkerClaimToken", template."WorkerClaimAttemptCount";
         """;
 
     private const string MaintenanceSql = """
@@ -137,6 +147,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
               AND task."IsActive"
               AND task."NextDueDate" <= @today
               AND COALESCE(settings."EnableRecurringMaintenance", TRUE)
+              AND task."WorkerClaimQuarantinedAtUtc" IS NULL
               AND (task."WorkerClaimToken" IS NULL OR task."WorkerClaimExpiresAtUtc" <= clock_timestamp())
             ORDER BY task."NextDueDate", task."Id"
             FOR UPDATE OF task SKIP LOCKED
@@ -149,7 +160,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
             "WorkerClaimAttemptCount" = task."WorkerClaimAttemptCount" + 1
         FROM candidates
         WHERE task."Id" = candidates."Id"
-        RETURNING task."Id", task."PortfolioId", task."WorkerClaimToken";
+        RETURNING task."Id", task."PortfolioId", task."WorkerClaimToken", task."WorkerClaimAttemptCount";
         """;
 
     private readonly RentalCommandDbContext _db;
@@ -171,6 +182,40 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         CancellationToken ct = default) =>
         ClaimAsync(MaintenanceSql, owner, todayUtc, leaseDuration, batchSize, false, ct);
 
+    public async Task<bool> RecordRecurringMaintenanceFailureAsync(
+        ScheduledAutomationClaim claim,
+        DateTime failedAtUtc,
+        string failureReason,
+        int quarantineAfterAttempts,
+        CancellationToken ct = default)
+    {
+        if (claim.Id <= 0 || claim.ClaimToken == Guid.Empty)
+            throw new ArgumentException("A valid recurring-maintenance claim is required.", nameof(claim));
+        if (quarantineAfterAttempts <= 0)
+            throw new ArgumentOutOfRangeException(nameof(quarantineAfterAttempts));
+
+        var reason = string.IsNullOrWhiteSpace(failureReason)
+            ? "Recurring-maintenance generation failed without a reason."
+            : failureReason.Trim();
+        if (reason.Length > 2000)
+            reason = reason[..2000];
+
+        var failedAt = AsUtc(failedAtUtc);
+        var quarantine = claim.AttemptCount >= quarantineAfterAttempts;
+        var affected = await _db.RecurringMaintenanceTasks
+            .IgnoreQueryFilters()
+            .Where(task => task.Id == claim.Id && task.WorkerClaimToken == claim.ClaimToken)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(task => task.WorkerClaimOwner, _ => (string?)null)
+                .SetProperty(task => task.WorkerClaimToken, _ => (Guid?)null)
+                .SetProperty(task => task.WorkerClaimExpiresAtUtc, _ => (DateTime?)null)
+                .SetProperty(task => task.WorkerClaimLastFailureReason, _ => reason)
+                .SetProperty(task => task.WorkerClaimLastFailureAtUtc, _ => failedAt)
+                .SetProperty(task => task.WorkerClaimQuarantinedAtUtc,
+                    task => quarantine ? failedAt : task.WorkerClaimQuarantinedAtUtc),
+                ct);
+        return affected == 1;
+    }
 
     private async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimAsync(
         string sql, string owner, DateTime todayUtc, TimeSpan leaseDuration,
@@ -205,7 +250,8 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
             var claims = new List<ScheduledAutomationClaim>();
             await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
-                claims.Add(new ScheduledAutomationClaim(reader.GetInt32(0), reader.GetInt32(1), reader.GetGuid(2)));
+                claims.Add(new ScheduledAutomationClaim(
+                    reader.GetInt32(0), reader.GetInt32(1), reader.GetGuid(2), reader.GetInt32(3)));
             return claims;
         }
         finally

@@ -3,6 +3,7 @@ using System;
 using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RentalCommand.Data;
@@ -12,9 +13,11 @@ using RentalCommand.Data;
 namespace RentalCommand.Data.Migrations
 {
     [DbContext(typeof(RentalCommandDbContext))]
-    partial class RentalCommandDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260811203626_H5RecurringMaintenanceQuarantine")]
+    partial class H5RecurringMaintenanceQuarantine
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

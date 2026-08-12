@@ -208,6 +208,7 @@ public static Task<IReadOnlyList<Loan>> LockDebtServiceClaimsAsync(
                 .Where(task => recurringMaintenanceTaskIds.Contains(task.Id) &&
                     task.DeletedAt == null && task.WorkerClaimToken == claimToken &&
                     task.WorkerClaimExpiresAtUtc > now && task.IsActive &&
+                    task.WorkerClaimQuarantinedAtUtc == null &&
                     task.NextDueDate <= businessDateUtc &&
                     (!_db.AutomationSettings.Any(settings => settings.PortfolioId == task.PortfolioId) ||
                      _db.AutomationSettings.Any(settings => settings.PortfolioId == task.PortfolioId &&
@@ -227,6 +228,7 @@ public static Task<IReadOnlyList<Loan>> LockDebtServiceClaimsAsync(
               AND task."WorkerClaimToken" = {claimToken}
               AND task."WorkerClaimExpiresAtUtc" > clock_timestamp()
               AND task."IsActive"
+              AND task."WorkerClaimQuarantinedAtUtc" IS NULL
               AND task."NextDueDate" <= {AsUtc(businessDateUtc)}
               AND COALESCE(settings."EnableRecurringMaintenance", TRUE)
             ORDER BY task."Id"

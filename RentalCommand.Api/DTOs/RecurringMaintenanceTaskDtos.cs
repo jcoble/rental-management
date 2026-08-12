@@ -28,6 +28,10 @@ public class RecurringMaintenanceTaskResponse
     public DateTime? LastGeneratedAtUtc { get; set; }
     public bool IsActive { get; set; }
     public WorkOrderPriority Priority { get; set; }
+    public int AutomationFailureAttemptCount { get; set; }
+    public string? AutomationFailureReason { get; set; }
+    public DateTime? AutomationFailureAtUtc { get; set; }
+    public DateTime? AutomationQuarantinedAtUtc { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -61,6 +65,10 @@ public class RecurringMaintenanceTaskResponse
         LastGeneratedAtUtc = e.LastGeneratedAtUtc,
         IsActive = e.IsActive,
         Priority = e.Priority,
+        AutomationFailureAttemptCount = e.WorkerClaimAttemptCount,
+        AutomationFailureReason = e.WorkerClaimLastFailureReason,
+        AutomationFailureAtUtc = e.WorkerClaimLastFailureAtUtc,
+        AutomationQuarantinedAtUtc = e.WorkerClaimQuarantinedAtUtc,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };

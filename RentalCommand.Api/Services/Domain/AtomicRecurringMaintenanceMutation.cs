@@ -129,6 +129,7 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
         {
             var request = Read<ToggleRecurringMaintenanceTaskActiveRequest>(command);
             entity!.IsActive = request.IsActive;
+            ClearAutomationFailureState(entity);
             entity.UpdatedAt = now;
             attempt.BindSemanticAudit(entity, Audit(command, entity.Id,
                 AuditLogOperation.Updated,
@@ -156,6 +157,7 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
             entity.EstimatedCost = request.EstimatedCost;
             if (request.IsActive.HasValue) entity.IsActive = request.IsActive.Value;
             if (request.Priority.HasValue) entity.Priority = request.Priority.Value;
+            ClearAutomationFailureState(entity);
             entity.UpdatedAt = now;
             attempt.BindSemanticAudit(entity, Audit(command, entity.Id,
                 AuditLogOperation.Updated, $"Recurring maintenance task {entity.Id} updated"));
@@ -321,6 +323,10 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
             LastGeneratedAtUtc = task.LastGeneratedAtUtc,
             IsActive = task.IsActive,
             Priority = task.Priority,
+            AutomationFailureAttemptCount = task.WorkerClaimAttemptCount,
+            AutomationFailureReason = task.WorkerClaimLastFailureReason,
+            AutomationFailureAtUtc = task.WorkerClaimLastFailureAtUtc,
+            AutomationQuarantinedAtUtc = task.WorkerClaimQuarantinedAtUtc,
             CreatedAt = task.CreatedAt,
             UpdatedAt = task.UpdatedAt,
         });
@@ -368,6 +374,14 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
 
     private DateTime NormalizeDate(DateTime value) =>
         DateTime.SpecifyKind(value.Date, DateTimeKind.Utc);
+
+    private static void ClearAutomationFailureState(RecurringMaintenanceTask entity)
+    {
+        entity.WorkerClaimAttemptCount = 0;
+        entity.WorkerClaimLastFailureReason = null;
+        entity.WorkerClaimLastFailureAtUtc = null;
+        entity.WorkerClaimQuarantinedAtUtc = null;
+    }
 
     private T Read<T>(AtomicRecurringMaintenanceMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
