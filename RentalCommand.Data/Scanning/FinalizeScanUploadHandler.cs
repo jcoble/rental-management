@@ -263,7 +263,9 @@ public sealed class FinalizeScanUploadHandler
             if (duplicateMatches[index] is { } duplicate)
             {
                 FinalizePending(sourcePending, duplicate.SourceStoredFileId, command.UploadedAtUtc);
-                StageDuplicateBlobCleanup(context, command, sourcePending.Id, sourcePending.StoragePath);
+                StageDuplicateBlobCleanup(
+                    context, command, sourcePending.Id, sourcePending.StoragePath,
+                    duplicate.SourceStoredFileId);
 
                 if (command.Files[index].ThumbnailPendingUploadId is Guid duplicateThumbnailPendingId)
                 {
@@ -604,13 +606,17 @@ public sealed class FinalizeScanUploadHandler
         IAtomicCommandContext context,
         FinalizeScanUploadCommand command,
         Guid pendingUploadId,
-        string storagePath)
+        string storagePath,
+        int? storedFileId = null)
     {
+        var payload = storedFileId is int id
+            ? JsonSerializer.Serialize(new { pendingUploadId, storedFileId = id, storagePath })
+            : JsonSerializer.Serialize(new { pendingUploadId, storagePath });
         context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "blob-delete",
-            Payload = JsonSerializer.Serialize(new { pendingUploadId, storagePath }),
+            Payload = payload,
             IdempotencyKey = $"scan-upload-duplicate-blob:{pendingUploadId}",
             CreatedAtUtc = command.UploadedAtUtc,
             NextAttemptAtUtc = command.UploadedAtUtc,

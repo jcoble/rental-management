@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
 using System.Data.Common;
 using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -12,11 +14,14 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Documents;
+using RentalCommand.Data.Outbox;
 using RentalCommand.Data.Scanning;
+using RentalCommand.Engine.Workers;
 using Testcontainers.PostgreSql;
 
 namespace RentalCommand.IntegrationTests;
@@ -213,8 +218,21 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             message.IdempotencyKey.StartsWith("scan-upload-duplicate-blob:"));
         duplicateCleanup.MessageType.Should().Be("blob-delete");
         duplicateCleanup.Payload.Should().Contain("mortgage.pdf");
+        using var duplicatePayload = JsonDocument.Parse(duplicateCleanup.Payload);
+        var duplicateStoragePath = duplicatePayload.RootElement.GetProperty("storagePath").GetString();
+        duplicateStoragePath.Should().NotBeNullOrWhiteSpace();
         (await db.OutboxMessages.CountAsync(message =>
             message.IdempotencyKey.StartsWith("scan-draft-created:"))).Should().Be(1);
+
+        await RunOutboxWorkerAsync();
+
+        await using var dispatched = NewContext();
+        var completed = await dispatched.OutboxMessages.SingleAsync(message => message.Id == duplicateCleanup.Id);
+        completed.FailureKind.Should().BeNull($"dispatcher failure: {completed.LastError}");
+        completed.AcceptedAtUtc.Should().NotBeNull();
+        Storage.Paths.Should().NotContain(duplicateStoragePath!);
+        duplicatePayload.RootElement.GetProperty("storedFileId").GetInt32()
+            .Should().Be(retainedSourceStoredFileId!.Value);
     }
 
     [SkippableFact]
@@ -650,6 +668,22 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         null, null, null, null, null, null, null, null, null,
         "integration test");
 
+    private async Task RunOutboxWorkerAsync()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDbContext<RentalCommandDbContext>(options =>
+            options.UseNpgsql(_postgres!.GetConnectionString()));
+        services.AddScoped<IOutboxClaimStore, OutboxClaimStore>();
+        services.AddSingleton<IFileStorage>(_ => Storage);
+        services.AddSingleton<INotificationChannel, NoopNotificationChannel>();
+        services.AddSingleton<IPushSender, NoopPushSender>();
+        services.AddSingleton<IDataUpdateService, NoopDataUpdateService>();
+        await using var provider = services.BuildServiceProvider();
+        await using var scope = provider.CreateAsyncScope();
+        await new TestableOutboxWorker(provider).RunCycleAsync(scope.ServiceProvider);
+    }
+
     private static ScanUploadFilePayload Pdf(string fileName, string marker) => new(
         Encoding.ASCII.GetBytes($"%PDF-1.4\n{marker}\n%%EOF"),
         fileName,
@@ -720,6 +754,61 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             _paths.TryRemove(path, out _);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class TestableOutboxWorker(IServiceProvider services)
+        : OutboxDispatchWorker(services, NullLogger<OutboxDispatchWorker>.Instance)
+    {
+        public Task<int> RunCycleAsync(IServiceProvider scopedProvider) =>
+            ExecuteCycleAsync(scopedProvider, CancellationToken.None);
+    }
+
+    private sealed class NoopNotificationChannel : INotificationChannel
+    {
+        public Task<NotificationDeliveryReceipt> SendSmsAsync(
+            string toPhoneNumber,
+            string message,
+            NotificationDeliveryContext delivery,
+            int? portfolioId = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new NotificationDeliveryReceipt("noop", "noop"));
+
+        public Task<NotificationDeliveryReceipt> SendEmailAsync(
+            string toEmail,
+            string subject,
+            string body,
+            NotificationDeliveryContext delivery,
+            string? htmlBody = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new NotificationDeliveryReceipt("noop", "noop"));
+    }
+
+    private sealed class NoopPushSender : IPushSender
+    {
+        public Task<PushSendResult> SendAsync(
+            string deviceToken,
+            string title,
+            string body,
+            IReadOnlyDictionary<string, string>? data,
+            NotificationDeliveryContext delivery,
+            CancellationToken ct = default) =>
+            Task.FromResult(PushSendResult.Ok("noop"));
+    }
+
+    private sealed class NoopDataUpdateService : IDataUpdateService
+    {
+        public Task BroadcastEntityUpdateAsync(
+            int portfolioId,
+            string entityType,
+            int entityId,
+            object data,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task BroadcastEntityDeleteAsync(
+            int portfolioId,
+            string entityType,
+            int entityId,
+            CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class SqlProbe : DbCommandInterceptor

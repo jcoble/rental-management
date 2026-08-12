@@ -185,13 +185,19 @@ public class OutboxDispatchWorker : EngineWorkerBase
             case "blob-delete":
             {
                 var storagePath = Required(root, "storagePath");
-                var storedFileId = RequiredInt(root, "storedFileId");
-                var hasLiveReference = await db.StoredFiles
-                    .IgnoreQueryFilters()
-                    .AsNoTracking()
-                    .AnyAsync(file => file.Id != storedFileId
-                        && file.FilePath == storagePath
-                        && file.DeletedAt == null, ct);
+                var storedFileId = OptionalInt(root, "storedFileId");
+                var hasLiveReference = storedFileId is int id
+                    ? await db.StoredFiles
+                        .IgnoreQueryFilters()
+                        .AsNoTracking()
+                        .AnyAsync(file => file.Id != id
+                            && file.FilePath == storagePath
+                            && file.DeletedAt == null, ct)
+                    : await db.StoredFiles
+                        .IgnoreQueryFilters()
+                        .AsNoTracking()
+                        .AnyAsync(file => file.FilePath == storagePath
+                            && file.DeletedAt == null, ct);
                 if (hasLiveReference)
                 {
                     return new NotificationDeliveryReceipt(
@@ -269,10 +275,21 @@ public class OutboxDispatchWorker : EngineWorkerBase
 
     private static int RequiredInt(JsonElement root, string name)
     {
-        if (root.ValueKind == JsonValueKind.Object
-            && root.TryGetProperty(name, out var value)
-            && value.TryGetInt32(out var result)
-            && result > 0)
+        return OptionalInt(root, name)
+            ?? throw new OutboxPermanentDeliveryException(
+                $"Outbox payload is missing required integer field '{name}'.");
+    }
+
+    private static int? OptionalInt(JsonElement root, string name)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty(name, out var value)
+            || value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.TryGetInt32(out var result) && result > 0)
         {
             return result;
         }
