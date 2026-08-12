@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Data.Common;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -11,9 +13,12 @@ using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Documents;
+using RentalCommand.Data.Outbox;
+using RentalCommand.Engine.Workers;
 using Testcontainers.PostgreSql;
 
 namespace RentalCommand.IntegrationTests;
@@ -247,6 +252,16 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             message.IdempotencyKey.StartsWith("stored-document-duplicate-upload:"));
         cleanup.MessageType.Should().Be("blob-delete");
         cleanup.Payload.Should().Contain("blob-duplicate");
+
+        await RunOutboxWorkerAsync();
+
+        await using var dispatched = NewContext();
+        var completed = await dispatched.OutboxMessages.SingleAsync(message => message.Id == cleanup.Id);
+        completed.FailureKind.Should().BeNull($"dispatcher failure: {completed.LastError}");
+        completed.AcceptedAtUtc.Should().NotBeNull();
+        Storage.Deleted.Should().ContainSingle().Which.Should().Be("blob-duplicate");
+        using var payload = JsonDocument.Parse(cleanup.Payload);
+        payload.RootElement.GetProperty("storedFileId").GetInt32().Should().Be(original!.Id);
     }
 
     [SkippableFact]
@@ -669,6 +684,23 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
+    private async Task RunOutboxWorkerAsync()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(new DateTimeOffset(BusinessAtUtc)));
+        services.AddDbContext<RentalCommandDbContext>(options =>
+            options.UseNpgsql(_postgres!.GetConnectionString()));
+        services.AddScoped<IOutboxClaimStore, OutboxClaimStore>();
+        services.AddSingleton<IFileStorage>(_ => Storage);
+        services.AddSingleton<INotificationChannel, NoopNotificationChannel>();
+        services.AddSingleton<IPushSender, NoopPushSender>();
+        services.AddSingleton<IDataUpdateService, NoopDataUpdateService>();
+        await using var provider = services.BuildServiceProvider();
+        await using var scope = provider.CreateAsyncScope();
+        await new TestableOutboxWorker(provider).RunCycleAsync(scope.ServiceProvider);
+    }
+
     private RentalCommandDbContext NewContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseNpgsql(_postgres!.GetConnectionString())
@@ -804,6 +836,61 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             _paths.Remove(path);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class TestableOutboxWorker(IServiceProvider services)
+        : OutboxDispatchWorker(services, NullLogger<OutboxDispatchWorker>.Instance)
+    {
+        public Task<int> RunCycleAsync(IServiceProvider scopedProvider) =>
+            ExecuteCycleAsync(scopedProvider, CancellationToken.None);
+    }
+
+    private sealed class NoopNotificationChannel : INotificationChannel
+    {
+        public Task<NotificationDeliveryReceipt> SendSmsAsync(
+            string toPhoneNumber,
+            string message,
+            NotificationDeliveryContext delivery,
+            int? portfolioId = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new NotificationDeliveryReceipt("noop", "noop"));
+
+        public Task<NotificationDeliveryReceipt> SendEmailAsync(
+            string toEmail,
+            string subject,
+            string body,
+            NotificationDeliveryContext delivery,
+            string? htmlBody = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new NotificationDeliveryReceipt("noop", "noop"));
+    }
+
+    private sealed class NoopPushSender : IPushSender
+    {
+        public Task<PushSendResult> SendAsync(
+            string deviceToken,
+            string title,
+            string body,
+            IReadOnlyDictionary<string, string>? data,
+            NotificationDeliveryContext delivery,
+            CancellationToken ct = default) =>
+            Task.FromResult(PushSendResult.Ok("noop"));
+    }
+
+    private sealed class NoopDataUpdateService : IDataUpdateService
+    {
+        public Task BroadcastEntityUpdateAsync(
+            int portfolioId,
+            string entityType,
+            int entityId,
+            object data,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task BroadcastEntityDeleteAsync(
+            int portfolioId,
+            string entityType,
+            int entityId,
+            CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class CommandProbe : DbCommandInterceptor

@@ -421,6 +421,61 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         accepted.ProviderMessageId.Should().Be($"outbox-{accepted.Id}");
     }
 
+    [SkippableFact]
+    public async Task Worker_dispatches_path_only_blob_cleanup()
+    {
+        SkipIfDockerUnavailable();
+        await ResetOutboxAsync();
+        var now = DateTime.UtcNow;
+        await SeedAsync(new OutboxMessage
+        {
+            MessageType = "blob-delete",
+            Payload = """{"storagePath":"pending/duplicate.pdf"}""",
+            IdempotencyKey = "pending-upload-duplicate:path-only",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+        var storage = new CapturingFileStorage();
+
+        await RunWorkerAsync(new CapturingChannel(), new CapturingPushSender(), storage);
+
+        storage.DeleteAttempts.Should().Equal("pending/duplicate.pdf");
+        await using var verify = NewContext();
+        var accepted = await verify.OutboxMessages.SingleAsync(message =>
+            message.IdempotencyKey == "pending-upload-duplicate:path-only");
+        accepted.AcceptedAtUtc.Should().NotBeNull();
+        accepted.FailureKind.Should().BeNull();
+        accepted.Provider.Should().Be("file-storage");
+    }
+
+    [SkippableFact]
+    public async Task Worker_permanently_rejects_blob_cleanup_without_path_or_id()
+    {
+        SkipIfDockerUnavailable();
+        await ResetOutboxAsync();
+        var now = DateTime.UtcNow;
+        await SeedAsync(new OutboxMessage
+        {
+            MessageType = "blob-delete",
+            Payload = "{}",
+            IdempotencyKey = "pending-upload-duplicate:invalid",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+        var storage = new CapturingFileStorage();
+
+        await RunWorkerAsync(new CapturingChannel(), new CapturingPushSender(), storage);
+
+        storage.DeleteAttempts.Should().BeEmpty();
+        await using var verify = NewContext();
+        var rejected = await verify.OutboxMessages.SingleAsync(message =>
+            message.IdempotencyKey == "pending-upload-duplicate:invalid");
+        rejected.AcceptedAtUtc.Should().BeNull();
+        rejected.DeadLetteredAtUtc.Should().NotBeNull();
+        rejected.FailureKind.Should().Be(OutboxFailureKind.Permanent);
+        rejected.LastError.Should().Contain("storagePath");
+    }
+
     private async Task SeedAsync(params OutboxMessage[] messages)
     {
         await using var db = NewContext();

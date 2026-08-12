@@ -60,7 +60,12 @@ public sealed class CreateStoredDocumentHandler
             {
                 PortfolioId = command.PortfolioId,
                 MessageType = "blob-delete",
-                Payload = JsonSerializer.Serialize(new { pendingUploadId = pendingUpload.Id, storagePath = command.StoragePath }),
+                Payload = JsonSerializer.Serialize(new
+                {
+                    pendingUploadId = pendingUpload.Id,
+                    storedFileId = existing.Id,
+                    storagePath = command.StoragePath,
+                }),
                 IdempotencyKey = $"stored-document-duplicate-upload:{pendingUpload.Id}",
                 CreatedAtUtc = command.UploadedAtUtc,
                 NextAttemptAtUtc = command.UploadedAtUtc,
