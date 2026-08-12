@@ -61,6 +61,7 @@
 	} from '$lib/onboarding/lease-scan-confirm';
 	import { createLeaseSubmissionCoordinator } from '$lib/onboarding/lease-submission';
 	import { addCalendarYear } from '$lib/utils/parse-date';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 	import {
 		NEW_ONBOARDING_OWNER_VALUE,
 		onboardingOwnerFormFromOwner,
@@ -971,14 +972,13 @@
 	const today = new Date();
 	const oneYear = new Date(today);
 	oneYear.setFullYear(oneYear.getFullYear() + 1);
-	const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
 	let leaseForm = $state({
 		tenantId: '',
 		propertyId: '',
 		unitId: '',
-		startDate: isoDate(today),
-		endDate: isoDate(oneYear),
+		startDate: businessDateOrToday(undefined, today),
+		endDate: businessDateOrToday(undefined, oneYear),
 		monthlyRent: '',
 		securityDeposit: '',
 		lateFeeAmount: '0',

@@ -1,10 +1,17 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { businessDateOrToday, localIsoDate } from '$lib/utils/business-date';
 
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
+const originalTimeZone = process.env.TZ;
 
 describe('money-entry date defaults', () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		if (originalTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = originalTimeZone;
+	});
+
 	it('normalizes the portfolio date and uses a local calendar fallback', () => {
 		expect(businessDateOrToday('2027-02-28T00:00:00Z')).toBe('2027-02-28');
 		const localDate = {
@@ -48,5 +55,22 @@ describe('money-entry date defaults', () => {
 		const unitPage = sourceByPath('../src/routes/(protected)/units/[id]/+page.svelte');
 		expect(unitPage).not.toContain(':${moveInBusinessDate}');
 		expect(unitPage).toContain('!moveInContextQuery.data && moveInContextQuery.isPending');
+	});
+
+	it('defaults the unit expense and onboarding lease forms to the local calendar date', () => {
+		process.env.TZ = 'America/Los_Angeles';
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2027-03-01T00:30:00Z'));
+
+		expect(businessDateOrToday(undefined)).toBe('2027-02-28');
+
+		const expensesTab = source('../src/lib/components/unit/tabs/ExpensesTab.svelte');
+		expect(expensesTab.includes('incurredAt: businessDateOrToday(undefined)')).toBe(true);
+		expect(expensesTab.includes('new Date().toISOString().slice(0, 10)')).toBe(false);
+
+		const onboardingPage = source('../src/routes/(protected)/onboarding/+page.svelte');
+		expect(onboardingPage.includes('startDate: businessDateOrToday(undefined, today)')).toBe(true);
+		expect(onboardingPage.includes('endDate: businessDateOrToday(undefined, oneYear)')).toBe(true);
+		expect(onboardingPage.includes('const isoDate = (d: Date) => d.toISOString().slice(0, 10)')).toBe(false);
 	});
 });
