@@ -22,8 +22,8 @@ internal static class FoundationBaselinePostgreSql
         ScheduleEDepreciationFunctionSql.Create,
         LeaseAgreementStatusViewSql.Create,
         LeaseAddendumStatusViewSql.Create,
-        TenantChargeBalanceViewSql.Create,
-        TenantAccountBalanceViewSql.Create,
+        CreateTenantChargeBalanceViewBeforeAllocationEffectiveOn,
+        CreateTenantAccountBalanceViewBeforeAllocationEffectiveOn,
         SecurityDepositBalanceViewSql.Create,
         UnitOccupancyViewSql.Create,
         LeaseManagementLifecycleViewSql.Create,
@@ -41,6 +41,16 @@ internal static class FoundationBaselinePostgreSql
     ]);
 
     internal static IReadOnlyList<string> CreateStatements => CreateStatementsValue.Value;
+
+    private static string CreateTenantChargeBalanceViewBeforeAllocationEffectiveOn =>
+        TenantChargeBalanceViewSql.Create.Replace(
+            "COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\")",
+            "credit.\"EffectiveOn\"");
+
+    private static string CreateTenantAccountBalanceViewBeforeAllocationEffectiveOn =>
+        TenantAccountBalanceViewSql.Create.Replace(
+            "COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\")",
+            "credit.\"EffectiveOn\"");
 
     private static readonly Lazy<IReadOnlyList<string>> DropStatementsValue = new(() =>
     [

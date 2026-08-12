@@ -522,7 +522,7 @@ public class ReportsService : IReportsService
              AND credit."Id" = allocation."CreditEntryId"
             WHERE allocation."PortfolioId" = @portfolioId
               AND credit."Direction" = 'Credit'
-              AND credit."EffectiveOn" <= @asOfDate
+              AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= @asOfDate
             GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
         ),
         as_of_charge_balances AS MATERIALIZED (
@@ -807,7 +807,7 @@ public class ReportsService : IReportsService
              AND credit."Id" = allocation."CreditEntryId"
             WHERE allocation."PortfolioId" = @portfolioId
               AND credit."Direction" = 'Credit'
-              AND credit."EffectiveOn" <= @asOfDate
+              AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= @asOfDate
             GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
         ),
         as_of_charge_balances AS MATERIALIZED (
