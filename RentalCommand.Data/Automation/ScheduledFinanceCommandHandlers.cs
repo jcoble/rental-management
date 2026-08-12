@@ -5,6 +5,7 @@ using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Services;
+using RentalCommand.Core.Time;
 using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Automation;
@@ -472,6 +473,8 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
             task.LastGeneratedAtUtc = command.AppliedAtUtc;
             task.NextDueDate = nextDueDate;
             task.UpdatedAt = command.AppliedAtUtc;
+            task.WorkerClaimAttemptCount = 0;
+            task.WorkerClaimQuarantinedAtUtc = null;
             ClearClaim(task);
             context.StageSemanticEvent(new AtomicSemanticAudit(
                 task.PortfolioId,
@@ -551,7 +554,7 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
         if (!scheduledTime.HasValue) return null;
         var local = DateTime.SpecifyKind(
             dueDate.Date.Add(scheduledTime.Value.ToTimeSpan()), DateTimeKind.Unspecified);
-        return TimeZoneInfo.ConvertTimeToUtc(local, businessTimeZone);
+        return LocalDateTimeResolver.ConvertToUtc(local, businessTimeZone);
     }
 
     private static void ClearClaim(RecurringMaintenanceTask task)

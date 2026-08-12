@@ -174,6 +174,18 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
+    internal static ServiceProvider CreateForRecurringMaintenance(
+        string connectionString,
+        TimeProvider? timeProvider = null)
+    {
+        var services = Core(connectionString, timeProvider);
+        services.AddAtomicCommandHandler<
+            AtomicRecurringMaintenanceMutationCommand,
+            AtomicRecurringMaintenanceMutationResult,
+            AtomicRecurringMaintenanceMutationHandler>();
+        return services.BuildServiceProvider();
+    }
+
     internal static ServiceProvider CreateForCoreCrudPostgreSql(
         string connectionString,
         TimeProvider? timeProvider = null)

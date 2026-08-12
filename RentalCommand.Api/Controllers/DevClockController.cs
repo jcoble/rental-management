@@ -88,7 +88,7 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
             var localMidnight = DateTime.SpecifyKind(
                 businessDate.ToDateTime(TimeOnly.MinValue),
                 DateTimeKind.Unspecified);
-            instant = TimeZoneInfo.ConvertTimeToUtc(localMidnight, timeZone);
+            instant = LocalDateTimeResolver.ConvertToUtc(localMidnight, timeZone);
         }
         else if (!string.IsNullOrWhiteSpace(request.Date)
                  && DateTime.TryParse(request.Date, CultureInfo.InvariantCulture,

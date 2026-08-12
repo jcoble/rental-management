@@ -1,6 +1,7 @@
 using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -146,6 +147,67 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         listCommands.Should().HaveCount(2);
         listCommands.Should().OnlyContain(sql =>
             sql.Contains("UnitId", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("update")]
+    [InlineData("active-toggle")]
+    public async Task ManualChange_ClearsQuarantine_AndMakesTaskClaimableAgain(string operation)
+    {
+        var property = SeedProperty();
+        var task = SeedTask(property.Id, title: "Quarantined schedule");
+        task.WorkerClaimAttemptCount = 3;
+        task.WorkerClaimLastFailureReason = "Internal failure detail";
+        task.WorkerClaimLastFailureAtUtc = DateTime.UtcNow.AddMinutes(-2);
+        task.WorkerClaimQuarantinedAtUtc = DateTime.UtcNow.AddMinutes(-1);
+        _ctx.Db.SaveChanges();
+
+        var scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(RecurringMaintenanceTaskServiceTests));
+        using var services = AtomicDomainTestKernel.CreateForRecurringMaintenance(_ctx.ConnectionString);
+        var service = new RecurringMaintenanceTaskService(
+            _ctx.Db,
+            TimeProvider.System,
+            services.GetRequiredService<IAtomicUnitOfWork>());
+
+        var response = operation switch
+        {
+            "update" => await service.UpdateAuthorizedAsync(
+                scope,
+                task.Id,
+                new UpdateRecurringMaintenanceTaskRequest
+                {
+                    Title = "Recovered schedule",
+                    IsActive = true,
+                },
+                "h5-quarantine-clear-update"),
+            "active-toggle" => await service.SetActiveAuthorizedAsync(
+                scope,
+                task.Id,
+                true,
+                "h5-quarantine-clear-active"),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
+        };
+
+        response.Should().NotBeNull();
+        response!.AutomationFailureAttemptCount.Should().Be(0);
+        response.AutomationFailureReason.Should().BeNull();
+        response.AutomationFailureAtUtc.Should().BeNull();
+        response.AutomationQuarantinedAtUtc.Should().BeNull();
+
+        _ctx.Db.ChangeTracker.Clear();
+        var persisted = _ctx.Db.RecurringMaintenanceTasks.Single(row => row.Id == task.Id);
+        persisted.WorkerClaimAttemptCount.Should().Be(0);
+        persisted.WorkerClaimLastFailureReason.Should().BeNull();
+        persisted.WorkerClaimLastFailureAtUtc.Should().BeNull();
+        persisted.WorkerClaimQuarantinedAtUtc.Should().BeNull();
+
+        var claims = await new TestScheduledAutomationClaimStore(_ctx.Db)
+            .ClaimRecurringMaintenanceAsync(
+                "h5-manual-recovery",
+                DateTime.UtcNow.Date.AddDays(1),
+                TimeSpan.FromMinutes(5),
+                batchSize: 25);
+        claims.Should().ContainSingle(claim => claim.Id == task.Id);
     }
 
     // -----------------------------------------------------------------------

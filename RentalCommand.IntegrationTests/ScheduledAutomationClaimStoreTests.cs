@@ -173,6 +173,42 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Quarantined_maintenance_is_not_reclaimed_and_failure_reason_is_durable()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var (portfolioId, propertyId) = await SeedScopeAsync(now);
+        await using (var seed = NewContext())
+        {
+            seed.RecurringMaintenanceTasks.Add(Maintenance(portfolioId, propertyId, now.AddDays(-1), true));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = NewContext();
+        var store = new ScheduledAutomationClaimStore(db);
+        var claim = (await store.ClaimRecurringMaintenanceAsync(
+            "maintenance-poison", now, TimeSpan.FromMinutes(2), 1)).Single();
+        claim.AttemptCount.Should().Be(1);
+
+        (await store.RecordRecurringMaintenanceFailureAsync(
+            claim,
+            now,
+            "Invalid recurrence data",
+            quarantineAfterAttempts: 1)).Should().BeTrue();
+        (await store.ClaimRecurringMaintenanceAsync(
+            "maintenance-retry", now, TimeSpan.FromMinutes(2), 1)).Should().BeEmpty();
+
+        await using var verify = NewContext();
+        var task = await verify.RecurringMaintenanceTasks.IgnoreQueryFilters()
+            .SingleAsync(row => row.Id == claim.Id);
+        task.WorkerClaimAttemptCount.Should().Be(1);
+        task.WorkerClaimLastFailureReason.Should().Be("Invalid recurrence data");
+        task.WorkerClaimLastFailureAtUtc.Should().Be(now);
+        task.WorkerClaimQuarantinedAtUtc.Should().Be(now);
+        task.WorkerClaimToken.Should().BeNull();
+    }
+
+    [SkippableFact]
     public async Task Debt_claim_selection_is_one_statement_and_orders_by_next_due_occurrence()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");

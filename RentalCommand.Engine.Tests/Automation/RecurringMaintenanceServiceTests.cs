@@ -3,12 +3,16 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Simulation;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Automation;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
@@ -30,6 +34,8 @@ public class RecurringMaintenanceServiceTests : IDisposable
 
     private readonly SqliteTestContext _ctx = new();
     private readonly ServiceProvider _services;
+    private bool _throwOnFailureRecording;
+    private int _failureRecordCalls;
 
     public RecurringMaintenanceServiceTests()
     {
@@ -41,6 +47,11 @@ public class RecurringMaintenanceServiceTests : IDisposable
             ApplyClaimedRecurringMaintenanceBatchCommand,
             ApplyScheduledFinanceBatchResult,
             ApplyClaimedRecurringMaintenanceBatchHandler>();
+        services.AddScoped<IScheduledAutomationClaimStore>(provider =>
+            new ThrowingFailureRecordingClaimStore(
+                provider.GetRequiredService<RentalCommandDbContext>(),
+                () => _throwOnFailureRecording,
+                () => _failureRecordCalls++));
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
@@ -186,10 +197,235 @@ public class RecurringMaintenanceServiceTests : IDisposable
         reloaded.NextDueDate.Date.Should().BeAfter(today);
     }
 
+    [Fact]
+    public async Task SpringForwardGap_At0230_GeneratesTheShiftedWorkOrder()
+    {
+        var businessDate = new DateTime(2027, 3, 14, 12, 0, 0, DateTimeKind.Utc);
+        var dueDate = new DateTime(2027, 3, 14, 0, 0, 0, DateTimeKind.Utc);
+        var property = SeedProperty();
+        var task = SeedTask(
+            property.Id,
+            interval: RecurrenceInterval.Monthly,
+            nextDueDate: dueDate,
+            isActive: true,
+            title: "Spring-forward HVAC check",
+            category: "HVAC",
+            priority: WorkOrderPriority.Normal,
+            scheduledTime: new TimeOnly(2, 30),
+            estimatedCost: null);
+
+        var sut = BuildService(true, new FixedTimeProvider(businessDate));
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(1);
+        var scheduled = _ctx.Db.WorkOrders.Single(row => row.RecurringMaintenanceTaskId == task.Id)
+            .ScheduledFor;
+        scheduled.Should().Be(new DateTime(2027, 3, 14, 7, 30, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task FailedTask_DoesNotBlockHealthyTaskBehindIt()
+    {
+        var businessDate = new DateTime(2027, 3, 14, 12, 0, 0, DateTimeKind.Utc);
+        var dueDate = new DateTime(2027, 3, 14, 0, 0, 0, DateTimeKind.Utc);
+        var poison = SeedTask(
+            SeedProperty().Id,
+            (RecurrenceInterval)999,
+            dueDate,
+            isActive: true,
+            title: "Unsupported interval");
+        var healthy = SeedTask(
+            SeedProperty(2).Id,
+            RecurrenceInterval.Monthly,
+            dueDate,
+            isActive: true,
+            title: "Healthy schedule",
+            category: "General",
+            priority: WorkOrderPriority.Normal,
+            scheduledTime: null,
+            estimatedCost: null,
+            portfolioId: 2);
+
+        var sut = BuildService(true, new FixedTimeProvider(businessDate));
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(1);
+        _ctx.Db.WorkOrders.Single(row => row.RecurringMaintenanceTaskId == healthy.Id).Should().NotBeNull();
+        _ctx.Db.WorkOrders.Should().NotContain(row => row.RecurringMaintenanceTaskId == poison.Id);
+        _ctx.Db.ChangeTracker.Clear();
+        var failed = _ctx.Db.RecurringMaintenanceTasks.Single(row => row.Id == poison.Id);
+        failed.WorkerClaimAttemptCount.Should().Be(1);
+        failed.WorkerClaimLastFailureReason.Should().Be(
+            "This recurring maintenance schedule uses an unsupported repeat interval. " +
+            "Edit it and choose a supported interval.");
+        failed.WorkerClaimQuarantinedAtUtc.Should().BeNull();
+
+        _ctx.Db.ChangeTracker.Clear();
+        var apiPayload = await new RecurringMaintenanceTaskService(
+                _ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>())
+            .ListAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery());
+        var failedPayload = apiPayload.Single(row => row.Id == poison.Id);
+        failedPayload.AutomationFailureReason.Should().Be(failed.WorkerClaimLastFailureReason);
+        failedPayload.AutomationFailureReason.Should().NotContain("InvalidOperationException");
+        failedPayload.AutomationFailureReason.Should().NotContain("Unsupported recurring-maintenance interval");
+    }
+
+    [Fact]
+    public async Task FailedTask_WhenFailureRecordingAlsoThrows_DoesNotBlockLaterPortfolioTask()
+    {
+        var businessDate = new DateTime(2027, 3, 14, 12, 0, 0, DateTimeKind.Utc);
+        var dueDate = new DateTime(2027, 3, 14, 0, 0, 0, DateTimeKind.Utc);
+        var poison = SeedTask(
+            SeedProperty().Id,
+            (RecurrenceInterval)999,
+            dueDate,
+            isActive: true,
+            title: "Failure recorder poison");
+        var healthy = SeedTask(
+            SeedProperty(2).Id,
+            RecurrenceInterval.Monthly,
+            dueDate,
+            isActive: true,
+            title: "Later portfolio schedule",
+            category: "General",
+            priority: WorkOrderPriority.Normal,
+            scheduledTime: null,
+            estimatedCost: null,
+            portfolioId: 2);
+
+        _throwOnFailureRecording = true;
+        var sut = BuildService(true, new FixedTimeProvider(businessDate));
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(1);
+        _failureRecordCalls.Should().Be(1);
+        _ctx.Db.WorkOrders.Should().ContainSingle(row =>
+            row.RecurringMaintenanceTaskId == healthy.Id && row.PortfolioId == 2);
+        _ctx.Db.WorkOrders.Should().NotContain(row => row.RecurringMaintenanceTaskId == poison.Id);
+    }
+
+    [Fact]
+    public void FailureReasons_MapKnownFailures_AndHideUnknownDetails()
+    {
+        RecurringMaintenanceService.BuildFailureReason(
+                new ArgumentException("The supplied DateTime represents an invalid time."),
+                "RM-known")
+            .Should().Be(
+                "The scheduled time falls during a daylight-saving time change. Pick a different time.");
+
+        var generic = RecurringMaintenanceService.BuildFailureReason(
+            new InvalidOperationException("provider secret and internal constraint detail"),
+            "RM-unknown");
+        generic.Should().Be(
+            "Recurring maintenance could not be generated. Check the schedule and try again. " +
+            "Reference: RM-unknown");
+        generic.Should().NotContain("InvalidOperationException");
+        generic.Should().NotContain("provider secret and internal constraint detail");
+    }
+
+    [Fact]
+    public async Task UnknownFailure_StoresSafeReasonWithCorrelationIdInApiPayload()
+    {
+        var businessDate = new DateTime(2027, 3, 14, 12, 0, 0, DateTimeKind.Utc);
+        var dueDate = new DateTime(2027, 3, 14, 0, 0, 0, DateTimeKind.Utc);
+        var task = SeedTask(
+            SeedProperty().Id,
+            RecurrenceInterval.Monthly,
+            dueDate,
+            isActive: true,
+            title: "Unknown failure schedule");
+        const string privateTimeZoneId = "H5-private-time-zone";
+        var timeZone = TimeZoneInfo.CreateCustomTimeZone(
+            privateTimeZoneId,
+            TimeSpan.Zero,
+            privateTimeZoneId,
+            privateTimeZoneId);
+        var sut = BuildService(
+            true,
+            new FixedTimeProvider(businessDate),
+            new FixedTimeZoneProvider(timeZone));
+
+        (await sut.GenerateAsync()).Should().Be(0);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var apiPayload = await new RecurringMaintenanceTaskService(
+                _ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>())
+            .ListAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery());
+        var reason = apiPayload.Single(row => row.Id == task.Id).AutomationFailureReason;
+        reason.Should().NotBeNull();
+        reason.Should().MatchRegex(
+            "^Recurring maintenance could not be generated\\. Check the schedule and try again\\. " +
+            "Reference: RM-[0-9a-f]{32}$");
+        reason.Should().NotContain(nameof(TimeZoneNotFoundException));
+        reason.Should().NotContain(nameof(InvalidTimeZoneException));
+        reason.Should().NotContain(privateTimeZoneId);
+    }
+
+    [Fact]
+    public async Task FailedTask_IsQuarantinedAfterThreeAttempts_AndLaterHealthyWorkContinues()
+    {
+        var businessDate = new DateTime(2027, 3, 14, 12, 0, 0, DateTimeKind.Utc);
+        var dueDate = new DateTime(2027, 3, 14, 0, 0, 0, DateTimeKind.Utc);
+        var poison = SeedTask(
+            SeedProperty().Id,
+            (RecurrenceInterval)999,
+            dueDate,
+            isActive: true,
+            title: "Quarantine me");
+        SeedTask(
+            SeedProperty(2).Id,
+            RecurrenceInterval.Monthly,
+            dueDate,
+            isActive: true,
+            title: "Healthy first",
+            category: "General",
+            priority: WorkOrderPriority.Normal,
+            scheduledTime: null,
+            estimatedCost: null,
+            portfolioId: 2);
+        var sut = BuildService(true, new FixedTimeProvider(businessDate));
+
+        (await sut.GenerateAsync()).Should().Be(1);
+        (await sut.GenerateAsync()).Should().Be(0);
+        (await sut.GenerateAsync()).Should().Be(0);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var quarantined = _ctx.Db.RecurringMaintenanceTasks.Single(row => row.Id == poison.Id);
+        quarantined.WorkerClaimAttemptCount.Should().Be(
+            ScheduledAutomationPolicy.RecurringMaintenanceQuarantineAfterAttempts);
+        quarantined.WorkerClaimQuarantinedAtUtc.Should().NotBeNull();
+        quarantined.WorkerClaimLastFailureReason.Should().Be(
+            "This recurring maintenance schedule uses an unsupported repeat interval. " +
+            "Edit it and choose a supported interval.");
+        quarantined.WorkerClaimToken.Should().BeNull();
+
+        var laterHealthy = SeedTask(
+            SeedProperty(2).Id,
+            RecurrenceInterval.Monthly,
+            dueDate,
+            isActive: true,
+            title: "Healthy after quarantine",
+            category: "General",
+            priority: WorkOrderPriority.Normal,
+            scheduledTime: null,
+            estimatedCost: null,
+            portfolioId: 2);
+        (await sut.GenerateAsync()).Should().Be(1);
+        _ctx.Db.WorkOrders.Should().Contain(row => row.RecurringMaintenanceTaskId == laterHealthy.Id);
+        _ctx.Db.RecurringMaintenanceTasks.Single(row => row.Id == poison.Id)
+            .WorkerClaimAttemptCount.Should().Be(ScheduledAutomationPolicy.RecurringMaintenanceQuarantineAfterAttempts);
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
-    private RecurringMaintenanceService BuildService(bool enable)
+    private RecurringMaintenanceService BuildService(
+        bool enable,
+        TimeProvider? timeProvider = null,
+        IAppTimeZoneProvider? timeZoneProvider = null)
     {
         var now = DateTime.UtcNow;
         var settings = _ctx.Db.AutomationSettings.SingleOrDefault(row => row.PortfolioId == PortfolioId);
@@ -211,19 +447,20 @@ public class RecurringMaintenanceServiceTests : IDisposable
         _ctx.Db.SaveChanges();
 
         return new RecurringMaintenanceService(
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
-            TimeProvider.System,
-            new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
-            new TestScheduledAutomationClaimStore(_ctx.Db),
+            _services.GetRequiredService<IServiceScopeFactory>(),
+            timeProvider ?? TimeProvider.System,
+            timeZoneProvider ?? new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
+            _services.GetRequiredService<IScheduledAutomationClaimStore>(),
             NullLogger<RecurringMaintenanceService>.Instance);
     }
 
-    private Property SeedProperty()
+    private Property SeedProperty(int portfolioId = PortfolioId)
     {
+        EnsurePortfolio(portfolioId);
         var now = DateTime.UtcNow;
         var property = new Property
         {
-            PortfolioId = PortfolioId,
+            PortfolioId = portfolioId,
             Name = "Test Property",
             AddressLine1 = "123 Main St",
             City = "Springfield",
@@ -256,12 +493,14 @@ public class RecurringMaintenanceServiceTests : IDisposable
         string? category,
         WorkOrderPriority priority,
         TimeOnly? scheduledTime,
-        decimal? estimatedCost)
+        decimal? estimatedCost,
+        int portfolioId = PortfolioId)
     {
+        EnsurePortfolio(portfolioId);
         var now = DateTime.UtcNow;
         var task = new RecurringMaintenanceTask
         {
-            PortfolioId = PortfolioId,
+            PortfolioId = portfolioId,
             PropertyId = propertyId,
             Title = title,
             Category = category,
@@ -277,5 +516,69 @@ public class RecurringMaintenanceServiceTests : IDisposable
         _ctx.Db.RecurringMaintenanceTasks.Add(task);
         _ctx.Db.SaveChanges();
         return task;
+    }
+
+    private void EnsurePortfolio(int portfolioId)
+    {
+        if (_ctx.Db.Portfolios.Any(row => row.Id == portfolioId)) return;
+        var now = DateTime.UtcNow;
+        _ctx.Db.Portfolios.Add(new Portfolio
+        {
+            Id = portfolioId,
+            Name = $"Test Portfolio {portfolioId}",
+            ManagementCompanyName = "Test Co",
+            TimeZone = "America/New_York",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
+    }
+
+    private sealed class FixedTimeZoneProvider(TimeZoneInfo timeZone) : IAppTimeZoneProvider
+    {
+        public TimeZoneInfo BusinessTimeZone { get; } = timeZone;
+    }
+
+    private sealed class ThrowingFailureRecordingClaimStore(
+        RentalCommandDbContext db,
+        Func<bool> shouldThrow,
+        Action onFailureRecord) : IScheduledAutomationClaimStore
+    {
+        private readonly TestScheduledAutomationClaimStore _inner = new(db);
+
+        public Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimDebtServiceAsync(
+            string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
+            CancellationToken ct = default) =>
+            _inner.ClaimDebtServiceAsync(owner, todayUtc, leaseDuration, batchSize, ct);
+
+        public Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringExpensesAsync(
+            string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
+            CancellationToken ct = default) =>
+            _inner.ClaimRecurringExpensesAsync(owner, todayUtc, leaseDuration, batchSize, ct);
+
+        public Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringMaintenanceAsync(
+            string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
+            CancellationToken ct = default) =>
+            _inner.ClaimRecurringMaintenanceAsync(owner, todayUtc, leaseDuration, batchSize, ct);
+
+        public async Task<bool> RecordRecurringMaintenanceFailureAsync(
+            ScheduledAutomationClaim claim,
+            DateTime failedAtUtc,
+            string failureReason,
+            int quarantineAfterAttempts,
+            CancellationToken ct = default)
+        {
+            onFailureRecord();
+            if (shouldThrow())
+                throw new InvalidOperationException("Injected failure-recording store failure.");
+
+            return await _inner.RecordRecurringMaintenanceFailureAsync(
+                claim, failedAtUtc, failureReason, quarantineAfterAttempts, ct);
+        }
     }
 }

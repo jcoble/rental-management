@@ -2352,6 +2352,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.RecurrenceInterval).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.Priority).HasConversion<int>();
             entity.Property(e => e.WorkerClaimOwner).HasMaxLength(200);
+            entity.Property(e => e.WorkerClaimLastFailureReason).HasMaxLength(2000);
             // The worker's hot path: scan active, not-yet-deleted tasks that are due. The query filter
             // already excludes soft-deleted rows; this index serves the (active, due) scan per portfolio.
             entity.HasIndex(e => new { e.PortfolioId, e.IsActive, e.NextDueDate });
