@@ -4,6 +4,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Policies;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data.Leasing;
@@ -589,11 +590,10 @@ internal static class CanonicalLeaseScanConfirmationWriter
         decimal? bedrooms,
         decimal? bathrooms)
     {
-        if (propertyType.RequiresResidentialUnitDetails()
-            && (!bedrooms.HasValue || !bathrooms.HasValue))
+        if (ResidentialUnitPolicy.IsInvalidForCreate(propertyType, bedrooms, bathrooms))
         {
             throw new ScanConfirmationValidationException(
-                "Bedrooms and bathrooms are required for residential dwellings.");
+                ResidentialUnitPolicy.RequiredDetailsMessage);
         }
     }
 

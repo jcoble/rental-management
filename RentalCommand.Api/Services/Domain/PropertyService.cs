@@ -280,84 +280,6 @@ public class PropertyService : IPropertyService
         return response;
     }
 
-    /// <summary>One translated SQL statement containing every Property delete decision.</summary>
-    internal IQueryable<PropertyDeletionGuard> BuildPropertyDeletionGuardQuery(int portfolioId, int propertyId) =>
-        _db.Properties
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .Where(property => property.PortfolioId == portfolioId && property.Id == propertyId)
-            .Select(property => new PropertyDeletionGuard
-            {
-                HasOccupiedUnit = _db.UnitOccupancyProjections.Any(occupancy =>
-                    occupancy.PortfolioId == portfolioId
-                    && occupancy.PropertyId == property.Id
-                    && occupancy.IsOccupied),
-                HasPlannedOrCurrentRelationship = _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                    lifecycle.PortfolioId == portfolioId
-                    && lifecycle.PropertyId == property.Id
-                    && lifecycle.Lifecycle != "Canceled"
-                    && lifecycle.Lifecycle != "Closed"
-                    && lifecycle.Lifecycle != "AccountingCloseout"),
-                HasRentalRelationshipHistory = _db.LeaseManagements.Any(management =>
-                    management.PortfolioId == portfolioId && management.PropertyId == property.Id),
-                HasWorkOrderHistory = _db.WorkOrders.IgnoreQueryFilters().Any(workOrder =>
-                    workOrder.PortfolioId == portfolioId && workOrder.PropertyId == property.Id),
-                HasAppointmentHistory = _db.Appointments.IgnoreQueryFilters().Any(appointment =>
-                    appointment.PortfolioId == portfolioId && appointment.PropertyId == property.Id),
-                HasInspectionHistory = _db.Inspections.IgnoreQueryFilters().Any(inspection =>
-                    inspection.PortfolioId == portfolioId && inspection.PropertyId == property.Id),
-                HasExpenseHistory = _db.Expenses.IgnoreQueryFilters().Any(expense =>
-                    expense.PortfolioId == portfolioId && expense.PropertyId == property.Id),
-                HasApplicationHistory = _db.RentalApplications.IgnoreQueryFilters().Any(application =>
-                    application.PortfolioId == portfolioId && application.PropertyId == property.Id),
-                HasRecurringExpenseHistory = _db.RecurringExpenses.IgnoreQueryFilters().Any(expense =>
-                    expense.PortfolioId == portfolioId && expense.PropertyId == property.Id),
-                HasLoanHistory = _db.Loans.IgnoreQueryFilters().Any(loan =>
-                    loan.PortfolioId == portfolioId && loan.PropertyId == property.Id),
-                HasDocumentHistory = _db.StoredFiles.IgnoreQueryFilters().Any(file =>
-                    file.PortfolioId == portfolioId
-                    && file.EntityType == EntityType
-                    && file.EntityId == property.Id),
-            });
-
-    /// <summary>One translated SQL statement containing every implicit canonical-Unit delete decision.</summary>
-    internal IQueryable<UnitDeletionGuard> BuildUnitDeletionGuardQuery(int portfolioId, int unitId) =>
-        _db.Units
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .Where(unit => unit.PortfolioId == portfolioId && unit.Id == unitId)
-            .Select(unit => new UnitDeletionGuard
-            {
-                IsOccupied = _db.UnitOccupancyProjections.Any(occupancy =>
-                    occupancy.PortfolioId == portfolioId
-                    && occupancy.UnitId == unit.Id
-                    && occupancy.IsOccupied),
-                HasPlannedOrCurrentRelationship = _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                    lifecycle.PortfolioId == portfolioId
-                    && lifecycle.UnitId == unit.Id
-                    && lifecycle.Lifecycle != "Canceled"
-                    && lifecycle.Lifecycle != "Closed"
-                    && lifecycle.Lifecycle != "AccountingCloseout"),
-                HasRentalRelationshipHistory = _db.LeaseManagements.Any(management =>
-                    management.PortfolioId == portfolioId && management.UnitId == unit.Id),
-                HasWorkOrderHistory = _db.WorkOrders.IgnoreQueryFilters().Any(workOrder =>
-                    workOrder.PortfolioId == portfolioId && workOrder.UnitId == unit.Id),
-                HasAppointmentHistory = _db.Appointments.IgnoreQueryFilters().Any(appointment =>
-                    appointment.PortfolioId == portfolioId && appointment.UnitId == unit.Id),
-                HasInspectionHistory = _db.Inspections.IgnoreQueryFilters().Any(inspection =>
-                    inspection.PortfolioId == portfolioId && inspection.UnitId == unit.Id),
-                HasExpenseHistory = _db.Expenses.IgnoreQueryFilters().Any(expense =>
-                    expense.PortfolioId == portfolioId && expense.UnitId == unit.Id),
-                HasApplicationHistory = _db.RentalApplications.IgnoreQueryFilters().Any(application =>
-                    application.PortfolioId == portfolioId && application.UnitId == unit.Id),
-                HasRecurringExpenseHistory = _db.RecurringExpenses.IgnoreQueryFilters().Any(expense =>
-                    expense.PortfolioId == portfolioId && expense.UnitId == unit.Id),
-                HasDocumentHistory = _db.StoredFiles.IgnoreQueryFilters().Any(file =>
-                    file.PortfolioId == portfolioId
-                    && file.EntityType == UnitEntityType
-                    && file.EntityId == unit.Id),
-            });
-
     internal IQueryable<UnitResponse> BuildCanonicalUnitResponseQuery(int portfolioId, int unitId) =>
         from unit in _db.Units.AsNoTracking()
         where unit.PortfolioId == portfolioId && unit.Id == unitId
@@ -390,32 +312,4 @@ public class PropertyService : IPropertyService
             UpdatedAt = unit.UpdatedAt,
         };
 
-    internal sealed class PropertyDeletionGuard
-    {
-        public bool HasOccupiedUnit { get; init; }
-        public bool HasPlannedOrCurrentRelationship { get; init; }
-        public bool HasRentalRelationshipHistory { get; init; }
-        public bool HasWorkOrderHistory { get; init; }
-        public bool HasAppointmentHistory { get; init; }
-        public bool HasInspectionHistory { get; init; }
-        public bool HasExpenseHistory { get; init; }
-        public bool HasApplicationHistory { get; init; }
-        public bool HasRecurringExpenseHistory { get; init; }
-        public bool HasLoanHistory { get; init; }
-        public bool HasDocumentHistory { get; init; }
-    }
-
-    internal sealed class UnitDeletionGuard
-    {
-        public bool IsOccupied { get; init; }
-        public bool HasPlannedOrCurrentRelationship { get; init; }
-        public bool HasRentalRelationshipHistory { get; init; }
-        public bool HasWorkOrderHistory { get; init; }
-        public bool HasAppointmentHistory { get; init; }
-        public bool HasInspectionHistory { get; init; }
-        public bool HasExpenseHistory { get; init; }
-        public bool HasApplicationHistory { get; init; }
-        public bool HasRecurringExpenseHistory { get; init; }
-        public bool HasDocumentHistory { get; init; }
-    }
 }

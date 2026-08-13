@@ -8,6 +8,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Policies;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -19,11 +20,6 @@ public class TenantService : ITenantService
 {
     private const string EntityType = "Tenant";
     private const int MaxSearchTokens = 8;
-    private const string ActiveLeaseDeleteBlockedReason =
-        "This tenant is a current resident in an occupied rental; return possession or change the household first.";
-    private const string LeaseHistoryDeleteBlockedReason =
-        "This tenant has rental relationship history; keep the tenant record to preserve agreements and account history.";
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAtomicUnitOfWork? _atomic;
@@ -969,12 +965,10 @@ public class TenantService : ITenantService
     {
         response.ActiveLeaseCount = activeLeaseCount;
         response.LeaseHistoryCount = leaseHistoryCount;
-        response.CanDelete = activeLeaseCount == 0 && leaseHistoryCount == 0;
-        response.DeleteBlockedReason = activeLeaseCount > 0
-            ? ActiveLeaseDeleteBlockedReason
-            : leaseHistoryCount > 0
-                ? LeaseHistoryDeleteBlockedReason
-                : null;
+        response.CanDelete = DeleteEligibilityPolicy.CanDeleteTenant(
+            activeLeaseCount, leaseHistoryCount);
+        response.DeleteBlockedReason = DeleteEligibilityPolicy.TenantBlockedReason(
+            activeLeaseCount, leaseHistoryCount);
     }
 
     private static void ApplyCurrentResidentContext(TenantResponse response, TenantRelationshipReadRow row)
