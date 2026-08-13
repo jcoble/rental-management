@@ -23,6 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\RentalCommand.Api\RentalCommand.Api.csproj" />
     <ProjectReference Include="..\RentalCommand.Data\RentalCommand.Data.csproj" />
     <ProjectReference Include="..\RentalCommand.TestCommon\RentalCommand.TestCommon.csproj" />
   </ItemGroup>

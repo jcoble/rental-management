@@ -6,7 +6,10 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Policies;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Policies;
 using RentalCommand.Api.Services;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -306,10 +309,10 @@ public sealed class AtomicCoreCrudMutationHandler
             throw Conflict("A SingleRental Property must contain exactly one Unit.");
         if (request.RentalStructure == RentalStructure.MultiRental && totalUnitCount < 1)
             throw Conflict("A MultiRental Property must contain at least one Unit.");
-        if (request.PropertyType.RequiresResidentialUnitDetails()
-            && setup.Units.Any(unit => !unit.Bedrooms.HasValue || !unit.Bathrooms.HasValue))
+        if (setup.Units.Any(unit => ResidentialUnitPolicy.IsInvalidForCreate(
+                request.PropertyType, unit.Bedrooms, unit.Bathrooms)))
             throw new DomainValidationException(
-                "Bedrooms and bathrooms are required for residential dwellings.");
+                ResidentialUnitPolicy.RequiredDetailsMessage);
 
         if (!updated)
             await attempt.FlushBusinessAsync(ct);
@@ -783,26 +786,11 @@ public sealed class AtomicCoreCrudMutationHandler
         var mutationNow = command.ChangedAtUtc ?? now;
         if (command.Operation == AtomicCoreCrudMutationOperation.Delete)
         {
-            var state = await db.Set<LeaseManagementParty>().AsNoTracking()
-                .Where(party => party.PortfolioId == command.PortfolioId && party.TenantId == tenant.Id)
-                .GroupBy(_ => 1)
-                .Select(group => new
-                {
-                    HasHistory = group.Any(),
-                    IsCurrentResident = group.Any(party => party.Role != LeaseManagementPartyRole.Guarantor
-                        && db.Set<UnitOccupancyProjection>().Any(occupancy =>
-                            occupancy.PortfolioId == command.PortfolioId
-                            && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                        && db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
-                            lifecycle.PortfolioId == command.PortfolioId
-                            && lifecycle.LeaseManagementId == party.LeaseManagementId
-                            && party.EffectiveFrom <= lifecycle.BusinessDate
-                            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate))),
-                }).SingleOrDefaultAsync(ct);
-            if (state?.IsCurrentResident == true)
-                throw Conflict("This tenant is a current resident in an occupied rental; return possession or change the household first.");
-            if (state?.HasHistory == true)
-                throw Conflict("This tenant has rental relationship history; keep the tenant record to preserve agreements and account history.");
+            var state = await db.TenantDeleteEligibility(
+                command.PortfolioId, tenant.Id).SingleAsync(ct);
+            var blockedReason = DeleteEligibilityPolicy.TenantBlockedReason(
+                state.ActiveLeaseCount, state.LeaseHistoryCount);
+            if (blockedReason is not null) throw Conflict(blockedReason);
             tenant.DeletedAt = mutationNow;
             tenant.UpdatedAt = mutationNow;
             attempt.BindSemanticAudit(tenant, Audit(command, nameof(Tenant), AuditLogOperation.Deleted,
@@ -995,36 +983,11 @@ public sealed class AtomicCoreCrudMutationHandler
         DateTime now,
         string firstCapability,
         string secondCapability) =>
-        db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= now
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
-            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
-            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
-            && assignment.WorkspaceMembership.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
-            && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && db.Set<WorkspaceAccessContext>().Any(context =>
-                context.Id == command.AccessContextId && context.UserId == command.ActorUserId
-                && context.PortfolioId == command.PortfolioId
-                && context.AccessRevision == command.ExpectedAccessRevision
-                && context.Status == WorkspaceAccessContextStatus.Active
-                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && db.Set<AuthSession>().Any(session =>
-                session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
-                && session.ActiveAccessContextId == command.AccessContextId
-                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > now)
-            && assignment.RoleProfile!.Capabilities.Any(grant =>
-                (grant.CapabilityDefinition!.Key == firstCapability
-                    || grant.CapabilityDefinition.Key == secondCapability)
-                && grant.CapabilityDefinition.AuthorizationTargetKind ==
-                    CapabilityAuthorizationTargetKind.Property));
+        db.AuthorizedAssignmentsForScope(
+            Scope(command),
+            [firstCapability, secondCapability],
+            CapabilityAuthorizationTargetKind.Property,
+            now);
 
     private IQueryable<Property> AuthorizedProperties(
         AtomicCoreCrudMutationCommand command,
@@ -1033,16 +996,19 @@ public sealed class AtomicCoreCrudMutationHandler
         string firstCapability,
         string secondCapability)
     {
-        var assignments = AuthorizedAssignments(command, db, now, firstCapability, secondCapability);
-        return db.Set<Property>().AsNoTracking().Where(property =>
-            property.PortfolioId == command.PortfolioId && property.DeletedAt == null
-            && assignments.Any(assignment =>
-                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                    && assignment.SelectedProperties.Any(selected =>
-                        selected.PortfolioId == command.PortfolioId
-                        && selected.PropertyId == property.Id))));
+        return db.Set<Property>().AsNoTracking().WhereAuthorizedForScope(
+            db,
+            Scope(command),
+            [firstCapability, secondCapability],
+            now);
     }
+
+    private static WorkspaceReadScope Scope(AtomicCoreCrudMutationCommand command) => new(
+        command.PortfolioId,
+        command.ActorUserId,
+        command.AuthSessionId,
+        command.AccessContextId,
+        command.ExpectedAccessRevision);
 
     private async Task EnsurePropertyHasNoCurrentOccupancyAsync(
         int portfolioId, int propertyId, RentalCommandDbContext db, CancellationToken ct)
@@ -1065,35 +1031,19 @@ public sealed class AtomicCoreCrudMutationHandler
     private async Task EnsurePropertyHasNoHistoryAsync(
         int portfolioId, int propertyId, RentalCommandDbContext db, CancellationToken ct)
     {
-        var guard = await db.Set<Property>().IgnoreQueryFilters().AsNoTracking()
-            .Where(property => property.PortfolioId == portfolioId && property.Id == propertyId)
-            .Select(property => new
-            {
-                Occupied = db.Set<UnitOccupancyProjection>().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id && row.IsOccupied),
-                Current = db.Set<LeaseManagementLifecycleProjection>().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id && row.Lifecycle != "Canceled" && row.Lifecycle != "Closed" && row.Lifecycle != "AccountingCloseout"),
-                Lease = db.Set<LeaseManagement>().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Work = db.Set<WorkOrder>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Appointment = db.Set<Appointment>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Inspection = db.Set<Inspection>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Expense = db.Set<Expense>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Application = db.Set<RentalApplication>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Recurring = db.Set<RecurringExpense>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Loan = db.Set<Loan>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Document = db.Set<StoredFile>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.EntityType == nameof(Property) && row.EntityId == property.Id),
-            }).SingleAsync(ct);
-        if (guard.Occupied) throw Conflict("This property has an occupied unit. Return possession before deleting the property.");
-        if (guard.Current) throw Conflict("This property has a planned or current rental relationship. Cancel or complete it before deleting the property.");
-        if (guard.Lease) throw Conflict("This property has rental relationship, legal, or financial history and cannot be deleted.");
-        if (guard.Work) throw Conflict("This property has work order history. Archive it instead of deleting the property.");
-        if (guard.Appointment) throw Conflict("This property has appointment history. Archive it instead of deleting the property.");
-        if (guard.Inspection) throw Conflict("This property has inspection history. Archive it instead of deleting the property.");
-        if (guard.Expense) throw Conflict("This property has expense history. Archive it instead of deleting the property.");
-        if (guard.Application) throw Conflict("This property has application history. Archive it instead of deleting the property.");
-        if (guard.Recurring) throw Conflict("This property has recurring expense history. Archive it instead of deleting the property.");
-        if (guard.Loan) throw Conflict("This property has loan history. Archive it instead of deleting the property.");
-        if (guard.Document) throw Conflict("This property has document history. Archive it instead of deleting the property.");
+        var guard = await db.PropertyDeleteEligibility(portfolioId, propertyId).SingleAsync(ct);
+        if (guard.HasOccupiedUnit) throw Conflict("This property has an occupied unit. Return possession before deleting the property.");
+        if (guard.HasPlannedOrCurrentRelationship) throw Conflict("This property has a planned or current rental relationship. Cancel or complete it before deleting the property.");
+        if (guard.HasRentalRelationshipHistory) throw Conflict("This property has rental relationship, legal, or financial history and cannot be deleted.");
+        if (guard.HasWorkOrderHistory) throw Conflict("This property has work order history. Archive it instead of deleting the property.");
+        if (guard.HasAppointmentHistory) throw Conflict("This property has appointment history. Archive it instead of deleting the property.");
+        if (guard.HasInspectionHistory) throw Conflict("This property has inspection history. Archive it instead of deleting the property.");
+        if (guard.HasExpenseHistory) throw Conflict("This property has expense history. Archive it instead of deleting the property.");
+        if (guard.HasApplicationHistory) throw Conflict("This property has application history. Archive it instead of deleting the property.");
+        if (guard.HasRecurringExpenseHistory) throw Conflict("This property has recurring expense history. Archive it instead of deleting the property.");
+        if (guard.HasLoanHistory) throw Conflict("This property has loan history. Archive it instead of deleting the property.");
+        if (guard.HasDocumentHistory) throw Conflict("This property has document history. Archive it instead of deleting the property.");
     }
-
 
     private async Task<string> SnapshotPropertyAsync(
         Property entity,
@@ -1157,28 +1107,10 @@ public sealed class AtomicCoreCrudMutationHandler
         RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var counts = await db.Set<Tenant>().AsNoTracking()
-            .Where(tenant => tenant.PortfolioId == entity.PortfolioId && tenant.Id == entity.Id)
-            .Select(tenant => new
-            {
-                Active = db.Set<LeaseManagementParty>()
-                    .Where(party => party.PortfolioId == entity.PortfolioId
-                        && party.TenantId == tenant.Id
-                        && party.Role != LeaseManagementPartyRole.Guarantor
-                        && db.Set<UnitOccupancyProjection>().Any(occupancy =>
-                            occupancy.PortfolioId == entity.PortfolioId
-                            && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                        && db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
-                            lifecycle.PortfolioId == entity.PortfolioId
-                            && lifecycle.LeaseManagementId == party.LeaseManagementId
-                            && party.EffectiveFrom <= lifecycle.BusinessDate
-                            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                    .Select(party => party.LeaseManagementId).Distinct().Count(),
-                History = db.Set<LeaseManagementParty>()
-                    .Where(party => party.PortfolioId == entity.PortfolioId && party.TenantId == tenant.Id)
-                    .Select(party => party.LeaseManagementId).Distinct().Count(),
-            }).SingleAsync(ct);
-        return SnapshotTenant(entity, counts.Active, counts.History);
+        var eligibility = await db.TenantDeleteEligibility(
+            entity.PortfolioId, entity.Id).SingleAsync(ct);
+        return SnapshotTenant(
+            entity, eligibility.ActiveLeaseCount, eligibility.LeaseHistoryCount);
     }
 
     private string SnapshotTenant(Tenant entity, int active, int history)
@@ -1186,12 +1118,8 @@ public sealed class AtomicCoreCrudMutationHandler
         var response = TenantResponse.FromEntity(entity);
         response.ActiveLeaseCount = active;
         response.LeaseHistoryCount = history;
-        response.CanDelete = active == 0 && history == 0;
-        response.DeleteBlockedReason = active > 0
-            ? "This tenant is a current resident in an occupied rental; return possession or change the household first."
-            : history > 0
-                ? "This tenant has rental relationship history; keep the tenant record to preserve agreements and account history."
-                : null;
+        response.CanDelete = DeleteEligibilityPolicy.CanDeleteTenant(active, history);
+        response.DeleteBlockedReason = DeleteEligibilityPolicy.TenantBlockedReason(active, history);
         return JsonSerializer.Serialize(response);
     }
 

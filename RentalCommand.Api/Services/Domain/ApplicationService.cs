@@ -493,35 +493,6 @@ public sealed class ApplicationService : IApplicationService
             .FirstOrDefaultAsync(p => p.PublicApplicationToken == token, ct);
     }
 
-    private static string? NormalizeEmailForComparison(string? email)
-    {
-        return string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
-    }
-
-    private async Task<int?> FindOpenApplicationIdByEmailAsync(
-        int portfolioId,
-        string? email,
-        CancellationToken ct)
-    {
-        var normalizedEmail = NormalizeEmailForComparison(email);
-        if (normalizedEmail is null)
-        {
-            return null;
-        }
-
-        return await _db.RentalApplications
-            .AsNoTracking()
-            .Where(a => a.PortfolioId == portfolioId
-                && a.Email != null
-                && (a.Status == ApplicationStatus.Submitted
-                    || a.Status == ApplicationStatus.UnderReview
-                    || a.Status == ApplicationStatus.Approved))
-            .Where(a => a.Email!.Trim().ToLower() == normalizedEmail)
-            .OrderBy(a => a.Id)
-            .Select(a => (int?)a.Id)
-            .FirstOrDefaultAsync(ct);
-    }
-
     private static string RequireNonBlank(string value, string fieldName)
     {
         var trimmed = value.Trim();

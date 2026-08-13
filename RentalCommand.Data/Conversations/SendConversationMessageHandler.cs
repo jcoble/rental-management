@@ -9,6 +9,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Operations;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data.Conversations;
@@ -267,7 +268,7 @@ public sealed class SendConversationMessageHandler
         }
     }
 
-    private static IQueryable<Conversation> WhereManagementAuthorized(
+    internal static IQueryable<Conversation> WhereManagementAuthorized(
         IQueryable<Conversation> conversations,
         RentalCommandDbContext db,
         SendConversationMessageCommand command,
@@ -284,7 +285,7 @@ public sealed class SendConversationMessageHandler
                 property.PortfolioId == conversation.PortfolioId)));
     }
 
-    private static IQueryable<Tenant> WhereManagementAuthorizedForStart(
+    internal static IQueryable<Tenant> WhereManagementAuthorizedForStart(
         IQueryable<Tenant> tenants,
         RentalCommandDbContext db,
         SendConversationMessageCommand command,
@@ -319,7 +320,7 @@ public sealed class SendConversationMessageHandler
             !currentRelationships.Any(party => party.TenantId == tenant.Id));
     }
 
-    private static IQueryable<Property> AuthorizedProperties(
+    internal static IQueryable<Property> AuthorizedProperties(
         RentalCommandDbContext db,
         SendConversationMessageCommand command,
         DateTime utcNow)
@@ -335,50 +336,39 @@ public sealed class SendConversationMessageHandler
                      selected.PropertyId == property.Id))));
     }
 
-    private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
+    internal static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
         RentalCommandDbContext db,
         SendConversationMessageCommand command,
         DateTime utcNow)
     {
         var access = command.ManagementAccess
             ?? throw new InvalidOperationException("Management access is required for this query.");
-        return db.Set<MembershipRoleAssignment>().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId &&
-            assignment.Status == MembershipRoleAssignmentStatus.Active &&
-            assignment.SuspendedAtUtc == null &&
-            assignment.RevokedAtUtc == null &&
-            assignment.EffectiveFromUtc <= utcNow &&
-            (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
-            assignment.WorkspaceMembership != null &&
-            assignment.WorkspaceMembership.AccessContextId == access.AccessContextId &&
-            assignment.WorkspaceMembership.PortfolioId == command.PortfolioId &&
-            assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
-            assignment.WorkspaceMembership.SuspendedAtUtc == null &&
-            assignment.WorkspaceMembership.RevokedAtUtc == null &&
-            assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow &&
-            (assignment.WorkspaceMembership.EffectiveToUtc == null ||
-             assignment.WorkspaceMembership.EffectiveToUtc > utcNow) &&
-            assignment.WorkspaceMembership.AccessContext != null &&
-            assignment.WorkspaceMembership.AccessContext.UserId == access.UserId &&
-            assignment.WorkspaceMembership.AccessContext.AccessRevision == access.AccessRevision &&
-            assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
-            assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
-            assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
-            db.Set<AuthSession>().Any(session =>
-                session.Id == access.SessionId &&
-                session.UserId == access.UserId &&
-                session.ActiveAccessContextId == access.AccessContextId &&
-                session.Status == AuthSessionStatus.Active &&
-                session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > utcNow) &&
-            assignment.RoleProfile != null &&
-            assignment.RoleProfile.Capabilities.Any(profileCapability =>
-                profileCapability.CapabilityDefinition != null &&
-                ManagementCapabilities.Contains(profileCapability.CapabilityDefinition.Key) &&
-                (access.RequiredCapabilityKey == null ||
-                 profileCapability.CapabilityDefinition.Key == access.RequiredCapabilityKey) &&
-                profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
-                    CapabilityAuthorizationTargetKind.Property));
+        if (access.RequiredCapabilityKey is { } requiredCapability &&
+            !ManagementCapabilities.Contains(requiredCapability, StringComparer.Ordinal))
+        {
+            return db.Set<MembershipRoleAssignment>().Where(_ => false);
+        }
+
+        IReadOnlyCollection<string> capabilityKeys = access.RequiredCapabilityKey is null
+            ? ManagementCapabilities
+            : [access.RequiredCapabilityKey];
+        var assignments = db.AuthorizedAssignmentsForScope(
+            new WorkspaceReadScope(
+                command.PortfolioId,
+                access.UserId,
+                access.SessionId,
+                access.AccessContextId,
+                access.AccessRevision),
+            capabilityKeys,
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
+        return access.RequiredCapabilityKey is null
+            ? assignments
+            : assignments.Where(assignment =>
+                assignment.RoleProfile != null &&
+                assignment.RoleProfile.Capabilities.Any(profileCapability =>
+                    profileCapability.CapabilityDefinition != null &&
+                    profileCapability.CapabilityDefinition.Key == access.RequiredCapabilityKey));
     }
 
     private static async Task<List<Notification>> CreateStaffNotificationsAsync(

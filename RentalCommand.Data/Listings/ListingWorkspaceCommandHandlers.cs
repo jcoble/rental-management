@@ -10,6 +10,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Listings;
 using RentalCommand.Core.Documents;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Data.Listings;
@@ -726,45 +727,27 @@ internal static class ListingWorkspaceCommandSupport
     internal static IQueryable<Unit> AuthorizedUnits(
         IListingWorkspaceAtomicCommand command, RentalCommandDbContext db, DateTime now)
     {
-        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= now
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
+        var scope = new WorkspaceReadScope(
+            command.PortfolioId,
+            command.ActorUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.AccessRevision);
+        var assignments = db.AuthorizedAssignmentsForScope(
+            scope,
+            [CapabilityKeys.LeasingListingsManage],
+            CapabilityAuthorizationTargetKind.Property,
+            now);
 
         return db.Set<Unit>().Where(unit =>
             unit.Id == command.UnitId && unit.PortfolioId == command.PortfolioId
             && unit.Property != null && unit.Property.PortfolioId == command.PortfolioId
-            && db.Set<AuthSession>().Any(session =>
-                session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
-                && session.ActiveAccessContextId == command.AccessContextId
-                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > now)
-            && db.Set<WorkspaceAccessContext>().Any(context =>
-                context.Id == command.AccessContextId && context.UserId == command.ActorUserId
-                && context.PortfolioId == command.PortfolioId
-                && context.AccessRevision == command.AccessRevision
-                && context.Status == WorkspaceAccessContextStatus.Active
-                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && db.Set<WorkspaceMembership>().Any(membership =>
-                membership.AccessContextId == command.AccessContextId
-                && membership.PortfolioId == command.PortfolioId
-                && membership.Status == WorkspaceMembershipStatus.Active
-                && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
-                && membership.EffectiveFromUtc <= now
-                && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
-                && assignments.Any(assignment =>
-                    assignment.WorkspaceMembershipId == membership.Id
-                    && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                        || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                            && assignment.SelectedProperties.Any(scope =>
-                                scope.PortfolioId == command.PortfolioId
-                                && scope.PropertyId == unit.PropertyId)))
-                    && assignment.RoleProfile!.Capabilities.Any(capability =>
-                        capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingListingsManage
-                        && capability.CapabilityDefinition.AuthorizationTargetKind ==
-                            CapabilityAuthorizationTargetKind.Property))));
+            && assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                && assignment.SelectedProperties.Any(selected =>
+                    selected.PortfolioId == command.PortfolioId
+                    && selected.PropertyId == unit.PropertyId)));
     }
 
     internal static IQueryable<RentalListing> AuthorizedListings(

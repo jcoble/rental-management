@@ -936,8 +936,6 @@ public sealed class AtomicNoticeDeliveryHandler
     {
         if (command.ActorUserId is not null)
         {
-            if (!await IdentityAuthorized(command, db, now).AnyAsync(ct))
-                throw new NoticeApprovalAuthorizationException("Workspace access changed. Refresh and try again.");
             if (!await db.Set<NoticeDraft>().AsNoTracking().AnyAsync(draft =>
                     draft.Id == command.NoticeDraftId
                     && draft.PortfolioId == command.PortfolioId
@@ -972,30 +970,21 @@ public sealed class AtomicNoticeDeliveryHandler
         }
     }
 
-    private IQueryable<Property> AuthorizedProperties(
+    internal static IQueryable<Property> AuthorizedProperties(
         AtomicNoticeDeliveryCommand command,
         RentalCommandDbContext db,
         DateTime now)
     {
-        var assignments = db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null
-            && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= now
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
-            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
-            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
-            && assignment.WorkspaceMembership.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
-            && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && assignment.RoleProfile!.Capabilities.Any(grant =>
-                grant.CapabilityDefinition!.Key == CapabilityKeys.TenantNoticesManage
-                && grant.CapabilityDefinition.AuthorizationTargetKind
-                    == CapabilityAuthorizationTargetKind.Property));
+        var assignments = db.AuthorizedAssignmentsForScope(
+            new WorkspaceReadScope(
+                command.PortfolioId,
+                command.ActorUserId!.Value,
+                command.AuthSessionId!.Value,
+                command.AccessContextId!.Value,
+                command.ExpectedAccessRevision!.Value),
+            [CapabilityKeys.TenantNoticesManage],
+            CapabilityAuthorizationTargetKind.Property,
+            now);
         return db.Set<Property>().AsNoTracking().Where(property =>
             property.PortfolioId == command.PortfolioId
             && property.DeletedAt == null
@@ -1006,26 +995,6 @@ public sealed class AtomicNoticeDeliveryHandler
                     selected.PortfolioId == property.PortfolioId
                     && selected.PropertyId == property.Id)));
     }
-
-    private IQueryable<WorkspaceAccessContext> IdentityAuthorized(
-        AtomicNoticeDeliveryCommand command,
-        RentalCommandDbContext db,
-        DateTime now) =>
-        db.Set<WorkspaceAccessContext>().AsNoTracking().Where(context =>
-            context.Id == command.AccessContextId
-            && context.UserId == command.ActorUserId
-            && context.PortfolioId == command.PortfolioId
-            && context.AccessRevision == command.ExpectedAccessRevision
-            && context.Status == WorkspaceAccessContextStatus.Active
-            && context.SuspendedAtUtc == null
-            && context.RevokedAtUtc == null
-            && db.Set<AuthSession>().Any(session =>
-                session.Id == command.AuthSessionId
-                && session.UserId == command.ActorUserId
-                && session.ActiveAccessContextId == command.AccessContextId
-                && session.Status == AuthSessionStatus.Active
-                && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > now));
 
     private (string MessageType, string Payload) Payload(
         RenderedNotice rendered,
