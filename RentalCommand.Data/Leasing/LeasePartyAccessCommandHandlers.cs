@@ -1103,13 +1103,17 @@ internal static class LeasePartyAccessCommandSupport
         RentalCommandDbContext db,
         DateTime securityNowUtc)
     {
-        var effectiveAssignments = db.Set<MembershipRoleAssignment>()
-            .Where(assignment =>
-                assignment.Status == MembershipRoleAssignmentStatus.Active
-                && assignment.SuspendedAtUtc == null
-                && assignment.RevokedAtUtc == null
-                && assignment.EffectiveFromUtc <= securityNowUtc
-                && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc));
+        var scope = new WorkspaceReadScope(
+            command.PortfolioId,
+            command.ActorUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision);
+        var assignments = db.AuthorizedAssignmentsForScope(
+            scope,
+            [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
+            CapabilityAuthorizationTargetKind.Property,
+            securityNowUtc);
 
         return db.Set<LeaseManagement>()
             .Where(relationship =>
@@ -1120,45 +1124,12 @@ internal static class LeasePartyAccessCommandSupport
                 && relationship.Unit != null
                 && relationship.Unit.PortfolioId == command.PortfolioId
                 && relationship.Unit.PropertyId == relationship.PropertyId
-                && db.Set<AuthSession>().Any(session =>
-                    session.Id == command.AuthSessionId
-                    && session.UserId == command.ActorUserId
-                    && session.ActiveAccessContextId == command.AccessContextId
-                    && session.Status == AuthSessionStatus.Active
-                    && session.RevokedAtUtc == null
-                    && session.ExpiresAtUtc > securityNowUtc)
-                && db.Set<WorkspaceAccessContext>().Any(context =>
-                    context.Id == command.AccessContextId
-                    && context.UserId == command.ActorUserId
-                    && context.PortfolioId == command.PortfolioId
-                    && context.AccessRevision == command.ExpectedAccessRevision
-                    && context.Status == WorkspaceAccessContextStatus.Active
-                    && context.SuspendedAtUtc == null
-                    && context.RevokedAtUtc == null)
-                && db.Set<WorkspaceMembership>().Any(membership =>
-                    membership.AccessContextId == command.AccessContextId
-                    && membership.PortfolioId == command.PortfolioId
-                    && membership.Status == WorkspaceMembershipStatus.Active
-                    && membership.SuspendedAtUtc == null
-                    && membership.RevokedAtUtc == null
-                    && membership.EffectiveFromUtc <= securityNowUtc
-                    && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > securityNowUtc)
-                    && effectiveAssignments.Any(assignment =>
-                        assignment.WorkspaceMembershipId == membership.Id
-                        && assignment.PortfolioId == command.PortfolioId
-                        && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                            || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                                && assignment.SelectedProperties.Any(scope =>
-                                    scope.PropertyId == relationship.PropertyId
-                                    && scope.PortfolioId == command.PortfolioId)))
-                        && (assignment.RoleProfile!.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
-                                && capability.CapabilityDefinition.AuthorizationTargetKind
-                                    == CapabilityAuthorizationTargetKind.Property)
-                            || assignment.RoleProfile.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage
-                                && capability.CapabilityDefinition.AuthorizationTargetKind
-                                    == CapabilityAuthorizationTargetKind.Property)))));
+                && assignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                    || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                    && assignment.SelectedProperties.Any(selected =>
+                        selected.PropertyId == relationship.PropertyId
+                        && selected.PortfolioId == command.PortfolioId)));
     }
 
     internal static async Task AuthorizeReplayAsync<TCommand>(

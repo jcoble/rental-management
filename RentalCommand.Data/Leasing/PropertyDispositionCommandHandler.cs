@@ -5,6 +5,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Leasing;
 
@@ -83,44 +84,35 @@ public sealed class CreatePropertyDispositionHandler
     private static async Task AuthorizeAsync(CreatePropertyDispositionCommand command,
         RentalCommandDbContext db, DateTime now, CancellationToken ct)
     {
-        var memberships = db.Set<WorkspaceMembership>().Where(membership =>
-            db.Set<AuthSession>().Any(session => session.Id == command.AuthSessionId
-                && session.UserId == command.ActorUserId
-                && session.ActiveAccessContextId == command.AccessContextId
-                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > now)
-            && db.Set<WorkspaceAccessContext>().Any(context =>
-                context.Id == command.AccessContextId && context.UserId == command.ActorUserId
-                && context.PortfolioId == command.PortfolioId
-                && context.AccessRevision == command.ExpectedAccessRevision
-                && context.Status == WorkspaceAccessContextStatus.Active
-                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && membership.AccessContextId == command.AccessContextId
-            && membership.PortfolioId == command.PortfolioId
-            && membership.Status == WorkspaceMembershipStatus.Active
-            && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
-            && membership.EffectiveFromUtc <= now
-            && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now));
-        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= now
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
-        var authorized = await db.Set<Property>().AnyAsync(property =>
-            property.Id == command.PropertyId && property.PortfolioId == command.PortfolioId
-            && memberships.Any(membership => assignments.Any(assignment =>
-                assignment.WorkspaceMembershipId == membership.Id
-                && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                    || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                        && assignment.SelectedProperties.Any(scope =>
-                            scope.PropertyId == property.Id && scope.PortfolioId == command.PortfolioId)))
-                && assignment.RoleProfile!.Capabilities.Any(capability =>
-                    capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
-                    && capability.CapabilityDefinition.AuthorizationTargetKind
-                        == CapabilityAuthorizationTargetKind.Property))), ct);
+        var authorized = await AuthorizedProperties(command, db, now).AnyAsync(ct);
         if (!authorized)
             throw new UnauthorizedAccessException("The property is not authorized in the current workspace scope.");
+    }
+
+    internal static IQueryable<Property> AuthorizedProperties(
+        CreatePropertyDispositionCommand command,
+        RentalCommandDbContext db,
+        DateTime now)
+    {
+        var scope = new WorkspaceReadScope(
+            command.PortfolioId,
+            command.ActorUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision);
+        var assignments = db.AuthorizedAssignmentsForScope(
+            scope,
+            [CapabilityKeys.RentalsManage],
+            CapabilityAuthorizationTargetKind.Property,
+            now);
+        return db.Set<Property>().Where(property =>
+            property.Id == command.PropertyId && property.PortfolioId == command.PortfolioId
+            && assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                && assignment.SelectedProperties.Any(selected =>
+                    selected.PropertyId == property.Id
+                    && selected.PortfolioId == command.PortfolioId)));
     }
 
     private static void StageMany(IAtomicCommandContext context, CreatePropertyDispositionCommand command,
