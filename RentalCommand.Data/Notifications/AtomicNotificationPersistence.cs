@@ -43,7 +43,7 @@ public static Task<bool> MarkReadAsync(
             portfolioId, notificationId, userId, includeStaffOnlyNotifications, readAtUtc, ct);
     }
 
-    public static Task<int> MarkAllReadAsync(
+    public static Task<AtomicMarkAllNotificationsReadResult> MarkAllReadAsync(
         RentalCommandDbContext db,
         IAtomicCommandContext context,
         int portfolioId,
@@ -104,7 +104,7 @@ public static Task<bool> MarkReadAsync(
             """, ct) == 1;
     }
 
-    public async Task<int> MarkAllReadAsync(
+    public async Task<AtomicMarkAllNotificationsReadResult> MarkAllReadAsync(
         int portfolioId,
         int userId,
         bool includeStaffOnlyNotifications,
@@ -113,15 +113,21 @@ public static Task<bool> MarkReadAsync(
     {
         using var lease = _scope.BeginInternalRawDml(
             "NotificationReadStates", AtomicRawDmlOperation.Insert);
-        return await _db.Database.ExecuteSqlInterpolatedAsync($$"""
-            INSERT INTO "NotificationReadStates" ("PortfolioId", "NotificationId", "UserId", "ReadAt")
-            SELECT notification."PortfolioId", notification."Id", {{userId}}, {{readAtUtc}}
-            FROM "Notifications" notification
-            WHERE notification."PortfolioId" = {{portfolioId}}
-              AND (notification."UserId" IS NULL OR notification."UserId" = {{userId}})
-              AND ({{includeStaffOnlyNotifications}} OR notification."Type" <> 'TenantMessage')
-            ON CONFLICT ("PortfolioId", "NotificationId", "UserId") DO NOTHING
-            """, ct);
+        var results = await _db.Database.SqlQuery<AtomicMarkAllNotificationsReadResult>($$"""
+            WITH inserted AS (
+                INSERT INTO "NotificationReadStates" ("PortfolioId", "NotificationId", "UserId", "ReadAt")
+                SELECT notification."PortfolioId", notification."Id", {{userId}}, {{readAtUtc}}
+                FROM "Notifications" notification
+                WHERE notification."PortfolioId" = {{portfolioId}}
+                  AND (notification."UserId" IS NULL OR notification."UserId" = {{userId}})
+                  AND ({{includeStaffOnlyNotifications}} OR notification."Type" <> 'TenantMessage')
+                ON CONFLICT ("PortfolioId", "NotificationId", "UserId") DO NOTHING
+                RETURNING "NotificationId"
+            )
+            SELECT count(*)::integer AS "Count", min("NotificationId") AS "NotificationId"
+            FROM inserted
+            """).ToListAsync(ct);
+        return results[0];
     }
 
     public async Task<int> MarkConversationReadAsync(
