@@ -617,6 +617,29 @@ public sealed class AccountingReadModelPostgreSqlTests
     }
 
     [Fact]
+    public async Task TargetedCreditEligibility_SharedAuthorityTranslatesBusinessDateCorrectionSumToSql()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+
+        var sql = TargetedCreditEligibilityQuery.Build(
+                setup.Db.TenantLedgerEntries.AsNoTracking()
+                    .Where(entry => entry.PortfolioId == 1
+                        && entry.TenantAccountId == 2
+                        && entry.Id == 3),
+                setup.Db.TenantLedgerEntries.AsNoTracking(),
+                setup.Db.TenantAccountBalanceProjections.AsNoTracking())
+            .Select(row => row.RemainingTargetableAmount)
+            .ToQueryString();
+
+        sql.Should().Contain("TenantLedgerEntries")
+            .And.Contain("vw_tenant_account_balances")
+            .And.Contain("sum(")
+            .And.Contain("ReversesEntryId")
+            .And.Contain("RelatedTenantLedgerEntryId")
+            .And.MatchRegex("EffectiveOn\\\" <= [^\\n]*BusinessDate");
+    }
+
+    [Fact]
     public async Task TenantCreditTargets_UsesAuthorizedServerEligibilityOrderingPagingAndBoundedSql()
     {
         var commands = new SqlCommandCounter();
@@ -695,7 +718,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         await setup.ActivateApiScopeAsync(scope);
 
         var service = new AccountingLedgerReadModelService(setup.Db);
-        const string businessDateCorrectionPredicate = "\"EffectiveOn\" <= v.\"BusinessDate\"";
+        const string businessDateCorrectionPredicate = "\"EffectiveOn\" <=";
         commands.Reset();
         var beforeBoundary = await service.GetTenantCreditTargetsAsync(scope, account.Id,
             new TenantCreditTargetQuery { Take = 50 });
@@ -720,6 +743,7 @@ public sealed class AccountingReadModelPostgreSqlTests
             && sql.Contains("ReversesEntryId", StringComparison.Ordinal)
             && sql.Contains("RelatedTenantLedgerEntryId", StringComparison.Ordinal)
             && sql.Contains("vw_tenant_account_balances", StringComparison.Ordinal)
+            && sql.Contains("BusinessDate", StringComparison.Ordinal)
             && sql.Contains(businessDateCorrectionPredicate, StringComparison.Ordinal));
         (commands.Sql[1].Split(businessDateCorrectionPredicate).Length - 1).Should().Be(2);
 
@@ -737,6 +761,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         commands.Count.Should().Be(2);
         commands.Sql.Should().OnlyContain(sql =>
             sql.Contains("vw_tenant_account_balances", StringComparison.Ordinal)
+            && sql.Contains("BusinessDate", StringComparison.Ordinal)
             && sql.Contains(businessDateCorrectionPredicate, StringComparison.Ordinal));
         (commands.Sql[1].Split(businessDateCorrectionPredicate).Length - 1).Should().Be(2);
         commands.Sql.Should().Contain(sql =>

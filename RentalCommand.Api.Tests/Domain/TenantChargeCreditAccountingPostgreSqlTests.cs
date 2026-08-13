@@ -9,6 +9,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Time;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
@@ -297,6 +298,71 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
             .CountAsync(row => row.BusinessKey == command.BusinessKey)).Should().Be(0);
     }
 
+    [Fact]
+    public async Task TargetedCreditEligibility_FutureCreditAgreesAcrossCandidatesLedgerAndCommitAtBusinessDateBoundary()
+    {
+        var graph = SeedTenantAccount("eligibility-boundary");
+        var charge = await ExecuteChargeAsync(ChargeCommand(
+            graph.AccountId, "eligibility-boundary", 100m));
+        _ctx.Db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.AccountId,
+            EntryType = TenantLedgerEntryType.Credit,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 100m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 06),
+            PostedAtUtc = SimulatedEntryAtUtc,
+            Description = "Future targeted credit",
+            BusinessKey = "tenant-credit:eligibility-boundary:future",
+            RelatedTenantLedgerEntryId = charge.LedgerEntryId,
+            CreatedByUserId = _scope.UserId,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        var readModel = new AccountingLedgerReadModelService(_ctx.Db);
+        var candidatesBefore = await readModel.GetTenantCreditTargetsAsync(
+            _scope, graph.AccountId, new TenantCreditTargetQuery { Take = 20 });
+        var ledgerBefore = await readModel.GetTenantLedgerAsync(
+            _scope, graph.AccountId, new TenantLedgerQuery { Take = 20 });
+
+        candidatesBefore!.Items.Should().ContainSingle(row =>
+            row.TenantLedgerEntryId == charge.LedgerEntryId
+            && row.RemainingTargetableAmount == 100m);
+        ledgerBefore!.Items.Single(row => row.TenantLedgerEntryId == charge.LedgerEntryId)
+            .ActionCapabilities.CanGiveCredit.Should().BeTrue();
+        await ExecuteCreditAsync(CreditCommand(
+            graph.AccountId, "eligibility-boundary-before", 1m, charge.LedgerEntryId));
+
+        await _ctx.Db.Database.ExecuteSqlRawAsync("RESET SESSION AUTHORIZATION;");
+        await FreezeSimulationClockAsync(new DateTime(2027, 01, 06, 14, 30, 00, DateTimeKind.Utc));
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        var candidatesOnBoundary = await readModel.GetTenantCreditTargetsAsync(
+            _scope, graph.AccountId, new TenantCreditTargetQuery { Take = 20 });
+        var ledgerOnBoundary = await readModel.GetTenantLedgerAsync(
+            _scope, graph.AccountId, new TenantLedgerQuery { Take = 20 });
+        var afterBoundaryCommand = CreditCommand(
+            graph.AccountId, "eligibility-boundary-on", 1m, charge.LedgerEntryId);
+
+        candidatesOnBoundary!.Items.Should().NotContain(row =>
+            row.TenantLedgerEntryId == charge.LedgerEntryId);
+        ledgerOnBoundary!.Items.Single(row => row.TenantLedgerEntryId == charge.LedgerEntryId)
+            .ActionCapabilities.CanGiveCredit.Should().BeFalse();
+        await FluentActions.Invoking(() => _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "tenant-account.credit.post", afterBoundaryCommand.DeliveryIdempotencyKey),
+                afterBoundaryCommand,
+                CreditCodec))
+            .Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*remaining amount*");
+        (await _ctx.Db.TenantLedgerEntries.AsNoTracking()
+            .CountAsync(row => row.BusinessKey == afterBoundaryCommand.BusinessKey)).Should().Be(0);
+    }
+
     private async Task<TenantChargeMutationResult> ExecuteChargeAsync(PostTenantChargeCommand command)
     {
         var outcome = await _atomic.ExecuteAsync(
@@ -579,8 +645,9 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         });
     }
 
-    private async Task FreezeSimulationClockAsync()
+    private async Task FreezeSimulationClockAsync(DateTime? simulatedNowUtc = null)
     {
+        var effectiveNowUtc = simulatedNowUtc ?? SimulatedEntryAtUtc;
         var clock = await _ctx.Db.SimulationClocks.SingleOrDefaultAsync(row => row.Id == 1);
         if (clock is null)
         {
@@ -588,7 +655,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
             {
                 Id = 1,
                 Mode = ClockMode.Frozen,
-                SimAnchorUtc = SimulatedEntryAtUtc,
+                SimAnchorUtc = effectiveNowUtc,
                 RealAnchorUtc = DateTime.UtcNow,
                 TimeZoneId = "America/New_York",
             });
@@ -596,7 +663,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         else
         {
             clock.Mode = ClockMode.Frozen;
-            clock.SimAnchorUtc = SimulatedEntryAtUtc;
+            clock.SimAnchorUtc = effectiveNowUtc;
             clock.RealAnchorUtc = DateTime.UtcNow;
             clock.TimeZoneId = "America/New_York";
         }
