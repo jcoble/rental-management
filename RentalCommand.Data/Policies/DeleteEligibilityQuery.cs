@@ -80,8 +80,21 @@ public static class DeleteEligibilityQuery
         int tenantId) =>
         db.Set<Tenant>().AsNoTracking()
             .Where(tenant => tenant.PortfolioId == portfolioId && tenant.Id == tenantId)
-            .Select(tenant => new TenantDeleteEligibility
+            .WithTenantDeleteEligibility(db, portfolioId)
+            .Select(row => new TenantDeleteEligibility
             {
+                ActiveLeaseCount = row.ActiveLeaseCount,
+                LeaseHistoryCount = row.LeaseHistoryCount,
+            });
+
+    public static IQueryable<TenantDeleteEligibilityProjection> WithTenantDeleteEligibility(
+        this IQueryable<Tenant> tenants,
+        RentalCommandDbContext db,
+        int portfolioId) =>
+        tenants
+            .Select(tenant => new TenantDeleteEligibilityProjection
+            {
+                Entity = tenant,
                 ActiveLeaseCount = db.Set<LeaseManagementParty>()
                     .Where(party => party.PortfolioId == portfolioId
                         && party.TenantId == tenant.Id
@@ -133,6 +146,13 @@ public sealed class UnitDeleteEligibility
 
 public sealed class TenantDeleteEligibility
 {
+    public int ActiveLeaseCount { get; init; }
+    public int LeaseHistoryCount { get; init; }
+}
+
+public sealed class TenantDeleteEligibilityProjection
+{
+    public required Tenant Entity { get; init; }
     public int ActiveLeaseCount { get; init; }
     public int LeaseHistoryCount { get; init; }
 }

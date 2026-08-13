@@ -12,6 +12,7 @@ using RentalCommand.Core.Policies;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Policies;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -1055,31 +1056,7 @@ public class TenantService : ITenantService
         int portfolioId,
         CancellationToken ct)
     {
-        var row = await tenants
-            .Select(t => new
-            {
-                Entity = t,
-                ActiveLeaseCount = _db.LeaseManagementParties
-                    .Where(party => party.PortfolioId == portfolioId
-                        && party.TenantId == t.Id
-                        && party.Role != LeaseManagementPartyRole.Guarantor
-                        && _db.UnitOccupancyProjections.Any(occupancy =>
-                            occupancy.PortfolioId == portfolioId
-                            && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                        && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                            lifecycle.PortfolioId == portfolioId
-                            && lifecycle.LeaseManagementId == party.LeaseManagementId
-                            && party.EffectiveFrom <= lifecycle.BusinessDate
-                            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                    .Select(party => party.LeaseManagementId)
-                    .Distinct()
-                    .Count(),
-                LeaseHistoryCount = _db.LeaseManagementParties
-                    .Where(party => party.PortfolioId == portfolioId && party.TenantId == t.Id)
-                    .Select(party => party.LeaseManagementId)
-                    .Distinct()
-                    .Count(),
-            })
+        var row = await BuildDeleteEligibilityQuery(tenants, portfolioId)
             .FirstOrDefaultAsync(ct);
 
         if (row == null)
@@ -1091,5 +1068,10 @@ public class TenantService : ITenantService
         ApplyDeleteState(response, row.ActiveLeaseCount, row.LeaseHistoryCount);
         return response;
     }
+
+    internal IQueryable<TenantDeleteEligibilityProjection> BuildDeleteEligibilityQuery(
+        IQueryable<Tenant> tenants,
+        int portfolioId) =>
+        tenants.WithTenantDeleteEligibility(_db, portfolioId);
 
 }

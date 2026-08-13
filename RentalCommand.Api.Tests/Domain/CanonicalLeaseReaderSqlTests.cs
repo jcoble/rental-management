@@ -8,9 +8,12 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Vendors;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Policies;
+using RentalCommand.Data.Screening;
+using RentalCommand.Data.Vendors;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -135,6 +138,26 @@ public sealed class CanonicalLeaseReaderSqlTests
             .ToQueryString();
         var resolutionSql = db.ResolvePropertyUnit(17, 9, 42).ToQueryString();
         var tenantDeleteSql = db.TenantDeleteEligibility(17, 5).ToQueryString();
+        var w9Sql = RequestVendorW9Handler.AuthorizedVendors(
+                new RequestVendorW9Command(
+                    17, 8, "query-canary", 7, ReadScope().SessionId, ReadScope().UserId,
+                    ReadScope().AccessContextId, ReadScope().AccessRevision, now),
+                db,
+                now)
+            .ToQueryString();
+        var screeningSql = ScreeningCommandSupport.AuthorizedApplications(
+                17, 23, ReadScope().UserId, ReadScope().SessionId,
+                ReadScope().AccessContextId, ReadScope().AccessRevision,
+                db, now, tracking: false)
+            .ToQueryString();
+        var tenantService = new TenantService(
+            db,
+            Mock.Of<IDataUpdateService>(),
+            TimeProvider.System);
+        var tenantResponseSql = tenantService.BuildDeleteEligibilityQuery(
+                db.Tenants.AsNoTracking().Where(tenant => tenant.PortfolioId == 17 && tenant.Id == 5),
+                17)
+            .ToQueryString();
 
         authorizationSql.Should().Contain("MembershipRoleAssignments");
         authorizationSql.Should().Contain("WorkspaceAccessContexts");
@@ -148,6 +171,21 @@ public sealed class CanonicalLeaseReaderSqlTests
         tenantDeleteSql.Should().Contain("DISTINCT");
         tenantDeleteSql.Should().Contain("vw_unit_occupancy");
         tenantDeleteSql.Should().Contain("vw_lease_management_lifecycle");
+        foreach (var sql in new[] { w9Sql, screeningSql })
+        {
+            sql.Should().Contain("MembershipRoleAssignments");
+            sql.Should().Contain("WorkspaceAccessContexts");
+            sql.Should().Contain("AuthSessions");
+            sql.Should().Contain("EXISTS");
+        }
+        w9Sql.Should().Contain("AllProperties");
+        w9Sql.Should().Contain("Vendors");
+        screeningSql.Should().Contain("RentalApplications");
+        screeningSql.Should().Contain("MembershipRoleAssignmentProperties");
+        tenantResponseSql.Should().Contain("count");
+        tenantResponseSql.Should().Contain("DISTINCT");
+        tenantResponseSql.Should().Contain("vw_unit_occupancy");
+        tenantResponseSql.Should().Contain("vw_lease_management_lifecycle");
     }
 
     [Fact]
