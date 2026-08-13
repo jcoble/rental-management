@@ -77,25 +77,43 @@ public sealed class AtomicPaymentCsvImportHandler
                 ChangeReason: $"Payment receipt imported from CSV row {row.RowNumber}"), now);
         }
 
-        attempt.StageOutbox(new OutboxMessage
-        {
-            PortfolioId = command.PortfolioId,
-            MessageType = "data-update",
-            Payload = JsonSerializer.Serialize(new
-            {
-                entityType = "Payment",
-                entityId = 0,
-                operation = "update",
-                data = new { import = true },
-            }),
-            IdempotencyKey = $"payment-import:{command.ImportOperationDigest}",
-            CreatedAtUtc = now,
-            NextAttemptAtUtc = now,
-        });
+        StageCreatedRowUpdates(
+            attempt, command.PortfolioId, command.ImportOperationDigest, batch.CreatedRows, now);
 
         return new AtomicPaymentCsvImportResult(
             batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
             batch.CreatedCount, batch.DuplicateRows);
+    }
+
+    internal static void StageCreatedRowUpdates(
+        IAtomicCommandContext attempt,
+        int portfolioId,
+        string importOperationDigest,
+        IReadOnlyList<AtomicPaymentCsvImportRowResult> createdRows,
+        DateTime now)
+    {
+        foreach (var row in createdRows)
+        {
+            var entityId = row.TenantAccountId is > 0
+                ? row.TenantAccountId.Value
+                : throw new InvalidOperationException(
+                    $"Created Payment CSV row {row.RowNumber} has no persisted tenant account id.");
+            attempt.StageOutbox(new OutboxMessage
+            {
+                PortfolioId = portfolioId,
+                MessageType = "data-update",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    entityType = nameof(TenantAccount),
+                    entityId,
+                    operation = "update",
+                    data = new { import = true, rowNumber = row.RowNumber, ledgerEntryId = row.CreatedId },
+                }),
+                IdempotencyKey = $"payment-import:{importOperationDigest}:tenant-account:{entityId}:row:{row.RowNumber}",
+                CreatedAtUtc = now,
+                NextAttemptAtUtc = now,
+            });
+        }
     }
 
     public async Task AuthorizeReplayAsync(

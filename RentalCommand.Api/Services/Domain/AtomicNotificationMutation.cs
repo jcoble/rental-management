@@ -386,7 +386,16 @@ public sealed class AtomicNotificationMutationHandler
                 AuditLogOperation.Created, "Tenant notice policy provisioned from supplied template", 0));
         if (policies.Length > 0) await attempt.FlushBusinessAsync(ct);
         if (workspaces.Length == 0 && policies.Length == 0) return new(true, false, 0, 0);
-        StageDataUpdate(attempt, command, nameof(WorkspaceNoticeTemplateVersion), 0, now);
+        foreach (var workspace in workspaces)
+        {
+            StageDataUpdate(attempt, command, nameof(WorkspaceNoticeTemplateVersion),
+                workspace.Id, now, $"workspace-template-{workspace.Id}");
+        }
+        foreach (var policy in policies)
+        {
+            StageDataUpdate(attempt, command, nameof(TenantNoticePolicy),
+                policy.Id, now, $"tenant-notice-policy-{policy.Id}");
+        }
         return new(true, true, 0, workspaces.Length + policies.Length);
     }
 
@@ -612,15 +621,18 @@ public sealed class AtomicNotificationMutationHandler
         CancellationToken ct)
     {
         var isStaff = await IsStaffAsync(command, _db, now, ct);
-        var count = await AtomicNotificationPersistence.MarkAllReadAsync(_db,
+        var result = await AtomicNotificationPersistence.MarkAllReadAsync(_db,
             attempt, command.PortfolioId, command.ActorUserId, isStaff, now, ct);
-        if (count > 0)
+        if (result.Count > 0)
         {
+            var notificationId = result.NotificationId
+                ?? throw new InvalidOperationException(
+                    "Mark-all-read inserted rows without returning a notification id.");
             attempt.StageSemanticEvent(Audit(command, nameof(NotificationReadState), AuditLogOperation.Created,
-                $"{count} notifications marked read", 0), now);
-            StageDataUpdate(attempt, command, nameof(Notification), 0, now);
+                $"{result.Count} notifications marked read", notificationId), now);
+            StageDataUpdate(attempt, command, nameof(Notification), notificationId, now);
         }
-        return new(true, count > 0, 0, count);
+        return new(true, result.Count > 0, 0, result.Count);
     }
 
     private async Task<AtomicNotificationMutationResult> BroadcastAsync(
@@ -1020,7 +1032,8 @@ public sealed class AtomicNotificationMutationHandler
         AtomicNotificationMutationCommand command,
         string entityType,
         int entityId,
-        DateTime now) =>
+        DateTime now,
+        string? suffix = null) =>
         attempt.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
@@ -1032,7 +1045,7 @@ public sealed class AtomicNotificationMutationHandler
                 operation = "update",
                 data = new { },
             }),
-            IdempotencyKey = $"{command.DeliveryIdempotencyKey}:data-update",
+            IdempotencyKey = $"{command.DeliveryIdempotencyKey}:{suffix ?? "data-update"}",
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
         });
