@@ -70,7 +70,7 @@ public sealed class PreviewIntegrationConfigurationContractTests
         compose.Should().NotContain("Notifications__Twilio__AuthToken: \"\"");
     }
 
-    [Fact(Skip = "RS-A01 stale preview resource-limit contract; receipt #rs-a01-preview-compose")]
+    [Fact]
     public void PreviewCompose_PreservesStableOriginAndPracticalCpuLimits()
     {
         var compose = ReadRepositoryFile("deploy", "docker-compose.preview.yml");
@@ -83,7 +83,7 @@ public sealed class PreviewIntegrationConfigurationContractTests
         compose.Should().Contain("Authentication__Google__ClientId: ${GOOGLE_CLIENT_ID:-}");
         compose.Should().Contain("PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}");
 
-        ServiceBlock(compose, "postgres").Should().Contain("cpus: 3.0");
+        ServiceBlock(compose, "postgres").Should().Contain("cpus: 2.0");
         ServiceBlock(compose, "api").Should().Contain("cpus: 2.0");
     }
 

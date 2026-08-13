@@ -255,10 +255,11 @@ public sealed class OwnerCutoverPostgreSqlTests : IAsyncLifetime
         });
     }
 
-    [Fact(Skip = "RS-B10 harness bug: seeded access context is inactive under the current security clock or scope; receipt #rs-b10-access-seed")]
+    [Fact]
     public async Task OwnershipQueries_PageInPostgreSql()
     {
         var scope = await SeedAdministratorScopeAsync();
+        await _context.ActivateApiScopeAsync(scope);
         var now = DateTime.UtcNow;
         foreach (var name in new[] { "Alpha", "Bravo", "Charlie" })
         {
@@ -318,14 +319,14 @@ public sealed class OwnerCutoverPostgreSqlTests : IAsyncLifetime
         }
 
         var countSql = _commands.Single(IsTopLevelCountCommand);
-        countSql.Should().Contain("AuthSessions");
+        countSql.Should().Contain("rc_api_effective_capability_scopes");
         countSql.Should().Contain("PropertyOwnerships");
         countSql.Should().Contain("ILIKE");
         countSql.Should().Contain("WHERE");
         countSql.Should().ContainEquivalentOf("join");
 
         var pageSql = _commands.Single(IsBoundedPageCommand);
-        pageSql.Should().Contain("AuthSessions");
+        pageSql.Should().Contain("rc_api_effective_capability_scopes");
         pageSql.Should().Contain("PropertyOwnerships");
         pageSql.Should().Contain("OwnerEntities");
         pageSql.Should().Contain("ILIKE");

@@ -14,6 +14,13 @@ using Xunit;
 
 namespace RentalCommand.IntegrationTests;
 
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class RlsResourceScopePlanRegressionCollection
+{
+    public const string Name = "RLS resource-scope plan regression";
+}
+
+[Collection(RlsResourceScopePlanRegressionCollection.Name)]
 public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
 {
     private const string ApiPassword = "rls-plan-test-password";
@@ -157,7 +164,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
         }
     }
 
-    [SkippableFact(Skip = "RS-B04 harness bug: RLS plan fixture command timeout poisons later initialization; receipt #rs-b04-rls-timeout")]
+    [SkippableFact]
     public async Task AllProperties_UnitsCountPlan_HasNoPerRowResourceScopeFilter()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL RLS plan proof.");
@@ -170,7 +177,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
         capture.AllPropertiesCalls.Should().BeGreaterThan(0);
     }
 
-    [SkippableFact(Skip = "RS-B04 harness bug: RLS plan fixture command timeout poisons later initialization; receipt #rs-b04-rls-timeout")]
+    [SkippableFact]
     public async Task AllProperties_DepositAggregatePlan_HasNoPerRowResourceScopeFilter()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL RLS plan proof.");
@@ -184,7 +191,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
         capture.AllPropertiesCalls.Should().BeGreaterThan(0);
     }
 
-    [SkippableFact(Skip = "RS-B04 harness bug: RLS plan fixture command timeout poisons later initialization; receipt #rs-b04-rls-timeout")]
+    [SkippableFact]
     public async Task SameData_CurrentVersusOptimized_HasMaterialImprovement()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL RLS plan proof.");
@@ -219,7 +226,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
         await WritePerformanceEvidenceAsync(current, optimized, detailedEvidence);
     }
 
-    [SkippableFact(Skip = "RS-B04 harness bug: RLS plan fixture command timeout poisons later initialization; receipt #rs-b04-rls-timeout")]
+    [SkippableFact]
     public async Task OptimizedAuthority_PreservesLiveSecurityDecisionMatrix()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL RLS security proof.");
@@ -253,7 +260,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
         }
     }
 
-    [SkippableFact(Skip = "RS-B04 harness bug: RLS plan fixture command timeout poisons later initialization; receipt #rs-b04-rls-timeout")]
+    [SkippableFact]
     public async Task OptimizedAuthority_PreservesPublicPolicyDefinitions()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL public-policy proof.");
@@ -284,7 +291,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
             "signing-token-qualified-rows:0|0");
     }
 
-    [SkippableFact(Skip = "RS-B04 harness bug: RLS plan fixture command timeout poisons later initialization; receipt #rs-b04-rls-timeout")]
+    [SkippableFact]
     public async Task BaselineAndMigration_InstallIdenticalAuthorityFunctions()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL migration parity proof.");
@@ -310,7 +317,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
             .BeSameAs(FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719);
     }
 
-    [SkippableFact(Skip = "RS-B04 harness bug: RLS plan fixture command timeout poisons later initialization; receipt #rs-b04-rls-timeout")]
+    [SkippableFact]
     public async Task EffectiveCapabilityScopes_UseFrozenBusinessClockForFutureEffectiveAuthority()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL capability-scope proof.");
@@ -338,7 +345,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
         frozenScope.Should().Be("9001|9001|AllProperties|null");
     }
 
-    [SkippableFact(Skip = "RS-B04 harness bug: RLS plan fixture command timeout poisons later initialization; receipt #rs-b04-rls-timeout")]
+    [SkippableFact]
     public async Task EffectiveCapabilityScopes_ReturnTypedAllSelectedAndAssignedWorkRows()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL capability-scope proof.");
@@ -374,7 +381,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
         assignedWork.Should().Be("9001|9001|AssignedWorkOrders|null");
     }
 
-    [SkippableFact(Skip = "RS-B04 harness bug: RLS plan fixture command timeout poisons later initialization; receipt #rs-b04-rls-timeout")]
+    [SkippableFact]
     public async Task EffectiveCapabilityScopes_FailClosedForWrongCoordinatesOrDeadAuthority()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL capability-scope proof.");
