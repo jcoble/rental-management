@@ -95,9 +95,10 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_recent_expenses",
-            "Returns expenses with IncurredAt within the last N days, most recent first: " +
-            "date, description, vendor name (if linked), Schedule-E category, amount, " +
-            "property name (if linked), and status. Also returns a total amount. " +
+            "Returns paid expenses whose paid date (or incurred date when no paid date was recorded) " +
+            "falls within the last N days, most recent first: date, description, vendor name (if linked), " +
+            "Schedule-E category, amount, property name (if linked), and status. " +
+            "Also returns the paid cash-basis total amount. " +
             "Use for 'what did I spend on repairs?', 'recent expenses'.",
             """{"type":"object","properties":{"withinDays":{"type":"integer","description":"Number of days to look back. Defaults to 90."}},"required":[]}"""),
 
@@ -1076,7 +1077,8 @@ public class PortfolioQaService : IPortfolioQaService
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == scope.PortfolioId &&
-                e.IncurredAt >= cutoff &&
+                e.Status == ExpenseStatus.Paid &&
+                (e.PaidAt ?? e.IncurredAt) >= cutoff &&
                 e.PropertyId != null &&
                 AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead)
                     .Any(property => property.Id == e.PropertyId));
@@ -1100,10 +1102,10 @@ public class PortfolioQaService : IPortfolioQaService
                 equals new { vendor.PortfolioId, Id = (int?)vendor.Id }
                 into vendorRows
             from vendor in vendorRows.DefaultIfEmpty()
-            orderby expense.IncurredAt descending, expense.Id descending
+            orderby (expense.PaidAt ?? expense.IncurredAt) descending, expense.Id descending
             select new
             {
-                expense.IncurredAt,
+                EffectiveAt = expense.PaidAt ?? expense.IncurredAt,
                 expense.Description,
                 VendorName = vendor != null ? vendor.Name : null,
                 expense.Category,
@@ -1118,7 +1120,7 @@ public class PortfolioQaService : IPortfolioQaService
 
         var rows = entities.Select(e => new
         {
-            date         = e.IncurredAt.ToString("yyyy-MM-dd"),
+            date         = e.EffectiveAt.ToString("yyyy-MM-dd"),
             description  = e.Description,
             vendor       = e.VendorName,
             category     = e.Category.ToString(),

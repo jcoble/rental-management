@@ -702,6 +702,9 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             join management in _db.LeaseManagements.AsNoTracking()
                 on new { account.PortfolioId, LeaseManagementId = account.LeaseManagementId }
                 equals new { management.PortfolioId, LeaseManagementId = management.Id }
+            join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { balance.PortfolioId, balance.TenantAccountId }
             join entry in _db.TenantLedgerEntries.AsNoTracking()
                 on new { account.PortfolioId, TenantAccountId = account.Id }
                 equals new { entry.PortfolioId, entry.TenantAccountId }
@@ -714,40 +717,42 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 && entry.Amount - (_db.TenantLedgerEntries
                     .Where(correction => correction.PortfolioId == entry.PortfolioId
                         && correction.TenantAccountId == entry.TenantAccountId
+                        && correction.EffectiveOn <= balance.BusinessDate
                         && ((correction.EntryType == TenantLedgerEntryType.Reversal
                                 && correction.ReversesEntryId == entry.Id)
                             || (correction.EntryType == TenantLedgerEntryType.Credit
                                 && correction.RelatedTenantLedgerEntryId == entry.Id)))
                     .Sum(correction => (decimal?)correction.Amount) ?? 0m) > 0m
-            select entry;
+            select new { Entry = entry, balance.BusinessDate };
 
         var totalCount = await eligibleEntries.CountAsync(ct);
         var skip = query.NormalizedSkip;
         var take = query.NormalizedTake;
         var ordered = eligibleEntries
-            .OrderByDescending(entry => query.TargetEntryId != null && entry.Id == query.TargetEntryId.Value)
-            .ThenByDescending(entry => entry.EffectiveOn)
-            .ThenByDescending(entry => entry.PostedAtUtc)
-            .ThenByDescending(entry => entry.Id);
+            .OrderByDescending(row => query.TargetEntryId != null && row.Entry.Id == query.TargetEntryId.Value)
+            .ThenByDescending(row => row.Entry.EffectiveOn)
+            .ThenByDescending(row => row.Entry.PostedAtUtc)
+            .ThenByDescending(row => row.Entry.Id);
         var rows = await ordered
             .Skip(skip)
             .Take(take)
-            .Select(entry => new TenantCreditTargetRow
+            .Select(row => new TenantCreditTargetRow
             {
-                TenantLedgerEntryId = entry.Id,
-                PublicId = entry.PublicId,
-                Description = entry.Description,
-                ChargeAmount = entry.Amount,
-                RemainingTargetableAmount = entry.Amount - (_db.TenantLedgerEntries
-                    .Where(correction => correction.PortfolioId == entry.PortfolioId
-                        && correction.TenantAccountId == entry.TenantAccountId
+                TenantLedgerEntryId = row.Entry.Id,
+                PublicId = row.Entry.PublicId,
+                Description = row.Entry.Description,
+                ChargeAmount = row.Entry.Amount,
+                RemainingTargetableAmount = row.Entry.Amount - (_db.TenantLedgerEntries
+                    .Where(correction => correction.PortfolioId == row.Entry.PortfolioId
+                        && correction.TenantAccountId == row.Entry.TenantAccountId
+                        && correction.EffectiveOn <= row.BusinessDate
                         && ((correction.EntryType == TenantLedgerEntryType.Reversal
-                                && correction.ReversesEntryId == entry.Id)
+                                && correction.ReversesEntryId == row.Entry.Id)
                             || (correction.EntryType == TenantLedgerEntryType.Credit
-                                && correction.RelatedTenantLedgerEntryId == entry.Id)))
+                                && correction.RelatedTenantLedgerEntryId == row.Entry.Id)))
                     .Sum(correction => (decimal?)correction.Amount) ?? 0m),
-                EffectiveOn = entry.EffectiveOn,
-                Currency = entry.Currency,
+                EffectiveOn = row.Entry.EffectiveOn,
+                Currency = row.Entry.Currency,
             })
             .ToListAsync(ct);
 
@@ -774,15 +779,19 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         if (query.OpenOnly is true)
             entries = entries.Where(entry => entry.Direction == TenantLedgerDirection.Debit
                 && ChargeEntryTypes.Contains(entry.EntryType)
-                && entry.Amount - _db.TenantLedgerAllocations
-                    .Where(allocation => allocation.DebitEntryId == entry.Id)
-                    .Sum(allocation => allocation.Amount) > 0m);
+                && _db.TenantChargeBalanceProjections.Any(balance =>
+                    balance.PortfolioId == entry.PortfolioId
+                    && balance.TenantAccountId == entry.TenantAccountId
+                    && balance.TenantLedgerEntryId == entry.Id
+                    && balance.OpenAmount > 0m));
         if (query.SettledOnly is true)
             entries = entries.Where(entry => entry.Direction != TenantLedgerDirection.Debit
                 || !ChargeEntryTypes.Contains(entry.EntryType)
-                || entry.Amount - _db.TenantLedgerAllocations
-                    .Where(allocation => allocation.DebitEntryId == entry.Id)
-                    .Sum(allocation => allocation.Amount) <= 0m);
+                || !_db.TenantChargeBalanceProjections.Any(balance =>
+                    balance.PortfolioId == entry.PortfolioId
+                    && balance.TenantAccountId == entry.TenantAccountId
+                    && balance.TenantLedgerEntryId == entry.Id
+                    && balance.OpenAmount > 0m));
 
         var totalCount = await entries.CountAsync(ct);
         var skip = query.NormalizedSkip;
@@ -835,15 +844,20 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 DueOn = entry.DueOn,
                 OpenAmount = entry.Direction == TenantLedgerDirection.Debit
                     && ChargeEntryTypes.Contains(entry.EntryType)
-                    ? entry.Amount - _db.TenantLedgerAllocations
-                        .Where(allocation => allocation.DebitEntryId == entry.Id)
-                        .Sum(allocation => allocation.Amount)
+                    ? _db.TenantChargeBalanceProjections
+                        .Where(balance => balance.PortfolioId == entry.PortfolioId
+                            && balance.TenantAccountId == entry.TenantAccountId
+                            && balance.TenantLedgerEntryId == entry.Id)
+                        .Select(balance => (decimal?)balance.OpenAmount)
+                        .FirstOrDefault() ?? 0m
                     : 0m,
                 Status = entry.Direction == TenantLedgerDirection.Debit
                     && ChargeEntryTypes.Contains(entry.EntryType)
-                    ? (entry.Amount - _db.TenantLedgerAllocations
-                        .Where(allocation => allocation.DebitEntryId == entry.Id)
-                        .Sum(allocation => allocation.Amount) > 0m ? "Open" : "Settled")
+                    ? (_db.TenantChargeBalanceProjections.Any(balance =>
+                        balance.PortfolioId == entry.PortfolioId
+                        && balance.TenantAccountId == entry.TenantAccountId
+                        && balance.TenantLedgerEntryId == entry.Id
+                        && balance.OpenAmount > 0m) ? "Open" : "Settled")
                     : "Settled",
                 PaymentMethod = entry.ProviderPaymentAttempt!.PaymentMethodSummary,
                 Reference = entry.ProviderPaymentAttempt.ProviderObjectId
@@ -880,7 +894,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     .Where(reversal => reversal.PortfolioId == portfolioId
                         && reversal.TenantAccountId == tenantAccountId
                         && reversal.EntryType == TenantLedgerEntryType.Reversal
-                        && reversal.ReversesEntryId == entry.Id)
+                        && reversal.ReversesEntryId == entry.Id
+                        && _db.TenantAccountBalanceProjections.Any(balance =>
+                            balance.PortfolioId == reversal.PortfolioId
+                            && balance.TenantAccountId == reversal.TenantAccountId
+                            && reversal.EffectiveOn <= balance.BusinessDate))
                     .OrderByDescending(reversal => reversal.Id)
                     .Select(reversal => (long?)reversal.Id)
                     .FirstOrDefault(),
@@ -909,6 +927,10 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && entry.Amount - (_db.TenantLedgerEntries
                             .Where(correction => correction.PortfolioId == entry.PortfolioId
                                 && correction.TenantAccountId == entry.TenantAccountId
+                                && _db.TenantAccountBalanceProjections.Any(balance =>
+                                    balance.PortfolioId == correction.PortfolioId
+                                    && balance.TenantAccountId == correction.TenantAccountId
+                                    && correction.EffectiveOn <= balance.BusinessDate)
                                 && ((correction.EntryType == TenantLedgerEntryType.Reversal
                                         && correction.ReversesEntryId == entry.Id)
                                     || (correction.EntryType == TenantLedgerEntryType.Credit
@@ -922,7 +944,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
-                            && reversal.ReversesEntryId == entry.Id),
+                            && reversal.ReversesEntryId == entry.Id
+                            && _db.TenantAccountBalanceProjections.Any(balance =>
+                                balance.PortfolioId == reversal.PortfolioId
+                                && balance.TenantAccountId == reversal.TenantAccountId
+                                && reversal.EffectiveOn <= balance.BusinessDate)),
                     CanAddRelatedCharge = entry.Direction == TenantLedgerDirection.Debit
                         && (entry.EntryType == TenantLedgerEntryType.RentCharge
                             || entry.EntryType == TenantLedgerEntryType.AddendumCharge
@@ -936,7 +962,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
-                            && reversal.ReversesEntryId == entry.Id),
+                            && reversal.ReversesEntryId == entry.Id
+                            && _db.TenantAccountBalanceProjections.Any(balance =>
+                                balance.PortfolioId == reversal.PortfolioId
+                                && balance.TenantAccountId == reversal.TenantAccountId
+                                && reversal.EffectiveOn <= balance.BusinessDate)),
                     CanReverseCharge = entry.Direction == TenantLedgerDirection.Debit
                         && (entry.EntryType == TenantLedgerEntryType.RentCharge
                             || entry.EntryType == TenantLedgerEntryType.AddendumCharge
@@ -950,7 +980,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
-                            && reversal.ReversesEntryId == entry.Id),
+                            && reversal.ReversesEntryId == entry.Id
+                            && _db.TenantAccountBalanceProjections.Any(balance =>
+                                balance.PortfolioId == reversal.PortfolioId
+                                && balance.TenantAccountId == reversal.TenantAccountId
+                                && reversal.EffectiveOn <= balance.BusinessDate)),
                     CanReverseLedgerEntry = entry.Direction == TenantLedgerDirection.Debit
                         && entry.EntryType == TenantLedgerEntryType.OpeningBalance
                         && entry.ReversesEntryId == null
@@ -960,14 +994,23 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
-                            && reversal.ReversesEntryId == entry.Id),
+                            && reversal.ReversesEntryId == entry.Id
+                            && _db.TenantAccountBalanceProjections.Any(balance =>
+                                balance.PortfolioId == reversal.PortfolioId
+                                && balance.TenantAccountId == reversal.TenantAccountId
+                                && reversal.EffectiveOn <= balance.BusinessDate)),
                     CanReviewPaymentAllocation = entry.Direction == TenantLedgerDirection.Credit
                         && entry.EntryType == TenantLedgerEntryType.PaymentReceipt,
                 },
                 Allocations = _db.TenantLedgerAllocations
                     .Where(allocation => allocation.PortfolioId == portfolioId
                         && allocation.TenantAccountId == tenantAccountId
-                        && (allocation.DebitEntryId == entry.Id || allocation.CreditEntryId == entry.Id))
+                        && (allocation.DebitEntryId == entry.Id || allocation.CreditEntryId == entry.Id)
+                        && _db.TenantAccountBalanceProjections.Any(balance =>
+                            balance.PortfolioId == allocation.PortfolioId
+                            && balance.TenantAccountId == allocation.TenantAccountId
+                            && (allocation.EffectiveOn ?? allocation.CreditEntry!.EffectiveOn)
+                                <= balance.BusinessDate))
                     .OrderBy(allocation => allocation.Id)
                     .Select(allocation => new AllocationRef
                     {
@@ -982,9 +1025,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                             ? allocation.CreditEntry!.Description
                             : allocation.DebitEntry!.Description,
                         Amount = allocation.Amount,
-                        EffectiveOn = allocation.DebitEntryId == entry.Id
-                            ? allocation.CreditEntry!.EffectiveOn
-                            : allocation.DebitEntry!.EffectiveOn,
+                        EffectiveOn = allocation.EffectiveOn ?? allocation.CreditEntry!.EffectiveOn,
                     })
                     .ToList(),
             })
@@ -1032,22 +1073,32 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                   )
             ),
             authorized_accounts AS MATERIALIZED (
-                SELECT account."PortfolioId", account."Id" AS "TenantAccountId"
+                SELECT account."PortfolioId", account."Id" AS "TenantAccountId",
+                       account_balance."BusinessDate"
                 FROM "TenantAccounts" AS account
                 INNER JOIN "LeaseManagements" AS management
                     ON management."PortfolioId" = account."PortfolioId"
                    AND management."Id" = account."LeaseManagementId"
                 INNER JOIN authorized_properties
                     ON authorized_properties."PropertyId" = management."PropertyId"
+                INNER JOIN "vw_tenant_account_balances" AS account_balance
+                    ON account_balance."PortfolioId" = account."PortfolioId"
+                   AND account_balance."TenantAccountId" = account."Id"
                 WHERE account."PortfolioId" = {{scope.PortfolioId}}
                   AND account."Id" = {{tenantAccountId}}
             ),
             filtered_entries AS MATERIALIZED (
-                SELECT entry.*
+                SELECT entry.*,
+                       authorized_accounts."BusinessDate",
+                       charge_balance."OpenAmount" AS "AsOfOpenAmount"
                 FROM authorized_accounts
                 INNER JOIN "TenantLedgerEntries" AS entry
                     ON entry."PortfolioId" = authorized_accounts."PortfolioId"
                    AND entry."TenantAccountId" = authorized_accounts."TenantAccountId"
+                LEFT JOIN "vw_tenant_charge_balances" AS charge_balance
+                    ON charge_balance."PortfolioId" = entry."PortfolioId"
+                   AND charge_balance."TenantAccountId" = entry."TenantAccountId"
+                   AND charge_balance."TenantLedgerEntryId" = entry."Id"
                 WHERE entry."PortfolioId" = {{scope.PortfolioId}}
                   AND entry."TenantAccountId" = {{tenantAccountId}}
                   AND (CAST({{query.From}} AS date) IS NULL OR entry."EffectiveOn" >= CAST({{query.From}} AS date))
@@ -1056,18 +1107,10 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                   AND (NOT {{openOnly}} OR (
                       entry."Direction" = 'Debit'
                       AND entry."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
-                      AND entry."Amount" - COALESCE((SELECT SUM(allocation."Amount")
-                          FROM "TenantLedgerAllocations" AS allocation
-                          WHERE allocation."PortfolioId" = entry."PortfolioId"
-                            AND allocation."TenantAccountId" = entry."TenantAccountId"
-                            AND allocation."DebitEntryId" = entry."Id"), 0) > 0))
+                      AND COALESCE(charge_balance."OpenAmount", 0) > 0))
                   AND (NOT {{settledOnly}} OR entry."Direction" <> 'Debit'
                       OR entry."EntryType" NOT IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
-                      OR entry."Amount" - COALESCE((SELECT SUM(allocation."Amount")
-                          FROM "TenantLedgerAllocations" AS allocation
-                          WHERE allocation."PortfolioId" = entry."PortfolioId"
-                            AND allocation."TenantAccountId" = entry."TenantAccountId"
-                            AND allocation."DebitEntryId" = entry."Id"), 0) <= 0)
+                      OR COALESCE(charge_balance."OpenAmount", 0) <= 0)
             ),
             entry_facts AS MATERIALIZED (
                 SELECT
@@ -1077,6 +1120,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         FROM "TenantLedgerEntries" AS correction
                         WHERE correction."PortfolioId" = entry."PortfolioId"
                           AND correction."TenantAccountId" = entry."TenantAccountId"
+                          AND correction."EffectiveOn" <= entry."BusinessDate"
                           AND ((correction."EntryType" = 'Reversal' AND correction."ReversesEntryId" = entry."Id")
                             OR (correction."EntryType" = 'Credit' AND correction."RelatedTenantLedgerEntryId" = entry."Id"))), 0) AS "CorrectedAmount"
                 FROM filtered_entries AS entry
@@ -1087,6 +1131,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                       AND reversal."TenantAccountId" = entry."TenantAccountId"
                       AND reversal."EntryType" = 'Reversal'
                       AND reversal."ReversesEntryId" = entry."Id"
+                      AND reversal."EffectiveOn" <= entry."BusinessDate"
                     ORDER BY reversal."Id" DESC
                     LIMIT 1
                 ) AS replacement ON TRUE
@@ -1134,18 +1179,10 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         'dueOn', entry_facts."DueOn",
                         'openAmount', CASE WHEN entry_facts."Direction" = 'Debit'
                             AND entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
-                            THEN entry_facts."Amount" - COALESCE((SELECT SUM(allocation."Amount")
-                                FROM "TenantLedgerAllocations" AS allocation
-                                WHERE allocation."PortfolioId" = entry_facts."PortfolioId"
-                                  AND allocation."TenantAccountId" = entry_facts."TenantAccountId"
-                                  AND allocation."DebitEntryId" = entry_facts."Id"), 0) ELSE 0 END,
+                            THEN COALESCE(entry_facts."AsOfOpenAmount", 0) ELSE 0 END,
                         'status', CASE WHEN entry_facts."Direction" = 'Debit'
                             AND entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
-                            AND entry_facts."Amount" - COALESCE((SELECT SUM(allocation."Amount")
-                                FROM "TenantLedgerAllocations" AS allocation
-                                WHERE allocation."PortfolioId" = entry_facts."PortfolioId"
-                                  AND allocation."TenantAccountId" = entry_facts."TenantAccountId"
-                                  AND allocation."DebitEntryId" = entry_facts."Id"), 0) > 0
+                            AND COALESCE(entry_facts."AsOfOpenAmount", 0) > 0
                             THEN 'Open' ELSE 'Settled' END,
                         'paymentMethod', NULL,
                         'reference', NULL,
@@ -1168,9 +1205,13 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                                 'targetPublicId', target."PublicId",
                                 'targetDescription', target."Description",
                                 'amount', allocation."Amount",
-                                'effectiveOn', target."EffectiveOn"
+                                'effectiveOn', COALESCE(allocation."EffectiveOn", credit."EffectiveOn")
                             ) ORDER BY allocation."Id")
                             FROM "TenantLedgerAllocations" AS allocation
+                            INNER JOIN "TenantLedgerEntries" AS credit
+                                ON credit."PortfolioId" = allocation."PortfolioId"
+                               AND credit."TenantAccountId" = allocation."TenantAccountId"
+                               AND credit."Id" = allocation."CreditEntryId"
                             INNER JOIN "TenantLedgerEntries" AS target
                                 ON target."PortfolioId" = allocation."PortfolioId"
                                AND target."Id" = CASE WHEN allocation."DebitEntryId" = entry_facts."Id"
@@ -1178,6 +1219,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                             WHERE allocation."PortfolioId" = entry_facts."PortfolioId"
                               AND allocation."TenantAccountId" = entry_facts."TenantAccountId"
                               AND (allocation."DebitEntryId" = entry_facts."Id" OR allocation."CreditEntryId" = entry_facts."Id")
+                              AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn")
+                                  <= entry_facts."BusinessDate"
                         ), '[]'::jsonb),
                         'actionCapabilities', jsonb_build_object(
                             'canViewDetail', TRUE,
@@ -1319,14 +1362,16 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         if (months is not (3 or 6 or 9 or 12))
             throw new ArgumentOutOfRangeException(nameof(months), "Months must be 3, 6, 9, or 12.");
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var from = today.AddMonths(-months);
-        var currency = await _db.TenantAccounts.AsNoTracking()
-            .Where(account => account.PortfolioId == portfolioId && account.Id == tenantAccountId)
-            .Select(account => account.Currency)
+        var accountState = await _db.TenantAccountBalanceProjections.AsNoTracking()
+            .Where(account => account.PortfolioId == portfolioId
+                && account.TenantAccountId == tenantAccountId)
+            .Select(account => new { account.Currency, account.BusinessDate })
             .SingleOrDefaultAsync(ct);
-        if (currency is null)
+        if (accountState is null)
             return null;
+        var today = accountState.BusinessDate;
+        var from = today.AddMonths(-months);
+        var currency = accountState.Currency;
 
         var entries = _db.TenantLedgerEntries.AsNoTracking()
             .Where(entry => entry.PortfolioId == portfolioId && entry.TenantAccountId == tenantAccountId
@@ -1359,26 +1404,25 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         }
 
         // Aging buckets remain SQL-side; each amount is a conditional aggregate over open charges.
-        var aging = await entries
-            .Where(entry => entry.Direction == TenantLedgerDirection.Debit)
+        var aging = await _db.TenantChargeBalanceProjections.AsNoTracking()
+            .Where(charge => charge.PortfolioId == portfolioId
+                && charge.TenantAccountId == tenantAccountId
+                && charge.Currency == currency
+                && charge.EffectiveOn >= from
+                && charge.EffectiveOn <= today)
             .GroupBy(_ => 1)
             .Select(group => new
             {
-                Current = group.Where(entry => entry.DueOn >= today)
-                    .Sum(entry => entry.Amount - _db.TenantLedgerAllocations
-                        .Where(allocation => allocation.DebitEntryId == entry.Id).Sum(allocation => allocation.Amount)),
-                OneToThirty = group.Where(entry => entry.DueOn < today && entry.DueOn >= today.AddDays(-30))
-                    .Sum(entry => entry.Amount - _db.TenantLedgerAllocations
-                        .Where(allocation => allocation.DebitEntryId == entry.Id).Sum(allocation => allocation.Amount)),
-                ThirtyOneToSixty = group.Where(entry => entry.DueOn < today.AddDays(-30) && entry.DueOn >= today.AddDays(-60))
-                    .Sum(entry => entry.Amount - _db.TenantLedgerAllocations
-                        .Where(allocation => allocation.DebitEntryId == entry.Id).Sum(allocation => allocation.Amount)),
-                SixtyOneToNinety = group.Where(entry => entry.DueOn < today.AddDays(-60) && entry.DueOn >= today.AddDays(-90))
-                    .Sum(entry => entry.Amount - _db.TenantLedgerAllocations
-                        .Where(allocation => allocation.DebitEntryId == entry.Id).Sum(allocation => allocation.Amount)),
-                NinetyPlus = group.Where(entry => entry.DueOn < today.AddDays(-90))
-                    .Sum(entry => entry.Amount - _db.TenantLedgerAllocations
-                        .Where(allocation => allocation.DebitEntryId == entry.Id).Sum(allocation => allocation.Amount)),
+                Current = group.Where(charge => charge.DueOn >= today)
+                    .Sum(charge => charge.OpenAmount),
+                OneToThirty = group.Where(charge => charge.DueOn < today && charge.DueOn >= today.AddDays(-30))
+                    .Sum(charge => charge.OpenAmount),
+                ThirtyOneToSixty = group.Where(charge => charge.DueOn < today.AddDays(-30) && charge.DueOn >= today.AddDays(-60))
+                    .Sum(charge => charge.OpenAmount),
+                SixtyOneToNinety = group.Where(charge => charge.DueOn < today.AddDays(-60) && charge.DueOn >= today.AddDays(-90))
+                    .Sum(charge => charge.OpenAmount),
+                NinetyPlus = group.Where(charge => charge.DueOn < today.AddDays(-90))
+                    .Sum(charge => charge.OpenAmount),
             })
             .SingleOrDefaultAsync(ct);
 
