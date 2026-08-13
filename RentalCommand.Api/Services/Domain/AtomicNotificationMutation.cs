@@ -667,6 +667,13 @@ public sealed class AtomicNotificationMutationHandler
         DateTime now,
         CancellationToken ct)
     {
+        if (command.Domain == AtomicNotificationMutationDomain.LandlordConversationRead)
+        {
+            if (!await LandlordConversationQuery(command, db, now).AnyAsync(ct))
+                throw new UnauthorizedAccessException("The current Team role cannot read this conversation.");
+            return;
+        }
+
         var identityAuthorized = await IdentityAuthorized(command, db, now).AnyAsync(ct);
         if (!identityAuthorized)
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
@@ -685,10 +692,6 @@ public sealed class AtomicNotificationMutationHandler
                 command, db, now, requiredCapability).AnyAsync(ct))
             throw new UnauthorizedAccessException("The current Team role cannot manage this notification setting.");
 
-        if (command.Domain == AtomicNotificationMutationDomain.LandlordConversationRead
-            && !await LandlordConversationQuery(command, db, now)
-                .AnyAsync(conversation => conversation.Id == command.EntityId, ct))
-            throw new UnauthorizedAccessException("The current Team role cannot read this conversation.");
         if (command.Domain == AtomicNotificationMutationDomain.TenantConversationRead)
         {
             var request = Read<AtomicConversationReadRequest>(command);
@@ -804,31 +807,25 @@ public sealed class AtomicNotificationMutationHandler
             && membership.EffectiveFromUtc <= now
             && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now), ct);
 
-    private IQueryable<Conversation> LandlordConversationQuery(
+    internal static IQueryable<Conversation> LandlordConversationQuery(
         AtomicNotificationMutationCommand command,
         RentalCommandDbContext db,
         DateTime now)
     {
-        var assignments = db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
-            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
-            && assignment.WorkspaceMembership.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
-            && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= now
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
-            && assignment.RoleProfile!.Capabilities.Any(grant =>
-                grant.CapabilityDefinition!.Key == CapabilityKeys.RentalsRead
-                && grant.CapabilityDefinition.AuthorizationTargetKind == CapabilityAuthorizationTargetKind.Property));
+        var assignments = db.AuthorizedAssignmentsForScope(
+            new WorkspaceReadScope(
+                command.PortfolioId,
+                command.ActorUserId,
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.ExpectedAccessRevision),
+            [CapabilityKeys.RentalsRead],
+            CapabilityAuthorizationTargetKind.Property,
+            now);
 
         return db.Set<Conversation>().Where(conversation =>
-            conversation.PortfolioId == command.PortfolioId
+            conversation.Id == command.EntityId
+            && conversation.PortfolioId == command.PortfolioId
             && ((conversation.PropertyId == null
                     && assignments.Any(assignment =>
                         assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties))

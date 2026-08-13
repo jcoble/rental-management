@@ -8,6 +8,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Listings;
+using RentalCommand.Core.Notifications;
 using RentalCommand.Core.Operations;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data.AiIntegrations;
@@ -180,6 +181,55 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
         dispatchSql.Should().Contain("WorkOrders");
         dispatchSql.Should().Contain("work.manage");
         aiSql.Should().Contain("money.owner-reports.read");
+    }
+
+    [Fact]
+    public void Notification_authorization_consumers_translate_as_single_statements()
+    {
+        using var db = Context();
+
+        var conversationSql = AtomicNotificationMutationHandler.LandlordConversationQuery(
+                new AtomicNotificationMutationCommand(
+                    17, 5, SessionId, 12, 3,
+                    AtomicNotificationMutationDomain.LandlordConversationRead,
+                    88, "conversation:88", "{}", "conversation-read-replay"),
+                db,
+                SecurityNowUtc)
+            .ToQueryString();
+        var noticeCommand = new AtomicNoticeDeliveryCommand(
+            17, 5, SessionId, 12, 3, 91,
+            [NoticeDeliveryChannel.Email], null, null, "notice-delivery-replay");
+        var authorizedProperties = AtomicNoticeDeliveryHandler.AuthorizedProperties(
+            noticeCommand, db, SecurityNowUtc);
+        var noticeSql = db.Set<NoticeDraft>().Where(draft =>
+                draft.Id == noticeCommand.NoticeDraftId
+                && draft.PortfolioId == noticeCommand.PortfolioId
+                && draft.PropertyId != null
+                && authorizedProperties.Any(property =>
+                    property.Id == draft.PropertyId.Value
+                    && property.PortfolioId == draft.PortfolioId))
+            .ToQueryString();
+
+        foreach (var sql in new[] { conversationSql, noticeSql })
+        {
+            sql.Should().Contain("MembershipRoleAssignments");
+            sql.Should().Contain("WorkspaceMemberships");
+            sql.Should().Contain("WorkspaceAccessContexts");
+            sql.Should().Contain("AuthSessions");
+            sql.Should().Contain("RoleProfileCapabilities");
+            sql.Should().Contain("MembershipRoleAssignmentProperties");
+            sql.Should().Contain("AllProperties");
+            sql.Should().Contain("SelectedProperties");
+            sql.Should().NotContain("ClientEvaluation");
+            sql.TrimEnd().Should().NotEndWith(";",
+                "the complete authorization consumer must render as one SQL statement");
+        }
+
+        conversationSql.Should().Contain("Conversations");
+        conversationSql.Should().Contain("rentals.read");
+        noticeSql.Should().Contain("NoticeDrafts");
+        noticeSql.Should().Contain("Properties");
+        noticeSql.Should().Contain("notifications.tenant-notices.manage");
     }
 
     private static RentalCommandDbContext Context() => new(
