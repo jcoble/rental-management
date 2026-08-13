@@ -62,8 +62,6 @@ public sealed class AtomicNoticeDeliveryHandler
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
-        await attempt.AcquireLockAsync("NoticeDraft", command.NoticeDraftId, ct);
         if (command.ActorUserId is not null)
         {
             await attempt.AcquireLockAsync(
@@ -71,6 +69,8 @@ public sealed class AtomicNoticeDeliveryHandler
             await attempt.AcquireLockAsync(
                 "WorkspaceAccessContext", command.AccessContextId!.Value, ct);
         }
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("NoticeDraft", command.NoticeDraftId, ct);
 
         var times = await AtomicCommandDbClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var securityNow = times.WallClockUtc;

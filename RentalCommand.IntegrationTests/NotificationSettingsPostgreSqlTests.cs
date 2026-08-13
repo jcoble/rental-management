@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -186,6 +187,76 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MyAlertsOldShellAndRequestExecutorWriteIdenticalCompanionRows()
+    {
+        var seededAt = new DateTime(2027, 1, 21, 12, 0, 0, DateTimeKind.Utc);
+        var businessNow = new DateTime(2027, 1, 22, 5, 0, 0, DateTimeKind.Utc);
+        var sessionId = Guid.Parse("57e8e27d-e54d-47ba-9d20-e8c70e11fd39");
+        await using var oldDatabase = await _fixture.CreateContextAsync();
+        await using var newDatabase = await _fixture.CreateContextAsync();
+        var oldScope = await SeedAdministratorScopeAsync(oldDatabase.Db, seededAt, sessionId);
+        var newScope = await SeedAdministratorScopeAsync(newDatabase.Db, seededAt, sessionId);
+        await SeedAlertPreferenceAsync(oldDatabase.Db, oldScope, seededAt);
+        await SeedAlertPreferenceAsync(newDatabase.Db, newScope, seededAt);
+        var request = new UpdateMyAlertsRequest(
+            EnableInApp: true,
+            EnableMobilePush: false,
+            EnableEmail: true,
+            EnableSms: true);
+        const string operationKey = "phase1-my-alerts-canary";
+
+        var oldCommand = AtomicNotificationMutation.Command(oldScope,
+            AtomicNotificationMutationDomain.MyAlerts, 0, string.Empty, operationKey, request,
+            businessNow);
+        var oldIdentity = AtomicNotificationMutation.Identity(oldCommand);
+        AtomicCommandOutcome<AtomicNotificationMutationResult> oldOutcome;
+        await using (var services = BuildAtomicServices(
+            oldDatabase.ConnectionString, new FixedTimeProvider(businessNow), new OutboxFailureInterceptor()))
+        await using (var scope = services.CreateAsyncScope())
+        {
+            oldOutcome = await scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
+                .ExecuteAsync(oldIdentity, oldCommand, AtomicNotificationMutation.Codec);
+        }
+
+        var newCommand = AtomicNotificationMutation.Command(newScope,
+            AtomicNotificationMutationDomain.MyAlerts, 0, string.Empty, operationKey, request,
+            businessNow);
+        var newIdentity = AtomicNotificationMutation.Identity(newCommand);
+        AtomicCommandOutcome<AtomicNotificationMutationResult> newOutcome;
+        await using (var services = BuildAtomicServices(
+            newDatabase.ConnectionString, new FixedTimeProvider(businessNow), new OutboxFailureInterceptor()))
+        await using (var scope = services.CreateAsyncScope())
+        {
+            var handler = scope.ServiceProvider.GetRequiredService<
+                IAtomicCommandHandler<AtomicNotificationMutationCommand, AtomicNotificationMutationResult>>();
+            var write = new TransactionalWrite<
+                AtomicNotificationMutationCommand,
+                AtomicNotificationMutationResult>(
+                newIdentity.CommandType,
+                WriteIdempotencyPolicy.Required,
+                newCommand,
+                AtomicNotificationMutation.Codec.ContractName,
+                new WriteLockPlan(
+                    WriteLockProtocol.AuthorizationScope,
+                    WriteLock.For("AuthSession", newCommand.AuthSessionId),
+                    WriteLock.For("WorkspaceAccessContext", newCommand.AccessContextId),
+                    WriteLock.For("Portfolio", newCommand.PortfolioId)),
+                handler.HandleAsync,
+                handler.AuthorizeReplayAsync);
+            newOutcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(newIdentity.IdempotencyKey, write);
+        }
+
+        oldOutcome.Value.Should().BeEquivalentTo(newOutcome.Value);
+        oldOutcome.Disposition.Should().Be(newOutcome.Disposition);
+        var oldRows = await ReadCanaryRowsAsync(
+            oldDatabase.Db, oldIdentity, operationKey, oldOutcome.AttemptId);
+        var newRows = await ReadCanaryRowsAsync(
+            newDatabase.Db, newIdentity, operationKey, newOutcome.AttemptId);
+        newRows.Should().BeEquivalentTo(oldRows);
+    }
+
+    [Fact]
     public async Task MyAlertsAtomicWrite_UsesBusinessClockForCompanions_ReplaysAndRollsBack()
     {
         var seededAt = DateTime.UtcNow;
@@ -272,8 +343,14 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
         query.ToQueryString();
 
     private async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(DateTime now)
+        => await SeedAdministratorScopeAsync(_context.Db, now, Guid.NewGuid());
+
+    private static async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(
+        RentalCommandDbContext db,
+        DateTime now,
+        Guid sessionId)
     {
-        var user = await _context.Db.Users.SingleAsync(row => row.Id == 1);
+        var user = await db.Users.SingleAsync(row => row.Id == 1);
         var accessContext = new WorkspaceAccessContext
         {
             UserId = user.Id,
@@ -306,7 +383,7 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
         };
         var session = new AuthSession
         {
-            Id = Guid.NewGuid(),
+            Id = sessionId,
             UserId = user.Id,
             ActiveAccessContext = accessContext,
             Status = AuthSessionStatus.Active,
@@ -315,9 +392,9 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
             ExpiresAtUtc = now.AddDays(30),
         };
 
-        _context.Db.AddRange(accessContext, membership, assignment, session);
-        await _context.Db.SaveChangesAsync();
-        _context.Db.ChangeTracker.Clear();
+        db.AddRange(accessContext, membership, assignment, session);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
 
         return new WorkspaceReadScope(
             1,
@@ -328,6 +405,12 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
     }
 
     private ServiceProvider BuildAtomicServices(
+        TimeProvider timeProvider,
+        OutboxFailureInterceptor outboxFailure) =>
+        BuildAtomicServices(_context.ConnectionString, timeProvider, outboxFailure);
+
+    private static ServiceProvider BuildAtomicServices(
+        string connectionString,
         TimeProvider timeProvider,
         OutboxFailureInterceptor outboxFailure)
     {
@@ -340,16 +423,147 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
             AtomicNotificationMutationCommand,
             AtomicNotificationMutationResult,
             AtomicNotificationMutationHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<NotificationFoundationService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
-            options.UseNpgsql(
-                    _context.ConnectionString,
-                    npgsql => npgsql.EnableRetryOnFailure(maxRetryCount: 2))
+            options.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider)
                 .AddInterceptors(provider.GetRequiredService<OutboxFailureInterceptor>()));
         return services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
+
+    private static async Task SeedAlertPreferenceAsync(
+        RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        DateTime now)
+    {
+        db.UserAlertPreferences.Add(new UserAlertPreference
+        {
+            PortfolioId = scope.PortfolioId,
+            UserId = scope.UserId,
+            EnableInApp = false,
+            EnableMobilePush = true,
+            EnableEmail = false,
+            EnableSms = false,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+    }
+
+    private static async Task<CanaryRows> ReadCanaryRowsAsync(
+        RentalCommandDbContext db,
+        AtomicCommandIdentity identity,
+        string operationKey,
+        Guid outcomeAttemptId)
+    {
+        db.ChangeTracker.Clear();
+        var receipt = await db.AtomicCommandReceipts.AsNoTracking().SingleAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey);
+        var audit = await db.AtomicAuditLogs.AsNoTracking().SingleAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey);
+        var outbox = await db.OutboxMessages.AsNoTracking().SingleAsync(row =>
+            row.IdempotencyKey == operationKey + ":data-update");
+        var preference = await db.UserAlertPreferences.AsNoTracking().SingleAsync(row =>
+            row.PortfolioId == 1 && row.UserId == 1);
+
+        receipt.AttemptId.Should().NotBeEmpty();
+        audit.AttemptId.Should().NotBeEmpty();
+        receipt.AttemptId.Should().Be(outcomeAttemptId);
+        audit.AttemptId.Should().Be(outcomeAttemptId);
+
+        return new CanaryRows(
+            new AttemptCorrelationRow("<run-attempt>", "<run-attempt>",
+                receipt.AttemptId == audit.AttemptId && audit.AttemptId == outcomeAttemptId),
+            new ReceiptRow(receipt.CommandType, receipt.IdempotencyKey, receipt.RequestFingerprint,
+                receipt.Status, receipt.ResultContract, receipt.ResultJson, receipt.StartedAt,
+                receipt.CompletedAt),
+            new AuditRow(audit.CommandType, audit.CommandIdempotencyKey, audit.MutationOrdinal,
+                audit.PortfolioId, audit.UserId, audit.ActorLabel, audit.EntityType, audit.EntityId,
+                audit.Operation, audit.OldValues, audit.NewValues, audit.ChangeReason, audit.Timestamp,
+                audit.IpAddress),
+            new OutboxRow(outbox.PortfolioId, outbox.MessageType, outbox.Payload,
+                outbox.IdempotencyKey, outbox.AttemptCount, outbox.CreatedAtUtc,
+                outbox.NextAttemptAtUtc, outbox.LastAttemptAtUtc, outbox.ClaimOwner,
+                outbox.ClaimToken, outbox.ClaimExpiresAtUtc, outbox.AcceptedAtUtc,
+                outbox.DeliveredAtUtc, outbox.DeadLetteredAtUtc, outbox.Provider,
+                outbox.ProviderMessageId, outbox.FailureKind, outbox.LastError),
+            new PreferenceRow(preference.Id, preference.PortfolioId, preference.UserId,
+                preference.EnableInApp, preference.EnableMobilePush, preference.EnableEmail,
+                preference.EnableSms, preference.CreatedAtUtc, preference.UpdatedAtUtc));
+    }
+
+    private sealed record CanaryRows(
+        AttemptCorrelationRow AttemptCorrelation,
+        ReceiptRow Receipt,
+        AuditRow Audit,
+        OutboxRow Outbox,
+        PreferenceRow Preference);
+
+    private sealed record AttemptCorrelationRow(
+        string ReceiptAttemptId,
+        string AuditAttemptId,
+        bool ReceiptMatchesAuditMatchesOutcomeAttempt);
+
+    private sealed record ReceiptRow(
+        string CommandType,
+        string IdempotencyKey,
+        string RequestFingerprint,
+        AtomicCommandReceiptStatus Status,
+        string ResultContract,
+        string? ResultJson,
+        DateTime StartedAt,
+        DateTime? CompletedAt);
+
+    private sealed record AuditRow(
+        string CommandType,
+        string CommandIdempotencyKey,
+        long MutationOrdinal,
+        int PortfolioId,
+        int? UserId,
+        string? ActorLabel,
+        string EntityType,
+        int EntityId,
+        AuditLogOperation Operation,
+        string? OldValues,
+        string? NewValues,
+        string? ChangeReason,
+        DateTime Timestamp,
+        string? IpAddress);
+
+    private sealed record OutboxRow(
+        int? PortfolioId,
+        string MessageType,
+        string Payload,
+        string IdempotencyKey,
+        int AttemptCount,
+        DateTime CreatedAtUtc,
+        DateTime NextAttemptAtUtc,
+        DateTime? LastAttemptAtUtc,
+        string? ClaimOwner,
+        Guid? ClaimToken,
+        DateTime? ClaimExpiresAtUtc,
+        DateTime? AcceptedAtUtc,
+        DateTime? DeliveredAtUtc,
+        DateTime? DeadLetteredAtUtc,
+        string? Provider,
+        string? ProviderMessageId,
+        OutboxFailureKind? FailureKind,
+        string? LastError);
+
+    private sealed record PreferenceRow(
+        int Id,
+        int PortfolioId,
+        int UserId,
+        bool EnableInApp,
+        bool EnableMobilePush,
+        bool EnableEmail,
+        bool EnableSms,
+        DateTime CreatedAtUtc,
+        DateTime UpdatedAtUtc);
 
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
     {
