@@ -89,6 +89,64 @@ public sealed class PortfolioQaServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RecentExpensesTool_UsesPaidCashBasisForRowsWindowAndTotal()
+    {
+        var now = DateTime.UtcNow;
+        var property = SeedProperty(now);
+        _db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                Property = property,
+                Description = "Paid repair",
+                Category = ScheduleECategory.Repairs,
+                Status = ExpenseStatus.Paid,
+                Amount = 25m,
+                IncurredAt = now.AddDays(-120),
+                PaidAt = now.AddDays(-1),
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                Property = property,
+                Description = "Pending repair",
+                Category = ScheduleECategory.Repairs,
+                Status = ExpenseStatus.Pending,
+                Amount = 500m,
+                IncurredAt = now.AddDays(-1),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _db.SaveChangesAsync();
+
+        var answer = await AskToolAsync(
+            toolName: "list_recent_expenses",
+            argsJson: """{"withinDays":90}""",
+            question: "What did I spend on repairs recently?");
+
+        using var doc = JsonDocument.Parse(answer);
+        doc.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+        doc.RootElement.GetProperty("total").GetDecimal().Should().Be(25m);
+        var expense = doc.RootElement.GetProperty("expenses").EnumerateArray().Single();
+        expense.GetProperty("description").GetString().Should().Be("Paid repair");
+        expense.GetProperty("status").GetString().Should().Be(nameof(ExpenseStatus.Paid));
+        expense.GetProperty("date").GetString().Should().Be(now.AddDays(-1).ToString("yyyy-MM-dd"));
+        _commands.Should().HaveCount(3);
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("PaidAt", StringComparison.Ordinal)
+            && sql.Contains("IncurredAt", StringComparison.Ordinal)
+            && sql.Contains("Status", StringComparison.Ordinal));
+        _commands.Should().Contain(sql =>
+            sql.Contains("PaidAt", StringComparison.Ordinal)
+            && sql.Contains("Status", StringComparison.Ordinal)
+            && sql.Contains("SUM", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task RecentPaymentsTool_AggregatesFullFilteredWindowInSql_NotReturnedPageOnly()
     {
         var now = DateTime.UtcNow;
