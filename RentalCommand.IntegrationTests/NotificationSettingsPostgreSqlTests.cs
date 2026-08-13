@@ -237,6 +237,7 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
                 newCommand,
                 AtomicNotificationMutation.Codec.ContractName,
                 new WriteLockPlan(
+                    WriteLockProtocol.AuthorizationScope,
                     WriteLock.For("AuthSession", newCommand.AuthSessionId),
                     WriteLock.For("WorkspaceAccessContext", newCommand.AccessContextId),
                     WriteLock.For("Portfolio", newCommand.PortfolioId)),
@@ -248,8 +249,10 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
 
         oldOutcome.Value.Should().BeEquivalentTo(newOutcome.Value);
         oldOutcome.Disposition.Should().Be(newOutcome.Disposition);
-        var oldRows = await ReadCanaryRowsAsync(oldDatabase.Db, oldIdentity, operationKey);
-        var newRows = await ReadCanaryRowsAsync(newDatabase.Db, newIdentity, operationKey);
+        var oldRows = await ReadCanaryRowsAsync(
+            oldDatabase.Db, oldIdentity, operationKey, oldOutcome.AttemptId);
+        var newRows = await ReadCanaryRowsAsync(
+            newDatabase.Db, newIdentity, operationKey, newOutcome.AttemptId);
         newRows.Should().BeEquivalentTo(oldRows);
     }
 
@@ -453,7 +456,8 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
     private static async Task<CanaryRows> ReadCanaryRowsAsync(
         RentalCommandDbContext db,
         AtomicCommandIdentity identity,
-        string operationKey)
+        string operationKey,
+        Guid outcomeAttemptId)
     {
         db.ChangeTracker.Clear();
         var receipt = await db.AtomicCommandReceipts.AsNoTracking().SingleAsync(row =>
@@ -466,7 +470,14 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
         var preference = await db.UserAlertPreferences.AsNoTracking().SingleAsync(row =>
             row.PortfolioId == 1 && row.UserId == 1);
 
+        receipt.AttemptId.Should().NotBeEmpty();
+        audit.AttemptId.Should().NotBeEmpty();
+        receipt.AttemptId.Should().Be(outcomeAttemptId);
+        audit.AttemptId.Should().Be(outcomeAttemptId);
+
         return new CanaryRows(
+            new AttemptCorrelationRow("<run-attempt>", "<run-attempt>",
+                receipt.AttemptId == audit.AttemptId && audit.AttemptId == outcomeAttemptId),
             new ReceiptRow(receipt.CommandType, receipt.IdempotencyKey, receipt.RequestFingerprint,
                 receipt.Status, receipt.ResultContract, receipt.ResultJson, receipt.StartedAt,
                 receipt.CompletedAt),
@@ -486,10 +497,16 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
     }
 
     private sealed record CanaryRows(
+        AttemptCorrelationRow AttemptCorrelation,
         ReceiptRow Receipt,
         AuditRow Audit,
         OutboxRow Outbox,
         PreferenceRow Preference);
+
+    private sealed record AttemptCorrelationRow(
+        string ReceiptAttemptId,
+        string AuditAttemptId,
+        bool ReceiptMatchesAuditMatchesOutcomeAttempt);
 
     private sealed record ReceiptRow(
         string CommandType,
