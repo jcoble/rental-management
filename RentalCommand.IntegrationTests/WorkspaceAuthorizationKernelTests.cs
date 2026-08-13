@@ -2299,7 +2299,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = _now.AddHours(-1),
             LastSeenAtUtc = _now,
-            ExpiresAtUtc = _now.AddDays(30),
+            ExpiresAtUtc = DateTime.UtcNow.AddDays(30),
         };
         db.AddRange(
             leasingAssignment,
@@ -2418,7 +2418,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = _now.AddMinutes(-5),
             LastSeenAtUtc = _now,
-            ExpiresAtUtc = _now.AddDays(30),
+            ExpiresAtUtc = DateTime.UtcNow.AddDays(30),
         };
         var targetSession = new AuthSession
         {
@@ -2428,7 +2428,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = _now.AddMinutes(-5),
             LastSeenAtUtc = _now,
-            ExpiresAtUtc = _now.AddDays(30),
+            ExpiresAtUtc = DateTime.UtcNow.AddDays(30),
         };
         db.AddRange(actorSession, targetSession);
         await db.SaveChangesAsync();

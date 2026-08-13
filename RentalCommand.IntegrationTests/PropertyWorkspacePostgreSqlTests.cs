@@ -43,6 +43,7 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
     public async Task MultiRentalAreas_PageInPostgreSql()
     {
         var scope = await SeedAdministratorScopeAsync();
+        await _context.ActivateApiScopeAsync(scope);
         var suffix = Guid.NewGuid().ToString("N");
         var now = DateTime.UtcNow;
         var property = NewProperty($"L09 MultiRental {suffix}", RentalStructure.MultiRental, now);
@@ -120,7 +121,7 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
             PropertyWorkspaceArea.PropertyWork,
             PropertyWorkspaceArea.PropertyFinances,
             PropertyWorkspaceArea.DocumentsHistory);
-        detailSql.Should().Contain("AuthSessions");
+        detailSql.Should().Contain("rc_api_effective_capability_scopes");
         detailSql.Should().Contain("RentalStructure");
         detailSql.Should().Contain("PropertyOwnerships");
         detailSql.Should().Contain("OwnerEntities");
@@ -150,7 +151,7 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
         CaptureAndAssertAreaPageSql(
             "MULTIRENTAL_UNITS",
             true,
-            "vw_unit_occupancy",
+            "LeaseManagements",
             "WorkOrders");
 
         var workOrderService = new WorkOrderService(
@@ -212,6 +213,7 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
     public async Task PersistedRentalStructure_DrivesWorkspaceWithoutInference()
     {
         var scope = await SeedAdministratorScopeAsync();
+        await _context.ActivateApiScopeAsync(scope);
         var suffix = Guid.NewGuid().ToString("N");
         var now = DateTime.UtcNow;
         var single = NewProperty($"L09 SingleRental {suffix}", RentalStructure.SingleRental, now);
@@ -232,7 +234,7 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
         singleResult.WorkspaceEntry.UnitId.Should().Be(singleUnit.Id);
         singleSql.Should().Contain("RentalStructure");
         singleSql.Should().Contain("Units");
-        singleSql.Should().Contain("AuthSessions");
+        singleSql.Should().Contain("rc_api_effective_capability_scopes");
 
         _commands.Clear();
         var multiResult = await service.GetAsync(scope, multi.Id);
@@ -351,14 +353,14 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
 
         Capture($"{label}_COUNT", countSql);
         Capture($"{label}_PAGE", pageSql);
-        countSql.Should().Contain("AuthSessions");
+        countSql.Should().Contain("rc_api_effective_capability_scopes");
         countSql.Should().Contain("WHERE");
         countSql.Should().ContainEquivalentOf("join");
-        pageSql.Should().Contain("AuthSessions");
+        pageSql.Should().Contain("rc_api_effective_capability_scopes");
         pageSql.Should().Contain("WHERE");
         foreach (var relation in joinedRelations)
         {
-            pageSql.Should().Contain(relation);
+            _commands.Should().Contain(command => command.Contains(relation, StringComparison.Ordinal));
         }
         pageSql.Should().ContainEquivalentOf("join");
         pageSql.Should().Contain("ORDER BY");

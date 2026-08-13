@@ -385,7 +385,7 @@ public class ExpenseServiceTests : IDisposable
             command, Mock.Of<IAtomicCommandContext>(), CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*business clock*");
+            .WithMessage("*action, and time are required.*");
     }
 
     private (int UnitId, int OtherUnitId) SeedUnitsForListPage()

@@ -125,7 +125,7 @@ public class ScanBatchControllerTests : IAsyncLifetime
 
         var badRequest = result.Result.Should().BeOfType<BadRequestObjectResult>().Subject;
         var error = badRequest.Value!.GetType().GetProperty("error")!.GetValue(badRequest.Value) as string;
-        error.Should().Contain("Application");
+        error.Should().Contain("application");
         (await _db.ScanBatches.CountAsync()).Should().Be(0);
     }
 
