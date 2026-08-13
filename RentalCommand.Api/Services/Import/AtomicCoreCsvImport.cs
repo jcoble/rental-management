@@ -90,24 +90,46 @@ public sealed class AtomicCoreCsvImportHandler
             }
         }
 
-        attempt.StageOutbox(new OutboxMessage
-        {
-            PortfolioId = command.PortfolioId,
-            MessageType = "data-update",
-            Payload = JsonSerializer.Serialize(new
-            {
-                entityType,
-                entityId = 0,
-                operation = "update",
-                data = new { import = true },
-            }),
-            IdempotencyKey = $"{entityType.ToLowerInvariant()}-import:{command.ImportOperationDigest}",
-            CreatedAtUtc = now,
-            NextAttemptAtUtc = now,
-        });
+        StageCreatedRowUpdates(
+            attempt, command.PortfolioId, command.Domain,
+            command.ImportOperationDigest, batch.CreatedRows, now);
         return new AtomicCoreCsvImportResult(
             batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
             batch.CreatedCount, batch.DuplicateRows);
+    }
+
+    internal static void StageCreatedRowUpdates(
+        IAtomicCommandContext attempt,
+        int portfolioId,
+        AtomicCoreCsvImportDomain domain,
+        string importOperationDigest,
+        IReadOnlyList<AtomicCoreCsvImportRowResult> createdRows,
+        DateTime now)
+    {
+        var entityType = domain.ToString();
+        foreach (var row in createdRows)
+        {
+            var entityId = row.CreatedId is > 0
+                ? row.CreatedId.Value
+                : throw new InvalidOperationException(
+                    $"Created {entityType} CSV row {row.RowNumber} has no persisted entity id.");
+            attempt.StageOutbox(new OutboxMessage
+            {
+                PortfolioId = portfolioId,
+                MessageType = "data-update",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    entityType,
+                    entityId,
+                    operation = "update",
+                    data = new { import = true, rowNumber = row.RowNumber, row.RelatedId },
+                }),
+                IdempotencyKey =
+                    $"{entityType.ToLowerInvariant()}-import:{importOperationDigest}:{entityType.ToLowerInvariant()}:{entityId}",
+                CreatedAtUtc = now,
+                NextAttemptAtUtc = now,
+            });
+        }
     }
 
     public async Task AuthorizeReplayAsync(
