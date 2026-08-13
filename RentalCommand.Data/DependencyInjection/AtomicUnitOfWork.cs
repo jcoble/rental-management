@@ -7,6 +7,7 @@ namespace RentalCommand.Data.Atomic;
 /// Resolves the command's ordinary scoped handler, then hands it to the transaction runner.
 /// Handler discovery is dependency-injection wiring, not part of the transaction kernel.
 /// </summary>
+[WriteEntryPoint(WriteEntryPointKind.LegacyAtomic)]
 internal sealed class AtomicUnitOfWork : IAtomicUnitOfWork
 {
     private readonly IServiceProvider _services;

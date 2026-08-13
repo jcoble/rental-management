@@ -188,6 +188,8 @@ builder.Services.AddAtomicPersistenceKernel();
 builder.Services.AddAtomicCommandHandlersFrom(
     typeof(RentalCommandDbContext).Assembly,
     Assembly.GetExecutingAssembly());
+builder.Services.AddScoped<RentalCommand.Api.Writes.IRequestWriteExecutor,
+    RentalCommand.Api.Writes.RequestWriteExecutor>();
 builder.Services.AddScoped<
     RentalCommand.Core.Import.IUnitCsvImportPreviewQuery,
     RentalCommand.Data.Import.AtomicUnitImportPersistence>();
