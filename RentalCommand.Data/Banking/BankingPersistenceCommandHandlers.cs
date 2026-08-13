@@ -805,12 +805,12 @@ public sealed class ReconcileBankTransactionHandler
         var expenseTarget = command.Action switch
         {
             BankReconciliationAction.MatchExpense =>
-                await LoadEligibleExpenseTargetAsync(command, transaction, _db, ct),
+                await LoadExpenseTargetAsync(command, _db, ct),
             BankReconciliationAction.Clear when transaction.MatchedExpenseId is not null =>
                 await LoadRestorableExpenseTargetAsync(transaction, _db, ct),
             _ => null,
         };
-        if (!await TargetExistsAsync(command, transaction, expenseTarget, context, ct))
+        if (!await TargetExistsAsync(command, transaction, expenseTarget, ct))
         {
             return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
         }
@@ -1028,79 +1028,46 @@ public sealed class ReconcileBankTransactionHandler
         ReconcileBankTransactionCommand command,
         BankTransaction transaction,
         Expense? expenseTarget,
-        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var expectedTransferUpdatedAtUtc =
             command.ExpectedTransferUpdatedAtUtc ?? command.ResolvedSuggestionTransferUpdatedAtUtc;
+        var currentTransaction = _db.Set<BankTransaction>().AsNoTracking()
+            .Where(row => row.Id == transaction.Id && row.PortfolioId == transaction.PortfolioId);
         return command.Action switch
         {
             BankReconciliationAction.MatchReceipt
                 when command.TenantAccountId is { } accountId
                     && command.TenantLedgerEntryId is { } ledgerEntryId
                     && command.ExpenseId is null =>
-                await _db.Set<TenantLedgerEntry>().AnyAsync(row =>
-                    row.Id == ledgerEntryId
-                    && row.TenantAccountId == accountId
-                    && row.PortfolioId == command.PortfolioId
-                    && ((row.EntryType == TenantLedgerEntryType.PaymentReceipt
-                            && row.Direction == TenantLedgerDirection.Credit
-                            && transaction.Amount > 0m)
-                        || (row.EntryType == TenantLedgerEntryType.TransferIn
-                            || row.EntryType == TenantLedgerEntryType.TransferOut)
-                           && ((row.Direction == TenantLedgerDirection.Credit && transaction.Amount > 0m)
-                               || (row.Direction == TenantLedgerDirection.Debit && transaction.Amount < 0m)))
-                    && row.Amount >= (transaction.Amount < 0m ? -transaction.Amount : transaction.Amount) - 0.01m
-                    && row.Amount <= (transaction.Amount < 0m ? -transaction.Amount : transaction.Amount) + 0.01m
-                    && row.EffectiveOn >= DateOnly.FromDateTime(transaction.PostedAt.AddDays(-14))
-                    && row.EffectiveOn <= DateOnly.FromDateTime(transaction.PostedAt.AddDays(14))
-                    && transaction.PropertyId != null
-                    && row.TenantAccount!.LeaseManagement!.PropertyId == transaction.PropertyId, ct),
+                await BankReconciliationCandidateQuery.EligibleTenantLedgerEntries(
+                        currentTransaction, _db.Set<TenantLedgerEntry>().AsNoTracking())
+                    .AnyAsync(candidate => candidate.Target.Id == ledgerEntryId
+                        && candidate.Target.TenantAccountId == accountId, ct),
             BankReconciliationAction.MatchExpense
                 when command.ExpenseId is { } expenseId
                     && command.TenantAccountId is null
                     && command.TenantLedgerEntryId is null =>
-                expenseTarget is not null && expenseTarget.Id == expenseId,
+                await BankReconciliationCandidateQuery.EligibleExpenses(
+                        currentTransaction, _db.Set<Expense>().AsNoTracking())
+                    .AnyAsync(candidate => candidate.Target.Id == expenseId, ct),
             BankReconciliationAction.MatchLoanPayment
                 when command.LoanPaymentId is { } loanPaymentId =>
-                await _db.Set<LoanPayment>().AnyAsync(payment =>
-                    payment.Id == loanPaymentId
-                    && payment.PortfolioId == command.PortfolioId
-                    && payment.Status == LoanPaymentStatus.Paid
-                    && transaction.Amount < 0m
-                    && payment.TotalAmount >= -transaction.Amount - 0.01m
-                    && payment.TotalAmount <= -transaction.Amount + 0.01m
-                    && (payment.PaidDate ?? payment.DueDate) >= transaction.PostedAt.AddDays(-14)
-                    && (payment.PaidDate ?? payment.DueDate) <= transaction.PostedAt.AddDays(14)
-                    && transaction.PropertyId != null
-                    && payment.Loan!.PropertyId == transaction.PropertyId, ct),
+                await BankReconciliationCandidateQuery.EligibleLoanPayments(
+                        currentTransaction, LoanPaymentEffectiveQuery.From(_db))
+                    .AnyAsync(candidate => candidate.Target.Id == loanPaymentId, ct),
             BankReconciliationAction.MatchOwnerDistribution
                 when command.OwnerDistributionId is { } ownerDistributionId =>
-                await _db.Set<OwnerDistribution>().AnyAsync(distribution =>
-                    distribution.Id == ownerDistributionId
-                    && distribution.PortfolioId == command.PortfolioId
-                    && distribution.Status == OwnerDistributionStatus.Approved
-                    && transaction.Amount < 0m
-                    && distribution.Amount >= -transaction.Amount - 0.01m
-                    && distribution.Amount <= -transaction.Amount + 0.01m
-                    && distribution.Date >= transaction.PostedAt.AddDays(-14)
-                    && distribution.Date <= transaction.PostedAt.AddDays(14)
-                    && (distribution.PropertyId == transaction.PropertyId
-                        || (distribution.PropertyId == null && transaction.PropertyId == null)), ct),
+                await BankReconciliationCandidateQuery.EligibleOwnerDistributions(
+                        currentTransaction, _db.Set<OwnerDistribution>().AsNoTracking())
+                    .AnyAsync(candidate => candidate.Target.Id == ownerDistributionId, ct),
             BankReconciliationAction.MatchTransfer
                 when command.TransferBankTransactionId is { } transferId
                     && expectedTransferUpdatedAtUtc is { } =>
-                await _db.Set<BankTransaction>().AnyAsync(other =>
-                    other.Id == transferId
-                    && other.Id != transaction.Id
-                    && other.PortfolioId == command.PortfolioId
-                    && other.BankConnectionId != transaction.BankConnectionId
-                    && other.MatchStatus == "Unmatched"
-                    && other.UpdatedAt == expectedTransferUpdatedAtUtc
-                    && other.Amount >= -transaction.Amount - 0.01m
-                    && other.Amount <= -transaction.Amount + 0.01m
-                    && other.PostedAt >= transaction.PostedAt.AddDays(-3)
-                    && other.PostedAt <= transaction.PostedAt.AddDays(3), ct),
+                await BankReconciliationCandidateQuery.EligibleTransfers(
+                        currentTransaction, _db.Set<BankTransaction>().AsNoTracking())
+                    .AnyAsync(candidate => candidate.Target.Id == transferId
+                        && candidate.Target.UpdatedAt == expectedTransferUpdatedAtUtc, ct),
             BankReconciliationAction.Clear when transaction.MatchedExpenseId is not null =>
                 expenseTarget is not null,
             BankReconciliationAction.MatchReceipt
@@ -1260,9 +1227,8 @@ public sealed class ReconcileBankTransactionHandler
             _ => false,
         };
 
-    private static Task<Expense?> LoadEligibleExpenseTargetAsync(
+    private static Task<Expense?> LoadExpenseTargetAsync(
         ReconcileBankTransactionCommand command,
-        BankTransaction transaction,
         RentalCommandDbContext db,
         CancellationToken ct) =>
         command.ExpenseId is not { } expenseId
@@ -1270,21 +1236,7 @@ public sealed class ReconcileBankTransactionHandler
             : db.Set<Expense>().SingleOrDefaultAsync(row =>
                 row.Id == expenseId
                 && row.PortfolioId == command.PortfolioId
-                && row.DeletedAt == null
-                && (row.Status == ExpenseStatus.Pending
-                    || row.Status == ExpenseStatus.Approved
-                    || row.Status == ExpenseStatus.Paid)
-                && transaction.Amount < 0m
-                && row.Amount >= -transaction.Amount - 0.01m
-                && row.Amount <= -transaction.Amount + 0.01m
-                && (row.PaidAt ?? row.IncurredAt) >= transaction.PostedAt.AddDays(-14)
-                && (row.PaidAt ?? row.IncurredAt) <= transaction.PostedAt.AddDays(14)
-                && (row.PropertyId == transaction.PropertyId
-                    || (row.PropertyId == null && row.Unit!.PropertyId == transaction.PropertyId)
-                    || (row.PropertyId == null && row.UnitId == null
-                        && row.WorkOrder!.PropertyId == transaction.PropertyId)
-                    || (transaction.PropertyId == null && row.PropertyId == null
-                        && row.UnitId == null && row.WorkOrderId == null)), ct);
+                && row.DeletedAt == null, ct);
 
     private static Task<Expense?> LoadRestorableExpenseTargetAsync(
         BankTransaction transaction,

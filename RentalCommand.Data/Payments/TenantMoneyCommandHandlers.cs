@@ -752,30 +752,26 @@ public sealed class PostTenantCreditHandler
         int? resolvedIncomeLedgerAccountId;
         var target = command.TargetChargeEntryId is not long targetChargeEntryId
             ? null
-            : await _db.Set<TenantLedgerEntry>()
-                .AsNoTracking()
-                .Where(entry => entry.PortfolioId == command.PortfolioId
-                    && entry.TenantAccountId == command.TenantAccountId
-                    && entry.Id == targetChargeEntryId
-                    && entry.Direction == TenantLedgerDirection.Debit
-                    && (entry.EntryType == TenantLedgerEntryType.RentCharge
-                        || entry.EntryType == TenantLedgerEntryType.AddendumCharge
-                        || entry.EntryType == TenantLedgerEntryType.LateFeeCharge
-                        || entry.EntryType == TenantLedgerEntryType.DepositCharge
-                        || entry.EntryType == TenantLedgerEntryType.ManualCharge))
-                .Select(entry => new
+            : await TargetedCreditEligibilityQuery.Build(
+                    _db.Set<TenantLedgerEntry>()
+                        .AsNoTracking()
+                        .Where(entry => entry.PortfolioId == command.PortfolioId
+                            && entry.TenantAccountId == command.TenantAccountId
+                            && entry.Id == targetChargeEntryId
+                            && entry.Direction == TenantLedgerDirection.Debit
+                            && (entry.EntryType == TenantLedgerEntryType.RentCharge
+                                || entry.EntryType == TenantLedgerEntryType.AddendumCharge
+                                || entry.EntryType == TenantLedgerEntryType.LateFeeCharge
+                                || entry.EntryType == TenantLedgerEntryType.DepositCharge
+                                || entry.EntryType == TenantLedgerEntryType.ManualCharge)),
+                    _db.Set<TenantLedgerEntry>().AsNoTracking(),
+                    _db.Set<TenantLedgerAllocation>().AsNoTracking(),
+                    _db.Set<TenantAccountBalanceProjection>().AsNoTracking())
+                .Select(eligibility => new
                 {
-                    entry.Id,
-                    entry.EntryType,
-                    AvailableTargetedAmount = entry.Amount
-                        - (_db.Set<TenantLedgerEntry>()
-                            .Where(correction => correction.PortfolioId == entry.PortfolioId
-                                && correction.TenantAccountId == entry.TenantAccountId
-                                && ((correction.EntryType == TenantLedgerEntryType.Reversal
-                                        && correction.ReversesEntryId == entry.Id)
-                                    || (correction.EntryType == TenantLedgerEntryType.Credit
-                                        && correction.RelatedTenantLedgerEntryId == entry.Id)))
-                            .Sum(correction => (decimal?)correction.Amount) ?? 0m),
+                    Id = eligibility.TenantLedgerEntryId,
+                    eligibility.EntryType,
+                    AvailableTargetedAmount = eligibility.RemainingTargetableAmount,
                 })
                 .SingleOrDefaultAsync(ct);
         if (command.TargetChargeEntryId is not null && target is null)
