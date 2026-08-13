@@ -72,6 +72,8 @@ builder.Services.AddAtomicCommandHandlersFrom(
     typeof(RentalCommandDbContext).Assembly,
     typeof(RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryHandler).Assembly,
     Assembly.GetExecutingAssembly());
+builder.Services.AddScoped<RentalCommand.Engine.Writes.IJobStepWriteExecutor,
+    RentalCommand.Engine.Writes.JobStepWriteExecutor>();
 builder.Services.AddGeneratedInfrastructureStores();
 builder.Services.AddPendingFileUploadStore();
 

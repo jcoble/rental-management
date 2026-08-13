@@ -87,6 +87,7 @@ public static class AtomicPersistenceKernelExtensions
         services.TryAddScoped<IMembershipAssignmentScopeValidator, MembershipAssignmentScopeValidator>();
         services.TryAddScoped<AtomicTransactionRunner>();
         services.TryAddScoped<IAtomicUnitOfWork, AtomicUnitOfWork>();
+        services.TryAddScoped<IWriteExecutor, WriteExecutor>();
         return services;
     }
 
