@@ -8,9 +8,11 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Policies;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Policies;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -19,11 +21,6 @@ public class TenantService : ITenantService
 {
     private const string EntityType = "Tenant";
     private const int MaxSearchTokens = 8;
-    private const string ActiveLeaseDeleteBlockedReason =
-        "This tenant is a current resident in an occupied rental; return possession or change the household first.";
-    private const string LeaseHistoryDeleteBlockedReason =
-        "This tenant has rental relationship history; keep the tenant record to preserve agreements and account history.";
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAtomicUnitOfWork? _atomic;
@@ -969,12 +966,10 @@ public class TenantService : ITenantService
     {
         response.ActiveLeaseCount = activeLeaseCount;
         response.LeaseHistoryCount = leaseHistoryCount;
-        response.CanDelete = activeLeaseCount == 0 && leaseHistoryCount == 0;
-        response.DeleteBlockedReason = activeLeaseCount > 0
-            ? ActiveLeaseDeleteBlockedReason
-            : leaseHistoryCount > 0
-                ? LeaseHistoryDeleteBlockedReason
-                : null;
+        response.CanDelete = DeleteEligibilityPolicy.CanDeleteTenant(
+            activeLeaseCount, leaseHistoryCount);
+        response.DeleteBlockedReason = DeleteEligibilityPolicy.TenantBlockedReason(
+            activeLeaseCount, leaseHistoryCount);
     }
 
     private static void ApplyCurrentResidentContext(TenantResponse response, TenantRelationshipReadRow row)
@@ -1061,31 +1056,7 @@ public class TenantService : ITenantService
         int portfolioId,
         CancellationToken ct)
     {
-        var row = await tenants
-            .Select(t => new
-            {
-                Entity = t,
-                ActiveLeaseCount = _db.LeaseManagementParties
-                    .Where(party => party.PortfolioId == portfolioId
-                        && party.TenantId == t.Id
-                        && party.Role != LeaseManagementPartyRole.Guarantor
-                        && _db.UnitOccupancyProjections.Any(occupancy =>
-                            occupancy.PortfolioId == portfolioId
-                            && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                        && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                            lifecycle.PortfolioId == portfolioId
-                            && lifecycle.LeaseManagementId == party.LeaseManagementId
-                            && party.EffectiveFrom <= lifecycle.BusinessDate
-                            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                    .Select(party => party.LeaseManagementId)
-                    .Distinct()
-                    .Count(),
-                LeaseHistoryCount = _db.LeaseManagementParties
-                    .Where(party => party.PortfolioId == portfolioId && party.TenantId == t.Id)
-                    .Select(party => party.LeaseManagementId)
-                    .Distinct()
-                    .Count(),
-            })
+        var row = await BuildDeleteEligibilityQuery(tenants, portfolioId)
             .FirstOrDefaultAsync(ct);
 
         if (row == null)
@@ -1097,5 +1068,10 @@ public class TenantService : ITenantService
         ApplyDeleteState(response, row.ActiveLeaseCount, row.LeaseHistoryCount);
         return response;
     }
+
+    internal IQueryable<TenantDeleteEligibilityProjection> BuildDeleteEligibilityQuery(
+        IQueryable<Tenant> tenants,
+        int portfolioId) =>
+        tenants.WithTenantDeleteEligibility(_db, portfolioId);
 
 }

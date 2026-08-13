@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Auth;
@@ -5,12 +6,17 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <inheritdoc cref="IAnalyticsService"/>
 public sealed class AnalyticsService : IAnalyticsService
 {
+    internal const string AuthorizationSource =
+        WorkspaceAuthorizationQuery.SecurityTimeAuthorizedPropertyIdsFunctionName;
+    private const string AuthorizationSourcePlaceholder = "__canonical_authorized_property_ids__";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -53,63 +59,17 @@ public sealed class AnalyticsService : IAnalyticsService
         var day60 = today.AddDays(60);
         var day90 = today.AddDays(90);
 
-        var row = await _db.Database.SqlQuery<AnalyticsOverviewRow>($$"""
+        FormattableString overviewSql = $$"""
             WITH authorized_properties AS MATERIALIZED (
-              SELECT property."Id"
-              FROM "Properties" AS property
-              WHERE property."PortfolioId" = {{scope.PortfolioId}}
-                AND property."DeletedAt" IS NULL
-                AND EXISTS (
-                  SELECT 1
-                  FROM "AuthSessions" AS session
-                  JOIN "WorkspaceAccessContexts" AS access_context
-                    ON access_context."Id" = session."ActiveAccessContextId"
-                   AND access_context."UserId" = session."UserId"
-                  JOIN "WorkspaceMemberships" AS membership
-                    ON membership."AccessContextId" = access_context."Id"
-                   AND membership."PortfolioId" = access_context."PortfolioId"
-                  JOIN "MembershipRoleAssignments" AS assignment
-                    ON assignment."WorkspaceMembershipId" = membership."Id"
-                   AND assignment."PortfolioId" = membership."PortfolioId"
-                  JOIN "RoleProfileCapabilities" AS role_capability
-                    ON role_capability."RoleProfileId" = assignment."RoleProfileId"
-                  JOIN "CapabilityDefinitions" AS capability
-                    ON capability."Id" = role_capability."CapabilityDefinitionId"
-                  WHERE session."Id" = {{scope.SessionId}}
-                    AND session."UserId" = {{scope.UserId}}
-                    AND session."ActiveAccessContextId" = {{scope.AccessContextId}}
-                    AND session."Status" = 'Active'
-                    AND session."RevokedAtUtc" IS NULL
-                    AND session."ExpiresAtUtc" > {{securityNow}}
-                    AND access_context."Id" = {{scope.AccessContextId}}
-                    AND access_context."PortfolioId" = property."PortfolioId"
-                    AND access_context."AccessRevision" = {{scope.AccessRevision}}
-                    AND access_context."Status" = 'Active'
-                    AND access_context."SuspendedAtUtc" IS NULL
-                    AND access_context."RevokedAtUtc" IS NULL
-                    AND membership."Status" = 'Active'
-                    AND membership."SuspendedAtUtc" IS NULL
-                    AND membership."RevokedAtUtc" IS NULL
-                    AND membership."EffectiveFromUtc" <= {{securityNow}}
-                    AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > {{securityNow}})
-                    AND assignment."Status" = 'Active'
-                    AND assignment."SuspendedAtUtc" IS NULL
-                    AND assignment."RevokedAtUtc" IS NULL
-                    AND assignment."EffectiveFromUtc" <= {{securityNow}}
-                    AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > {{securityNow}})
-                    AND capability."Key" = 'reports.read'
-                    AND capability."AuthorizationTargetKind" = 'Property'
-                    AND (
-                      assignment."ScopeKind" = 'AllProperties'
-                      OR (
-                        assignment."ScopeKind" = 'SelectedProperties'
-                        AND EXISTS (
-                          SELECT 1
-                          FROM "MembershipRoleAssignmentProperties" AS selected_property
-                          WHERE selected_property."MembershipRoleAssignmentId" = assignment."Id"
-                            AND selected_property."PortfolioId" = property."PortfolioId"
-                            AND selected_property."PropertyId" = property."Id")))
-                )
+              SELECT authorized_property."Value" AS "Id"
+              FROM __canonical_authorized_property_ids__(
+                {{scope.PortfolioId}},
+                {{scope.SessionId}},
+                {{scope.UserId}},
+                {{scope.AccessContextId}},
+                {{scope.AccessRevision}},
+                ARRAY['reports.read']::text[],
+                {{securityNow}}) AS authorized_property
             ),
             authorized_accounts AS MATERIALIZED (
               SELECT account."Id" AS "TenantAccountId",
@@ -317,7 +277,10 @@ public sealed class AnalyticsService : IAnalyticsService
             CROSS JOIN expiry
             CROSS JOIN open_work_orders
             CROSS JOIN recurring_rent
-            """).SingleAsync(ct);
+            """;
+        var row = await _db.Database.SqlQuery<AnalyticsOverviewRow>(
+                UseCanonicalAuthorizationSource(overviewSql))
+            .SingleAsync(ct);
 
         return new AnalyticsOverview
         {
@@ -337,6 +300,23 @@ public sealed class AnalyticsService : IAnalyticsService
                 JsonOptions) ?? [],
             MonthlyRecurringRent = row.MonthlyRecurringRent,
         };
+    }
+
+    internal static FormattableString UseCanonicalAuthorizationSource(FormattableString sql)
+    {
+        var first = sql.Format.IndexOf(AuthorizationSourcePlaceholder, StringComparison.Ordinal);
+        if (first < 0 || first != sql.Format.LastIndexOf(AuthorizationSourcePlaceholder, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Analytics SQL must contain exactly one canonical authorization-source placeholder.");
+        }
+
+        return FormattableStringFactory.Create(
+            sql.Format.Replace(
+                AuthorizationSourcePlaceholder,
+                AuthorizationSource,
+                StringComparison.Ordinal),
+            sql.GetArguments());
     }
 
     private sealed class AnalyticsOverviewRow

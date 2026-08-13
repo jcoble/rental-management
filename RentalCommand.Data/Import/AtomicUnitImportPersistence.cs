@@ -133,6 +133,8 @@ public sealed class AtomicUnitImportPersistence : IUnitCsvImportPreviewQuery
                        WHEN resolved."MatchCount" = 0 THEN ARRAY['Property was not found in this portfolio.']::text[]
                        WHEN resolved."MatchCount" > 1 THEN ARRAY['Property name matches more than one property; use propertyId.']::text[]
                        WHEN nullif(trim(resolved."UnitNumber"), '') IS NULL THEN ARRAY['Unit number is required.']::text[]
+                       -- SQL parity form of ResidentialUnitPolicy.IsInvalidForCreate. These values are
+                       -- PropertyType.SingleFamily through PropertyType.Townhome.
                        WHEN resolved."ResolvedPropertyType" IN (0, 1, 2, 3)
                             AND (resolved."Bedrooms" IS NULL OR resolved."Bathrooms" IS NULL)
                            THEN ARRAY['Bedrooms and bathrooms are required for residential dwellings.']::text[]

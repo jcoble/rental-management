@@ -7,6 +7,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Screening;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Screening;
 
@@ -552,51 +553,27 @@ internal static class ScreeningCommandSupport
         DateTime securityNowUtc,
         bool tracking)
     {
-        var assignments = db.Set<MembershipRoleAssignment>();
+        var scope = new WorkspaceReadScope(
+            portfolioId,
+            actorUserId,
+            authSessionId,
+            accessContextId,
+            expectedAccessRevision);
+        var assignments = db.AuthorizedAssignmentsForScope(
+            scope,
+            [CapabilityKeys.LeasingApplicationsManage],
+            CapabilityAuthorizationTargetKind.Property,
+            securityNowUtc);
         var query = db.Set<RentalApplication>().Where(application =>
             application.Id == applicationId
             && application.PortfolioId == portfolioId
-            && db.Set<AuthSession>().Any(session =>
-                session.Id == authSessionId
-                && session.UserId == actorUserId
-                && session.ActiveAccessContextId == accessContextId
-                && session.Status == AuthSessionStatus.Active
-                && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > securityNowUtc)
-            && db.Set<WorkspaceAccessContext>().Any(context =>
-                context.Id == accessContextId
-                && context.UserId == actorUserId
-                && context.PortfolioId == portfolioId
-                && context.AccessRevision == expectedAccessRevision
-                && context.Status == WorkspaceAccessContextStatus.Active
-                && context.SuspendedAtUtc == null
-                && context.RevokedAtUtc == null)
-            && db.Set<WorkspaceMembership>().Any(membership =>
-                membership.AccessContextId == accessContextId
-                && membership.PortfolioId == portfolioId
-                && membership.Status == WorkspaceMembershipStatus.Active
-                && membership.SuspendedAtUtc == null
-                && membership.RevokedAtUtc == null
-                && membership.EffectiveFromUtc <= securityNowUtc
-                && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > securityNowUtc)
-                && assignments.Any(assignment =>
-                    assignment.WorkspaceMembershipId == membership.Id
-                    && assignment.PortfolioId == portfolioId
-                    && assignment.Status == MembershipRoleAssignmentStatus.Active
-                    && assignment.SuspendedAtUtc == null
-                    && assignment.RevokedAtUtc == null
-                    && assignment.EffectiveFromUtc <= securityNowUtc
-                    && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc)
-                    && assignment.RoleProfile!.Capabilities.Any(grant =>
-                        grant.CapabilityDefinition!.Key == CapabilityKeys.LeasingApplicationsManage
-                        && grant.CapabilityDefinition.AuthorizationTargetKind ==
-                            CapabilityAuthorizationTargetKind.Property)
-                    && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                        || (application.PropertyId != null
-                            && assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                            && assignment.SelectedProperties.Any(selected =>
-                                selected.PortfolioId == portfolioId
-                                && selected.PropertyId == application.PropertyId))))));
+            && assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                || application.PropertyId != null
+                && assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                && assignment.SelectedProperties.Any(selected =>
+                    selected.PortfolioId == portfolioId
+                    && selected.PropertyId == application.PropertyId)));
         return tracking ? query : query.AsNoTracking();
     }
 

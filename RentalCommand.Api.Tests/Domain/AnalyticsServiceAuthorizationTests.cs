@@ -69,7 +69,8 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
 
         _commands.Should().ContainSingle();
         _commands[0].Should().Contain("reports.read");
-        _commands[0].Should().Contain("MembershipRoleAssignmentProperties");
+        _commands[0].Should().Contain(AnalyticsService.AuthorizationSource);
+        _commands[0].Should().NotContain("MembershipRoleAssignmentProperties");
         _commands[0].Should().Contain("authorized_properties");
         _commands[0].Should().Contain("vw_unit_occupancy");
         _commands[0].Should().Contain("TenantLedgerEntries");
@@ -232,9 +233,10 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         result.Trend.Should().Contain(point => point.Month == "2027-01");
         _commands.Should().ContainSingle();
         _commands[0].Should().Contain("authorized_properties");
-        _commands[0].Should().Contain("session.\"ExpiresAtUtc\"");
-        _commands[0].Should().Contain("membership.\"EffectiveFromUtc\"");
-        _commands[0].Should().Contain("assignment.\"EffectiveFromUtc\"");
+        _commands[0].Should().Contain(AnalyticsService.AuthorizationSource);
+        _commands[0].Should().NotContain("AuthSessions");
+        _commands[0].Should().NotContain("WorkspaceMemberships");
+        _commands[0].Should().NotContain("MembershipRoleAssignments");
         _commands[0].Should().Contain("generate_series");
     }
 

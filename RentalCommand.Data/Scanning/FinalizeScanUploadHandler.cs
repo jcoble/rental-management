@@ -336,52 +336,57 @@ public sealed class FinalizeScanUploadHandler
             || context.AccessRevision != command.ExpectedAccessRevision)
             throw Unauthorized();
 
+        var securityNowUtc = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var valid = await CaptureContextAuthorizationQuery(command, context, db, securityNowUtc)
+            .SingleOrDefaultAsync(ct);
+
+        if (!valid)
+            throw Unauthorized();
+    }
+
+    internal static IQueryable<bool> CaptureContextAuthorizationQuery(
+        FinalizeScanUploadCommand command,
+        ScanCaptureContextData context,
+        RentalCommandDbContext db,
+        DateTime securityNowUtc)
+    {
         var capabilities = ScanDraftAuthorizationQuery.CapabilitiesForTarget(command.TargetEntityType);
         if (capabilities.Count == 0)
             throw Unauthorized();
 
-        var securityNowUtc = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var capabilityKeys = capabilities.Distinct(StringComparer.Ordinal).ToArray();
-        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= securityNowUtc
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc)
-            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
-            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
-            && assignment.WorkspaceMembership.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= securityNowUtc
-            && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > securityNowUtc)
-            && assignment.WorkspaceMembership.AccessContext!.UserId == command.UploadedByUserId
-            && assignment.WorkspaceMembership.AccessContext.AccessRevision == command.ExpectedAccessRevision
-            && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
-            && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
-            && db.Set<AuthSession>().Any(session =>
-                session.Id == command.AuthSessionId && session.UserId == command.UploadedByUserId
-                && session.ActiveAccessContextId == command.AccessContextId
-                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > securityNowUtc)
-            && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                capabilityKeys.Contains(profileCapability.CapabilityDefinition!.Key)
-                && (profileCapability.CapabilityDefinition.AuthorizationTargetKind
-                        == CapabilityAuthorizationTargetKind.Property
-                    || profileCapability.CapabilityDefinition.Key == CapabilityKeys.AssignedWorkUpdate
-                    && profileCapability.CapabilityDefinition.AuthorizationTargetKind
-                        == CapabilityAuthorizationTargetKind.WorkOrder)));
+        var scope = new WorkspaceReadScope(
+            command.PortfolioId,
+            command.UploadedByUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision);
+        var propertyAssignments = db.AuthorizedAssignmentsForScope(
+            scope,
+            capabilityKeys,
+            CapabilityAuthorizationTargetKind.Property,
+            securityNowUtc);
+        var supportsAssignedWork = capabilityKeys.Contains(
+            CapabilityKeys.AssignedWorkUpdate,
+            StringComparer.Ordinal);
+        var workOrderAssignments = supportsAssignedWork
+            ? db.AuthorizedAssignmentsForScope(
+                scope,
+                [CapabilityKeys.AssignedWorkUpdate],
+                CapabilityAuthorizationTargetKind.WorkOrder,
+                securityNowUtc)
+            : db.Set<MembershipRoleAssignment>().Where(_ => false);
 
         var authorizedWorkOrders = db.Set<WorkOrder>().Where(workOrder =>
-            workOrder.PortfolioId == command.PortfolioId && assignments.Any(assignment =>
+            workOrder.PortfolioId == command.PortfolioId &&
+            (propertyAssignments.Any(assignment =>
                 (assignment.RoleProfile!.Capabilities.Any(item =>
                      item.CapabilityDefinition!.Key == CapabilityKeys.WorkManage) &&
                  (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
                   assignment.SelectedProperties.Any(selected => selected.PortfolioId == command.PortfolioId &&
-                                                               selected.PropertyId == workOrder.PropertyId))) ||
-                (assignment.RoleProfile.Capabilities.Any(item =>
+                                                               selected.PropertyId == workOrder.PropertyId)))) ||
+             workOrderAssignments.Any(assignment =>
+                assignment.RoleProfile!.Capabilities.Any(item =>
                      item.CapabilityDefinition!.Key == CapabilityKeys.AssignedWorkUpdate) &&
                  assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
                  db.Set<WorkOrderResponsibility>().Any(responsibility =>
@@ -395,7 +400,7 @@ public sealed class FinalizeScanUploadHandler
         var properties = db.Set<Property>();
         var authorizedProperties = properties.Where(property =>
             property.PortfolioId == command.PortfolioId && property.DeletedAt == null
-            && (assignments.Any(assignment =>
+            && (propertyAssignments.Any(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
                 || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
                     && assignment.SelectedProperties.Any(selected =>
@@ -415,19 +420,17 @@ public sealed class FinalizeScanUploadHandler
         // One translated predicate validates current authority and the complete capture graph before
         // any StoredFile, ScanBatch, or ScanDraft row is added. Every nested Any becomes a correlated
         // EXISTS in this SQL statement; no candidate business rows are materialized in memory.
-        var valid = await db.Set<Portfolio>()
+        return db.Set<Portfolio>()
             .Where(portfolio => portfolio.Id == command.PortfolioId)
             .Select(_ =>
-                assignments.Any()
+                (propertyAssignments.Any() || workOrderAssignments.Any())
                 // Assigned technicians must bind WorkOrder scans to a current responsibility.
                 // Other targets already select their own required capability above, so a leasing
                 // agent must not also need unrelated work-management authority to finish a lease
                 // or application scan.
                 && (command.TargetEntityType != "WorkOrder"
                     || context.WorkOrderId != null
-                    || assignments.Any(assignment =>
-                        assignment.RoleProfile!.Capabilities.Any(item =>
-                            item.CapabilityDefinition!.Key == CapabilityKeys.WorkManage)))
+                    || propertyAssignments.Any())
                 && (context.PropertyId == null || authorizedProperties.Any(property =>
                     property.Id == context.PropertyId.Value))
                 && (context.UnitId == null || units.Any(unit =>
@@ -521,11 +524,7 @@ public sealed class FinalizeScanUploadHandler
                     && (context.LeaseManagementId == null || relationships.Any(relationship =>
                         relationship.Id == context.LeaseManagementId.Value
                         && relationship.PropertyId == listing.PropertyId
-                        && relationship.UnitId == listing.UnitId)))))
-            .SingleOrDefaultAsync(ct);
-
-        if (!valid)
-            throw Unauthorized();
+                        && relationship.UnitId == listing.UnitId)))));
     }
 
     private static UnauthorizedAccessException Unauthorized() =>

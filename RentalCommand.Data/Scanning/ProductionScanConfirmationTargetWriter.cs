@@ -9,9 +9,11 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Leasing;
 using RentalCommand.Data.Operations;
 using RentalCommand.Data.Payments;
+using RentalCommand.Data.Policies;
 
 namespace RentalCommand.Data.Scanning;
 
@@ -102,44 +104,30 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         _ => [],
     };
 
-    private static IQueryable<MembershipRoleAssignment> EffectiveAssignments(
+    internal static IQueryable<MembershipRoleAssignment> EffectiveAssignments(
         ConfirmScanDraftCommand command,
         IReadOnlyCollection<string> capabilities,
         RentalCommandDbContext db,
         DateTime securityNowUtc)
     {
-        var keys = capabilities.Distinct(StringComparer.Ordinal).ToArray();
-        return db.Set<MembershipRoleAssignment>().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= securityNowUtc
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc)
-            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
-            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
-            && assignment.WorkspaceMembership.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= securityNowUtc
-            && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > securityNowUtc)
-            && assignment.WorkspaceMembership.AccessContext!.UserId == command.ConfirmedByUserId
-            && assignment.WorkspaceMembership.AccessContext.AccessRevision == command.ExpectedAccessRevision
-            && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
-            && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
-            && db.Set<AuthSession>().Any(session =>
-                session.Id == command.AuthSessionId && session.UserId == command.ConfirmedByUserId
-                && session.ActiveAccessContextId == command.AccessContextId
-                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > securityNowUtc)
-            && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                keys.Contains(profileCapability.CapabilityDefinition!.Key)
-                && profileCapability.CapabilityDefinition.AuthorizationTargetKind
-                    == CapabilityAuthorizationTargetKind.Property));
+        if (capabilities.Count == 0)
+        {
+            return db.Set<MembershipRoleAssignment>().Where(_ => false);
+        }
+
+        return db.AuthorizedAssignmentsForScope(
+            new WorkspaceReadScope(
+                command.PortfolioId,
+                command.ConfirmedByUserId,
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.ExpectedAccessRevision),
+            capabilities,
+            CapabilityAuthorizationTargetKind.Property,
+            securityNowUtc);
     }
 
-    private static IQueryable<Property> AuthorizedProperties(
+    internal static IQueryable<Property> AuthorizedProperties(
         ConfirmScanDraftCommand command,
         IReadOnlyCollection<string> capabilities,
         RentalCommandDbContext db,
@@ -596,12 +584,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         if (normalizedEmail is not null)
         {
             var existingOpenApplicationId = await _db.Set<RentalApplication>()
-                .Where(application => application.PortfolioId == command.PortfolioId
-                    && application.Email != null
-                    && (application.Status == ApplicationStatus.Submitted
-                        || application.Status == ApplicationStatus.UnderReview
-                        || application.Status == ApplicationStatus.Approved)
-                    && application.Email.Trim().ToLower() == normalizedEmail)
+                .OpenForEmail(command.PortfolioId, normalizedEmail)
                 .OrderBy(application => application.Id)
                 .Select(application => (int?)application.Id)
                 .FirstOrDefaultAsync(ct);
@@ -1413,16 +1396,15 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         RentalCommandDbContext db,
         CancellationToken ct)
     {
-        if (propertyId is int selectedPropertyId &&
-            !await IsPropertyInPortfolioAsync(portfolioId, selectedPropertyId, _db, ct))
-        {
+        var resolution = await db.ResolvePropertyUnit(portfolioId, propertyId, unitId)
+            .SingleOrDefaultAsync(ct);
+        if (propertyId is not null
+            && (resolution is null || resolution.PropertyId is null))
             throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
-        }
-        if (unitId is int selectedUnitId && !await db.Set<Unit>()
-                .AnyAsync(unit => unit.Id == selectedUnitId
-                    && unit.Property != null
-                    && unit.Property.PortfolioId == portfolioId
-                    && (propertyId == null || unit.PropertyId == propertyId), ct))
+        if (unitId is not null
+            && (resolution is null
+                || resolution.UnitId is null
+                || resolution.UnitDoesNotBelongToProperty))
         {
             throw new ScanConfirmationValidationException("Selected unit is not in this portfolio or property.");
         }

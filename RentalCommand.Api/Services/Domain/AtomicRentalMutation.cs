@@ -9,7 +9,10 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Policies;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Policies;
 using RentalCommand.Api.Services;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -48,9 +51,6 @@ public sealed class AtomicRentalMutationHandler
     : IAtomicCommandHandler<AtomicRentalMutationCommand, AtomicRentalMutationResult>
 {
     private readonly RentalCommandDbContext _db;
-
-    private const string ResidentialUnitDetailsRequired =
-        "Bedrooms and bathrooms are required for residential dwellings.";
 
     public AtomicRentalMutationHandler(RentalCommandDbContext db) => _db = db;
 
@@ -127,9 +127,9 @@ public sealed class AtomicRentalMutationHandler
             var propertyType = await ReadUnitPropertyTypeAsync(
                 command.PortfolioId, request.PropertyId, db, ct)
                 ?? throw Conflict("Property not found.");
-            if (propertyType.RequiresResidentialUnitDetails()
-                && (!request.Bedrooms.HasValue || !request.Bathrooms.HasValue))
-                throw new DomainValidationException(ResidentialUnitDetailsRequired);
+            if (ResidentialUnitPolicy.IsInvalidForCreate(
+                    propertyType, request.Bedrooms, request.Bathrooms))
+                throw new DomainValidationException(ResidentialUnitPolicy.RequiredDetailsMessage);
             if (await db.Set<Unit>().AnyAsync(unit =>
                     unit.PortfolioId == command.PortfolioId
                     && unit.PropertyId == request.PropertyId
@@ -205,10 +205,13 @@ public sealed class AtomicRentalMutationHandler
         var propertyTypeForUpdate = await ReadUnitPropertyTypeAsync(
             command.PortfolioId, unit.PropertyId, db, ct)
             ?? throw Conflict("Property not found.");
-        if (propertyTypeForUpdate.RequiresResidentialUnitDetails()
-            && ((update.BedroomsSpecified && !update.Bedrooms.HasValue)
-                || (update.BathroomsSpecified && !update.Bathrooms.HasValue)))
-            throw new DomainValidationException(ResidentialUnitDetailsRequired);
+        if (ResidentialUnitPolicy.IsInvalidForUpdate(
+                propertyTypeForUpdate,
+                update.BedroomsSpecified,
+                update.Bedrooms,
+                update.BathroomsSpecified,
+                update.Bathrooms))
+            throw new DomainValidationException(ResidentialUnitPolicy.RequiredDetailsMessage);
         var normalizedUpdateNumber = update.UnitNumber is null
             ? null
             : RequireNonBlank(update.UnitNumber, "Unit number");
@@ -389,27 +392,28 @@ public sealed class AtomicRentalMutationHandler
                     CapabilityKeys.LeasingApplicationsManage, requireAllProperties: false, ct))
                 throw Denied();
             entity.PropertyId = request.PropertyId;
-            if (entity.UnitId is > 0 && !await db.Set<Unit>().AnyAsync(unit =>
-                    unit.Id == entity.UnitId && unit.PortfolioId == command.PortfolioId
-                    && unit.PropertyId == request.PropertyId && unit.DeletedAt == null, ct))
-                entity.UnitId = null;
+            if (entity.UnitId is > 0)
+            {
+                var currentUnit = await db.ResolveUnit(
+                        command.PortfolioId, entity.UnitId.Value)
+                    .SingleOrDefaultAsync(ct);
+                if (currentUnit is null || currentUnit.DoesNotBelongTo(request.PropertyId))
+                    entity.UnitId = null;
+            }
         }
         if (request.ClearUnit) entity.UnitId = null;
         if (request.UnitId is > 0)
         {
-            var unit = await db.Set<Unit>().AsNoTracking()
-                .Where(candidate => candidate.Id == request.UnitId
-                    && candidate.PortfolioId == command.PortfolioId && candidate.DeletedAt == null)
-                .Select(candidate => new { candidate.Id, candidate.PropertyId })
+            var resolution = await db.ResolveUnit(command.PortfolioId, request.UnitId.Value)
                 .SingleOrDefaultAsync(ct)
                 ?? throw new DomainValidationException("Selected unit was not found in this portfolio.");
-            if (entity.PropertyId is > 0 && entity.PropertyId != unit.PropertyId)
+            if (resolution.DoesNotBelongTo(entity.PropertyId))
                 throw new DomainValidationException("Selected unit does not belong to the selected property.");
-            if (!await AuthorizePropertyAsync(command, db, now, unit.PropertyId,
+            if (!await AuthorizePropertyAsync(command, db, now, resolution.PropertyId,
                     CapabilityKeys.LeasingApplicationsManage, requireAllProperties: false, ct))
                 throw Denied();
-            entity.PropertyId = unit.PropertyId;
-            entity.UnitId = unit.Id;
+            entity.PropertyId = resolution.PropertyId;
+            entity.UnitId = resolution.UnitId;
         }
 
         if (request.FirstName is not null) entity.FirstName = RequireNonBlank(request.FirstName, "First name");
@@ -756,48 +760,23 @@ public sealed class AtomicRentalMutationHandler
         bool requireAllProperties,
         CancellationToken ct)
     {
-        var assignments = db.Set<MembershipRoleAssignment>().AsNoTracking();
-        return db.Set<AuthSession>().AsNoTracking().AnyAsync(session =>
-            session.Id == command.AuthSessionId
-            && session.UserId == command.ActorUserId
-            && session.ActiveAccessContextId == command.AccessContextId
-            && session.Status == AuthSessionStatus.Active
-            && session.RevokedAtUtc == null
-            && session.ExpiresAtUtc > now
-            && db.Set<WorkspaceAccessContext>().Any(context =>
-                context.Id == command.AccessContextId
-                && context.UserId == command.ActorUserId
-                && context.PortfolioId == command.PortfolioId
-                && context.AccessRevision == command.ExpectedAccessRevision
-                && context.Status == WorkspaceAccessContextStatus.Active
-                && context.SuspendedAtUtc == null
-                && context.RevokedAtUtc == null)
-            && db.Set<WorkspaceMembership>().Any(membership =>
-                membership.AccessContextId == command.AccessContextId
-                && membership.PortfolioId == command.PortfolioId
-                && membership.Status == WorkspaceMembershipStatus.Active
-                && membership.SuspendedAtUtc == null
-                && membership.RevokedAtUtc == null
-                && membership.EffectiveFromUtc <= now
-                && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
-                && assignments.Any(assignment =>
-                    assignment.WorkspaceMembershipId == membership.Id
-                    && assignment.PortfolioId == command.PortfolioId
-                    && assignment.Status == MembershipRoleAssignmentStatus.Active
-                    && assignment.SuspendedAtUtc == null
-                    && assignment.RevokedAtUtc == null
-                    && assignment.EffectiveFromUtc <= now
-                    && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
-                    && assignment.RoleProfile!.Capabilities.Any(grant =>
-                        grant.CapabilityDefinition!.Key == capability
-                        && grant.CapabilityDefinition.AuthorizationTargetKind ==
-                            CapabilityAuthorizationTargetKind.Property)
-                    && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                        || (!requireAllProperties && propertyId != null
-                            && assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                            && assignment.SelectedProperties.Any(selected =>
-                                selected.PortfolioId == command.PortfolioId
-                                && selected.PropertyId == propertyId))))), ct);
+        var scope = new WorkspaceReadScope(
+            command.PortfolioId,
+            command.ActorUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision);
+        return requireAllProperties
+            ? db.AuthorizedAssignmentsForScope(
+                    scope,
+                    [capability],
+                    CapabilityAuthorizationTargetKind.Property,
+                    now)
+                .AnyAsync(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties, ct)
+            : db.Set<Property>().AsNoTracking()
+                .WhereAuthorizedForScope(db, scope, capability, now)
+                .AnyAsync(property => property.Id == propertyId, ct);
     }
 
     private async Task<(int? PropertyId, int? UnitId)> ResolveApplicationReferencesAsync(
@@ -807,43 +786,19 @@ public sealed class AtomicRentalMutationHandler
         RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var resolved = await db.Set<Portfolio>().AsNoTracking()
-            .Where(portfolio => portfolio.Id == portfolioId && portfolio.DeletedAt == null)
-            .Select(portfolio => new
-            {
-                PropertyId = requestedPropertyId > 0
-                    ? db.Set<Property>()
-                        .Where(property => property.Id == requestedPropertyId
-                            && property.PortfolioId == portfolio.Id && property.DeletedAt == null)
-                        .Select(property => (int?)property.Id).SingleOrDefault()
-                    : null,
-                UnitId = requestedUnitId > 0
-                    ? db.Set<Unit>()
-                        .Where(unit => unit.Id == requestedUnitId
-                            && unit.PortfolioId == portfolio.Id && unit.DeletedAt == null)
-                        .Select(unit => (int?)unit.Id)
-                        .SingleOrDefault()
-                    : null,
-                UnitPropertyId = requestedUnitId > 0
-                    ? db.Set<Unit>()
-                        .Where(unit => unit.Id == requestedUnitId
-                            && unit.PortfolioId == portfolio.Id && unit.DeletedAt == null)
-                        .Select(unit => (int?)unit.PropertyId)
-                        .SingleOrDefault()
-                    : null,
-            })
+        var resolved = await db.ResolvePropertyUnit(
+                portfolioId, requestedPropertyId, requestedUnitId)
             .SingleOrDefaultAsync(ct)
             ?? throw new DomainValidationException("Portfolio was not found.");
 
-        if (requestedPropertyId is > 0 && resolved.PropertyId is null)
+        if (resolved.PropertyWasRequestedButNotFound)
             throw new DomainValidationException("Selected property was not found in this portfolio.");
-        if (requestedUnitId is > 0 && resolved.UnitId is null)
+        if (resolved.UnitWasRequestedButNotFound)
             throw new DomainValidationException("Selected unit was not found in this portfolio.");
-        if (resolved.PropertyId is > 0 && resolved.UnitPropertyId != null
-            && resolved.PropertyId != resolved.UnitPropertyId)
+        if (resolved.UnitDoesNotBelongToProperty)
             throw new DomainValidationException("Selected unit does not belong to the selected property.");
 
-        return (resolved.UnitPropertyId ?? resolved.PropertyId, resolved.UnitId);
+        return (resolved.ResolvedPropertyId, resolved.UnitId);
     }
 
     private Task<bool> OpenApplicationExistsAsync(
@@ -851,14 +806,9 @@ public sealed class AtomicRentalMutationHandler
         string normalizedEmail,
         RentalCommandDbContext db,
         CancellationToken ct) =>
-        db.Set<RentalApplication>().AsNoTracking().AnyAsync(application =>
-            application.PortfolioId == portfolioId
-            && application.DeletedAt == null
-            && application.Email != null
-            && application.Email.Trim().ToLower() == normalizedEmail
-            && (application.Status == ApplicationStatus.Submitted
-                || application.Status == ApplicationStatus.UnderReview
-                || application.Status == ApplicationStatus.Approved), ct);
+        db.Set<RentalApplication>()
+            .OpenForEmail(portfolioId, normalizedEmail)
+            .AnyAsync(ct);
 
     private async Task RequireCompatibleScreeningDecisionAsync(
         int portfolioId,
@@ -890,36 +840,17 @@ public sealed class AtomicRentalMutationHandler
         RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var guard = await db.Set<Unit>().IgnoreQueryFilters().AsNoTracking()
-            .Where(unit => unit.PortfolioId == portfolioId && unit.Id == unitId)
-            .Select(unit => new
-            {
-                IsOccupied = db.Set<UnitOccupancyProjection>().Any(occupancy =>
-                    occupancy.PortfolioId == portfolioId && occupancy.UnitId == unit.Id && occupancy.IsOccupied),
-                HasCurrent = db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
-                    lifecycle.PortfolioId == portfolioId && lifecycle.UnitId == unit.Id
-                    && lifecycle.Lifecycle != "Canceled" && lifecycle.Lifecycle != "Closed"
-                    && lifecycle.Lifecycle != "AccountingCloseout"),
-                HasLease = db.Set<LeaseManagement>().Any(row => row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasWork = db.Set<WorkOrder>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasAppointment = db.Set<Appointment>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasInspection = db.Set<Inspection>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasExpense = db.Set<Expense>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasApplication = db.Set<RentalApplication>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasRecurringExpense = db.Set<RecurringExpense>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasDocument = db.Set<StoredFile>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.EntityType == UnitEntityType && row.EntityId == unit.Id),
-            })
-            .SingleAsync(ct);
+        var guard = await db.UnitDeleteEligibility(portfolioId, unitId).SingleAsync(ct);
         if (guard.IsOccupied) throw Conflict("This unit is occupied. Return possession before deleting the unit.");
-        if (guard.HasCurrent) throw Conflict("This unit has a planned or current rental relationship. Cancel or complete it before deleting the unit.");
-        if (guard.HasLease) throw Conflict("This unit has rental relationship, legal, or financial history and cannot be deleted.");
-        if (guard.HasWork) throw Conflict("This unit has work order history. Archive the work order history instead of deleting the unit.");
-        if (guard.HasAppointment) throw Conflict("This unit has appointment history. Archive the appointment history instead of deleting the unit.");
-        if (guard.HasInspection) throw Conflict("This unit has inspection history. Archive the inspection history instead of deleting the unit.");
-        if (guard.HasExpense) throw Conflict("This unit has expense history. Archive the expense history instead of deleting the unit.");
-        if (guard.HasApplication) throw Conflict("This unit has application history. Archive the applications instead of deleting the unit.");
-        if (guard.HasRecurringExpense) throw Conflict("This unit has recurring expense history. Archive the recurring expense history instead of deleting the unit.");
-        if (guard.HasDocument) throw Conflict("This unit has document history. Archive the documents instead of deleting the unit.");
+        if (guard.HasPlannedOrCurrentRelationship) throw Conflict("This unit has a planned or current rental relationship. Cancel or complete it before deleting the unit.");
+        if (guard.HasRentalRelationshipHistory) throw Conflict("This unit has rental relationship, legal, or financial history and cannot be deleted.");
+        if (guard.HasWorkOrderHistory) throw Conflict("This unit has work order history. Archive the work order history instead of deleting the unit.");
+        if (guard.HasAppointmentHistory) throw Conflict("This unit has appointment history. Archive the appointment history instead of deleting the unit.");
+        if (guard.HasInspectionHistory) throw Conflict("This unit has inspection history. Archive the inspection history instead of deleting the unit.");
+        if (guard.HasExpenseHistory) throw Conflict("This unit has expense history. Archive the expense history instead of deleting the unit.");
+        if (guard.HasApplicationHistory) throw Conflict("This unit has application history. Archive the applications instead of deleting the unit.");
+        if (guard.HasRecurringExpenseHistory) throw Conflict("This unit has recurring expense history. Archive the recurring expense history instead of deleting the unit.");
+        if (guard.HasDocumentHistory) throw Conflict("This unit has document history. Archive the documents instead of deleting the unit.");
     }
 
     private async Task FlushUnitAsync(IAtomicCommandContext attempt, CancellationToken ct)
@@ -952,11 +883,11 @@ public sealed class AtomicRentalMutationHandler
             FindPostgresException(ex) is PostgresException
             {
                 SqlState: PostgresErrorCodes.UniqueViolation,
-                ConstraintName: "IX_RentalApplications_PortfolioId_Email_Open_CI",
+                ConstraintName: ApplicationPolicy.OpenEmailUniqueConstraint,
             })
         {
             throw new DomainValidationException(
-                "An open application for this email address already exists. Review it before creating another.",
+                ApplicationPolicy.OpenEmailConflictMessage,
                 409);
         }
     }

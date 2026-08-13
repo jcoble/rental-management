@@ -8,8 +8,10 @@ using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Policies;
 using RentalCommand.Api.Services;
 using RentalCommand.Data;
+using RentalCommand.Data.Policies;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -56,15 +58,8 @@ public sealed class AtomicPublicApplicationSubmissionHandler
             portfolioId.Value, request.PropertyId, request.UnitId, _db, ct);
         var normalizedEmail = Normalize(request.Email)?.ToLowerInvariant();
         if (normalizedEmail is not null && await _db.Set<RentalApplication>()
-                .AsNoTracking()
-                .AnyAsync(application =>
-                    application.PortfolioId == portfolioId.Value
-                    && application.DeletedAt == null
-                    && application.Email != null
-                    && application.Email.Trim().ToLower() == normalizedEmail
-                    && (application.Status == ApplicationStatus.Submitted
-                        || application.Status == ApplicationStatus.UnderReview
-                        || application.Status == ApplicationStatus.Approved), ct))
+                .OpenForEmail(portfolioId.Value, normalizedEmail)
+                .AnyAsync(ct))
         {
             throw new DomainValidationException(
                 $"An open application for {normalizedEmail} already exists. Review it before creating another.",
@@ -120,11 +115,11 @@ public sealed class AtomicPublicApplicationSubmissionHandler
             FindPostgresException(ex) is PostgresException
             {
                 SqlState: PostgresErrorCodes.UniqueViolation,
-                ConstraintName: "IX_RentalApplications_PortfolioId_Email_Open_CI",
+                ConstraintName: ApplicationPolicy.OpenEmailUniqueConstraint,
             })
         {
             throw new DomainValidationException(
-                "An open application for this email address already exists. Review it before creating another.",
+                ApplicationPolicy.OpenEmailConflictMessage,
                 409);
         }
         attempt.StageOutbox(new OutboxMessage
@@ -174,37 +169,16 @@ public sealed class AtomicPublicApplicationSubmissionHandler
         RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var resolved = await db.Set<Portfolio>().AsNoTracking()
-            .Where(portfolio => portfolio.Id == portfolioId && portfolio.DeletedAt == null)
-            .Select(portfolio => new
-            {
-                PropertyId = requestedPropertyId > 0
-                    ? db.Set<Property>()
-                        .Where(property => property.Id == requestedPropertyId
-                            && property.PortfolioId == portfolio.Id && property.DeletedAt == null)
-                        .Select(property => (int?)property.Id).SingleOrDefault()
-                    : null,
-                UnitId = requestedUnitId > 0
-                    ? db.Set<Unit>()
-                        .Where(unit => unit.Id == requestedUnitId
-                            && unit.PortfolioId == portfolio.Id && unit.DeletedAt == null)
-                        .Select(unit => (int?)unit.Id).SingleOrDefault()
-                    : null,
-                UnitPropertyId = requestedUnitId > 0
-                    ? db.Set<Unit>()
-                        .Where(unit => unit.Id == requestedUnitId
-                            && unit.PortfolioId == portfolio.Id && unit.DeletedAt == null)
-                        .Select(unit => (int?)unit.PropertyId).SingleOrDefault()
-                    : null,
-            }).SingleAsync(ct);
-        if (requestedPropertyId is > 0 && resolved.PropertyId is null)
+        var resolved = await db.ResolvePropertyUnit(
+                portfolioId, requestedPropertyId, requestedUnitId)
+            .SingleAsync(ct);
+        if (resolved.PropertyWasRequestedButNotFound)
             throw new DomainValidationException("Selected property was not found.");
-        if (requestedUnitId is > 0 && resolved.UnitId is null)
+        if (resolved.UnitWasRequestedButNotFound)
             throw new DomainValidationException("Selected unit was not found.");
-        if (resolved.PropertyId is > 0 && resolved.UnitPropertyId != null
-            && resolved.PropertyId != resolved.UnitPropertyId)
+        if (resolved.UnitDoesNotBelongToProperty)
             throw new DomainValidationException("Selected unit does not belong to the selected property.");
-        return (resolved.UnitPropertyId ?? resolved.PropertyId, resolved.UnitId);
+        return (resolved.ResolvedPropertyId, resolved.UnitId);
     }
 
     private void Validate(AtomicPublicApplicationSubmissionCommand command)
