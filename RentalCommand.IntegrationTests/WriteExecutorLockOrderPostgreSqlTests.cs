@@ -94,6 +94,51 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             outcome.Disposition == AtomicCommandDisposition.Executed && outcome.Value.Completed);
     }
 
+    [Fact]
+    public async Task ActorDrivenNoticeDeliveryShellAndAuthorizationExecutor_OnSameTargets_CompleteWithoutDeadlock()
+    {
+        await using var database = await fixture.CreateContextAsync();
+        var coordinator = new LockCanaryCoordinator();
+        var newLockProbe = new NewExecutorLockProbe(coordinator);
+        await using var oldServices = BuildServices(database.ConnectionString, coordinator, oldShell: true);
+        await using var newServices = BuildServices(
+            database.ConnectionString, coordinator, oldShell: false, newLockProbe);
+        await using var oldScope = oldServices.CreateAsyncScope();
+        await using var newScope = newServices.CreateAsyncScope();
+        var command = new NoticeDeliveryLockCanaryCommand(
+            PortfolioId: 51,
+            AuthSessionId: Guid.Parse("7cb9184f-1b50-47bc-bde6-3336152f5645"),
+            AccessContextId: 52,
+            NoticeDraftId: 53);
+
+        var oldTask = oldScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
+            new AtomicCommandIdentity("canary.notice-delivery.old-shell", "old-shell"),
+            command,
+            LockCanaryResult.Codec);
+        await coordinator.OldAuthSessionHeld.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var write = new TransactionalWrite<NoticeDeliveryLockCanaryCommand, LockCanaryResult>(
+            "canary.notice-delivery.new-executor",
+            WriteIdempotencyPolicy.Required,
+            command,
+            LockCanaryResult.Codec.ContractName,
+            new WriteLockPlan(
+                WriteLockProtocol.AuthorizationScope,
+                WriteLock.For("AuthSession", command.AuthSessionId),
+                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
+                WriteLock.For("Portfolio", command.PortfolioId)),
+            static (_, _, _) => Task.FromResult(new LockCanaryResult(true)),
+            static (_, _, _) => Task.CompletedTask);
+        var newTask = newScope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync("new-executor", write);
+
+        await coordinator.NewAdvisoryLockAttempted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var outcomes = await Task.WhenAll(oldTask, newTask).WaitAsync(TimeSpan.FromSeconds(15));
+
+        outcomes.Should().OnlyContain(outcome =>
+            outcome.Disposition == AtomicCommandDisposition.Executed && outcome.Value.Completed);
+    }
+
     private static ServiceProvider BuildServices(
         string connectionString,
         LockCanaryCoordinator coordinator,
@@ -108,6 +153,10 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
         if (oldShell)
         {
             services.AddAtomicCommandHandler<LockCanaryCommand, LockCanaryResult, OldPossessionShell>();
+            services.AddAtomicCommandHandler<
+                NoticeDeliveryLockCanaryCommand,
+                LockCanaryResult,
+                ActorDrivenNoticeDeliveryShell>();
         }
 
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
@@ -124,6 +173,12 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
     }
 
     private sealed record LockCanaryCommand(int UnitId, int LeaseManagementId) : IAtomicCommandData;
+
+    private sealed record NoticeDeliveryLockCanaryCommand(
+        int PortfolioId,
+        Guid AuthSessionId,
+        int AccessContextId,
+        int NoticeDraftId) : IAtomicCommandData;
 
     private sealed record LockCanaryResult(bool Completed)
     {
@@ -152,9 +207,34 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             CancellationToken ct) => Task.CompletedTask;
     }
 
+    private sealed class ActorDrivenNoticeDeliveryShell(LockCanaryCoordinator coordinator)
+        : IAtomicCommandHandler<NoticeDeliveryLockCanaryCommand, LockCanaryResult>
+    {
+        public async Task<LockCanaryResult> HandleAsync(
+            NoticeDeliveryLockCanaryCommand command,
+            IAtomicCommandContext context,
+            CancellationToken ct)
+        {
+            await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+            coordinator.OldAuthSessionHeld.TrySetResult();
+            await coordinator.NewAdvisoryLockAttempted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+            await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+            await context.AcquireLockAsync("NoticeDraft", command.NoticeDraftId, ct);
+            return new LockCanaryResult(true);
+        }
+
+        public Task AuthorizeReplayAsync(
+            NoticeDeliveryLockCanaryCommand command,
+            IAtomicCommandContext context,
+            CancellationToken ct) => Task.CompletedTask;
+    }
+
     private sealed class LockCanaryCoordinator
     {
         public TaskCompletionSource OldUnitHeld { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource OldAuthSessionHeld { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource NewAdvisoryLockAttempted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
