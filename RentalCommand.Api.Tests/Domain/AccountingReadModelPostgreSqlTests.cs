@@ -653,38 +653,61 @@ public sealed class AccountingReadModelPostgreSqlTests
         var deposit = NewEntry(TenantLedgerEntryType.DepositCharge, 400m, new DateOnly(2027, 7, 4), "credit-target:deposit");
         var opening = NewEntry(TenantLedgerEntryType.OpeningBalance, 500m, new DateOnly(2027, 7, 5), "credit-target:opening");
         var corrected = NewEntry(TenantLedgerEntryType.LateFeeCharge, 60m, new DateOnly(2027, 7, 6), "credit-target:corrected");
-        setup.Db.TenantLedgerEntries.AddRange(rent, addendum, manual, deposit, opening, corrected);
+        var partiallyCorrected = NewEntry(TenantLedgerEntryType.ManualCharge, 90m, new DateOnly(2027, 7, 6), "credit-target:partially-corrected");
+        setup.Db.TenantLedgerEntries.AddRange(
+            rent, addendum, manual, deposit, opening, corrected, partiallyCorrected);
         await setup.Db.SaveChangesAsync();
-        setup.Db.TenantLedgerEntries.Add(new TenantLedgerEntry
-        {
-            PublicId = Guid.NewGuid(),
-            PortfolioId = 1,
-            TenantAccountId = account.Id,
-            EntryType = TenantLedgerEntryType.Reversal,
-            Direction = TenantLedgerDirection.Credit,
-            Amount = corrected.Amount,
-            Currency = "USD",
-            EffectiveOn = new DateOnly(2027, 7, 7),
-            PostedAtUtc = now,
-            Description = "Corrected late fee",
-            BusinessKey = "credit-target:correction",
-            ReversesEntryId = corrected.Id,
-            CreatedByUserId = scope.UserId,
-        });
+        setup.Db.TenantLedgerEntries.AddRange(
+            new TenantLedgerEntry
+            {
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                TenantAccountId = account.Id,
+                EntryType = TenantLedgerEntryType.Reversal,
+                Direction = TenantLedgerDirection.Credit,
+                Amount = corrected.Amount,
+                Currency = "USD",
+                EffectiveOn = new DateOnly(2027, 7, 7),
+                PostedAtUtc = now,
+                Description = "Corrected late fee",
+                BusinessKey = "credit-target:correction",
+                ReversesEntryId = corrected.Id,
+                CreatedByUserId = scope.UserId,
+            },
+            new TenantLedgerEntry
+            {
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                TenantAccountId = account.Id,
+                EntryType = TenantLedgerEntryType.Credit,
+                Direction = TenantLedgerDirection.Credit,
+                Amount = 30m,
+                Currency = "USD",
+                EffectiveOn = new DateOnly(2027, 7, 7),
+                PostedAtUtc = now,
+                Description = "Related credit for manual charge",
+                BusinessKey = "credit-target:partial-correction",
+                RelatedTenantLedgerEntryId = partiallyCorrected.Id,
+                CreatedByUserId = scope.UserId,
+            });
         await setup.Db.SaveChangesAsync();
+        FreezeBusinessClock(setup, new DateTime(2027, 7, 6, 12, 0, 0, DateTimeKind.Utc));
         await setup.ActivateApiScopeAsync(scope);
 
         var service = new AccountingLedgerReadModelService(setup.Db);
+        const string businessDateCorrectionPredicate = "\"EffectiveOn\" <= v.\"BusinessDate\"";
         commands.Reset();
-        var page = await service.GetTenantCreditTargetsAsync(scope, account.Id,
-            new TenantCreditTargetQuery { Skip = 1, Take = 1 });
+        var beforeBoundary = await service.GetTenantCreditTargetsAsync(scope, account.Id,
+            new TenantCreditTargetQuery { Take = 50 });
 
-        page.Should().NotBeNull();
-        page!.TotalCount.Should().Be(3);
-        page.Items.Should().ContainSingle().Which.Should().Match<TenantCreditTargetRow>(row =>
-            row.TenantLedgerEntryId == addendum.Id
-            && row.ChargeAmount == 200m
-            && row.RemainingTargetableAmount == 200m);
+        beforeBoundary.Should().NotBeNull();
+        beforeBoundary!.TotalCount.Should().Be(5);
+        beforeBoundary.Items.Should().ContainSingle(row =>
+            row.TenantLedgerEntryId == corrected.Id
+            && row.RemainingTargetableAmount == 60m);
+        beforeBoundary.Items.Should().ContainSingle(row =>
+            row.TenantLedgerEntryId == partiallyCorrected.Id
+            && row.RemainingTargetableAmount == 90m);
         commands.Count.Should().Be(2);
         commands.Sql.Should().OnlyContain(sql =>
             sql.Contains("TenantAccounts", StringComparison.Ordinal)
@@ -695,7 +718,27 @@ public sealed class AccountingReadModelPostgreSqlTests
             && sql.Contains("Direction", StringComparison.Ordinal)
             && sql.Contains("EntryType", StringComparison.Ordinal)
             && sql.Contains("ReversesEntryId", StringComparison.Ordinal)
-            && sql.Contains("RelatedTenantLedgerEntryId", StringComparison.Ordinal));
+            && sql.Contains("RelatedTenantLedgerEntryId", StringComparison.Ordinal)
+            && sql.Contains("vw_tenant_account_balances", StringComparison.Ordinal)
+            && sql.Contains(businessDateCorrectionPredicate, StringComparison.Ordinal));
+        (commands.Sql[1].Split(businessDateCorrectionPredicate).Length - 1).Should().Be(2);
+
+        FreezeBusinessClock(setup, new DateTime(2027, 7, 7, 12, 0, 0, DateTimeKind.Utc));
+        commands.Reset();
+        var onBoundary = await service.GetTenantCreditTargetsAsync(scope, account.Id,
+            new TenantCreditTargetQuery { Take = 50 });
+
+        onBoundary.Should().NotBeNull();
+        onBoundary!.TotalCount.Should().Be(4);
+        onBoundary.Items.Should().NotContain(row => row.TenantLedgerEntryId == corrected.Id);
+        onBoundary.Items.Should().ContainSingle(row =>
+            row.TenantLedgerEntryId == partiallyCorrected.Id
+            && row.RemainingTargetableAmount == 60m);
+        commands.Count.Should().Be(2);
+        commands.Sql.Should().OnlyContain(sql =>
+            sql.Contains("vw_tenant_account_balances", StringComparison.Ordinal)
+            && sql.Contains(businessDateCorrectionPredicate, StringComparison.Ordinal));
+        (commands.Sql[1].Split(businessDateCorrectionPredicate).Length - 1).Should().Be(2);
         commands.Sql.Should().Contain(sql =>
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
             && sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase)

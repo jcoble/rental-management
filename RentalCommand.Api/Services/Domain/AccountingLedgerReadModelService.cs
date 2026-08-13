@@ -702,6 +702,9 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             join management in _db.LeaseManagements.AsNoTracking()
                 on new { account.PortfolioId, LeaseManagementId = account.LeaseManagementId }
                 equals new { management.PortfolioId, LeaseManagementId = management.Id }
+            join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { balance.PortfolioId, balance.TenantAccountId }
             join entry in _db.TenantLedgerEntries.AsNoTracking()
                 on new { account.PortfolioId, TenantAccountId = account.Id }
                 equals new { entry.PortfolioId, entry.TenantAccountId }
@@ -714,40 +717,42 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 && entry.Amount - (_db.TenantLedgerEntries
                     .Where(correction => correction.PortfolioId == entry.PortfolioId
                         && correction.TenantAccountId == entry.TenantAccountId
+                        && correction.EffectiveOn <= balance.BusinessDate
                         && ((correction.EntryType == TenantLedgerEntryType.Reversal
                                 && correction.ReversesEntryId == entry.Id)
                             || (correction.EntryType == TenantLedgerEntryType.Credit
                                 && correction.RelatedTenantLedgerEntryId == entry.Id)))
                     .Sum(correction => (decimal?)correction.Amount) ?? 0m) > 0m
-            select entry;
+            select new { Entry = entry, balance.BusinessDate };
 
         var totalCount = await eligibleEntries.CountAsync(ct);
         var skip = query.NormalizedSkip;
         var take = query.NormalizedTake;
         var ordered = eligibleEntries
-            .OrderByDescending(entry => query.TargetEntryId != null && entry.Id == query.TargetEntryId.Value)
-            .ThenByDescending(entry => entry.EffectiveOn)
-            .ThenByDescending(entry => entry.PostedAtUtc)
-            .ThenByDescending(entry => entry.Id);
+            .OrderByDescending(row => query.TargetEntryId != null && row.Entry.Id == query.TargetEntryId.Value)
+            .ThenByDescending(row => row.Entry.EffectiveOn)
+            .ThenByDescending(row => row.Entry.PostedAtUtc)
+            .ThenByDescending(row => row.Entry.Id);
         var rows = await ordered
             .Skip(skip)
             .Take(take)
-            .Select(entry => new TenantCreditTargetRow
+            .Select(row => new TenantCreditTargetRow
             {
-                TenantLedgerEntryId = entry.Id,
-                PublicId = entry.PublicId,
-                Description = entry.Description,
-                ChargeAmount = entry.Amount,
-                RemainingTargetableAmount = entry.Amount - (_db.TenantLedgerEntries
-                    .Where(correction => correction.PortfolioId == entry.PortfolioId
-                        && correction.TenantAccountId == entry.TenantAccountId
+                TenantLedgerEntryId = row.Entry.Id,
+                PublicId = row.Entry.PublicId,
+                Description = row.Entry.Description,
+                ChargeAmount = row.Entry.Amount,
+                RemainingTargetableAmount = row.Entry.Amount - (_db.TenantLedgerEntries
+                    .Where(correction => correction.PortfolioId == row.Entry.PortfolioId
+                        && correction.TenantAccountId == row.Entry.TenantAccountId
+                        && correction.EffectiveOn <= row.BusinessDate
                         && ((correction.EntryType == TenantLedgerEntryType.Reversal
-                                && correction.ReversesEntryId == entry.Id)
+                                && correction.ReversesEntryId == row.Entry.Id)
                             || (correction.EntryType == TenantLedgerEntryType.Credit
-                                && correction.RelatedTenantLedgerEntryId == entry.Id)))
+                                && correction.RelatedTenantLedgerEntryId == row.Entry.Id)))
                     .Sum(correction => (decimal?)correction.Amount) ?? 0m),
-                EffectiveOn = entry.EffectiveOn,
-                Currency = entry.Currency,
+                EffectiveOn = row.Entry.EffectiveOn,
+                Currency = row.Entry.Currency,
             })
             .ToListAsync(ct);
 
