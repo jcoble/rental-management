@@ -23,6 +23,12 @@ public sealed record AtomicNoticeApprovalCompletionValidation(
     bool IsMatch,
     int? RecipientConversationId);
 
+public sealed class AtomicMarkAllNotificationsReadResult
+{
+    public int Count { get; init; }
+    public int? NotificationId { get; init; }
+}
+
 public sealed class AtomicGeneratedTenantNoticeDraft
 {
     public long? WorkItemId { get; init; }
