@@ -12,6 +12,9 @@ namespace RentalCommand.Data.Authorization;
 /// </summary>
 public static class WorkspaceAuthorizationQuery
 {
+    public const string SecurityTimeAuthorizedPropertyIdsFunctionName =
+        "public.rc_api_authorized_property_ids_at_security_time";
+
     /// <summary>
     /// Produces the caller's effective property ids as a composable, materialized PostgreSQL set.
     /// Hot report/accounting queries join this relation directly instead of embedding the effective
@@ -49,6 +52,32 @@ public static class WorkspaceAuthorizationQuery
             )
             SELECT authorized_properties."PropertyId" AS "Value"
             FROM authorized_properties
+            """);
+    }
+
+    /// <summary>
+    /// Produces effective property ids using the caller-supplied security timestamp. This is the
+    /// canonical database-side rendering for raw-SQL aggregates that must not use simulation time.
+    /// Its function definition is kept beside, and mirrors, the LINQ policy in
+    /// <see cref="AuthorizedAssignmentsForScope"/>.
+    /// </summary>
+    public static IQueryable<int> AuthorizedPropertyIds(
+        this RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilityKeys,
+        DateTime securityNowUtc)
+    {
+        var keys = RequireCapabilityKeys(capabilityKeys);
+        return db.Database.SqlQuery<int>($"""
+            SELECT authorized_property."Value"
+            FROM public.rc_api_authorized_property_ids_at_security_time(
+                {scope.PortfolioId},
+                {scope.SessionId},
+                {scope.UserId},
+                {scope.AccessContextId},
+                {scope.AccessRevision},
+                {keys},
+                {securityNowUtc}) AS authorized_property
             """);
     }
 

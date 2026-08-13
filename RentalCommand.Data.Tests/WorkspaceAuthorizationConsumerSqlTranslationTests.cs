@@ -12,6 +12,7 @@ using RentalCommand.Core.Notifications;
 using RentalCommand.Core.Operations;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data.AiIntegrations;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Conversations;
 using RentalCommand.Data.Leasing;
 using RentalCommand.Data.Listings;
@@ -230,6 +231,89 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
         noticeSql.Should().Contain("NoticeDrafts");
         noticeSql.Should().Contain("Properties");
         noticeSql.Should().Contain("notifications.tenant-notices.manage");
+    }
+
+    [Fact]
+    public void Scan_upload_and_analytics_authorization_use_complete_canonical_sql_shapes()
+    {
+        using var db = Context();
+
+        var captureContext = new ScanCaptureContextData(
+            WorkspaceExperience.Maintenance,
+            12,
+            3,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            "translation-shape");
+        var scanSql = FinalizeScanUploadHandler.CaptureContextAuthorizationQuery(
+                new FinalizeScanUploadCommand(
+                    17,
+                    5,
+                    SessionId,
+                    12,
+                    3,
+                    "scan-upload-translation",
+                    "fingerprint",
+                    "WorkOrder",
+                    false,
+                    null,
+                    SecurityNowUtc,
+                    [],
+                    captureContext),
+                captureContext,
+                db,
+                SecurityNowUtc)
+            .ToQueryString();
+
+        foreach (var relation in new[]
+                 {
+                     "Portfolios", "Properties", "Units", "LeaseManagements", "LeaseAgreements",
+                     "TenantAccounts", "TenantLedgerEntries", "WorkOrders", "WorkOrderResponsibilities",
+                     "RentalApplications", "RentalListings", "MembershipRoleAssignments",
+                     "WorkspaceMemberships", "WorkspaceAccessContexts", "AuthSessions",
+                     "RoleProfileCapabilities", "MembershipRoleAssignmentProperties",
+                 })
+        {
+            scanSql.Should().Contain(relation);
+        }
+
+        scanSql.Should().Contain(CapabilityKeys.WorkManage);
+        scanSql.Should().Contain(CapabilityKeys.AssignedWorkUpdate);
+        scanSql.Should().Contain(nameof(CapabilityAuthorizationTargetKind.Property));
+        scanSql.Should().Contain(nameof(CapabilityAuthorizationTargetKind.WorkOrder));
+        scanSql.Should().Contain(nameof(MembershipRoleAssignmentScopeKind.AllProperties));
+        scanSql.Should().Contain(nameof(MembershipRoleAssignmentScopeKind.SelectedProperties));
+        scanSql.Should().Contain(nameof(MembershipRoleAssignmentScopeKind.AssignedWorkOrders));
+        scanSql.Should().NotContain("ClientEvaluation");
+        scanSql.TrimEnd().Should().NotEndWith(";",
+            "the complete scan-upload authorization consumer must render as one SQL statement");
+
+        var analyticsAuthorizationSql = db.AuthorizedPropertyIds(
+                new WorkspaceReadScope(17, 5, SessionId, 12, 3),
+                [CapabilityKeys.ReportsRead],
+                SecurityNowUtc)
+            .ToQueryString();
+
+        AnalyticsService.AuthorizationSource.Should().Be(
+            WorkspaceAuthorizationQuery.SecurityTimeAuthorizedPropertyIdsFunctionName);
+        AnalyticsService.UseCanonicalAuthorizationSource(
+                $"SELECT * FROM __canonical_authorized_property_ids__()")
+            .Format.Should().Contain(AnalyticsService.AuthorizationSource);
+        analyticsAuthorizationSql.Should().Contain(AnalyticsService.AuthorizationSource);
+        analyticsAuthorizationSql.Should().Contain(CapabilityKeys.ReportsRead);
+        analyticsAuthorizationSql.Should().NotContain("AuthSessions");
+        analyticsAuthorizationSql.Should().NotContain("WorkspaceAccessContexts");
+        analyticsAuthorizationSql.Should().NotContain("WorkspaceMemberships");
+        analyticsAuthorizationSql.Should().NotContain("MembershipRoleAssignments");
+        analyticsAuthorizationSql.TrimEnd().Should().NotEndWith(";",
+            "the canonical Analytics authorization source must stay composable in one statement");
     }
 
     private static RentalCommandDbContext Context() => new(
