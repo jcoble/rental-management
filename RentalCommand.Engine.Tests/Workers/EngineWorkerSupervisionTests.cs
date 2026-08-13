@@ -1,15 +1,70 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Data;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Engine.Tests.Workers;
 
 public sealed class EngineWorkerSupervisionTests
 {
+    [Fact]
+    public async Task Watchdog_ErrorThreshold_DoesNotStopHostAndHealthySiblingContinues()
+    {
+        using var sqlite = new SqliteTestContext();
+        sqlite.Db.EngineWorkerHeartbeats.Add(new EngineWorkerHeartbeat
+        {
+            WorkerName = "OutboxDispatchWorker",
+            LastHeartbeatUtc = DateTime.UtcNow,
+            LastErrorUtc = DateTime.UtcNow,
+            LastErrorMessage = "Expected persisted worker failure.",
+            Status = EngineWorkerStatus.Error,
+            StartedAtUtc = DateTime.UtcNow,
+        });
+        await sqlite.Db.SaveChangesAsync();
+
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddDbContext<RentalCommandDbContext>(options =>
+            options.UseSqlite(sqlite.ConnectionString));
+        builder.Services.AddSingleton<IEngineWorkerHeartbeatStore, NoopHeartbeatStore>();
+        builder.Services.AddScoped<EngineStatusReporter>();
+        builder.Services.AddSingleton<HealthyWorker>();
+        builder.Services.AddSingleton<WorkerWatchdogService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthyWorker>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<WorkerWatchdogService>());
+
+        using var host = builder.Build();
+        await host.StartAsync();
+
+        try
+        {
+            var watchdog = host.Services.GetRequiredService<WorkerWatchdogService>();
+            var healthyWorker = host.Services.GetRequiredService<HealthyWorker>();
+            var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+
+            await RunWatchdogCheckAsync(watchdog);
+            await RunWatchdogCheckAsync(watchdog);
+            await RunWatchdogCheckAsync(watchdog);
+
+            var siblingCyclesAtThreshold = healthyWorker.CycleCount;
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+            lifetime.ApplicationStopping.IsCancellationRequested.Should().BeFalse();
+            healthyWorker.CycleCount.Should().BeGreaterThan(siblingCyclesAtThreshold);
+        }
+        finally
+        {
+            await host.StopAsync();
+        }
+    }
+
     [Fact]
     public async Task FailingWorker_RestartsWithBackoff_WithoutStoppingHostOrSibling()
     {
@@ -147,5 +202,15 @@ public sealed class EngineWorkerSupervisionTests
             DateTime nowUtc,
             string errorMessage,
             CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private static async Task RunWatchdogCheckAsync(WorkerWatchdogService watchdog)
+    {
+        var checkWorkers = typeof(WorkerWatchdogService).GetMethod(
+            "CheckWorkersAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        checkWorkers.Should().NotBeNull();
+        await (Task)checkWorkers!.Invoke(watchdog, [CancellationToken.None])!;
     }
 }
