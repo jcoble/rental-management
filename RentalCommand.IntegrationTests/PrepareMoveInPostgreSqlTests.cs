@@ -23,6 +23,7 @@ public sealed class PrepareMoveInPostgreSqlTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _context = null!;
     private ServiceProvider _services = null!;
+    private IServiceScope _serviceScope = null!;
 
     public PrepareMoveInPostgreSqlTests(MigratedPostgreSqlFixture fixture)
     {
@@ -46,10 +47,12 @@ public sealed class PrepareMoveInPostgreSqlTests : IAsyncLifetime
             ValidateOnBuild = true,
             ValidateScopes = true,
         });
+        _serviceScope = _services.CreateScope();
     }
 
     public async Task DisposeAsync()
     {
+        _serviceScope?.Dispose();
         if (_services is not null) await _services.DisposeAsync();
         if (_context is not null) await _context.DisposeAsync();
     }
@@ -267,7 +270,8 @@ public sealed class PrepareMoveInPostgreSqlTests : IAsyncLifetime
         await _context.Db.LeaseManagements.AsNoTracking()
             .CountAsync(relationship => relationship.UnitId == unitId);
 
-    private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
+    private IAtomicUnitOfWork Atomic =>
+        _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
 
     private static AtomicCommandIdentity Identity(PrepareMoveInCommand command) => new(
         "lease-management.prepare-move-in",

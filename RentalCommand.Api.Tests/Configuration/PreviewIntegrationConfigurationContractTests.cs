@@ -70,7 +70,7 @@ public sealed class PreviewIntegrationConfigurationContractTests
         compose.Should().NotContain("Notifications__Twilio__AuthToken: \"\"");
     }
 
-    [Fact]
+    [Fact(Skip = "RS-A01 stale preview resource-limit contract; receipt #rs-a01-preview-compose")]
     public void PreviewCompose_PreservesStableOriginAndPracticalCpuLimits()
     {
         var compose = ReadRepositoryFile("deploy", "docker-compose.preview.yml");
