@@ -1737,6 +1737,77 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         return new AtomicTestAuthority(userId, sessionId, accessContext.Id, accessContext.AccessRevision);
     }
 
+    [SkippableFact]
+    public async Task Reconciliation_RevalidatesDisplayedExpenseCandidateInsideWriteTransaction()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int transactionId;
+        int expenseId;
+
+        await using (var db = NewContext())
+        {
+            var property = SeedProperty(db, "Commit-time candidate property");
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Displayed reconciliation candidate",
+                Status = ExpenseStatus.Approved,
+                Amount = 425m,
+                IncurredAt = _now,
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var connection = SeedBankConnection(db, "Commit-time candidate bank");
+            var transaction = SeedBankTransaction(
+                db, connection.Id, "commit-time-expense-candidate", -expense.Amount, property.Id);
+            db.Expenses.Add(expense);
+            await db.SaveChangesAsync();
+            transactionId = transaction.Id;
+            expenseId = expense.Id;
+
+            (await BankReconciliationCandidateQuery.EligibleExpenses(
+                    db.BankTransactions.AsNoTracking().Where(row => row.Id == transactionId),
+                    db.Expenses.AsNoTracking())
+                .AnyAsync(candidate => candidate.Target.Id == expenseId))
+                .Should().BeTrue("the candidate was displayed from the canonical selection query");
+        }
+
+        await using (var concurrent = NewContext())
+        {
+            var expense = await concurrent.Expenses.SingleAsync(row => row.Id == expenseId);
+            expense.DeletedAt = _now.AddMinutes(1);
+            expense.UpdatedAt = _now.AddMinutes(1);
+            await concurrent.SaveChangesAsync();
+        }
+
+        Recorder.Clear();
+        var result = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "banking.transaction.reconcile",
+                $"{_portfolioId}:{transactionId}:commit-time-candidate"),
+            ReconcileExpense(transactionId, expenseId, auth, "commit-time-candidate"),
+            ReconcileCodec);
+
+        result.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.TargetNotFound);
+        Recorder.Commands.Should().ContainSingle(sql =>
+            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("DeletedAt", StringComparison.OrdinalIgnoreCase),
+            "the locked write transaction must re-run canonical candidate eligibility in one SQL statement");
+
+        await using var verify = NewContext();
+        var bankState = await verify.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new { row.MatchStatus, row.MatchedExpenseId })
+            .SingleAsync();
+        bankState.MatchStatus.Should().Be("Unmatched");
+        bankState.MatchedExpenseId.Should().BeNull();
+    }
+
     private ReconcileBankTransactionCommand ReconcileLoanPayment(
         int transactionId,
         int loanPaymentId,
