@@ -14,21 +14,16 @@ namespace RentalCommand.Api.Services.Domain;
 
 public enum AtomicNotificationMutationDomain
 {
-    MyAlerts,
-    TeamRouting,
-    TenantNoticePolicy,
-    SeedTemplates,
-    TemplateVersion,
-    RestoreTemplate,
-    MorningBriefingSettings,
-    LateFeeSettings,
-    DeviceRegister,
-    DeviceUnregister,
-    LandlordConversationRead,
-    TenantConversationRead,
-    MarkRead,
-    MarkAllRead,
-    Broadcast,
+    TeamRouting = 1,
+    TenantNoticePolicy = 2,
+    SeedTemplates = 3,
+    TemplateVersion = 4,
+    RestoreTemplate = 5,
+    MorningBriefingSettings = 6,
+    LateFeeSettings = 7,
+    LandlordConversationRead = 10,
+    TenantConversationRead = 11,
+    Broadcast = 14,
 }
 
 public sealed record AtomicNotificationMutationCommand(
@@ -45,9 +40,7 @@ public sealed record AtomicNotificationMutationCommand(
     string ResourceKey,
     string RequestJson,
     [property: AtomicFingerprintIgnore]
-    string DeliveryIdempotencyKey,
-    [property: AtomicFingerprintIgnore]
-    DateTime BusinessNowUtc = default) : IAtomicCommandData;
+    string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AtomicNotificationMutationResult(
     bool Found,
@@ -55,8 +48,6 @@ public sealed record AtomicNotificationMutationResult(
     int EntityId,
     int AffectedCount,
     string? ResponseJson = null);
-
-public sealed record AtomicDeviceMutationRequest(string Token, string? Platform) : IAtomicCommandData;
 
 public sealed record AtomicConversationReadRequest(int TenantId) : IAtomicCommandData;
 
@@ -80,14 +71,11 @@ public sealed class AtomicNotificationMutationHandler
             or AtomicNotificationMutationDomain.TenantConversationRead)
             await attempt.AcquireLockAsync("Conversation", command.EntityId, ct);
         var databaseNow = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
-        var mutationNow = BusinessNow(command, databaseNow);
-        attempt.UseDatabaseWallClockForAudit(mutationNow);
+        attempt.UseDatabaseWallClockForAudit(databaseNow);
         await AuthorizeAsync(command, _db, databaseNow, ct);
 
         return command.Domain switch
         {
-            AtomicNotificationMutationDomain.MyAlerts =>
-                await UpdateMyAlertsAsync(command, attempt, mutationNow, ct),
             AtomicNotificationMutationDomain.TeamRouting =>
                 await ReplaceTeamRoutingAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.TenantNoticePolicy =>
@@ -102,18 +90,10 @@ public sealed class AtomicNotificationMutationHandler
                 await UpdateMorningBriefingSettingsAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.LateFeeSettings =>
                 await UpdateLateFeeAutomationSettingsAsync(command, attempt, databaseNow, ct),
-            AtomicNotificationMutationDomain.DeviceRegister =>
-                await RegisterDeviceAsync(command, attempt, databaseNow, ct),
-            AtomicNotificationMutationDomain.DeviceUnregister =>
-                await UnregisterDeviceAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.LandlordConversationRead =>
                 await MarkConversationReadAsync(command, attempt, databaseNow, tenantViewer: false, ct),
             AtomicNotificationMutationDomain.TenantConversationRead =>
                 await MarkConversationReadAsync(command, attempt, databaseNow, tenantViewer: true, ct),
-            AtomicNotificationMutationDomain.MarkRead =>
-                await MarkReadAsync(command, attempt, databaseNow, ct),
-            AtomicNotificationMutationDomain.MarkAllRead =>
-                await MarkAllReadAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.Broadcast =>
                 await BroadcastAsync(command, attempt, databaseNow, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
@@ -127,40 +107,6 @@ public sealed class AtomicNotificationMutationHandler
     {
         Validate(command);
         await AuthorizeAsync(command, _db, await context.ReadDatabaseClockUtcAsync(ct), ct);
-    }
-
-    private async Task<AtomicNotificationMutationResult> UpdateMyAlertsAsync(
-        AtomicNotificationMutationCommand command,
-        IAtomicCommandContext attempt,
-        DateTime now,
-        CancellationToken ct)
-    {
-        var request = Read<UpdateMyAlertsRequest>(command);
-        var db = _db;
-        var row = await db.Set<UserAlertPreference>().SingleOrDefaultAsync(preference =>
-            preference.PortfolioId == command.PortfolioId && preference.UserId == command.ActorUserId, ct);
-        var operation = row is null ? AuditLogOperation.Created : AuditLogOperation.Updated;
-        if (row is null)
-        {
-            row = new UserAlertPreference
-            {
-                PortfolioId = command.PortfolioId,
-                UserId = command.ActorUserId,
-                CreatedAtUtc = now,
-            };
-            db.Add(row);
-        }
-        row.EnableInApp = request.EnableInApp;
-        row.EnableMobilePush = request.EnableMobilePush;
-        row.EnableEmail = request.EnableEmail;
-        row.EnableSms = request.EnableSms;
-        row.UpdatedAtUtc = now;
-        attempt.BindSemanticAudit(row, Audit(command, nameof(UserAlertPreference), operation,
-            "Personal notification destinations updated", operation == AuditLogOperation.Created ? 0 : row.Id));
-        await attempt.FlushBusinessAsync(ct);
-        StageDataUpdate(attempt, command, nameof(UserAlertPreference), row.Id, now);
-        var response = await MyAlertsQuery(db, command.PortfolioId, command.ActorUserId).SingleAsync(ct);
-        return Applied(row.Id, JsonSerializer.Serialize(response));
     }
 
     private async Task<AtomicNotificationMutationResult> ReplaceTeamRoutingAsync(
@@ -462,30 +408,6 @@ public sealed class AtomicNotificationMutationHandler
         return Applied(next.Id, JsonSerializer.Serialize(response));
     }
 
-    private async Task<AtomicNotificationMutationResult> MarkReadAsync(
-        AtomicNotificationMutationCommand command,
-        IAtomicCommandContext attempt,
-        DateTime now,
-        CancellationToken ct)
-    {
-        var db = _db;
-        var isStaff = await IsStaffAsync(command, db, now, ct);
-        var notification = await db.Set<Notification>().SingleOrDefaultAsync(candidate =>
-            candidate.Id == command.EntityId && candidate.PortfolioId == command.PortfolioId
-            && (candidate.UserId == null || candidate.UserId == command.ActorUserId)
-            && (isStaff || candidate.Type != "TenantMessage"), ct);
-        if (notification is null) return Missing();
-        if (await AtomicNotificationPersistence.MarkReadAsync(_db,
-                attempt, command.PortfolioId, notification.Id, command.ActorUserId, isStaff, now, ct))
-        {
-            attempt.StageSemanticEvent(Audit(command, nameof(NotificationReadState), AuditLogOperation.Created,
-                "Notification marked read", notification.Id), now);
-            StageDataUpdate(attempt, command, nameof(Notification), notification.Id, now);
-            return new(true, true, notification.Id, 1);
-        }
-        return new(true, false, notification.Id, 0);
-    }
-
     private async Task<AtomicNotificationMutationResult> UpdateMorningBriefingSettingsAsync(
         AtomicNotificationMutationCommand command,
         IAtomicCommandContext attempt,
@@ -534,61 +456,6 @@ public sealed class AtomicNotificationMutationHandler
         return Applied(settings.Id, JsonSerializer.Serialize(response));
     }
 
-    private async Task<AtomicNotificationMutationResult> RegisterDeviceAsync(
-        AtomicNotificationMutationCommand command,
-        IAtomicCommandContext attempt,
-        DateTime now,
-        CancellationToken ct)
-    {
-        var request = Read<AtomicDeviceMutationRequest>(command);
-        var token = request.Token.Trim();
-        var platform = request.Platform?.Trim().ToLowerInvariant() ?? string.Empty;
-        if (token.Length is 0 or > 500 || platform is not ("ios" or "android" or "web"))
-            throw new InvalidOperationException("A valid device token and platform are required.");
-
-        var row = await _db.Set<DeviceToken>().SingleOrDefaultAsync(candidate =>
-            candidate.PortfolioId == command.PortfolioId && candidate.Token == token, ct);
-        var operation = row is null ? AuditLogOperation.Created : AuditLogOperation.Updated;
-        if (row is null)
-        {
-            row = new DeviceToken
-            {
-                PortfolioId = command.PortfolioId,
-                Token = token,
-                CreatedAt = now,
-            };
-            _db.Add(row);
-        }
-        row.UserId = command.ActorUserId;
-        row.Platform = platform;
-        row.LastSeenAt = now;
-        attempt.BindSemanticAudit(row, Audit(command, nameof(DeviceToken), operation,
-            "Push notification device registered", operation == AuditLogOperation.Created ? 0 : row.Id));
-        await attempt.FlushBusinessAsync(ct);
-        return Applied(row.Id);
-    }
-
-    private async Task<AtomicNotificationMutationResult> UnregisterDeviceAsync(
-        AtomicNotificationMutationCommand command,
-        IAtomicCommandContext attempt,
-        DateTime now,
-        CancellationToken ct)
-    {
-        var request = Read<AtomicDeviceMutationRequest>(command);
-        var token = request.Token.Trim();
-        if (token.Length is 0 or > 500)
-            throw new InvalidOperationException("A valid device token is required.");
-        var row = await _db.Set<DeviceToken>().SingleOrDefaultAsync(candidate =>
-            candidate.PortfolioId == command.PortfolioId && candidate.UserId == command.ActorUserId
-            && candidate.Token == token, ct);
-        if (row is null) return Missing();
-        _db.Remove(row);
-        attempt.BindSemanticAudit(row, Audit(command, nameof(DeviceToken), AuditLogOperation.Deleted,
-            "Push notification device unregistered", row.Id));
-        await attempt.FlushBusinessAsync(ct);
-        return new(true, true, row.Id, 1);
-    }
-
     private async Task<AtomicNotificationMutationResult> MarkConversationReadAsync(
         AtomicNotificationMutationCommand command,
         IAtomicCommandContext attempt,
@@ -612,27 +479,6 @@ public sealed class AtomicNotificationMutationHandler
             tenantViewer ? "Tenant conversation marked read" : "Team conversation marked read", conversation.Id), now);
         StageDataUpdate(attempt, command, nameof(Conversation), conversation.Id, now);
         return new(true, true, conversation.Id, unread);
-    }
-
-    private async Task<AtomicNotificationMutationResult> MarkAllReadAsync(
-        AtomicNotificationMutationCommand command,
-        IAtomicCommandContext attempt,
-        DateTime now,
-        CancellationToken ct)
-    {
-        var isStaff = await IsStaffAsync(command, _db, now, ct);
-        var result = await AtomicNotificationPersistence.MarkAllReadAsync(_db,
-            attempt, command.PortfolioId, command.ActorUserId, isStaff, now, ct);
-        if (result.Count > 0)
-        {
-            var notificationId = result.NotificationId
-                ?? throw new InvalidOperationException(
-                    "Mark-all-read inserted rows without returning a notification id.");
-            attempt.StageSemanticEvent(Audit(command, nameof(NotificationReadState), AuditLogOperation.Created,
-                $"{result.Count} notifications marked read", notificationId), now);
-            StageDataUpdate(attempt, command, nameof(Notification), notificationId, now);
-        }
-        return new(true, result.Count > 0, 0, result.Count);
     }
 
     private async Task<AtomicNotificationMutationResult> BroadcastAsync(
@@ -679,11 +525,7 @@ public sealed class AtomicNotificationMutationHandler
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
         var requiredCapability = command.Domain switch
         {
-            AtomicNotificationMutationDomain.MyAlerts or AtomicNotificationMutationDomain.MarkRead
-                or AtomicNotificationMutationDomain.MarkAllRead
-                or AtomicNotificationMutationDomain.DeviceRegister
-                or AtomicNotificationMutationDomain.DeviceUnregister
-                or AtomicNotificationMutationDomain.LandlordConversationRead
+            AtomicNotificationMutationDomain.LandlordConversationRead
                 or AtomicNotificationMutationDomain.TenantConversationRead => null,
             AtomicNotificationMutationDomain.Broadcast => CapabilityKeys.TeamManage,
             _ => CapabilityKeys.NotificationsManage,
@@ -794,19 +636,6 @@ public sealed class AtomicNotificationMutationHandler
             select user.Id;
     }
 
-    private Task<bool> IsStaffAsync(
-        AtomicNotificationMutationCommand command,
-        RentalCommandDbContext db,
-        DateTime now,
-        CancellationToken ct) =>
-        db.Set<WorkspaceMembership>().AsNoTracking().AnyAsync(membership =>
-            membership.PortfolioId == command.PortfolioId
-            && membership.AccessContextId == command.AccessContextId
-            && membership.Status == WorkspaceMembershipStatus.Active
-            && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
-            && membership.EffectiveFromUtc <= now
-            && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now), ct);
-
     internal static IQueryable<Conversation> LandlordConversationQuery(
         AtomicNotificationMutationCommand command,
         RentalCommandDbContext db,
@@ -877,34 +706,6 @@ public sealed class AtomicNotificationMutationHandler
             settings.EnableRentCharges,
             settings.EnableLateFees,
             settings.LateFeeGraceDays);
-
-    private IQueryable<MyAlertsResponse> MyAlertsQuery(
-        RentalCommandDbContext db,
-        int portfolioId,
-        int userId) =>
-        from context in db.Set<WorkspaceAccessContext>().AsNoTracking()
-        join user in db.Set<ApplicationUser>().AsNoTracking() on context.UserId equals user.Id
-        where context.PortfolioId == portfolioId && context.UserId == userId
-            && context.Status == WorkspaceAccessContextStatus.Active
-            && context.SuspendedAtUtc == null && context.RevokedAtUtc == null
-        join saved in db.Set<UserAlertPreference>().AsNoTracking()
-                .Select(preference => new
-                {
-                    preference.PortfolioId,
-                    preference.UserId,
-                    EnableInApp = (bool?)preference.EnableInApp,
-                    EnableMobilePush = (bool?)preference.EnableMobilePush,
-                    EnableEmail = (bool?)preference.EnableEmail,
-                    EnableSms = (bool?)preference.EnableSms,
-                })
-            on new { context.PortfolioId, context.UserId }
-            equals new { saved.PortfolioId, saved.UserId } into preferences
-        from preference in preferences.DefaultIfEmpty()
-        select new MyAlertsResponse(user.Id, user.DisplayName, user.Email, user.PhoneNumber,
-            preference.EnableInApp ?? true,
-            preference.EnableMobilePush ?? true,
-            preference.EnableEmail ?? true,
-            preference.EnableSms ?? false);
 
     private IQueryable<TeamRoutingRuleResponse> TeamRoutingResponseQuery(
         RentalCommandDbContext db,
@@ -1060,21 +861,6 @@ public sealed class AtomicNotificationMutationHandler
         JsonSerializer.Deserialize<T>(command.RequestJson)
         ?? throw new ArgumentException("The notification update is invalid.");
 
-    private DateTime BusinessNow(AtomicNotificationMutationCommand command, DateTime databaseNow)
-    {
-        if (command.BusinessNowUtc == default)
-        {
-            return databaseNow;
-        }
-
-        if (command.BusinessNowUtc.Kind != DateTimeKind.Utc)
-        {
-            throw new ArgumentException("Notification time must use UTC.");
-        }
-
-        return command.BusinessNowUtc;
-    }
-
     private string? NormalizeJurisdiction(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToUpperInvariant();
 
@@ -1095,8 +881,7 @@ public sealed class AtomicNotificationMutationHandler
             || command.ExpectedAccessRevision <= 0 || string.IsNullOrWhiteSpace(command.RequestJson)
             || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey)
             || command.DeliveryIdempotencyKey.Length > 128
-            || ((command.Domain is AtomicNotificationMutationDomain.MarkRead
-                    or AtomicNotificationMutationDomain.LandlordConversationRead
+            || ((command.Domain is AtomicNotificationMutationDomain.LandlordConversationRead
                     or AtomicNotificationMutationDomain.TenantConversationRead)
                 && command.EntityId <= 0))
             throw new ArgumentException(
@@ -1123,18 +908,6 @@ public static class AtomicNotificationMutation
         new(scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
             scope.AccessRevision, domain, entityId, resourceKey,
             JsonSerializer.Serialize(request), operationKey);
-
-    public static AtomicNotificationMutationCommand Command<TRequest>(
-        WorkspaceReadScope scope,
-        AtomicNotificationMutationDomain domain,
-        int entityId,
-        string resourceKey,
-        string operationKey,
-        TRequest request,
-        DateTime businessNowUtc) =>
-        new(scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
-            scope.AccessRevision, domain, entityId, resourceKey,
-            JsonSerializer.Serialize(request), operationKey, businessNowUtc);
 
     public static AtomicCommandIdentity Identity(AtomicNotificationMutationCommand command) =>
         new($"rental.notification.{command.Domain.ToString().ToLowerInvariant()}",

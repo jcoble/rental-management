@@ -3,6 +3,7 @@ using System.Net.Mail;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -20,35 +21,107 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     private readonly TimeProvider _clock;
     private readonly IAtomicUnitOfWork _atomic;
     private readonly IServiceProvider? _services;
+    private readonly IRequestWriteExecutor? _writes;
 
     public NotificationFoundationService(
         RentalCommandDbContext db,
         TimeProvider clock,
         IAtomicUnitOfWork atomic,
-        IServiceProvider? services = null)
+        IServiceProvider? services = null,
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _clock = clock;
         _atomic = atomic;
         _services = services;
+        _writes = writes;
     }
 
     public async Task<MyAlertsResponse> GetMyAlertsAsync(int portfolioId, int userId, CancellationToken ct) =>
         await MyAlertsQuery(portfolioId, userId).SingleAsync(ct);
 
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<MyAlertsResponse> UpdateMyAlertsAsync(
         WorkspaceReadScope scope,
         UpdateMyAlertsRequest request,
         string operationKey,
         CancellationToken ct)
     {
-        var command = AtomicNotificationMutation.Command(scope,
-            AtomicNotificationMutationDomain.MyAlerts, 0, string.Empty, operationKey, request,
+        var writeRequest = NotificationCrudWriteSupport.Request(
+            scope,
+            NotificationCrudOperation.MyAlerts,
+            0,
+            string.Empty,
+            operationKey,
+            request,
             _clock.GetUtcNow().UtcDateTime);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
+            NotificationCrudWriteSupport.OperationName(writeRequest),
+            WriteIdempotencyPolicy.Required,
+            writeRequest,
+            NotificationCrudWriteSupport.ResultContract,
+            NotificationCrudWriteSupport.LockPlan(writeRequest),
+            UpdateMyAlertsAsync,
+            AuthorizeNotificationCrudReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            NotificationCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return ReadSnapshot<MyAlertsResponse>(outcome.Value);
     }
+
+    private async Task<AtomicNotificationMutationResult> UpdateMyAlertsAsync(
+        NotificationCrudWriteRequest writeRequest,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await NotificationCrudWriteSupport.BeginExecutionAsync(
+            writeRequest, _db, context, ct);
+        var request = JsonSerializer.Deserialize<UpdateMyAlertsRequest>(writeRequest.RequestJson)
+            ?? throw new ArgumentException("The notification update is invalid.");
+        var row = await _db.UserAlertPreferences.SingleOrDefaultAsync(preference =>
+            preference.PortfolioId == writeRequest.PortfolioId
+            && preference.UserId == writeRequest.ActorUserId, ct);
+        var operation = row is null ? AuditLogOperation.Created : AuditLogOperation.Updated;
+        if (row is null)
+        {
+            row = new UserAlertPreference
+            {
+                PortfolioId = writeRequest.PortfolioId,
+                UserId = writeRequest.ActorUserId,
+                CreatedAtUtc = now,
+            };
+            _db.Add(row);
+        }
+
+        row.EnableInApp = request.EnableInApp;
+        row.EnableMobilePush = request.EnableMobilePush;
+        row.EnableEmail = request.EnableEmail;
+        row.EnableSms = request.EnableSms;
+        row.UpdatedAtUtc = now;
+        context.BindSemanticAudit(
+            row,
+            NotificationCrudWriteSupport.Audit(
+                writeRequest,
+                nameof(UserAlertPreference),
+                operation,
+                "Personal notification destinations updated",
+                operation == AuditLogOperation.Created ? 0 : row.Id));
+        await context.FlushBusinessAsync(ct);
+        NotificationCrudWriteSupport.StageDataUpdate(
+            writeRequest, context, nameof(UserAlertPreference), row.Id, now);
+        var response = await MyAlertsQuery(
+            writeRequest.PortfolioId, writeRequest.ActorUserId).SingleAsync(ct);
+        return NotificationCrudWriteSupport.Applied(row.Id, JsonSerializer.Serialize(response));
+    }
+
+    private Task AuthorizeNotificationCrudReplayAsync(
+        NotificationCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        NotificationCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
+
+    private IRequestWriteExecutor RequireWrites() =>
+        _writes ?? throw new InvalidOperationException(
+            "The shared request write executor is required for notification preference mutations.");
 
     public async Task<MorningBriefingSettingsResponse> GetMorningBriefingSettingsAsync(
         int portfolioId, CancellationToken ct) =>

@@ -1,21 +1,29 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <inheritdoc cref="IDeviceService"/>
 public class DeviceService : IDeviceService
 {
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
 
-    public DeviceService(IAtomicUnitOfWork atomic)
+    public DeviceService(RentalCommandDbContext db, IRequestWriteExecutor writes)
     {
-        _atomic = atomic;
+        _db = db;
+        _writes = writes;
     }
 
     /// <inheritdoc/>
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task RegisterAsync(
         WorkspaceReadScope scope,
         string token,
@@ -23,27 +31,136 @@ public class DeviceService : IDeviceService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicNotificationMutation.Command(scope,
-            AtomicNotificationMutationDomain.DeviceRegister, 0, TokenHash(token), operationKey,
-            new AtomicDeviceMutationRequest(token, platform));
-        await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var request = NotificationCrudWriteSupport.Request(
+            scope,
+            NotificationCrudOperation.DeviceRegister,
+            0,
+            TokenHash(token),
+            operationKey,
+            new { Token = token, Platform = platform });
+        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
+            NotificationCrudWriteSupport.OperationName(request),
+            WriteIdempotencyPolicy.Required,
+            request,
+            NotificationCrudWriteSupport.ResultContract,
+            NotificationCrudWriteSupport.LockPlan(request),
+            RegisterDeviceAsync,
+            AuthorizeReplayAsync);
+        await _writes.ExecuteAsync(NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
     }
 
     /// <inheritdoc/>
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<bool> UnregisterAsync(
         WorkspaceReadScope scope,
         string token,
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicNotificationMutation.Command(scope,
-            AtomicNotificationMutationDomain.DeviceUnregister, 0, TokenHash(token), operationKey,
-            new AtomicDeviceMutationRequest(token, null));
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var request = NotificationCrudWriteSupport.Request(
+            scope,
+            NotificationCrudOperation.DeviceUnregister,
+            0,
+            TokenHash(token),
+            operationKey,
+            new { Token = token, Platform = (string?)null });
+        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
+            NotificationCrudWriteSupport.OperationName(request),
+            WriteIdempotencyPolicy.Required,
+            request,
+            NotificationCrudWriteSupport.ResultContract,
+            NotificationCrudWriteSupport.LockPlan(request),
+            UnregisterDeviceAsync,
+            AuthorizeReplayAsync);
+        var outcome = await _writes.ExecuteAsync(
+            NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
         return outcome.Value.Found;
     }
+
+    private async Task<AtomicNotificationMutationResult> RegisterDeviceAsync(
+        NotificationCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await NotificationCrudWriteSupport.BeginExecutionAsync(request, _db, context, ct);
+        using var payload = System.Text.Json.JsonDocument.Parse(request.RequestJson);
+        var token = payload.RootElement.GetProperty("Token").GetString()?.Trim() ?? string.Empty;
+        var platform = payload.RootElement.GetProperty("Platform").GetString()?.Trim().ToLowerInvariant()
+            ?? string.Empty;
+        if (token.Length is 0 or > 500 || platform is not ("ios" or "android" or "web"))
+        {
+            throw new InvalidOperationException("A valid device token and platform are required.");
+        }
+
+        var row = await _db.DeviceTokens.SingleOrDefaultAsync(candidate =>
+            candidate.PortfolioId == request.PortfolioId && candidate.Token == token, ct);
+        var operation = row is null ? AuditLogOperation.Created : AuditLogOperation.Updated;
+        if (row is null)
+        {
+            row = new DeviceToken
+            {
+                PortfolioId = request.PortfolioId,
+                Token = token,
+                CreatedAt = now,
+            };
+            _db.Add(row);
+        }
+
+        row.UserId = request.ActorUserId;
+        row.Platform = platform;
+        row.LastSeenAt = now;
+        context.BindSemanticAudit(
+            row,
+            NotificationCrudWriteSupport.Audit(
+                request,
+                nameof(DeviceToken),
+                operation,
+                "Push notification device registered",
+                operation == AuditLogOperation.Created ? 0 : row.Id));
+        await context.FlushBusinessAsync(ct);
+        return NotificationCrudWriteSupport.Applied(row.Id);
+    }
+
+    private async Task<AtomicNotificationMutationResult> UnregisterDeviceAsync(
+        NotificationCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        _ = await NotificationCrudWriteSupport.BeginExecutionAsync(request, _db, context, ct);
+        using var payload = System.Text.Json.JsonDocument.Parse(request.RequestJson);
+        var token = payload.RootElement.GetProperty("Token").GetString()?.Trim() ?? string.Empty;
+        if (token.Length is 0 or > 500)
+        {
+            throw new InvalidOperationException("A valid device token is required.");
+        }
+
+        var row = await _db.DeviceTokens.SingleOrDefaultAsync(candidate =>
+            candidate.PortfolioId == request.PortfolioId
+            && candidate.UserId == request.ActorUserId
+            && candidate.Token == token, ct);
+        if (row is null)
+        {
+            return NotificationCrudWriteSupport.Missing();
+        }
+
+        _db.Remove(row);
+        context.BindSemanticAudit(
+            row,
+            NotificationCrudWriteSupport.Audit(
+                request,
+                nameof(DeviceToken),
+                AuditLogOperation.Deleted,
+                "Push notification device unregistered",
+                row.Id));
+        await context.FlushBusinessAsync(ct);
+        return new AtomicNotificationMutationResult(true, true, row.Id, 1);
+    }
+
+    private Task AuthorizeReplayAsync(
+        NotificationCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        NotificationCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
 
     private static string TokenHash(string token) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token.Trim())))

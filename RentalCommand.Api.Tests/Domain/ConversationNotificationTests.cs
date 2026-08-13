@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -43,6 +44,8 @@ public class ConversationNotificationTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddScoped<NotificationService>();
         services.AddAtomicCommandHandler<
             SendConversationMessageCommand,
             SendConversationMessageResult,
@@ -764,8 +767,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         _ctx.Db.AuthSessions.AddRange(sessions.Values);
         await _ctx.Db.SaveChangesAsync();
         var notificationId = await _ctx.Db.Notifications.Select(notification => notification.Id).SingleAsync();
-        var sut = new NotificationService(
-            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+        var sut = _services.GetRequiredService<NotificationService>();
 
         var staffContext = contexts[10];
         var staffScope = new WorkspaceReadScope(

@@ -1,4 +1,6 @@
 using System.Data.Common;
+using System.Security.Cryptography;
+using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -187,73 +189,174 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MyAlertsOldShellAndRequestExecutorWriteIdenticalCompanionRows()
+    public async Task MyAlertsRequestExecutorPreservesLegacyFingerprintAndCompanionRows()
     {
         var seededAt = new DateTime(2027, 1, 21, 12, 0, 0, DateTimeKind.Utc);
         var businessNow = new DateTime(2027, 1, 22, 5, 0, 0, DateTimeKind.Utc);
         var sessionId = Guid.Parse("57e8e27d-e54d-47ba-9d20-e8c70e11fd39");
-        await using var oldDatabase = await _fixture.CreateContextAsync();
-        await using var newDatabase = await _fixture.CreateContextAsync();
-        var oldScope = await SeedAdministratorScopeAsync(oldDatabase.Db, seededAt, sessionId);
-        var newScope = await SeedAdministratorScopeAsync(newDatabase.Db, seededAt, sessionId);
-        await SeedAlertPreferenceAsync(oldDatabase.Db, oldScope, seededAt);
-        await SeedAlertPreferenceAsync(newDatabase.Db, newScope, seededAt);
+        await using var database = await _fixture.CreateContextAsync();
+        var scope = await SeedAdministratorScopeAsync(database.Db, seededAt, sessionId);
+        await SeedAlertPreferenceAsync(database.Db, scope, seededAt);
+        var actor = await database.Db.Users.AsNoTracking().SingleAsync(user => user.Id == scope.UserId);
         var request = new UpdateMyAlertsRequest(
             EnableInApp: true,
             EnableMobilePush: false,
             EnableEmail: true,
             EnableSms: true);
         const string operationKey = "phase1-my-alerts-canary";
-
-        var oldCommand = AtomicNotificationMutation.Command(oldScope,
-            AtomicNotificationMutationDomain.MyAlerts, 0, string.Empty, operationKey, request,
-            businessNow);
-        var oldIdentity = AtomicNotificationMutation.Identity(oldCommand);
-        AtomicCommandOutcome<AtomicNotificationMutationResult> oldOutcome;
         await using (var services = BuildAtomicServices(
-            oldDatabase.ConnectionString, new FixedTimeProvider(businessNow), new OutboxFailureInterceptor()))
-        await using (var scope = services.CreateAsyncScope())
+            database.ConnectionString, new FixedTimeProvider(businessNow), new OutboxFailureInterceptor()))
+        await using (var serviceScope = services.CreateAsyncScope())
         {
-            oldOutcome = await scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-                .ExecuteAsync(oldIdentity, oldCommand, AtomicNotificationMutation.Codec);
+            var sut = serviceScope.ServiceProvider.GetRequiredService<NotificationFoundationService>();
+            var response = await sut.UpdateMyAlertsAsync(scope, request, operationKey, default);
+            response.Should().Be(new MyAlertsResponse(
+                scope.UserId,
+                actor.DisplayName,
+                actor.Email!,
+                actor.PhoneNumber,
+                true,
+                false,
+                true,
+                true));
         }
 
-        var newCommand = AtomicNotificationMutation.Command(newScope,
-            AtomicNotificationMutationDomain.MyAlerts, 0, string.Empty, operationKey, request,
-            businessNow);
-        var newIdentity = AtomicNotificationMutation.Identity(newCommand);
-        AtomicCommandOutcome<AtomicNotificationMutationResult> newOutcome;
-        await using (var services = BuildAtomicServices(
-            newDatabase.ConnectionString, new FixedTimeProvider(businessNow), new OutboxFailureInterceptor()))
-        await using (var scope = services.CreateAsyncScope())
+        var identity = new AtomicCommandIdentity(
+            "rental.notification.myalerts",
+            $"{scope.PortfolioId}:{scope.AccessContextId}:MyAlerts:0::{operationKey}");
+        var receipt = await database.Db.AtomicCommandReceipts.AsNoTracking().SingleAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey);
+        var legacyFingerprint = AtomicCommandFingerprint.Create(new LegacyNotificationMutationFingerprint(
+            scope.PortfolioId,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            0,
+            0,
+            string.Empty,
+            System.Text.Json.JsonSerializer.Serialize(request),
+            operationKey,
+            businessNow));
+        receipt.RequestFingerprint.Should().Be(legacyFingerprint);
+        receipt.ResultContract.Should().Be("rental.notification-mutation.v1");
+        var rows = await ReadCanaryRowsAsync(
+            database.Db, identity, operationKey, receipt.AttemptId);
+        rows.AttemptCorrelation.ReceiptMatchesAuditMatchesOutcomeAttempt.Should().BeTrue();
+        rows.Audit.Should().BeEquivalentTo(new
         {
-            var handler = scope.ServiceProvider.GetRequiredService<
-                IAtomicCommandHandler<AtomicNotificationMutationCommand, AtomicNotificationMutationResult>>();
-            var write = new TransactionalWrite<
-                AtomicNotificationMutationCommand,
-                AtomicNotificationMutationResult>(
-                newIdentity.CommandType,
-                WriteIdempotencyPolicy.Required,
-                newCommand,
-                AtomicNotificationMutation.Codec.ContractName,
-                new WriteLockPlan(
-                    WriteLockProtocol.AuthorizationScope,
-                    WriteLock.For("AuthSession", newCommand.AuthSessionId),
-                    WriteLock.For("WorkspaceAccessContext", newCommand.AccessContextId),
-                    WriteLock.For("Portfolio", newCommand.PortfolioId)),
-                handler.HandleAsync,
-                handler.AuthorizeReplayAsync);
-            newOutcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
-                .ExecuteAsync(newIdentity.IdempotencyKey, write);
+            CommandType = "rental.notification.myalerts",
+            CommandIdempotencyKey = identity.IdempotencyKey,
+            MutationOrdinal = 1L,
+            PortfolioId = scope.PortfolioId,
+            UserId = (int?)scope.UserId,
+            EntityType = nameof(UserAlertPreference),
+            Operation = AuditLogOperation.Updated,
+            ChangeReason = "Personal notification destinations updated",
+            Timestamp = businessNow,
+        }, options => options.ExcludingMissingMembers());
+        rows.Outbox.Should().BeEquivalentTo(new
+        {
+            PortfolioId = (int?)scope.PortfolioId,
+            MessageType = "data-update",
+            IdempotencyKey = operationKey + ":data-update",
+            AttemptCount = 0,
+            CreatedAtUtc = businessNow,
+            NextAttemptAtUtc = businessNow,
+        }, options => options.ExcludingMissingMembers());
+        rows.Preference.Should().BeEquivalentTo(new
+        {
+            PortfolioId = scope.PortfolioId,
+            UserId = scope.UserId,
+            EnableInApp = true,
+            EnableMobilePush = false,
+            EnableEmail = true,
+            EnableSms = true,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = businessNow,
+        }, options => options.ExcludingMissingMembers());
+    }
+
+    [Fact]
+    public async Task DeviceRegistration_PreservesLegacyRows_ReplaysExactly_AndRejectsStaleAuthorization()
+    {
+        var seededAt = new DateTime(2027, 1, 23, 10, 0, 0, DateTimeKind.Utc);
+        var scope = await SeedAdministratorScopeAsync(seededAt);
+        const string token = "phase3-device-token";
+        const string operationKey = "phase3-device-register";
+        var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)))
+            .ToLowerInvariant()[..24];
+
+        await using (var services = BuildAtomicServices(
+            new FixedTimeProvider(seededAt), new OutboxFailureInterceptor()))
+        await using (var serviceScope = services.CreateAsyncScope())
+        {
+            var sut = serviceScope.ServiceProvider.GetRequiredService<DeviceService>();
+            await sut.RegisterAsync(scope, token, "android", operationKey);
+            await sut.RegisterAsync(scope, token, "android", operationKey);
         }
 
-        oldOutcome.Value.Should().BeEquivalentTo(newOutcome.Value);
-        oldOutcome.Disposition.Should().Be(newOutcome.Disposition);
-        var oldRows = await ReadCanaryRowsAsync(
-            oldDatabase.Db, oldIdentity, operationKey, oldOutcome.AttemptId);
-        var newRows = await ReadCanaryRowsAsync(
-            newDatabase.Db, newIdentity, operationKey, newOutcome.AttemptId);
-        newRows.Should().BeEquivalentTo(oldRows);
+        _context.Db.ChangeTracker.Clear();
+        var device = await _context.Db.DeviceTokens.AsNoTracking().SingleAsync(row =>
+            row.PortfolioId == scope.PortfolioId && row.Token == token);
+        device.UserId.Should().Be(scope.UserId);
+        device.Platform.Should().Be("android");
+        device.LastSeenAt.Should().Be(device.CreatedAt);
+        var receipt = await _context.Db.AtomicCommandReceipts.AsNoTracking().SingleAsync(row =>
+            row.CommandType == "rental.notification.deviceregister"
+            && row.IdempotencyKey ==
+                $"{scope.PortfolioId}:{scope.AccessContextId}:DeviceRegister:0:{tokenHash}:{operationKey}");
+        receipt.Status.Should().Be(AtomicCommandReceiptStatus.Completed);
+        receipt.RequestFingerprint.Should().Be(AtomicCommandFingerprint.Create(
+            new LegacyNotificationMutationFingerprint(
+                scope.PortfolioId,
+                scope.UserId,
+                scope.SessionId,
+                scope.AccessContextId,
+                scope.AccessRevision,
+                8,
+                0,
+                tokenHash,
+                System.Text.Json.JsonSerializer.Serialize(new { Token = token, Platform = "android" }),
+                operationKey,
+                default)));
+        receipt.ResultContract.Should().Be("rental.notification-mutation.v1");
+        System.Text.Json.JsonSerializer.Deserialize<AtomicNotificationMutationResult>(receipt.ResultJson!)
+            .Should().Be(new AtomicNotificationMutationResult(true, true, device.Id, 1));
+        var audit = await _context.Db.AtomicAuditLogs.AsNoTracking().SingleAsync(row =>
+            row.CommandType == "rental.notification.deviceregister"
+            && row.CommandIdempotencyKey == receipt.IdempotencyKey
+            && row.EntityType == nameof(DeviceToken)
+            && row.EntityId == device.Id
+            && row.Operation == AuditLogOperation.Created
+            && row.ChangeReason == "Push notification device registered"
+            && row.AttemptId == receipt.AttemptId);
+        audit.Timestamp.Should().Be(device.CreatedAt);
+        (await _context.Db.OutboxMessages.AsNoTracking().CountAsync(row =>
+            row.IdempotencyKey == operationKey + ":data-update")).Should().Be(0);
+
+        var session = await _context.Db.AuthSessions.SingleAsync(row => row.Id == scope.SessionId);
+        session.Status = AuthSessionStatus.Revoked;
+        session.RevokedAtUtc = seededAt.AddMinutes(1);
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+
+        await using (var services = BuildAtomicServices(
+            new FixedTimeProvider(seededAt.AddMinutes(2)), new OutboxFailureInterceptor()))
+        await using (var serviceScope = services.CreateAsyncScope())
+        {
+            var sut = serviceScope.ServiceProvider.GetRequiredService<DeviceService>();
+            Func<Task> staleReplay = () => sut.RegisterAsync(
+                scope, token, "android", operationKey);
+            await staleReplay.Should().ThrowAsync<UnauthorizedAccessException>()
+                .WithMessage("Workspace access changed. Refresh and try again.");
+        }
+
+        (await _context.Db.DeviceTokens.AsNoTracking().CountAsync(row =>
+            row.PortfolioId == scope.PortfolioId && row.Token == token)).Should().Be(1);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking().CountAsync(row =>
+            row.CommandType == "rental.notification.deviceregister"
+            && row.CommandIdempotencyKey == receipt.IdempotencyKey)).Should().Be(1);
     }
 
     [Fact]
@@ -419,12 +522,9 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(outboxFailure);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            AtomicNotificationMutationCommand,
-            AtomicNotificationMutationResult,
-            AtomicNotificationMutationHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<NotificationFoundationService>();
+        services.AddScoped<DeviceService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -564,6 +664,24 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
         bool EnableSms,
         DateTime CreatedAtUtc,
         DateTime UpdatedAtUtc);
+
+    private sealed record LegacyNotificationMutationFingerprint(
+        int PortfolioId,
+        int ActorUserId,
+        [property: AtomicFingerprintIgnore]
+        Guid AuthSessionId,
+        [property: AtomicFingerprintIgnore]
+        int AccessContextId,
+        [property: AtomicFingerprintIgnore]
+        long ExpectedAccessRevision,
+        int Domain,
+        int EntityId,
+        string ResourceKey,
+        string RequestJson,
+        [property: AtomicFingerprintIgnore]
+        string DeliveryIdempotencyKey,
+        [property: AtomicFingerprintIgnore]
+        DateTime BusinessNowUtc) : IAtomicCommandData;
 
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
     {

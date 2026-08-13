@@ -2,9 +2,11 @@ using System.Text.Json;
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Notifications;
@@ -17,13 +19,18 @@ public class NotificationService : INotificationService
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor? _writes;
 
     public NotificationService(
-        RentalCommandDbContext db, TimeProvider timeProvider, IAtomicUnitOfWork atomic)
+        RentalCommandDbContext db,
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _timeProvider = timeProvider;
         _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<NotificationResponse>> ListAsync(
@@ -111,31 +118,158 @@ public class NotificationService : INotificationService
         return await query.CountAsync(ct);
     }
 
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<bool> MarkAsReadAsync(
         WorkspaceReadScope scope,
         int notificationId,
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicNotificationMutation.Command(scope,
-            AtomicNotificationMutationDomain.MarkRead, notificationId, string.Empty,
-            operationKey, new { });
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var request = NotificationCrudWriteSupport.Request(
+            scope,
+            NotificationCrudOperation.MarkRead,
+            notificationId,
+            string.Empty,
+            operationKey,
+            new { });
+        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
+            NotificationCrudWriteSupport.OperationName(request),
+            WriteIdempotencyPolicy.Required,
+            request,
+            NotificationCrudWriteSupport.ResultContract,
+            NotificationCrudWriteSupport.LockPlan(request),
+            MarkAsReadAsync,
+            AuthorizeNotificationCrudReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
         return outcome.Value.Found;
     }
 
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task MarkAllAsReadAsync(
         WorkspaceReadScope scope,
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicNotificationMutation.Command(scope,
-            AtomicNotificationMutationDomain.MarkAllRead, 0, string.Empty,
-            operationKey, new { });
-        await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var request = NotificationCrudWriteSupport.Request(
+            scope,
+            NotificationCrudOperation.MarkAllRead,
+            0,
+            string.Empty,
+            operationKey,
+            new { });
+        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
+            NotificationCrudWriteSupport.OperationName(request),
+            WriteIdempotencyPolicy.Required,
+            request,
+            NotificationCrudWriteSupport.ResultContract,
+            NotificationCrudWriteSupport.LockPlan(request),
+            MarkAllAsReadAsync,
+            AuthorizeNotificationCrudReplayAsync);
+        await RequireWrites().ExecuteAsync(
+            NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
     }
+
+    private async Task<AtomicNotificationMutationResult> MarkAsReadAsync(
+        NotificationCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await NotificationCrudWriteSupport.BeginExecutionAsync(request, _db, context, ct);
+        var isStaff = await IsStaffAsync(request, now, ct);
+        var notification = await _db.Notifications.SingleOrDefaultAsync(candidate =>
+            candidate.Id == request.EntityId
+            && candidate.PortfolioId == request.PortfolioId
+            && (candidate.UserId == null || candidate.UserId == request.ActorUserId)
+            && (isStaff || candidate.Type != "TenantMessage"), ct);
+        if (notification is null)
+        {
+            return NotificationCrudWriteSupport.Missing();
+        }
+
+        if (await AtomicNotificationPersistence.MarkReadAsync(
+                _db,
+                context,
+                request.PortfolioId,
+                notification.Id,
+                request.ActorUserId,
+                isStaff,
+                now,
+                ct))
+        {
+            context.StageSemanticEvent(
+                NotificationCrudWriteSupport.Audit(
+                    request,
+                    nameof(NotificationReadState),
+                    AuditLogOperation.Created,
+                    "Notification marked read",
+                    notification.Id),
+                now);
+            NotificationCrudWriteSupport.StageDataUpdate(
+                request, context, nameof(Notification), notification.Id, now);
+            return new AtomicNotificationMutationResult(true, true, notification.Id, 1);
+        }
+
+        return new AtomicNotificationMutationResult(true, false, notification.Id, 0);
+    }
+
+    private async Task<AtomicNotificationMutationResult> MarkAllAsReadAsync(
+        NotificationCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await NotificationCrudWriteSupport.BeginExecutionAsync(request, _db, context, ct);
+        var isStaff = await IsStaffAsync(request, now, ct);
+        var result = await AtomicNotificationPersistence.MarkAllReadAsync(
+            _db,
+            context,
+            request.PortfolioId,
+            request.ActorUserId,
+            isStaff,
+            now,
+            ct);
+        if (result.Count > 0)
+        {
+            var notificationId = result.NotificationId
+                ?? throw new InvalidOperationException(
+                    "Mark-all-read inserted rows without returning a notification id.");
+            context.StageSemanticEvent(
+                NotificationCrudWriteSupport.Audit(
+                    request,
+                    nameof(NotificationReadState),
+                    AuditLogOperation.Created,
+                    $"{result.Count} notifications marked read",
+                    notificationId),
+                now);
+            NotificationCrudWriteSupport.StageDataUpdate(
+                request, context, nameof(Notification), notificationId, now);
+        }
+
+        return new AtomicNotificationMutationResult(true, result.Count > 0, 0, result.Count);
+    }
+
+    private Task<bool> IsStaffAsync(
+        NotificationCrudWriteRequest request,
+        DateTime now,
+        CancellationToken ct) =>
+        _db.WorkspaceMemberships.AsNoTracking().AnyAsync(membership =>
+            membership.PortfolioId == request.PortfolioId
+            && membership.AccessContextId == request.AccessContextId
+            && membership.Status == WorkspaceMembershipStatus.Active
+            && membership.SuspendedAtUtc == null
+            && membership.RevokedAtUtc == null
+            && membership.EffectiveFromUtc <= now
+            && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now), ct);
+
+    private Task AuthorizeNotificationCrudReplayAsync(
+        NotificationCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        NotificationCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
+
+    private IRequestWriteExecutor RequireWrites() =>
+        _writes ?? throw new InvalidOperationException(
+            "The shared request write executor is required for notification read-state mutations.");
 
     public async Task<NotificationResponse> CreateBroadcastAsync(
         WorkspaceReadScope scope,
