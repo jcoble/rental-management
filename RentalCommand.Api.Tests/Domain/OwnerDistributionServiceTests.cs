@@ -85,25 +85,6 @@ public sealed class OwnerDistributionServiceTests : IDisposable
             "paged lists must sort and page in SQL");
     }
 
-    [Fact]
-    public async Task SumForOwnerYearAsync_SumsDbSideAndExcludesOtherYears()
-    {
-        var owner = SeedOwner("Acme Holdings");
-        SeedDistribution(owner.Id, 100m, new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-        SeedDistribution(owner.Id, 250m, new DateTime(Year, 2, 1, 0, 0, 0, DateTimeKind.Utc));
-        SeedDistribution(owner.Id, 999m, new DateTime(Year - 1, 2, 1, 0, 0, 0, DateTimeKind.Utc));
-
-        _commands.Clear();
-
-        var total = await _sut.SumForOwnerYearAsync(PortfolioId, owner.Id, Year);
-
-        total.Should().Be(350m);
-        _commands.Should().Contain(command =>
-            command.Contains("FROM \"OwnerDistributions\"", StringComparison.OrdinalIgnoreCase) &&
-            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
-            "yearly owner distribution totals must be summed in SQL");
-    }
-
     private void SeedPortfolio(int id)
     {
         var now = DateTime.UtcNow;

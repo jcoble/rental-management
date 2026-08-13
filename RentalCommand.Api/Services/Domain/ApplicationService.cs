@@ -480,37 +480,6 @@ public sealed class ApplicationService : IApplicationService
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// A landlord can still decide without screening. Once a completed screening exists, however,
-    /// its explicit landlord decision must be recorded first and must agree with the application
-    /// outcome. The latest row is selected and sorted entirely in PostgreSQL.
-    /// </summary>
-    private async Task RequireCompatibleScreeningDecisionAsync(
-        int portfolioId,
-        int applicationId,
-        ScreeningDecision allowed,
-        ScreeningDecision? alsoAllowed,
-        CancellationToken ct)
-    {
-        var latest = await _db.ApplicantScreenings
-            .AsNoTracking()
-            .Where(screening => screening.PortfolioId == portfolioId
-                && screening.ApplicationId == applicationId
-                && screening.Status == ApplicantScreeningStatus.Completed)
-            .OrderByDescending(screening => screening.CompletedAtUtc)
-            .Select(screening => new { screening.Decision })
-            .FirstOrDefaultAsync(ct);
-
-        if (latest == null)
-            return;
-        if (latest.Decision == null)
-            throw new InvalidOperationException(
-                "Record the screening decision before approving or declining this application.");
-        if (latest.Decision != allowed && latest.Decision != alsoAllowed)
-            throw new InvalidOperationException(
-                "Update the recorded screening decision so it matches this application outcome.");
-    }
-
-    /// <summary>
     /// Resolves a portfolio from a public link token. Tokens are matched exactly; an empty/whitespace
     /// token never matches. Soft-deleted portfolios are excluded by the global query filter.
     /// </summary>
