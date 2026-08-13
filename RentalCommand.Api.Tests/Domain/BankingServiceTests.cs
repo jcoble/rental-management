@@ -1081,15 +1081,33 @@ public class BankingServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ConfirmMatch_WithSuggestedLoanPayment_LinksPaidInstallmentAndReplaysExactly()
+    public async Task ConfirmMatch_WithCorrectedSuggestedLoanPayment_LinksEffectiveInstallmentAndReplaysExactly()
     {
         var date = new DateTime(2026, 06, 20, 0, 0, 0, DateTimeKind.Utc);
-        var payment = SeedLoanPayment(date, 1054m);
+        const decimal effectiveAmount = 1054m;
+        var payment = SeedLoanPayment(date, 1072m);
+        payment.Status = LoanPaymentStatus.Scheduled;
+        payment.PaidDate = null;
+        _ctx.Db.LoanPaymentCorrections.Add(new LoanPaymentCorrection
+        {
+            PortfolioId = payment.PortfolioId,
+            LoanPaymentId = payment.Id,
+            AttemptId = Guid.NewGuid(),
+            DueDate = date,
+            PaidDate = date,
+            InterestAmount = 600m,
+            PrincipalAmount = effectiveAmount - 600m,
+            TotalAmount = effectiveAmount,
+            BalanceAfter = payment.BalanceAfter + (payment.TotalAmount - effectiveAmount),
+            Status = LoanPaymentStatus.Paid,
+            CreatedAtUtc = date,
+        });
+        _ctx.Db.SaveChanges();
         var imported = await _sut.ImportAsync(1, BankImport(
             "loan-payment-match",
             date,
             payment.Loan!.Lender,
-            -payment.TotalAmount));
+            -effectiveAmount));
         var transactionId = imported.Transactions.Single().Id;
         AssignRoute(_ctx, transactionId, payment.Loan.PropertyId);
 

@@ -349,6 +349,123 @@ internal static class TenantChargeBalanceViewSql
         """;
 }
 
+/// <summary>
+/// Shared DB-side tenant balance authority for report snapshots. Current reports select the
+/// canonical views; explicit historical reports use the same as-of rendering so report SQL never
+/// owns a second copy of reversal, allocation, or open-charge rules.
+/// </summary>
+public static class TenantBalanceReportSql
+{
+    public const string CurrentAuthority = """
+        as_of_charge_balances AS MATERIALIZED (
+          SELECT balance."PortfolioId",
+                 balance."TenantAccountId",
+                 balance."TenantLedgerEntryId",
+                 balance."EffectiveOn",
+                 balance."OpenAmount"
+          FROM "vw_tenant_charge_balances" AS balance
+          WHERE balance."PortfolioId" = @portfolioId
+        ),
+        account_balances AS MATERIALIZED (
+          SELECT balance."PortfolioId",
+                 balance."TenantAccountId",
+                 balance."ReceivableBalance" AS "CurrentBalance"
+          FROM "vw_tenant_account_balances" AS balance
+          WHERE balance."PortfolioId" = @portfolioId
+        ),
+        """;
+
+    public const string AsOfAuthority = """
+        as_of_entry_reversals AS MATERIALIZED (
+          SELECT reversal."PortfolioId",
+                 reversal."TenantAccountId",
+                 reversal."ReversesEntryId" AS "TenantLedgerEntryId",
+                 sum(reversal."Amount") AS "ReversedAmount"
+          FROM "TenantLedgerEntries" AS reversal
+          WHERE reversal."PortfolioId" = @portfolioId
+            AND reversal."EntryType" = 'Reversal'
+            AND reversal."EffectiveOn" <= @asOfDate
+          GROUP BY reversal."PortfolioId", reversal."TenantAccountId", reversal."ReversesEntryId"
+        ),
+        as_of_effective_entries AS MATERIALIZED (
+          SELECT entry."PortfolioId",
+                 entry."TenantAccountId",
+                 entry."Id" AS "TenantLedgerEntryId",
+                 entry."EntryType",
+                 entry."Direction",
+                 entry."EffectiveOn",
+                 entry."DueOn",
+                 GREATEST(
+                   entry."Amount" - COALESCE(reversal."ReversedAmount", 0::numeric),
+                   0::numeric
+                 ) AS "NetAmount"
+          FROM "TenantLedgerEntries" AS entry
+          LEFT JOIN as_of_entry_reversals AS reversal
+            ON reversal."PortfolioId" = entry."PortfolioId"
+           AND reversal."TenantAccountId" = entry."TenantAccountId"
+           AND reversal."TenantLedgerEntryId" = entry."Id"
+          WHERE entry."PortfolioId" = @portfolioId
+            AND entry."EntryType" <> 'Reversal'
+            AND entry."EffectiveOn" <= @asOfDate
+        ),
+        as_of_debit_allocations AS MATERIALIZED (
+          SELECT allocation."PortfolioId",
+                 allocation."TenantAccountId",
+                 allocation."DebitEntryId" AS "TenantLedgerEntryId",
+                 sum(allocation."Amount") AS "NetAllocations"
+          FROM "TenantLedgerAllocations" AS allocation
+          JOIN "TenantLedgerEntries" AS credit
+            ON credit."PortfolioId" = allocation."PortfolioId"
+           AND credit."TenantAccountId" = allocation."TenantAccountId"
+           AND credit."Id" = allocation."CreditEntryId"
+          WHERE allocation."PortfolioId" = @portfolioId
+            AND credit."Direction" = 'Credit'
+            AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= @asOfDate
+          GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
+        ),
+        as_of_charge_balances AS MATERIALIZED (
+          SELECT entry."PortfolioId",
+                 entry."TenantAccountId",
+                 entry."TenantLedgerEntryId",
+                 entry."EffectiveOn",
+                 GREATEST(
+                   entry."NetAmount" - COALESCE(allocation."NetAllocations", 0::numeric),
+                   0::numeric
+                 ) AS "OpenAmount"
+          FROM as_of_effective_entries AS entry
+          LEFT JOIN as_of_debit_allocations AS allocation
+            ON allocation."PortfolioId" = entry."PortfolioId"
+           AND allocation."TenantAccountId" = entry."TenantAccountId"
+           AND allocation."TenantLedgerEntryId" = entry."TenantLedgerEntryId"
+          WHERE entry."Direction" = 'Debit'
+            AND entry."EntryType" NOT IN ('Refund', 'TransferOut')
+        ),
+        as_of_account_entry_totals AS MATERIALIZED (
+          SELECT entry."PortfolioId",
+                 entry."TenantAccountId",
+                 COALESCE(sum(entry."NetAmount") FILTER (
+                   WHERE entry."Direction" = 'Debit'
+                 ), 0::numeric) AS "TotalDebits",
+                 COALESCE(sum(entry."NetAmount") FILTER (
+                   WHERE entry."Direction" = 'Credit'
+                 ), 0::numeric) AS "TotalCredits"
+          FROM as_of_effective_entries AS entry
+          GROUP BY entry."PortfolioId", entry."TenantAccountId"
+        ),
+        account_balances AS MATERIALIZED (
+          SELECT account."PortfolioId",
+                 account."Id" AS "TenantAccountId",
+                 COALESCE(totals."TotalDebits", 0::numeric)
+                   - COALESCE(totals."TotalCredits", 0::numeric) AS "CurrentBalance"
+          FROM "TenantAccounts" AS account
+          LEFT JOIN as_of_account_entry_totals AS totals
+            ON totals."PortfolioId" = account."PortfolioId"
+           AND totals."TenantAccountId" = account."Id"
+          WHERE account."PortfolioId" = @portfolioId
+        ),
+        """;
+}
+
 internal static class TenantAccountBalanceViewSql
 {
     public const string Drop = "DROP VIEW IF EXISTS \"vw_tenant_account_balances\";";

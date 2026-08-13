@@ -6,6 +6,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -697,33 +698,40 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         var now = DateTime.UtcNow;
         var authorizedProperties = _db.Properties.AsNoTracking()
             .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, now);
+        var targetability = TargetedCreditEligibilityQuery.Build(
+            _db.TenantLedgerEntries.AsNoTracking(),
+            _db.TenantLedgerEntries.AsNoTracking(),
+            _db.TenantLedgerAllocations.AsNoTracking(),
+            _db.TenantAccountBalanceProjections.AsNoTracking());
         var eligibleEntries =
             from account in _db.TenantAccounts.AsNoTracking()
             join management in _db.LeaseManagements.AsNoTracking()
                 on new { account.PortfolioId, LeaseManagementId = account.LeaseManagementId }
                 equals new { management.PortfolioId, LeaseManagementId = management.Id }
-            join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
-                on new { account.PortfolioId, TenantAccountId = account.Id }
-                equals new { balance.PortfolioId, balance.TenantAccountId }
             join entry in _db.TenantLedgerEntries.AsNoTracking()
                 on new { account.PortfolioId, TenantAccountId = account.Id }
                 equals new { entry.PortfolioId, entry.TenantAccountId }
+            join eligibility in targetability
+                on new
+                {
+                    entry.PortfolioId,
+                    entry.TenantAccountId,
+                    TenantLedgerEntryId = entry.Id,
+                }
+                equals new
+                {
+                    eligibility.PortfolioId,
+                    eligibility.TenantAccountId,
+                    eligibility.TenantLedgerEntryId,
+                }
             where account.PortfolioId == scope.PortfolioId
                 && account.Id == tenantAccountId
                 && authorizedProperties.Any(property => property.Id == management.PropertyId)
                 && entry.Direction == TenantLedgerDirection.Debit
                 && TargetedCreditEntryTypes.Contains(entry.EntryType)
                 && entry.EntryType != TenantLedgerEntryType.DepositCharge
-                && entry.Amount - (_db.TenantLedgerEntries
-                    .Where(correction => correction.PortfolioId == entry.PortfolioId
-                        && correction.TenantAccountId == entry.TenantAccountId
-                        && correction.EffectiveOn <= balance.BusinessDate
-                        && ((correction.EntryType == TenantLedgerEntryType.Reversal
-                                && correction.ReversesEntryId == entry.Id)
-                            || (correction.EntryType == TenantLedgerEntryType.Credit
-                                && correction.RelatedTenantLedgerEntryId == entry.Id)))
-                    .Sum(correction => (decimal?)correction.Amount) ?? 0m) > 0m
-            select new { Entry = entry, balance.BusinessDate };
+                && eligibility.RemainingTargetableAmount > 0m
+            select new { Entry = entry, eligibility.RemainingTargetableAmount };
 
         var totalCount = await eligibleEntries.CountAsync(ct);
         var skip = query.NormalizedSkip;
@@ -742,15 +750,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 PublicId = row.Entry.PublicId,
                 Description = row.Entry.Description,
                 ChargeAmount = row.Entry.Amount,
-                RemainingTargetableAmount = row.Entry.Amount - (_db.TenantLedgerEntries
-                    .Where(correction => correction.PortfolioId == row.Entry.PortfolioId
-                        && correction.TenantAccountId == row.Entry.TenantAccountId
-                        && correction.EffectiveOn <= row.BusinessDate
-                        && ((correction.EntryType == TenantLedgerEntryType.Reversal
-                                && correction.ReversesEntryId == row.Entry.Id)
-                            || (correction.EntryType == TenantLedgerEntryType.Credit
-                                && correction.RelatedTenantLedgerEntryId == row.Entry.Id)))
-                    .Sum(correction => (decimal?)correction.Amount) ?? 0m),
+                RemainingTargetableAmount = row.RemainingTargetableAmount,
                 EffectiveOn = row.Entry.EffectiveOn,
                 Currency = row.Entry.Currency,
             })
@@ -793,6 +793,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     && balance.TenantLedgerEntryId == entry.Id
                     && balance.OpenAmount > 0m));
 
+        var targetability = TargetedCreditEligibilityQuery.Build(
+            _db.TenantLedgerEntries.AsNoTracking(),
+            _db.TenantLedgerEntries.AsNoTracking(),
+            _db.TenantLedgerAllocations.AsNoTracking(),
+            _db.TenantAccountBalanceProjections.AsNoTracking());
         var totalCount = await entries.CountAsync(ct);
         var skip = query.NormalizedSkip;
         var take = query.NormalizedTake;
@@ -924,18 +929,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     CanGiveCredit = entry.Direction == TenantLedgerDirection.Debit
                         && TargetedCreditEntryTypes.Contains(entry.EntryType)
                         && entry.EntryType != TenantLedgerEntryType.DepositCharge
-                        && entry.Amount - (_db.TenantLedgerEntries
-                            .Where(correction => correction.PortfolioId == entry.PortfolioId
-                                && correction.TenantAccountId == entry.TenantAccountId
-                                && _db.TenantAccountBalanceProjections.Any(balance =>
-                                    balance.PortfolioId == correction.PortfolioId
-                                    && balance.TenantAccountId == correction.TenantAccountId
-                                    && correction.EffectiveOn <= balance.BusinessDate)
-                                && ((correction.EntryType == TenantLedgerEntryType.Reversal
-                                        && correction.ReversesEntryId == entry.Id)
-                                    || (correction.EntryType == TenantLedgerEntryType.Credit
-                                        && correction.RelatedTenantLedgerEntryId == entry.Id)))
-                            .Sum(correction => (decimal?)correction.Amount) ?? 0m) > 0m
+                        && targetability.Any(target =>
+                            target.PortfolioId == entry.PortfolioId
+                            && target.TenantAccountId == entry.TenantAccountId
+                            && target.TenantLedgerEntryId == entry.Id
+                            && target.RemainingTargetableAmount > 0m)
                         && entry.ReversesEntryId == null
                         && _db.JournalEntries.Any(journal => journal.PortfolioId == entry.PortfolioId
                             && journal.SourceId == entry.Id

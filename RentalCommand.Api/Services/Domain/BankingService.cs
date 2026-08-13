@@ -16,6 +16,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Banking;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -757,57 +758,20 @@ public class BankingService : IBankingService
 
     private IQueryable<BankTransaction> SuggestibleUnmatchedTransactionsQuery(int portfolioId)
     {
-        return BaseTransactions(portfolioId)
-            .Where(t => t.MatchStatus == "Unmatched")
-            .Where(t =>
-                // Deposits suggest against canonical posted tenant receipt entries.
-                (_db.TenantLedgerEntries.Any(entry =>
-                    entry.PortfolioId == portfolioId &&
-                    ((entry.EntryType == TenantLedgerEntryType.PaymentReceipt
-                        && entry.Direction == TenantLedgerDirection.Credit
-                        && t.Amount > 0m)
-                     || (entry.EntryType == TenantLedgerEntryType.TransferIn
-                         || entry.EntryType == TenantLedgerEntryType.TransferOut)
-                        && ((entry.Direction == TenantLedgerDirection.Credit && t.Amount > 0m)
-                            || (entry.Direction == TenantLedgerDirection.Debit && t.Amount < 0m))) &&
-                    entry.Amount >= (t.Amount < 0m ? -t.Amount : t.Amount) - 0.01m &&
-                    entry.Amount <= (t.Amount < 0m ? -t.Amount : t.Amount) + 0.01m &&
-                    entry.EffectiveOn >= DateOnly.FromDateTime(t.PostedAt.AddDays(-7)) &&
-                    entry.EffectiveOn <= DateOnly.FromDateTime(t.PostedAt.AddDays(7))))
-                ||
-                // Withdrawals (spend) suggest against expenses; expense amounts are stored positive while
-                // the bank withdrawal is negative, so compare against the absolute amount.
-                (t.Amount < 0 && _db.Expenses.Any(e =>
-                    e.PortfolioId == portfolioId &&
-                    e.Amount >= -t.Amount - 0.01m && e.Amount <= -t.Amount + 0.01m &&
-                    (e.PaidAt ?? e.IncurredAt) >= t.PostedAt.AddDays(-7) &&
-                    (e.PaidAt ?? e.IncurredAt) <= t.PostedAt.AddDays(7)))
-                ||
-                (t.Amount < 0 && LoanPaymentEffectiveQuery.From(_db).Any(payment =>
-                    payment.PortfolioId == portfolioId &&
-                    payment.Status == LoanPaymentStatus.Paid &&
-                    payment.TotalAmount >= -t.Amount - 0.01m &&
-                    payment.TotalAmount <= -t.Amount + 0.01m &&
-                    (payment.PaidDate ?? payment.DueDate) >= t.PostedAt.AddDays(-7) &&
-                    (payment.PaidDate ?? payment.DueDate) <= t.PostedAt.AddDays(7)))
-                ||
-                (t.Amount < 0 && _db.OwnerDistributions.Any(distribution =>
-                    distribution.PortfolioId == portfolioId &&
-                    distribution.Status == OwnerDistributionStatus.Approved &&
-                    distribution.Amount >= -t.Amount - 0.01m &&
-                    distribution.Amount <= -t.Amount + 0.01m &&
-                    distribution.Date >= t.PostedAt.AddDays(-7) &&
-                    distribution.Date <= t.PostedAt.AddDays(7)))
-                ||
-                _db.BankTransactions.Any(other =>
-                    other.PortfolioId == portfolioId &&
-                    other.Id != t.Id &&
-                    other.BankConnectionId != t.BankConnectionId &&
-                    other.MatchStatus == "Unmatched" &&
-                    other.Amount >= -t.Amount - 0.01m &&
-                    other.Amount <= -t.Amount + 0.01m &&
-                    other.PostedAt >= t.PostedAt.AddDays(-3) &&
-                    other.PostedAt <= t.PostedAt.AddDays(3)));
+        var transactions = BaseTransactions(portfolioId)
+            .Where(transaction => transaction.MatchStatus == "Unmatched");
+        return SuggestibleFromCanonicalCandidates(
+            transactions,
+            BankReconciliationCandidateQuery.EligibleTenantLedgerEntries(
+                transactions, _db.TenantLedgerEntries.AsNoTracking(), requirePropertyMatch: false),
+            BankReconciliationCandidateQuery.EligibleExpenses(
+                transactions, _db.Expenses.AsNoTracking(), requirePropertyMatch: false, requireMatchableState: false),
+            BankReconciliationCandidateQuery.EligibleLoanPayments(
+                transactions, LoanPaymentEffectiveQuery.From(_db), requirePropertyMatch: false),
+            BankReconciliationCandidateQuery.EligibleOwnerDistributions(
+                transactions, _db.OwnerDistributions.AsNoTracking(), requirePropertyMatch: false),
+            BankReconciliationCandidateQuery.EligibleTransfers(
+                transactions, _db.BankTransactions.AsNoTracking()));
     }
 
     /// <summary>
@@ -832,71 +796,51 @@ public class BankingService : IBankingService
             CapabilityAuthorizationTargetKind.Property,
             now);
 
-        return _db.BankTransactions.AsNoTracking()
+        var transactions = _db.BankTransactions.AsNoTracking()
             .Where(transaction =>
                 transaction.PortfolioId == scope.PortfolioId &&
                 transaction.MatchStatus == "Unmatched" &&
                 ((transaction.PropertyId != null &&
                   authorizedProperties.Any(property => property.Id == transaction.PropertyId))
-                 || (transaction.PropertyId == null && allProperties.Any())))
-            .Where(transaction =>
-                (_db.TenantLedgerEntries.AsNoTracking().Any(entry =>
-                    entry.PortfolioId == scope.PortfolioId &&
-                    ((entry.EntryType == TenantLedgerEntryType.PaymentReceipt
-                        && entry.Direction == TenantLedgerDirection.Credit
-                        && transaction.Amount > 0m)
-                     || (entry.EntryType == TenantLedgerEntryType.TransferIn
-                         || entry.EntryType == TenantLedgerEntryType.TransferOut)
-                        && ((entry.Direction == TenantLedgerDirection.Credit && transaction.Amount > 0m)
-                            || (entry.Direction == TenantLedgerDirection.Debit && transaction.Amount < 0m))) &&
-                    entry.Amount >= (transaction.Amount < 0m ? -transaction.Amount : transaction.Amount) - 0.01m &&
-                    entry.Amount <= (transaction.Amount < 0m ? -transaction.Amount : transaction.Amount) + 0.01m &&
-                    entry.EffectiveOn >= DateOnly.FromDateTime(transaction.PostedAt.AddDays(-7)) &&
-                    entry.EffectiveOn <= DateOnly.FromDateTime(transaction.PostedAt.AddDays(7)) &&
-                    entry.TenantAccount!.LeaseManagement!.PropertyId == transaction.PropertyId)) ||
-                (transaction.Amount < 0 && authorizedExpenses.Any(expense =>
-                    expense.DeletedAt == null &&
-                    (expense.Status == ExpenseStatus.Pending ||
-                     expense.Status == ExpenseStatus.Approved ||
-                     expense.Status == ExpenseStatus.Paid) &&
-                    expense.Amount >= -transaction.Amount - 0.01m &&
-                    expense.Amount <= -transaction.Amount + 0.01m &&
-                    (expense.PaidAt ?? expense.IncurredAt) >= transaction.PostedAt.AddDays(-7) &&
-                    (expense.PaidAt ?? expense.IncurredAt) <= transaction.PostedAt.AddDays(7) &&
-                    (expense.PropertyId == transaction.PropertyId
-                        || (expense.PropertyId == null && expense.Unit!.PropertyId == transaction.PropertyId)
-                        || (expense.PropertyId == null && expense.UnitId == null
-                            && expense.WorkOrder!.PropertyId == transaction.PropertyId)
-                        || (transaction.PropertyId == null && expense.PropertyId == null
-                            && expense.UnitId == null && expense.WorkOrderId == null)))
-                ||
-                (transaction.Amount < 0 && authorizedLoans.Any(loan =>
-                    loan.Payments.Any(payment =>
-                        payment.Status == LoanPaymentStatus.Paid &&
-                        payment.TotalAmount >= -transaction.Amount - 0.01m &&
-                        payment.TotalAmount <= -transaction.Amount + 0.01m &&
-                        (payment.PaidDate ?? payment.DueDate) >= transaction.PostedAt.AddDays(-7) &&
-                        (payment.PaidDate ?? payment.DueDate) <= transaction.PostedAt.AddDays(7)) &&
-                    loan.PropertyId == transaction.PropertyId))
-                ||
-                (transaction.Amount < 0 && authorizedDistributions.Any(distribution =>
-                    distribution.Status == OwnerDistributionStatus.Approved &&
-                    distribution.Amount >= -transaction.Amount - 0.01m &&
-                    distribution.Amount <= -transaction.Amount + 0.01m &&
-                    distribution.Date >= transaction.PostedAt.AddDays(-7) &&
-                    distribution.Date <= transaction.PostedAt.AddDays(7) &&
-                    (distribution.PropertyId == transaction.PropertyId
-                     || (distribution.PropertyId == null && transaction.PropertyId == null))))
-                ||
-                (allProperties.Any() && _db.BankTransactions.AsNoTracking().Any(other =>
-                    other.PortfolioId == scope.PortfolioId &&
-                    other.Id != transaction.Id &&
-                    other.BankConnectionId != transaction.BankConnectionId &&
-                    other.MatchStatus == "Unmatched" &&
-                    other.Amount >= -transaction.Amount - 0.01m &&
-                    other.Amount <= -transaction.Amount + 0.01m &&
-                    other.PostedAt >= transaction.PostedAt.AddDays(-3) &&
-                    other.PostedAt <= transaction.PostedAt.AddDays(3)))));
+                 || (transaction.PropertyId == null && allProperties.Any())));
+        var receiptEntries = _db.TenantLedgerEntries.AsNoTracking().Where(entry =>
+            authorizedProperties.Any(property =>
+                property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId));
+        var effectiveLoanPayments = LoanPaymentEffectiveQuery.From(_db).Where(payment =>
+            authorizedLoans.Any(loan => loan.Id == payment.LoanId));
+        return SuggestibleFromCanonicalCandidates(
+            transactions,
+            BankReconciliationCandidateQuery.EligibleTenantLedgerEntries(transactions, receiptEntries),
+            BankReconciliationCandidateQuery.EligibleExpenses(transactions, authorizedExpenses),
+            BankReconciliationCandidateQuery.EligibleLoanPayments(transactions, effectiveLoanPayments),
+            BankReconciliationCandidateQuery.EligibleOwnerDistributions(transactions, authorizedDistributions),
+            BankReconciliationCandidateQuery.EligibleTransfers(
+                    transactions, _db.BankTransactions.AsNoTracking())
+                .Where(_ => allProperties.Any()));
+    }
+
+    private IQueryable<BankTransaction> SuggestibleFromCanonicalCandidates(
+        IQueryable<BankTransaction> transactions,
+        IQueryable<BankReconciliationCandidate<TenantLedgerEntry>> receipts,
+        IQueryable<BankReconciliationCandidate<Expense>> expenseCandidates,
+        IQueryable<BankReconciliationCandidate<LoanPaymentEffectiveRow>> loanCandidates,
+        IQueryable<BankReconciliationCandidate<OwnerDistribution>> distributionCandidates,
+        IQueryable<BankReconciliationCandidate<BankTransaction>> transferCandidates)
+    {
+        receipts = receipts.Where(candidate => candidate.Target.EffectiveOn >= DateOnly.FromDateTime(candidate.Transaction.PostedAt.AddDays(-7))
+                && candidate.Target.EffectiveOn <= DateOnly.FromDateTime(candidate.Transaction.PostedAt.AddDays(7)));
+        expenseCandidates = expenseCandidates.Where(candidate => (candidate.Target.PaidAt ?? candidate.Target.IncurredAt) >= candidate.Transaction.PostedAt.AddDays(-7)
+                && (candidate.Target.PaidAt ?? candidate.Target.IncurredAt) <= candidate.Transaction.PostedAt.AddDays(7));
+        loanCandidates = loanCandidates.Where(candidate => (candidate.Target.PaidDate ?? candidate.Target.DueDate) >= candidate.Transaction.PostedAt.AddDays(-7)
+                && (candidate.Target.PaidDate ?? candidate.Target.DueDate) <= candidate.Transaction.PostedAt.AddDays(7));
+        distributionCandidates = distributionCandidates.Where(candidate => candidate.Target.Date >= candidate.Transaction.PostedAt.AddDays(-7)
+                && candidate.Target.Date <= candidate.Transaction.PostedAt.AddDays(7));
+        return transactions.Where(transaction =>
+            receipts.Any(candidate => candidate.Transaction.Id == transaction.Id)
+            || expenseCandidates.Any(candidate => candidate.Transaction.Id == transaction.Id)
+            || loanCandidates.Any(candidate => candidate.Transaction.Id == transaction.Id)
+            || distributionCandidates.Any(candidate => candidate.Transaction.Id == transaction.Id)
+            || transferCandidates.Any(candidate => candidate.Transaction.Id == transaction.Id));
     }
 
     private Task<PlaidRuntimeSettings> GetRuntimeSettingsAsync(int portfolioId, CancellationToken ct)
@@ -1247,9 +1191,17 @@ public class BankingService : IBankingService
                 _db, scopedAccess, CapabilityKeys.MoneyReconciliationOperate, now);
         }
 
+        var candidateTransactions = _db.BankTransactions.AsNoTracking()
+            .Where(transaction =>
+                transaction.PortfolioId == portfolioId
+                && transaction.MatchStatus == "Unmatched"
+                && (transactionIds == null || transactionIds.Contains(transaction.Id)));
+
         var tenantLedgerCandidates =
-            from t in _db.BankTransactions.AsNoTracking()
-            from entry in receiptEntries
+            from candidate in BankReconciliationCandidateQuery.EligibleTenantLedgerEntries(
+                candidateTransactions, receiptEntries)
+            let t = candidate.Transaction
+            let entry = candidate.Target
             join account in _db.TenantAccounts.AsNoTracking()
                 on new { entry.TenantAccountId, entry.PortfolioId }
                 equals new { TenantAccountId = account.Id, account.PortfolioId }
@@ -1268,23 +1220,7 @@ public class BankingService : IBankingService
                 entry.EffectiveOn >= DateOnly.FromDateTime(t.PostedAt.AddDays(-14)) && entry.EffectiveOn <= DateOnly.FromDateTime(t.PostedAt.AddDays(14)) && hasNameMatch ? 0.42m :
                 0m
             where
-                (transactionIds == null || transactionIds.Contains(t.Id)) &&
-                t.PortfolioId == portfolioId &&
                 t.PropertyId != null &&
-                t.MatchStatus == "Unmatched" &&
-                entry.PortfolioId == portfolioId &&
-                ((entry.EntryType == TenantLedgerEntryType.PaymentReceipt
-                        && entry.Direction == TenantLedgerDirection.Credit
-                        && t.Amount > 0m)
-                    || (entry.EntryType == TenantLedgerEntryType.TransferIn
-                        && ((entry.Direction == TenantLedgerDirection.Credit && t.Amount > 0m)
-                            || (entry.Direction == TenantLedgerDirection.Debit && t.Amount < 0m)))
-                    || (entry.EntryType == TenantLedgerEntryType.TransferOut
-                        && ((entry.Direction == TenantLedgerDirection.Credit && t.Amount > 0m)
-                            || (entry.Direction == TenantLedgerDirection.Debit && t.Amount < 0m)))) &&
-                entry.Amount >= (t.Amount < 0m ? -t.Amount : t.Amount) - 0.01m &&
-                entry.Amount <= (t.Amount < 0m ? -t.Amount : t.Amount) + 0.01m &&
-                account.LeaseManagement!.PropertyId == t.PropertyId &&
                 dateScore > 0m
             select new BankSuggestionRankRow
             {
@@ -1302,8 +1238,10 @@ public class BankingService : IBankingService
             };
 
         var expenseCandidates =
-            from t in _db.BankTransactions.AsNoTracking()
-            from e in expenses
+            from candidate in BankReconciliationCandidateQuery.EligibleExpenses(
+                candidateTransactions, expenses)
+            let t = candidate.Transaction
+            let e = candidate.Target
             let anchor = e.PaidAt ?? e.IncurredAt
             let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
             let vendorName = e.Vendor != null ? e.Vendor.Name.ToLower() : ""
@@ -1319,22 +1257,6 @@ public class BankingService : IBankingService
                 anchor >= t.PostedAt.AddDays(-14) && anchor <= t.PostedAt.AddDays(14) && hasNameMatch ? 0.42m :
                 0m
             where
-                (transactionIds == null || transactionIds.Contains(t.Id)) &&
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus == "Unmatched" &&
-                t.Amount < 0m &&
-                e.PortfolioId == portfolioId &&
-                e.DeletedAt == null &&
-                (e.Status == ExpenseStatus.Pending ||
-                 e.Status == ExpenseStatus.Approved ||
-                 e.Status == ExpenseStatus.Paid) &&
-                e.Amount >= -t.Amount - 0.01m &&
-                e.Amount <= -t.Amount + 0.01m &&
-                (e.PropertyId == t.PropertyId
-                    || (e.PropertyId == null && e.Unit!.PropertyId == t.PropertyId)
-                    || (e.PropertyId == null && e.UnitId == null && e.WorkOrder!.PropertyId == t.PropertyId)
-                    || (t.PropertyId == null && e.PropertyId == null
-                        && e.UnitId == null && e.WorkOrderId == null)) &&
                 dateScore > 0m
             select new BankSuggestionRankRow
             {
@@ -1348,8 +1270,10 @@ public class BankingService : IBankingService
             };
 
         var loanPaymentCandidates =
-            from t in _db.BankTransactions.AsNoTracking()
-            from payment in loanPayments
+            from candidate in BankReconciliationCandidateQuery.EligibleLoanPayments(
+                candidateTransactions, loanPayments)
+            let t = candidate.Transaction
+            let payment = candidate.Target
             join loan in _db.Loans.AsNoTracking()
                 on new { payment.LoanId, payment.PortfolioId }
                 equals new { LoanId = loan.Id, loan.PortfolioId }
@@ -1367,15 +1291,7 @@ public class BankingService : IBankingService
                 anchor >= t.PostedAt.AddDays(-14) && anchor <= t.PostedAt.AddDays(14) && hasNameMatch ? 0.46m :
                 0m
             where
-                (transactionIds == null || transactionIds.Contains(t.Id)) &&
-                t.PortfolioId == portfolioId &&
                 t.PropertyId != null &&
-                t.MatchStatus == "Unmatched" &&
-                t.Amount < 0m &&
-                payment.Status == LoanPaymentStatus.Paid &&
-                payment.TotalAmount >= -t.Amount - 0.01m &&
-                payment.TotalAmount <= -t.Amount + 0.01m &&
-                loan.PropertyId == t.PropertyId &&
                 dateScore > 0m
             select new BankSuggestionRankRow
             {
@@ -1389,8 +1305,10 @@ public class BankingService : IBankingService
             };
 
         var ownerDistributionCandidates =
-            from t in _db.BankTransactions.AsNoTracking()
-            from distribution in ownerDistributions
+            from candidate in BankReconciliationCandidateQuery.EligibleOwnerDistributions(
+                candidateTransactions, ownerDistributions)
+            let t = candidate.Transaction
+            let distribution = candidate.Target
             let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
             let ownerName = distribution.OwnerEntity!.Name.ToLower()
             let hasNameMatch =
@@ -1405,15 +1323,6 @@ public class BankingService : IBankingService
                 distribution.Date >= t.PostedAt.AddDays(-14) && distribution.Date <= t.PostedAt.AddDays(14) && hasNameMatch ? 0.46m :
                 0m
             where
-                (transactionIds == null || transactionIds.Contains(t.Id)) &&
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus == "Unmatched" &&
-                t.Amount < 0m &&
-                distribution.Status == OwnerDistributionStatus.Approved &&
-                distribution.Amount >= -t.Amount - 0.01m &&
-                distribution.Amount <= -t.Amount + 0.01m &&
-                (distribution.PropertyId == t.PropertyId ||
-                 (distribution.PropertyId == null && t.PropertyId == null)) &&
                 dateScore > 0m
             select new BankSuggestionRankRow
             {
@@ -1427,23 +1336,16 @@ public class BankingService : IBankingService
             };
 
         var bankTransferCandidates =
-            from t in _db.BankTransactions.AsNoTracking()
-            from other in _db.BankTransactions.AsNoTracking()
+            from candidate in BankReconciliationCandidateQuery.EligibleTransfers(
+                candidateTransactions, _db.BankTransactions.AsNoTracking())
+            let t = candidate.Transaction
+            let other = candidate.Target
             let dateScore =
                 other.PostedAt >= t.PostedAt.AddDays(-1) && other.PostedAt <= t.PostedAt.AddDays(1) ? 0.82m :
                 other.PostedAt >= t.PostedAt.AddDays(-2) && other.PostedAt <= t.PostedAt.AddDays(2) ? 0.72m :
                 other.PostedAt >= t.PostedAt.AddDays(-3) && other.PostedAt <= t.PostedAt.AddDays(3) ? 0.62m :
                 0m
             where
-                (transactionIds == null || transactionIds.Contains(t.Id)) &&
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus == "Unmatched" &&
-                other.PortfolioId == portfolioId &&
-                other.Id != t.Id &&
-                other.BankConnectionId != t.BankConnectionId &&
-                other.MatchStatus == "Unmatched" &&
-                other.Amount >= -t.Amount - 0.01m &&
-                other.Amount <= -t.Amount + 0.01m &&
                 dateScore > 0m
             select new BankSuggestionRankRow
             {

@@ -17,6 +17,8 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IReportsService"/>
 public class ReportsService : IReportsService
 {
+    private const string TenantBalanceAuthorityMarker = "/* tenant_balance_authority */";
+
     /// <summary>IRS 1099-NEC reporting threshold per payee per year.</summary>
     private const decimal Vendor1099Threshold = 600m;
 
@@ -25,6 +27,14 @@ public class ReportsService : IReportsService
     private readonly RentalCommandDbContext _db;
     private readonly IScheduleEService _scheduleE;
     private readonly TimeProvider _timeProvider;
+
+    private static string WithTenantBalanceAuthority(string reportSql, bool useHistoricalBalances) =>
+        reportSql.Replace(
+            TenantBalanceAuthorityMarker,
+            useHistoricalBalances
+                ? TenantBalanceReportSql.AsOfAuthority
+                : TenantBalanceReportSql.CurrentAuthority,
+            StringComparison.Ordinal);
 
     public ReportsService(
         RentalCommandDbContext db,
@@ -276,6 +286,7 @@ public class ReportsService : IReportsService
 
     public async Task<RentRollResponse> GetRentRollAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
+        var useHistoricalBalances = query.AsOf.HasValue;
         var asOf = query.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
         var asOfUtc = asOf.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddTicks(-1);
         var propertyIds = (query.PropertyIds ?? [])
@@ -297,7 +308,7 @@ public class ReportsService : IReportsService
         };
 
         var rows = await _db.Database
-            .SqlQueryRaw<RentRollDatabaseRow>(RentRollSql, parameters)
+            .SqlQueryRaw<RentRollDatabaseRow>(WithTenantBalanceAuthority(RentRollSql, useHistoricalBalances), parameters)
             .ToListAsync(ct);
         if (rows.Count != 1)
             throw new InvalidOperationException($"The rent-roll query returned {rows.Count} summary rows instead of one.");
@@ -338,6 +349,7 @@ public class ReportsService : IReportsService
         ReportRangeQuery query,
         CancellationToken ct = default)
     {
+        var useHistoricalBalances = query.AsOf.HasValue;
         var asOf = query.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
         var propertyIds = (query.PropertyIds ?? [])
             .Concat(query.PropertyId is { } propertyId ? [propertyId] : [])
@@ -359,7 +371,7 @@ public class ReportsService : IReportsService
         };
 
         var rows = await _db.Database
-            .SqlQueryRaw<AgedReceivablesDatabaseRow>(AgedReceivablesSql, parameters)
+            .SqlQueryRaw<AgedReceivablesDatabaseRow>(WithTenantBalanceAuthority(AgedReceivablesSql, useHistoricalBalances), parameters)
             .ToListAsync(ct);
         if (rows.Count != 1)
             throw new InvalidOperationException($"The aged-receivables query returned {rows.Count} summary rows instead of one.");
@@ -498,66 +510,7 @@ public class ReportsService : IReportsService
               AND (party."EffectiveThrough" IS NULL OR party."EffectiveThrough" >= @asOfDate)
             GROUP BY party."PortfolioId", party."LeaseManagementId"
         ),
-        as_of_reversals AS MATERIALIZED (
-            SELECT reversal."PortfolioId",
-                   reversal."TenantAccountId",
-                   reversal."ReversesEntryId" AS "TenantLedgerEntryId",
-                   sum(reversal."Amount") AS "ReversedAmount"
-            FROM "TenantLedgerEntries" AS reversal
-            WHERE reversal."PortfolioId" = @portfolioId
-              AND reversal."EntryType" = 'Reversal'
-              AND reversal."Direction" = 'Credit'
-              AND reversal."EffectiveOn" <= @asOfDate
-            GROUP BY reversal."PortfolioId", reversal."TenantAccountId", reversal."ReversesEntryId"
-        ),
-        as_of_allocations AS MATERIALIZED (
-            SELECT allocation."PortfolioId",
-                   allocation."TenantAccountId",
-                   allocation."DebitEntryId" AS "TenantLedgerEntryId",
-                   sum(allocation."Amount") AS "NetAllocations"
-            FROM "TenantLedgerAllocations" AS allocation
-            JOIN "TenantLedgerEntries" AS credit
-              ON credit."PortfolioId" = allocation."PortfolioId"
-             AND credit."TenantAccountId" = allocation."TenantAccountId"
-             AND credit."Id" = allocation."CreditEntryId"
-            WHERE allocation."PortfolioId" = @portfolioId
-              AND credit."Direction" = 'Credit'
-              AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= @asOfDate
-            GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
-        ),
-        as_of_charge_balances AS MATERIALIZED (
-            SELECT entry."PortfolioId",
-                   entry."TenantAccountId",
-                   entry."Id" AS "TenantLedgerEntryId",
-                   entry."EffectiveOn",
-                   GREATEST(
-                       0::numeric,
-                       entry."Amount"
-                         - COALESCE(reversal."ReversedAmount", 0::numeric)
-                         - COALESCE(allocation."NetAllocations", 0::numeric)
-                   ) AS "OpenAmount"
-            FROM "TenantLedgerEntries" AS entry
-            LEFT JOIN as_of_reversals AS reversal
-              ON reversal."PortfolioId" = entry."PortfolioId"
-             AND reversal."TenantAccountId" = entry."TenantAccountId"
-             AND reversal."TenantLedgerEntryId" = entry."Id"
-            LEFT JOIN as_of_allocations AS allocation
-              ON allocation."PortfolioId" = entry."PortfolioId"
-             AND allocation."TenantAccountId" = entry."TenantAccountId"
-             AND allocation."TenantLedgerEntryId" = entry."Id"
-            WHERE entry."PortfolioId" = @portfolioId
-              AND entry."Direction" = 'Debit'
-              AND entry."EffectiveOn" <= @asOfDate
-              AND entry."EntryType" NOT IN ('Refund', 'Reversal', 'TransferOut')
-        ),
-        account_balances AS MATERIALIZED (
-            SELECT balance."PortfolioId",
-                   balance."TenantAccountId",
-                   COALESCE(sum(balance."OpenAmount"), 0::numeric) AS "CurrentBalance"
-            FROM as_of_charge_balances AS balance
-            WHERE balance."OpenAmount" > 0::numeric
-            GROUP BY balance."PortfolioId", balance."TenantAccountId"
-        ),
+        /* tenant_balance_authority */
         deposit_reversals AS MATERIALIZED (
             SELECT reversal."PortfolioId",
                    reversal."SecurityDepositAccountId",
@@ -783,58 +736,7 @@ public class ReportsService : IReportsService
               AND (party."EffectiveThrough" IS NULL OR party."EffectiveThrough" >= @asOfDate)
             GROUP BY party."PortfolioId", party."LeaseManagementId"
         ),
-        as_of_reversals AS MATERIALIZED (
-            SELECT reversal."PortfolioId",
-                   reversal."TenantAccountId",
-                   reversal."ReversesEntryId" AS "TenantLedgerEntryId",
-                   sum(reversal."Amount") AS "ReversedAmount"
-            FROM "TenantLedgerEntries" AS reversal
-            WHERE reversal."PortfolioId" = @portfolioId
-              AND reversal."EntryType" = 'Reversal'
-              AND reversal."Direction" = 'Credit'
-              AND reversal."EffectiveOn" <= @asOfDate
-            GROUP BY reversal."PortfolioId", reversal."TenantAccountId", reversal."ReversesEntryId"
-        ),
-        as_of_allocations AS MATERIALIZED (
-            SELECT allocation."PortfolioId",
-                   allocation."TenantAccountId",
-                   allocation."DebitEntryId" AS "TenantLedgerEntryId",
-                   sum(allocation."Amount") AS "NetAllocations"
-            FROM "TenantLedgerAllocations" AS allocation
-            JOIN "TenantLedgerEntries" AS credit
-              ON credit."PortfolioId" = allocation."PortfolioId"
-             AND credit."TenantAccountId" = allocation."TenantAccountId"
-             AND credit."Id" = allocation."CreditEntryId"
-            WHERE allocation."PortfolioId" = @portfolioId
-              AND credit."Direction" = 'Credit'
-              AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= @asOfDate
-            GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
-        ),
-        as_of_charge_balances AS MATERIALIZED (
-            SELECT entry."PortfolioId",
-                   entry."TenantAccountId",
-                   entry."Id" AS "TenantLedgerEntryId",
-                   entry."EffectiveOn",
-                   GREATEST(
-                       0::numeric,
-                       entry."Amount"
-                         - COALESCE(reversal."ReversedAmount", 0::numeric)
-                         - COALESCE(allocation."NetAllocations", 0::numeric)
-                   ) AS "OpenAmount"
-            FROM "TenantLedgerEntries" AS entry
-            LEFT JOIN as_of_reversals AS reversal
-              ON reversal."PortfolioId" = entry."PortfolioId"
-             AND reversal."TenantAccountId" = entry."TenantAccountId"
-             AND reversal."TenantLedgerEntryId" = entry."Id"
-            LEFT JOIN as_of_allocations AS allocation
-              ON allocation."PortfolioId" = entry."PortfolioId"
-             AND allocation."TenantAccountId" = entry."TenantAccountId"
-             AND allocation."TenantLedgerEntryId" = entry."Id"
-            WHERE entry."PortfolioId" = @portfolioId
-              AND entry."Direction" = 'Debit'
-              AND entry."EffectiveOn" <= @asOfDate
-              AND entry."EntryType" NOT IN ('Refund', 'Reversal', 'TransferOut')
-        ),
+        /* tenant_balance_authority */
         charge_rows AS MATERIALIZED (
             SELECT balance."TenantAccountId",
                    balance."TenantLedgerEntryId",
