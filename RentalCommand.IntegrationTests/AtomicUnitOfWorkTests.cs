@@ -52,6 +52,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         services.AddSingleton<HandlerProbe>();
         services.AddSingleton<NestedProbe>();
         services.AddSingleton<AtomicFlushFailureInterceptor>();
+        services.AddSingleton<SaveBoundaryFailureInterceptor>();
         services.AddSingleton<TransactionEvidenceInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
@@ -60,6 +61,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         services.AddAtomicCommandHandler<CreatedSemanticCommand, ExpenseResult, CreatedSemanticHandler>();
         services.AddAtomicCommandHandler<ExactAuditCommand, ExpenseResult, ExactAuditHandler>();
         services.AddAtomicCommandHandler<SemanticEventCommand, EventResult, SemanticEventHandler>();
+        services.AddAtomicCommandHandler<AtomicityCommand, ExpenseResult, AtomicityHandler>();
         services.AddAtomicCommandHandler<NestedOuterCommand, ExpenseResult, NestedOuterHandler>();
         services.AddAtomicCommandHandler<NestedInnerCommand, ExpenseResult, NestedInnerHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
@@ -67,6 +69,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
                 .UseAtomicPersistenceKernel(provider)
                 .AddInterceptors(
                     provider.GetRequiredService<AtomicFlushFailureInterceptor>(),
+                    provider.GetRequiredService<SaveBoundaryFailureInterceptor>(),
                     provider.GetRequiredService<TransactionEvidenceInterceptor>()));
         _services = services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
@@ -227,6 +230,59 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         evidence.Rollbacks.Should().Be(1);
     }
 
+    [SkippableTheory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task FailureAtEachSaveBoundary_RollsBackBusinessReceiptAuditAndOutbox(int saveBoundary)
+    {
+        SkipIfDockerUnavailable();
+        var failure = Services.GetRequiredService<SaveBoundaryFailureInterceptor>();
+        var evidence = Services.GetRequiredService<TransactionEvidenceInterceptor>();
+        evidence.Reset();
+        failure.Arm(saveBoundary);
+        var marker = $"atomic-boundary-{saveBoundary}-{Guid.NewGuid():N}";
+        var identity = Identity($"{nameof(FailureAtEachSaveBoundary_RollsBackBusinessReceiptAuditAndOutbox)}-{saveBoundary}");
+
+        Func<Task> act = async () => await ExecuteAsync(
+            identity,
+            new AtomicityCommand(_portfolioId, marker),
+            ExpenseCodec);
+
+        await act.Should().ThrowAsync<InjectedFailureException>();
+        await AssertNothingCommitted(identity, marker);
+        evidence.Starts.Should().Be(1);
+        evidence.Commits.Should().Be(0);
+        evidence.Rollbacks.Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Command_CommitsBusinessReceiptAuditAndOutboxTogether()
+    {
+        SkipIfDockerUnavailable();
+        var evidence = Services.GetRequiredService<TransactionEvidenceInterceptor>();
+        evidence.Reset();
+        var marker = $"atomic-four-part-{Guid.NewGuid():N}";
+        var identity = Identity(nameof(Command_CommitsBusinessReceiptAuditAndOutboxTogether));
+
+        var outcome = await ExecuteAsync(
+            identity,
+            new AtomicityCommand(_portfolioId, marker),
+            ExpenseCodec);
+
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        (await verify.Db.Expenses.AsNoTracking().CountAsync(row => row.Id == outcome.Value.Id)).Should().Be(1);
+        (await verify.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+        (await verify.Db.AtomicAuditLogs.AsNoTracking().CountAsync(row =>
+            row.CommandType == identity.CommandType && row.CommandIdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(1);
+        (await verify.Db.OutboxMessages.AsNoTracking().CountAsync(row => row.IdempotencyKey == marker)).Should().Be(1);
+        evidence.Starts.Should().Be(1);
+        evidence.Commits.Should().Be(1);
+        evidence.Rollbacks.Should().Be(0);
+    }
+
     [SkippableFact]
     public async Task ConcurrentSameKey_ExecutesOneProducer_AndReplaysTheOther()
     {
@@ -355,6 +411,30 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task SetBasedDmlWithoutPermit_IsRejectedBeforeDatabaseMutation()
+    {
+        SkipIfDockerUnavailable();
+        var identity = Identity(nameof(SetBasedDmlWithoutPermit_IsRejectedBeforeDatabaseMutation));
+        var created = await ExecuteAsync(
+            identity,
+            new CreateExpenseCommand(_portfolioId, "atomic-set-based"),
+            ExpenseCodec);
+        await using var mutationScope = await VerificationScope.CreateAsync(Services);
+
+        Func<Task> act = () => mutationScope.Db.Expenses
+            .Where(expense => expense.Id == created.Value.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(expense => expense.Amount, 999m));
+
+        await act.Should().ThrowAsync<AtomicArchitectureException>()
+            .WithMessage("The opt-in atomic persistence scope is not active for this operation.");
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        (await verify.Db.Expenses.AsNoTracking()
+            .Where(expense => expense.Id == created.Value.Id)
+            .Select(expense => expense.Amount)
+            .SingleAsync()).Should().Be(100m);
+    }
+
+    [SkippableFact]
     public async Task NestedCommand_IsRejectedInsteadOfCreatingASecondPath()
     {
         SkipIfDockerUnavailable();
@@ -374,6 +454,70 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             && row.IdempotencyKey == outerIdentity.IdempotencyKey)).Should().Be(0);
         (await verify.Db.Expenses.AsNoTracking()
             .CountAsync(row => row.Description == "atomic-nested")).Should().Be(0);
+    }
+
+    [SkippableTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirtyOrTransactionOwnedContext_IsRejectedBeforeAtomicWork(bool beginTransaction)
+    {
+        SkipIfDockerUnavailable();
+        await using var scope = Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        await using var transaction = beginTransaction
+            ? await db.Database.BeginTransactionAsync()
+            : null;
+        if (!beginTransaction)
+        {
+            db.Expenses.Add(NewExpense(_portfolioId, "preexisting-dirty-row"));
+        }
+        var marker = beginTransaction ? "preexisting-transaction" : "preexisting-dirty";
+        var identity = Identity($"{nameof(DirtyOrTransactionOwnedContext_IsRejectedBeforeAtomicWork)}-{beginTransaction}");
+
+        Func<Task> act = async () => await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, new CreateExpenseCommand(_portfolioId, marker), ExpenseCodec);
+
+        await act.Should().ThrowAsync<AtomicArchitectureException>()
+            .WithMessage(beginTransaction
+                ? "*already has a transaction*"
+                : "*pending changes before the atomic workflow begins*");
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        (await verify.Db.Expenses.AsNoTracking().CountAsync(row => row.Description == marker)).Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReplayWithMissingOrMismatchedStoredResult_FailsClosed(bool removeResult)
+    {
+        SkipIfDockerUnavailable();
+        var marker = $"atomic-corrupt-result-{removeResult}-{Guid.NewGuid():N}";
+        var identity = Identity($"{nameof(ReplayWithMissingOrMismatchedStoredResult_FailsClosed)}-{removeResult}");
+        var command = new CreateExpenseCommand(_portfolioId, marker);
+        await ExecuteAsync(identity, command, ExpenseCodec);
+        await using (var corrupt = await VerificationScope.CreateAsync(Services))
+        {
+            var receipt = await corrupt.Db.AtomicCommandReceipts.SingleAsync(row =>
+                row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey);
+            if (removeResult)
+            {
+                receipt.ResultJson = null;
+            }
+            else
+            {
+                receipt.ResultContract = "different-result-contract.v1";
+            }
+            await corrupt.Db.SaveChangesAsync();
+        }
+
+        Func<Task> act = async () => await ExecuteAsync(identity, command, ExpenseCodec);
+
+        await act.Should().ThrowAsync<AtomicReceiptInvariantException>();
+        Probe.Entries.Count(entry => entry.Marker == marker).Should().Be(1,
+            "a corrupt stored result must fail closed instead of executing the handler again");
     }
 
     [SkippableFact]
@@ -411,6 +555,8 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             .Should().Be(0);
         (await verify.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
             row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+        (await verify.Db.OutboxMessages.AsNoTracking().CountAsync(row => row.IdempotencyKey == marker))
             .Should().Be(0);
     }
 
@@ -480,6 +626,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
     private sealed record CreatedSemanticCommand(int PortfolioId, string Marker) : IAtomicCommandData;
     private sealed record ExactAuditCommand(int PortfolioId, string Marker) : IAtomicCommandData;
     private sealed record SemanticEventCommand(int PortfolioId, string Name) : IAtomicCommandData;
+    private sealed record AtomicityCommand(int PortfolioId, string Marker) : IAtomicCommandData;
     private sealed record NestedOuterCommand(
         int PortfolioId,
         string Marker,
@@ -657,6 +804,36 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CancellationToken ct) => Task.CompletedTask;
     }
 
+    private sealed class AtomicityHandler : IAtomicCommandHandler<AtomicityCommand, ExpenseResult>
+    {
+        private readonly RentalCommandDbContext _db;
+
+        public AtomicityHandler(RentalCommandDbContext db) => _db = db;
+
+        public async Task<ExpenseResult> HandleAsync(
+            AtomicityCommand command,
+            IAtomicCommandContext context,
+            CancellationToken ct)
+        {
+            var expense = NewExpense(command.PortfolioId, command.Marker);
+            _db.Expenses.Add(expense);
+            context.StageOutbox(new OutboxMessage
+            {
+                PortfolioId = command.PortfolioId,
+                MessageType = "atomic-kernel-canary",
+                Payload = "{}",
+                IdempotencyKey = command.Marker,
+            });
+            await context.FlushBusinessAsync(ct);
+            return new ExpenseResult(expense.Id);
+        }
+
+        public Task AuthorizeReplayAsync(
+            AtomicityCommand command,
+            IAtomicCommandContext context,
+            CancellationToken ct) => Task.CompletedTask;
+    }
+
     private sealed class NestedOuterHandler : IAtomicCommandHandler<NestedOuterCommand, ExpenseResult>
     {
         private readonly IAtomicUnitOfWork _unitOfWork;
@@ -768,6 +945,33 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
                 && Interlocked.Exchange(ref _armed, 0) == 1)
             {
                 throw new InjectedFailureException("during atomic audit companion flush");
+            }
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class SaveBoundaryFailureInterceptor : SaveChangesInterceptor
+    {
+        private int _armedBoundary;
+        private int _saveAttempt;
+
+        public void Arm(int saveBoundary)
+        {
+            Interlocked.Exchange(ref _saveAttempt, 0);
+            Interlocked.Exchange(ref _armedBoundary, saveBoundary);
+        }
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            var attempt = Interlocked.Increment(ref _saveAttempt);
+            if (attempt == Volatile.Read(ref _armedBoundary)
+                && Interlocked.Exchange(ref _armedBoundary, 0) != 0)
+            {
+                throw new InjectedFailureException($"at atomic save boundary {attempt}");
             }
 
             return ValueTask.FromResult(result);
