@@ -227,14 +227,4 @@ public class VendorService : IVendorService
              authorizedProperties.Any()));
     }
 
-    private Task<bool> HasAllPropertiesAsync(
-        WorkspaceReadScope scope,
-        string capabilityKey,
-        CancellationToken ct) =>
-        _db.AuthorizedAssignmentsForScope(
-                scope,
-                [capabilityKey],
-                CapabilityAuthorizationTargetKind.Property,
-                _timeProvider.UtcNow())
-            .AnyAsync(ct);
 }

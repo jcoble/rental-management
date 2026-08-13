@@ -3,6 +3,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Scanning;
 
@@ -37,13 +38,11 @@ public static class AtomicScanAuthorizationQueries
         DateTime utcNow,
         CancellationToken ct = default)
     {
-        var assignments = db.MembershipRoleAssignments.AsNoTracking()
-            .Where(assignment =>
-                assignment.Status == MembershipRoleAssignmentStatus.Active
-                && assignment.SuspendedAtUtc == null
-                && assignment.RevokedAtUtc == null
-                && assignment.EffectiveFromUtc <= utcNow
-                && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow));
+        var assignments = db.AuthorizedAssignmentsForScope(
+            scope,
+            [CapabilityKeys.MoneyPaymentsManage],
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
         return (
             from draft in db.ScanDrafts.AsNoTracking()
             join account in db.TenantAccounts.AsNoTracking()
@@ -59,39 +58,12 @@ public static class AtomicScanAuthorizationQueries
                 && account.ClosedAtUtc == null
                 && (draft.CaptureLeaseManagementId == null
                     || account.LeaseManagementId == draft.CaptureLeaseManagementId)
-                && db.AuthSessions.AsNoTracking().Any(session =>
-                    session.Id == scope.SessionId
-                    && session.UserId == scope.UserId
-                    && session.ActiveAccessContextId == scope.AccessContextId
-                    && session.Status == AuthSessionStatus.Active
-                    && session.RevokedAtUtc == null
-                    && session.ExpiresAtUtc > utcNow)
-                && db.WorkspaceAccessContexts.AsNoTracking().Any(context =>
-                    context.Id == scope.AccessContextId
-                    && context.UserId == scope.UserId
-                    && context.PortfolioId == scope.PortfolioId
-                    && context.AccessRevision == scope.AccessRevision
-                    && context.Status == WorkspaceAccessContextStatus.Active
-                    && context.SuspendedAtUtc == null
-                    && context.RevokedAtUtc == null)
-                && db.WorkspaceMemberships.AsNoTracking().Any(membership =>
-                    membership.AccessContextId == scope.AccessContextId
-                    && membership.PortfolioId == scope.PortfolioId
-                    && membership.Status == WorkspaceMembershipStatus.Active
-                    && membership.SuspendedAtUtc == null
-                    && membership.RevokedAtUtc == null
-                    && membership.EffectiveFromUtc <= utcNow
-                    && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > utcNow)
-                    && assignments.Any(assignment =>
-                        assignment.WorkspaceMembershipId == membership.Id
-                        && assignment.PortfolioId == scope.PortfolioId
-                        && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                            || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                            && assignment.SelectedProperties.Any(selected =>
-                                selected.PortfolioId == scope.PortfolioId
-                                && selected.PropertyId == management.PropertyId))
-                        && assignment.RoleProfile!.Capabilities.Any(capability =>
-                            capability.CapabilityDefinition!.Key == CapabilityKeys.MoneyPaymentsManage)))
+                && assignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                    || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                    && assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == scope.PortfolioId
+                        && selected.PropertyId == management.PropertyId))
             select account.Id)
             .AnyAsync(ct);
     }
