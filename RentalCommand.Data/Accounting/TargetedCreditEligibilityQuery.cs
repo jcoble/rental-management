@@ -15,14 +15,17 @@ public sealed class TargetedCreditEligibilityRow
 
 /// <summary>
 /// Shared DB-translatable authority for the amount of a debit entry that remains available to a
-/// targeted credit at the portfolio business date. Callers compose authorization and action-specific
-/// eligibility around this projection without materializing ledger rows.
+/// targeted credit. Effective charge reversals follow the portfolio business date, while allocation
+/// capacity follows the append-only invariant and is consumed as soon as an allocation is written.
+/// Callers compose authorization and action-specific eligibility around this projection without
+/// materializing ledger rows.
 /// </summary>
 public static class TargetedCreditEligibilityQuery
 {
     public static IQueryable<TargetedCreditEligibilityRow> Build(
         IQueryable<TenantLedgerEntry> targetEntries,
         IQueryable<TenantLedgerEntry> corrections,
+        IQueryable<TenantLedgerAllocation> allocations,
         IQueryable<TenantAccountBalanceProjection> accountBalances) =>
         from entry in targetEntries
         join balance in accountBalances
@@ -40,10 +43,13 @@ public static class TargetedCreditEligibilityQuery
                     .Where(correction => correction.PortfolioId == entry.PortfolioId
                         && correction.TenantAccountId == entry.TenantAccountId
                         && correction.EffectiveOn <= balance.BusinessDate
-                        && ((correction.EntryType == TenantLedgerEntryType.Reversal
-                                && correction.ReversesEntryId == entry.Id)
-                            || (correction.EntryType == TenantLedgerEntryType.Credit
-                                && correction.RelatedTenantLedgerEntryId == entry.Id)))
-                    .Sum(correction => (decimal?)correction.Amount) ?? 0m),
+                        && correction.EntryType == TenantLedgerEntryType.Reversal
+                        && correction.ReversesEntryId == entry.Id)
+                    .Sum(correction => (decimal?)correction.Amount) ?? 0m)
+                - (allocations
+                    .Where(allocation => allocation.PortfolioId == entry.PortfolioId
+                        && allocation.TenantAccountId == entry.TenantAccountId
+                        && allocation.DebitEntryId == entry.Id)
+                    .Sum(allocation => (decimal?)allocation.Amount) ?? 0m),
         };
 }

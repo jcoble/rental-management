@@ -765,6 +765,7 @@ public sealed class PostTenantCreditHandler
                                 || entry.EntryType == TenantLedgerEntryType.DepositCharge
                                 || entry.EntryType == TenantLedgerEntryType.ManualCharge)),
                     _db.Set<TenantLedgerEntry>().AsNoTracking(),
+                    _db.Set<TenantLedgerAllocation>().AsNoTracking(),
                     _db.Set<TenantAccountBalanceProjection>().AsNoTracking())
                 .Select(eligibility => new
                 {
