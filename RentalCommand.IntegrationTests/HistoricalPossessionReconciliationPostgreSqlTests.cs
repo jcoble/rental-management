@@ -29,6 +29,7 @@ public sealed class HistoricalPossessionReconciliationPostgreSqlTests : IAsyncLi
     private readonly QueryCaptureInterceptor _queries = new();
     private MigratedPostgreSqlTestContext _context = null!;
     private ServiceProvider _services = null!;
+    private IServiceScope _serviceScope = null!;
 
     public HistoricalPossessionReconciliationPostgreSqlTests(MigratedPostgreSqlFixture fixture) =>
         _fixture = fixture;
@@ -55,10 +56,12 @@ public sealed class HistoricalPossessionReconciliationPostgreSqlTests : IAsyncLi
             ValidateOnBuild = true,
             ValidateScopes = true,
         });
+        _serviceScope = _services.CreateScope();
     }
 
     public async Task DisposeAsync()
     {
+        _serviceScope?.Dispose();
         if (_services is not null) await _services.DisposeAsync();
         if (_context is not null) await _context.DisposeAsync();
     }
@@ -161,7 +164,8 @@ public sealed class HistoricalPossessionReconciliationPostgreSqlTests : IAsyncLi
         sql.Should().NotContain("Enumerable");
     }
 
-    private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
+    private IAtomicUnitOfWork Atomic =>
+        _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
 
     private static AtomicCommandIdentity Identity(ReconcileHistoricalPossessionCommand command) =>
         new("lease-management.reconcile-historical-possession",
