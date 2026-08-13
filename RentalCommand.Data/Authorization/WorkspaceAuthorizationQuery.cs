@@ -81,7 +81,7 @@ public static class WorkspaceAuthorizationQuery
         DateTime utcNow)
     {
         var keys = RequireCapabilityKeys(capabilityKeys);
-        return db.MembershipRoleAssignments.AsNoTracking().Where(assignment =>
+        return db.MembershipRoleAssignments.Where(assignment =>
             assignment.PortfolioId == scope.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null

@@ -7,6 +7,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Leasing;
 
@@ -642,18 +643,22 @@ public sealed class PrepareMoveInHandler
                 && (candidate.UnitId == null || candidate.UnitId == command.UnitId));
     }
 
-    private static IQueryable<Unit> AuthorizedUnits(
+    internal static IQueryable<Unit> AuthorizedUnits(
         PrepareMoveInCommand command,
         RentalCommandDbContext db,
         DateTime securityNowUtc)
     {
-        var effectiveAssignments = db.Set<MembershipRoleAssignment>()
-            .Where(assignment =>
-                assignment.Status == MembershipRoleAssignmentStatus.Active
-                && assignment.SuspendedAtUtc == null
-                && assignment.RevokedAtUtc == null
-                && assignment.EffectiveFromUtc <= securityNowUtc
-                && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc));
+        var scope = new WorkspaceReadScope(
+            command.PortfolioId,
+            command.CreatedByUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision);
+        var assignments = db.AuthorizedAssignmentsForScope(
+            scope,
+            [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare],
+            CapabilityAuthorizationTargetKind.Property,
+            securityNowUtc);
 
         return db.Set<Unit>()
             .Where(unit =>
@@ -661,45 +666,12 @@ public sealed class PrepareMoveInHandler
                 && unit.PortfolioId == command.PortfolioId
                 && unit.Property != null
                 && unit.Property.PortfolioId == command.PortfolioId
-                && db.Set<AuthSession>().Any(session =>
-                    session.Id == command.AuthSessionId
-                    && session.UserId == command.CreatedByUserId
-                    && session.ActiveAccessContextId == command.AccessContextId
-                    && session.Status == AuthSessionStatus.Active
-                    && session.RevokedAtUtc == null
-                    && session.ExpiresAtUtc > securityNowUtc)
-                && db.Set<WorkspaceAccessContext>().Any(context =>
-                    context.Id == command.AccessContextId
-                    && context.UserId == command.CreatedByUserId
-                    && context.PortfolioId == command.PortfolioId
-                    && context.AccessRevision == command.ExpectedAccessRevision
-                    && context.Status == WorkspaceAccessContextStatus.Active
-                    && context.SuspendedAtUtc == null
-                    && context.RevokedAtUtc == null)
-                && db.Set<WorkspaceMembership>().Any(membership =>
-                    membership.AccessContextId == command.AccessContextId
-                    && membership.PortfolioId == command.PortfolioId
-                    && membership.Status == WorkspaceMembershipStatus.Active
-                    && membership.SuspendedAtUtc == null
-                    && membership.RevokedAtUtc == null
-                    && membership.EffectiveFromUtc <= securityNowUtc
-                    && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > securityNowUtc)
-                    && effectiveAssignments.Any(assignment =>
-                        assignment.WorkspaceMembershipId == membership.Id
-                        && assignment.PortfolioId == command.PortfolioId
-                        && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                            || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                                && assignment.SelectedProperties.Any(scope =>
-                                    scope.PropertyId == unit.PropertyId
-                                    && scope.PortfolioId == command.PortfolioId)))
-                        && (assignment.RoleProfile!.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
-                                && capability.CapabilityDefinition.AuthorizationTargetKind
-                                    == CapabilityAuthorizationTargetKind.Property)
-                            || assignment.RoleProfile.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare
-                                && capability.CapabilityDefinition.AuthorizationTargetKind
-                                    == CapabilityAuthorizationTargetKind.Property)))));
+                && assignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                    || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                    && assignment.SelectedProperties.Any(selected =>
+                        selected.PropertyId == unit.PropertyId
+                        && selected.PortfolioId == command.PortfolioId)));
     }
 
     private static void ValidateAuthorizationShape(PrepareMoveInCommand command)
