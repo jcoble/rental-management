@@ -6,6 +6,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Operations;
 using RentalCommand.Core.Outbox;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Operations;
 
@@ -187,48 +188,23 @@ public sealed class DispatchWorkOrderToVendorHandler
     {
         var access = managementAccess
             ?? throw new InvalidOperationException("Management access is required for this query.");
+        var assignments = db.AuthorizedAssignmentsForScope(
+            new WorkspaceReadScope(
+                portfolioId,
+                access.UserId,
+                access.SessionId,
+                access.AccessContextId,
+                access.AccessRevision),
+            [CapabilityKeys.WorkManage],
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
         return workOrders.Where(workOrder =>
-            db.Set<AuthSession>().Any(session =>
-                session.Id == access.SessionId &&
-                session.UserId == access.UserId &&
-                session.ActiveAccessContextId == access.AccessContextId &&
-                session.Status == AuthSessionStatus.Active &&
-                session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > utcNow &&
-                session.ActiveAccessContext != null &&
-                session.ActiveAccessContext.Id == access.AccessContextId &&
-                session.ActiveAccessContext.UserId == access.UserId &&
-                session.ActiveAccessContext.PortfolioId == portfolioId &&
-                session.ActiveAccessContext.AccessRevision == access.AccessRevision &&
-                session.ActiveAccessContext.Status == WorkspaceAccessContextStatus.Active &&
-                session.ActiveAccessContext.SuspendedAtUtc == null &&
-                session.ActiveAccessContext.RevokedAtUtc == null &&
-                session.ActiveAccessContext.Membership != null &&
-                session.ActiveAccessContext.Membership.PortfolioId == portfolioId &&
-                session.ActiveAccessContext.Membership.Status == WorkspaceMembershipStatus.Active &&
-                session.ActiveAccessContext.Membership.SuspendedAtUtc == null &&
-                session.ActiveAccessContext.Membership.RevokedAtUtc == null &&
-                session.ActiveAccessContext.Membership.EffectiveFromUtc <= utcNow &&
-                (session.ActiveAccessContext.Membership.EffectiveToUtc == null ||
-                 session.ActiveAccessContext.Membership.EffectiveToUtc > utcNow) &&
-                session.ActiveAccessContext.Membership.RoleAssignments.Any(assignment =>
-                    assignment.PortfolioId == portfolioId &&
-                    assignment.Status == MembershipRoleAssignmentStatus.Active &&
-                    assignment.SuspendedAtUtc == null &&
-                    assignment.RevokedAtUtc == null &&
-                    assignment.EffectiveFromUtc <= utcNow &&
-                    (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
-                    assignment.RoleProfile != null &&
-                    assignment.RoleProfile.Capabilities.Any(profileCapability =>
-                        profileCapability.CapabilityDefinition != null &&
-                        profileCapability.CapabilityDefinition.Key == CapabilityKeys.WorkManage &&
-                        profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
-                            CapabilityAuthorizationTargetKind.Property) &&
-                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                      assignment.SelectedProperties.Any(selected =>
-                          selected.PortfolioId == portfolioId &&
-                          selected.PropertyId == workOrder.PropertyId))))));
+            assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                 assignment.SelectedProperties.Any(selected =>
+                     selected.PortfolioId == portfolioId &&
+                     selected.PropertyId == workOrder.PropertyId))));
     }
 
     private static DispatchWorkOrderToVendorResult Empty(

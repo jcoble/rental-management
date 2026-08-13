@@ -248,7 +248,17 @@ public sealed class QueueOwnerStatementEmailHandler
             throw new UnauthorizedAccessException(
                 "Your workspace export access changed. Refresh and try again.");
 
-        var ownerIsAuthorized = await db.Set<OwnerEntity>().AsNoTracking().AnyAsync(owner =>
+        var ownerIsAuthorized = await AuthorizedOwners(command, db, now).AnyAsync(ct);
+        if (!ownerIsAuthorized)
+            throw new UnauthorizedAccessException(
+                "The owner is no longer available within your current reporting scope.");
+    }
+
+    internal static IQueryable<OwnerEntity> AuthorizedOwners(
+        QueueOwnerStatementEmailCommand command,
+        RentalCommandDbContext db,
+        DateTime now) =>
+        db.Set<OwnerEntity>().AsNoTracking().Where(owner =>
             owner.Id == command.OwnerEntityId && owner.PortfolioId == command.PortfolioId
             && owner.DeletedAt == null
             && db.Set<PropertyOwnership>().Any(ownership =>
@@ -257,13 +267,9 @@ public sealed class QueueOwnerStatementEmailHandler
                 && ownership.EffectiveFromUtc <= now
                 && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
                 && AuthorizedOwnerReportProperties(command, db, now)
-                    .Any(property => property.Id == ownership.PropertyId)), ct);
-        if (!ownerIsAuthorized)
-            throw new UnauthorizedAccessException(
-                "The owner is no longer available within your current reporting scope.");
-    }
+                    .Any(property => property.Id == ownership.PropertyId)));
 
-    private IQueryable<Property> AuthorizedOwnerReportProperties(
+    internal static IQueryable<Property> AuthorizedOwnerReportProperties(
         QueueOwnerStatementEmailCommand command,
         RentalCommandDbContext db,
         DateTime now)
@@ -279,40 +285,22 @@ public sealed class QueueOwnerStatementEmailHandler
                         scope.PortfolioId == command.PortfolioId && scope.PropertyId == property.Id))));
     }
 
-    private IQueryable<MembershipRoleAssignment> LiveAssignments(
+    internal static IQueryable<MembershipRoleAssignment> LiveAssignments(
         QueueOwnerStatementEmailCommand command,
         RentalCommandDbContext db,
         DateTime now,
         string capability,
         CapabilityAuthorizationTargetKind targetKind) =>
-        db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= now
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
-            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
-            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
-            && assignment.WorkspaceMembership.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
-            && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && assignment.WorkspaceMembership.AccessContext!.UserId == command.ActorUserId
-            && assignment.WorkspaceMembership.AccessContext.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.AccessContext.AccessRevision == command.ExpectedAccessRevision
-            && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
-            && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
-            && db.Set<AuthSession>().Any(session =>
-                session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
-                && session.ActiveAccessContextId == command.AccessContextId
-                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > now)
-            && assignment.RoleProfile!.Capabilities.Any(grant =>
-                grant.CapabilityDefinition!.Key == capability
-                && grant.CapabilityDefinition.AuthorizationTargetKind == targetKind));
+        db.AuthorizedAssignmentsForScope(
+            new WorkspaceReadScope(
+                command.PortfolioId,
+                command.ActorUserId,
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.ExpectedAccessRevision),
+            [capability],
+            targetKind,
+            now);
 
     private void Validate(QueueOwnerStatementEmailCommand command)
     {

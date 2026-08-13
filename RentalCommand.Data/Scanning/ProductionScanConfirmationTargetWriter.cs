@@ -9,6 +9,7 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Leasing;
 using RentalCommand.Data.Operations;
 using RentalCommand.Data.Payments;
@@ -103,44 +104,30 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         _ => [],
     };
 
-    private static IQueryable<MembershipRoleAssignment> EffectiveAssignments(
+    internal static IQueryable<MembershipRoleAssignment> EffectiveAssignments(
         ConfirmScanDraftCommand command,
         IReadOnlyCollection<string> capabilities,
         RentalCommandDbContext db,
         DateTime securityNowUtc)
     {
-        var keys = capabilities.Distinct(StringComparer.Ordinal).ToArray();
-        return db.Set<MembershipRoleAssignment>().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= securityNowUtc
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc)
-            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
-            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
-            && assignment.WorkspaceMembership.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= securityNowUtc
-            && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > securityNowUtc)
-            && assignment.WorkspaceMembership.AccessContext!.UserId == command.ConfirmedByUserId
-            && assignment.WorkspaceMembership.AccessContext.AccessRevision == command.ExpectedAccessRevision
-            && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
-            && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
-            && db.Set<AuthSession>().Any(session =>
-                session.Id == command.AuthSessionId && session.UserId == command.ConfirmedByUserId
-                && session.ActiveAccessContextId == command.AccessContextId
-                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > securityNowUtc)
-            && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                keys.Contains(profileCapability.CapabilityDefinition!.Key)
-                && profileCapability.CapabilityDefinition.AuthorizationTargetKind
-                    == CapabilityAuthorizationTargetKind.Property));
+        if (capabilities.Count == 0)
+        {
+            return db.Set<MembershipRoleAssignment>().Where(_ => false);
+        }
+
+        return db.AuthorizedAssignmentsForScope(
+            new WorkspaceReadScope(
+                command.PortfolioId,
+                command.ConfirmedByUserId,
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.ExpectedAccessRevision),
+            capabilities,
+            CapabilityAuthorizationTargetKind.Property,
+            securityNowUtc);
     }
 
-    private static IQueryable<Property> AuthorizedProperties(
+    internal static IQueryable<Property> AuthorizedProperties(
         ConfirmScanDraftCommand command,
         IReadOnlyCollection<string> capabilities,
         RentalCommandDbContext db,

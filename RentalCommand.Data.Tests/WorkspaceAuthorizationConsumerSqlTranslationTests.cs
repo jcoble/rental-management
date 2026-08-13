@@ -1,9 +1,21 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.AiIntegrations;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Conversations;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Listings;
+using RentalCommand.Core.Operations;
+using RentalCommand.Core.Scanning;
+using RentalCommand.Data.AiIntegrations;
+using RentalCommand.Data.Conversations;
 using RentalCommand.Data.Leasing;
 using RentalCommand.Data.Listings;
+using RentalCommand.Data.Operations;
+using RentalCommand.Data.Scanning;
 
 namespace RentalCommand.Data.Tests;
 
@@ -82,6 +94,92 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
         listingSql.Should().Contain("Units");
         listingSql.Should().Contain("RentalListings");
         listingSql.Should().Contain("leasing.listings.manage");
+    }
+
+    [Fact]
+    public void Remaining_authorization_consumers_translate_as_single_statements()
+    {
+        using var db = Context();
+
+        var ownerSql = QueueOwnerStatementEmailHandler.AuthorizedOwners(
+                new QueueOwnerStatementEmailCommand(
+                    17, 5, SessionId, 12, 3, 9, 2026, "owner@example.test", "Statement", "Body", "owner-replay"),
+                db,
+                SecurityNowUtc)
+            .ToQueryString();
+        var scanSql = ProductionScanConfirmationTargetWriter.AuthorizedProperties(
+                new ConfirmScanDraftCommand(
+                    17, 44, 5, SecurityNowUtc, "fingerprint", null!,
+                    AuthSessionId: SessionId,
+                    AccessContextId: 12,
+                    ExpectedAccessRevision: 3),
+                [CapabilityKeys.WorkManage, CapabilityKeys.RentalsManage],
+                db,
+                SecurityNowUtc)
+            .ToQueryString();
+        var conversationCommand = new SendConversationMessageCommand(
+            17, 88, 9, "Subject", "Body", ConversationSenderRole.Landlord, [], SecurityNowUtc,
+            42, new ConversationManagementAccess(SessionId, 5, 12, 3));
+        var conversationSql = SendConversationMessageHandler.WhereManagementAuthorized(
+                db.Set<Conversation>().Where(conversation =>
+                    conversation.Id == 88 && conversation.PortfolioId == 17),
+                db,
+                conversationCommand,
+                SecurityNowUtc)
+            .ToQueryString();
+        var tenantSql = SendConversationMessageHandler.WhereManagementAuthorizedForStart(
+                db.Set<Tenant>().Where(tenant => tenant.Id == 9 && tenant.PortfolioId == 17),
+                db,
+                conversationCommand,
+                SecurityNowUtc,
+                new DateOnly(2026, 8, 13))
+            .ToQueryString();
+        var dispatchSql = DispatchWorkOrderToVendorHandler.WhereManagementAuthorized(
+                db.Set<WorkOrder>().Where(workOrder => workOrder.Id == 71 && workOrder.PortfolioId == 17),
+                db,
+                17,
+                new DispatchManagementAccess(SessionId, 5, 12, 3),
+                SecurityNowUtc)
+            .ToQueryString();
+        var aiSql = AiIntegrationCommandSupport.PropertyCapabilityAssignments(
+                17,
+                new PortfolioQaDeliveryCommand(
+                    17, 5, SessionId, 12, 3, "Question", "Answer", null, null, "email-key", "sms-key",
+                    SecurityNowUtc),
+                CapabilityKeys.MoneyOwnerReportsRead,
+                db,
+                SecurityNowUtc)
+            .ToQueryString();
+
+        foreach (var sql in new[] { ownerSql, scanSql, conversationSql, tenantSql, dispatchSql, aiSql })
+        {
+            sql.Should().Contain("MembershipRoleAssignments");
+            sql.Should().Contain("WorkspaceMemberships");
+            sql.Should().Contain("WorkspaceAccessContexts");
+            sql.Should().Contain("AuthSessions");
+            sql.Should().Contain("RoleProfileCapabilities");
+            sql.Should().Contain("MembershipRoleAssignmentProperties");
+            sql.Should().Contain("AllProperties");
+            sql.Should().Contain("SelectedProperties");
+            sql.Should().NotContain("ClientEvaluation");
+            sql.TrimEnd().Should().NotEndWith(";",
+                "the complete authorization consumer must render as one SQL statement");
+        }
+
+        ownerSql.Should().Contain("OwnerEntities");
+        ownerSql.Should().Contain("PropertyOwnerships");
+        ownerSql.Should().Contain("money.owner-reports.read");
+        scanSql.Should().Contain("Properties");
+        scanSql.Should().Contain("work.manage");
+        scanSql.Should().Contain("rentals.manage");
+        conversationSql.Should().Contain("Conversations");
+        conversationSql.Should().Contain("rentals.manage");
+        conversationSql.Should().Contain("leasing.onboarding.manage");
+        tenantSql.Should().Contain("Tenants");
+        tenantSql.Should().Contain("LeaseManagementParties");
+        dispatchSql.Should().Contain("WorkOrders");
+        dispatchSql.Should().Contain("work.manage");
+        aiSql.Should().Contain("money.owner-reports.read");
     }
 
     private static RentalCommandDbContext Context() => new(
