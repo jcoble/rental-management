@@ -78,37 +78,6 @@ public class OwnerDistributionService : IOwnerDistributionService
         };
     }
 
-    public async Task<IReadOnlyList<OwnerDistributionResponse>> ListForOwnerYearAsync(
-        int portfolioId, int ownerEntityId, int year, CancellationToken ct = default)
-    {
-        var query = new OwnerDistributionListQuery
-        {
-            OwnerEntityId = ownerEntityId,
-            Year = year,
-            Sort = "-date",
-            Take = ListQuery.MaxTake,
-        };
-
-        return await ProjectResponse(ApplySort(BuildListQuery(portfolioId, query), query))
-            .ToListAsync(ct);
-    }
-
-    public async Task<decimal> SumForOwnerYearAsync(
-        int portfolioId, int ownerEntityId, int year, CancellationToken ct = default)
-    {
-        var (start, end) = YearRange(year);
-
-        return await _db.OwnerDistributions
-            .AsNoTracking()
-            .Where(d =>
-                d.PortfolioId == portfolioId &&
-                d.OwnerEntityId == ownerEntityId &&
-                d.Status == OwnerDistributionStatus.Approved &&
-                d.Date >= start &&
-                d.Date < end)
-            .SumAsync(d => (decimal?)d.Amount, ct) ?? 0m;
-    }
-
     public Task<OwnerDistributionResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
         GetAsync(_db.OwnerDistributions.AsNoTracking(), portfolioId, id, ct);
 
