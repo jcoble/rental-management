@@ -190,7 +190,7 @@
 	const dashboard = $derived(dashboardQuery.data);
 	const moveInContextQuery = createQuery(() => ({
 		queryKey: ['prepare-move-in-context'],
-		enabled: page.url.searchParams.get('action') === 'confirm-move-in',
+		enabled: page.url.searchParams.get('action') === 'confirm-move-in' || activeTab === 'money',
 		queryFn: () => leaseManagements.prepareMoveInContext()
 	}));
 	const moveInBusinessDate = $derived(businessDateOrToday(moveInContextQuery.data?.businessDate));
@@ -500,7 +500,13 @@
 					</div>
 					{:else if activeTab === 'money'}
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Money">
-						<LedgerTab {dashboard} onScan={goScan} onOpenTab={setTab} />
+						<LedgerTab
+							{dashboard}
+							businessDate={moveInContextQuery.data?.businessDate}
+							businessDatePending={moveInContextQuery.isPending}
+							onScan={goScan}
+							onOpenTab={setTab}
+						/>
 					</div>
 					{:else if activeTab === 'maintenance'}
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Maintenance">

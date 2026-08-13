@@ -12,6 +12,7 @@
 	import { expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 	import { money, unitMoneySectionGates } from '../money';
 	import {
 		EXPENSE_CATEGORY_OPTIONS,
@@ -30,11 +31,15 @@
 
 	let {
 		dashboard,
+		businessDate = null,
+		businessDatePending = false,
 		onScan,
 		tabQuery = 'expenses',
 		ledgerQuery,
 	}: {
 		dashboard: UnitDashboard;
+		businessDate?: string | null;
+		businessDatePending?: boolean;
 		onScan: (context?: Partial<ScanContext>) => void;
 		tabQuery?: string;
 		ledgerQuery?: string;
@@ -47,7 +52,6 @@
 
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 	const EXPENSE_PAGE_SIZE = 20;
-	const today = () => new Date().toISOString().slice(0, 10);
 
 	// A selected expense folds its full detail inline (?expense=<id> on the unit URL); otherwise the list shows.
 	let selectedExpense = $state(Number(page.url.searchParams.get('expense')) || null);
@@ -164,7 +168,8 @@
 	}
 
 	// ── Inline "add expense" form (reuses expenseSchema + the app's form conventions; sets UnitId) ──
-	const emptyCreate = () => ({ description: '', amount: '', incurredAt: today(), category: 'Repairs', status: 'Pending' });
+	const moneyDate = $derived(businessDateOrToday(businessDate));
+	const emptyCreate = () => ({ description: '', amount: '', incurredAt: moneyDate, category: 'Repairs', status: 'Pending' });
 	const createSteps: FormStepperStep[] = [
 		{ id: 'details', label: 'Details', description: 'Amount and date' },
 		{ id: 'context', label: 'Context', description: 'Category and status' },
@@ -277,7 +282,13 @@
 	/>
 {:else}
 	<div class="flex flex-wrap justify-end gap-2">
-		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="expenses-create">
+		<Button
+			class="gap-2"
+			disabled={!showCreate && businessDatePending}
+			aria-busy={!showCreate && businessDatePending}
+			onclick={() => (showCreate ? closeCreate() : openCreate())}
+			data-testid="expenses-create"
+		>
 			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> Add expense{/if}
 		</Button>
 		<Button variant="outline" class="gap-2" onclick={() => onScan({ type: 'Expense', returnTo: unitUrl() })} data-testid="expenses-scan">
