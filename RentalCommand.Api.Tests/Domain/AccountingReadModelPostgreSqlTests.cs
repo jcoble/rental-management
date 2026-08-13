@@ -617,7 +617,7 @@ public sealed class AccountingReadModelPostgreSqlTests
     }
 
     [Fact]
-    public async Task TargetedCreditEligibility_SharedAuthorityTranslatesBusinessDateCorrectionSumToSql()
+    public async Task TargetedCreditEligibility_SharedAuthorityTranslatesDatedReversalsAndUnboundedAllocationsToSql()
     {
         await using var setup = await _fixture.CreateContextAsync();
 
@@ -627,6 +627,7 @@ public sealed class AccountingReadModelPostgreSqlTests
                         && entry.TenantAccountId == 2
                         && entry.Id == 3),
                 setup.Db.TenantLedgerEntries.AsNoTracking(),
+                setup.Db.TenantLedgerAllocations.AsNoTracking(),
                 setup.Db.TenantAccountBalanceProjections.AsNoTracking())
             .Select(row => row.RemainingTargetableAmount)
             .ToQueryString();
@@ -635,7 +636,8 @@ public sealed class AccountingReadModelPostgreSqlTests
             .And.Contain("vw_tenant_account_balances")
             .And.Contain("sum(")
             .And.Contain("ReversesEntryId")
-            .And.Contain("RelatedTenantLedgerEntryId")
+            .And.Contain("TenantLedgerAllocations")
+            .And.Contain("DebitEntryId")
             .And.MatchRegex("EffectiveOn\\\" <= [^\\n]*BusinessDate");
     }
 
@@ -680,6 +682,22 @@ public sealed class AccountingReadModelPostgreSqlTests
         setup.Db.TenantLedgerEntries.AddRange(
             rent, addendum, manual, deposit, opening, corrected, partiallyCorrected);
         await setup.Db.SaveChangesAsync();
+        var futureRelatedCredit = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.Credit,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 30m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 7, 7),
+            PostedAtUtc = now,
+            Description = "Related credit for manual charge",
+            BusinessKey = "credit-target:partial-correction",
+            RelatedTenantLedgerEntryId = partiallyCorrected.Id,
+            CreatedByUserId = scope.UserId,
+        };
         setup.Db.TenantLedgerEntries.AddRange(
             new TenantLedgerEntry
             {
@@ -697,22 +715,20 @@ public sealed class AccountingReadModelPostgreSqlTests
                 ReversesEntryId = corrected.Id,
                 CreatedByUserId = scope.UserId,
             },
-            new TenantLedgerEntry
-            {
-                PublicId = Guid.NewGuid(),
-                PortfolioId = 1,
-                TenantAccountId = account.Id,
-                EntryType = TenantLedgerEntryType.Credit,
-                Direction = TenantLedgerDirection.Credit,
-                Amount = 30m,
-                Currency = "USD",
-                EffectiveOn = new DateOnly(2027, 7, 7),
-                PostedAtUtc = now,
-                Description = "Related credit for manual charge",
-                BusinessKey = "credit-target:partial-correction",
-                RelatedTenantLedgerEntryId = partiallyCorrected.Id,
-                CreatedByUserId = scope.UserId,
-            });
+            futureRelatedCredit);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            DebitEntryId = partiallyCorrected.Id,
+            CreditEntryId = futureRelatedCredit.Id,
+            Amount = 30m,
+            AllocatedAtUtc = now,
+            EffectiveOn = futureRelatedCredit.EffectiveOn,
+            BusinessKey = "credit-target:partial-correction:allocation",
+            CreatedByUserId = scope.UserId,
+        });
         await setup.Db.SaveChangesAsync();
         FreezeBusinessClock(setup, new DateTime(2027, 7, 6, 12, 0, 0, DateTimeKind.Utc));
         await setup.ActivateApiScopeAsync(scope);
@@ -730,7 +746,7 @@ public sealed class AccountingReadModelPostgreSqlTests
             && row.RemainingTargetableAmount == 60m);
         beforeBoundary.Items.Should().ContainSingle(row =>
             row.TenantLedgerEntryId == partiallyCorrected.Id
-            && row.RemainingTargetableAmount == 90m);
+            && row.RemainingTargetableAmount == 60m);
         commands.Count.Should().Be(2);
         commands.Sql.Should().OnlyContain(sql =>
             sql.Contains("TenantAccounts", StringComparison.Ordinal)
@@ -741,7 +757,8 @@ public sealed class AccountingReadModelPostgreSqlTests
             && sql.Contains("Direction", StringComparison.Ordinal)
             && sql.Contains("EntryType", StringComparison.Ordinal)
             && sql.Contains("ReversesEntryId", StringComparison.Ordinal)
-            && sql.Contains("RelatedTenantLedgerEntryId", StringComparison.Ordinal)
+            && sql.Contains("TenantLedgerAllocations", StringComparison.Ordinal)
+            && sql.Contains("DebitEntryId", StringComparison.Ordinal)
             && sql.Contains("vw_tenant_account_balances", StringComparison.Ordinal)
             && sql.Contains("BusinessDate", StringComparison.Ordinal)
             && sql.Contains(businessDateCorrectionPredicate, StringComparison.Ordinal));

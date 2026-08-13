@@ -161,7 +161,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task TenantChargeCredit_FullyPaidTargetLeavesCreditUnapplied()
+    public async Task TenantChargeCredit_FullyAllocatedTargetRejectsCreditBeforeWrites()
     {
         var graph = SeedTenantAccount("fully-paid");
         var charge = await ExecuteChargeAsync(ChargeCommand(graph.AccountId, "fully-paid", 100m));
@@ -171,15 +171,8 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         };
         await ExecuteReceiptAsync(receipt);
 
-        var credit = await ExecuteCreditAsync(CreditCommand(
+        await AssertCreditRejectedBeforeWritesAsync(CreditCommand(
             graph.AccountId, "fully-paid", 40m, charge.LedgerEntryId));
-
-        (await _ctx.Db.TenantLedgerAllocations.AsNoTracking()
-            .CountAsync(row => row.CreditEntryId == credit.LedgerEntryId)).Should().Be(0);
-        (await _ctx.Db.TenantAccountBalanceProjections.AsNoTracking()
-            .Where(row => row.PortfolioId == PortfolioId && row.TenantAccountId == graph.AccountId)
-            .Select(row => row.UnappliedCredit)
-            .SingleAsync()).Should().Be(40m);
     }
 
     [Fact]
@@ -304,23 +297,23 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         var graph = SeedTenantAccount("eligibility-boundary");
         var charge = await ExecuteChargeAsync(ChargeCommand(
             graph.AccountId, "eligibility-boundary", 100m));
-        _ctx.Db.TenantLedgerEntries.Add(new TenantLedgerEntry
-        {
-            PublicId = Guid.NewGuid(),
-            PortfolioId = PortfolioId,
-            TenantAccountId = graph.AccountId,
-            EntryType = TenantLedgerEntryType.Credit,
-            Direction = TenantLedgerDirection.Credit,
-            Amount = 100m,
-            Currency = "USD",
-            EffectiveOn = new DateOnly(2027, 01, 06),
-            PostedAtUtc = SimulatedEntryAtUtc,
-            Description = "Future targeted credit",
-            BusinessKey = "tenant-credit:eligibility-boundary:future",
-            RelatedTenantLedgerEntryId = charge.LedgerEntryId,
-            CreatedByUserId = _scope.UserId,
-        });
-        await _ctx.Db.SaveChangesAsync();
+        var futureCreditCommand = CreditCommand(
+            graph.AccountId, "eligibility-boundary-future", 100m, charge.LedgerEntryId,
+            effectiveOn: new DateOnly(2027, 01, 06));
+        var futureCredit = await ExecuteCreditAsync(futureCreditCommand);
+
+        (await _ctx.Db.TenantLedgerEntries.AsNoTracking()
+            .CountAsync(row => row.Id == futureCredit.LedgerEntryId
+                && row.BusinessKey == futureCreditCommand.BusinessKey
+                && row.RelatedTenantLedgerEntryId == charge.LedgerEntryId)).Should().Be(1);
+        (await _ctx.Db.JournalEntries.AsNoTracking()
+            .CountAsync(row => row.SourceType == JournalSourceType.TenantConcession
+                && row.SourceId == futureCredit.LedgerEntryId
+                && row.SourceBusinessKey == futureCreditCommand.BusinessKey)).Should().Be(1);
+        (await _ctx.Db.TenantLedgerAllocations.AsNoTracking()
+            .CountAsync(row => row.DebitEntryId == charge.LedgerEntryId
+                && row.CreditEntryId == futureCredit.LedgerEntryId
+                && row.Amount == 100m)).Should().Be(1);
         await _ctx.ActivateApiScopeAsync(_scope);
 
         var readModel = new AccountingLedgerReadModelService(_ctx.Db);
@@ -329,13 +322,13 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         var ledgerBefore = await readModel.GetTenantLedgerAsync(
             _scope, graph.AccountId, new TenantLedgerQuery { Take = 20 });
 
-        candidatesBefore!.Items.Should().ContainSingle(row =>
-            row.TenantLedgerEntryId == charge.LedgerEntryId
-            && row.RemainingTargetableAmount == 100m);
+        candidatesBefore!.Items.Should().NotContain(row =>
+            row.TenantLedgerEntryId == charge.LedgerEntryId);
         ledgerBefore!.Items.Single(row => row.TenantLedgerEntryId == charge.LedgerEntryId)
-            .ActionCapabilities.CanGiveCredit.Should().BeTrue();
-        await ExecuteCreditAsync(CreditCommand(
-            graph.AccountId, "eligibility-boundary-before", 1m, charge.LedgerEntryId));
+            .ActionCapabilities.CanGiveCredit.Should().BeFalse();
+        var beforeBoundaryCommand = CreditCommand(
+            graph.AccountId, "eligibility-boundary-before", 1m, charge.LedgerEntryId);
+        await AssertCreditRejectedBeforeWritesAsync(beforeBoundaryCommand);
 
         await _ctx.Db.Database.ExecuteSqlRawAsync("RESET SESSION AUTHORIZATION;");
         await FreezeSimulationClockAsync(new DateTime(2027, 01, 06, 14, 30, 00, DateTimeKind.Utc));
@@ -352,15 +345,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
             row.TenantLedgerEntryId == charge.LedgerEntryId);
         ledgerOnBoundary!.Items.Single(row => row.TenantLedgerEntryId == charge.LedgerEntryId)
             .ActionCapabilities.CanGiveCredit.Should().BeFalse();
-        await FluentActions.Invoking(() => _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "tenant-account.credit.post", afterBoundaryCommand.DeliveryIdempotencyKey),
-                afterBoundaryCommand,
-                CreditCodec))
-            .Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*remaining amount*");
-        (await _ctx.Db.TenantLedgerEntries.AsNoTracking()
-            .CountAsync(row => row.BusinessKey == afterBoundaryCommand.BusinessKey)).Should().Be(0);
+        await AssertCreditRejectedBeforeWritesAsync(afterBoundaryCommand);
     }
 
     private async Task<TenantChargeMutationResult> ExecuteChargeAsync(PostTenantChargeCommand command)
@@ -379,6 +364,24 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
             command,
             CreditCodec);
         return outcome.Value;
+    }
+
+    private async Task AssertCreditRejectedBeforeWritesAsync(PostTenantCreditCommand command)
+    {
+        await FluentActions.Invoking(() => _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "tenant-account.credit.post", command.DeliveryIdempotencyKey),
+                command,
+                CreditCodec))
+            .Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*remaining amount*");
+
+        (await _ctx.Db.TenantLedgerEntries.AsNoTracking()
+            .CountAsync(row => row.BusinessKey == command.BusinessKey)).Should().Be(0);
+        (await _ctx.Db.JournalEntries.AsNoTracking()
+            .CountAsync(row => row.SourceBusinessKey == command.BusinessKey)).Should().Be(0);
+        (await _ctx.Db.TenantLedgerAllocations.AsNoTracking()
+            .CountAsync(row => row.BusinessKey.StartsWith(command.BusinessKey))).Should().Be(0);
     }
 
     private async Task<RecordTenantReceiptResult> ExecuteReceiptAsync(RecordTenantReceiptCommand command)
@@ -421,11 +424,12 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         decimal amount,
         long? targetChargeEntryId = null,
         int? incomeLedgerAccountId = null,
-        bool allocateOldestCharges = false) => new(
+        bool allocateOldestCharges = false,
+        DateOnly? effectiveOn = null) => new(
         PortfolioId,
         accountId,
         amount,
-        new DateOnly(2027, 01, 05),
+        effectiveOn ?? new DateOnly(2027, 01, 05),
         $"{suffix} credit",
         null,
         allocateOldestCharges,

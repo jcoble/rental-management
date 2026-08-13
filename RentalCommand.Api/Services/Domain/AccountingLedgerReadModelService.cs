@@ -701,6 +701,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         var targetability = TargetedCreditEligibilityQuery.Build(
             _db.TenantLedgerEntries.AsNoTracking(),
             _db.TenantLedgerEntries.AsNoTracking(),
+            _db.TenantLedgerAllocations.AsNoTracking(),
             _db.TenantAccountBalanceProjections.AsNoTracking());
         var eligibleEntries =
             from account in _db.TenantAccounts.AsNoTracking()
@@ -795,6 +796,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         var targetability = TargetedCreditEligibilityQuery.Build(
             _db.TenantLedgerEntries.AsNoTracking(),
             _db.TenantLedgerEntries.AsNoTracking(),
+            _db.TenantLedgerAllocations.AsNoTracking(),
             _db.TenantAccountBalanceProjections.AsNoTracking());
         var totalCount = await entries.CountAsync(ct);
         var skip = query.NormalizedSkip;
