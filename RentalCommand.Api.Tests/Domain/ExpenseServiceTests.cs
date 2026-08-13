@@ -363,7 +363,7 @@ public class ExpenseServiceTests : IDisposable
         captured.Should().OnlyContain(command => command.BusinessNowUtc == businessNowUtc);
     }
 
-    [Fact(Skip = "RS-A03 stale atomic business-clock expectation; receipt #rs-a03-business-clock")]
+    [Fact]
     public async Task AtomicMoneyMutationRejectsAMissingBusinessClockBeforeStartingAnAttempt()
     {
         var command = new AtomicMoneyMutationCommand(
@@ -385,7 +385,7 @@ public class ExpenseServiceTests : IDisposable
             command, Mock.Of<IAtomicCommandContext>(), CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*business clock*");
+            .WithMessage("*action, and time are required.*");
     }
 
     private (int UnitId, int OtherUnitId) SeedUnitsForListPage()

@@ -460,13 +460,14 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
             sql => sql == "SELECT 1");
     }
 
-    [Fact(Skip = "RS-B10 harness bug: seeded access context is inactive under the current security clock or scope; receipt #rs-b10-access-seed")]
+    [Fact]
     public async Task UnitInspections_PageFiltersAuthorizesSortsAndPagesInPostgreSql()
     {
         var property = await SeedPropertyAsync("Inspection Paging");
         var unit = await SeedUnitAsync(property, "4A");
         var decoy = await SeedUnitAsync(property, "4B");
         var scope = await SeedAdministratorScopeAsync();
+        await _context.ActivateApiScopeAsync(scope);
         _context.Db.Inspections.AddRange(
             Inspection(unit, "Target inspection", Now.AddDays(1)),
             Inspection(unit, "Target inspection second", Now.AddDays(2)),
@@ -500,7 +501,7 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
         listCommands.Should().HaveCount(2);
         listCommands.Should().OnlyContain(command =>
             command.Sql.Contains("UnitId", StringComparison.OrdinalIgnoreCase)
-            && command.Sql.Contains("MembershipRoleAssignments", StringComparison.OrdinalIgnoreCase));
+            && command.Sql.Contains("rc_api_effective_capability_scopes", StringComparison.OrdinalIgnoreCase));
         listCommands.Should().Contain(command =>
             command.Sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
             && command.Sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
@@ -509,13 +510,14 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
         Capture("UNIT_INSPECTIONS_COUNT_AND_PAGE", listCommands);
     }
 
-    [Fact(Skip = "RS-B10 harness bug: seeded access context is inactive under the current security clock or scope; receipt #rs-b10-access-seed")]
+    [Fact]
     public async Task UnitRecurringMaintenance_PageFiltersAuthorizesSortsAndPagesInPostgreSql()
     {
         var property = await SeedPropertyAsync("Recurring Paging");
         var unit = await SeedUnitAsync(property, "5A");
         var decoy = await SeedUnitAsync(property, "5B");
         var scope = await SeedAdministratorScopeAsync();
+        await _context.ActivateApiScopeAsync(scope);
         _context.Db.RecurringMaintenanceTasks.AddRange(
             Recurring(unit, "Target HVAC", Now.AddDays(1)),
             Recurring(unit, "Target HVAC second", Now.AddDays(2)),
@@ -545,7 +547,7 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
         listCommands.Should().HaveCount(2);
         listCommands.Should().OnlyContain(command =>
             command.Sql.Contains("UnitId", StringComparison.OrdinalIgnoreCase)
-            && command.Sql.Contains("MembershipRoleAssignments", StringComparison.OrdinalIgnoreCase));
+            && command.Sql.Contains("rc_api_effective_capability_scopes", StringComparison.OrdinalIgnoreCase));
         listCommands.Should().Contain(command =>
             command.Sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
             && command.Sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)

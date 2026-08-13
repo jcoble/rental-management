@@ -113,7 +113,7 @@ public class ScanBatchControllerTests : IAsyncLifetime
         (await _db.ScanBatches.CountAsync()).Should().Be(0);
     }
 
-    [Fact(Skip = "RS-A04 stale scan target validation expectation; receipt #rs-a04-invalid-target")]
+    [Fact]
     public async Task UploadBatch_WithInvalidTarget_ReturnsBadRequest()
     {
         var controller = await CreateControllerAsync(
@@ -125,7 +125,7 @@ public class ScanBatchControllerTests : IAsyncLifetime
 
         var badRequest = result.Result.Should().BeOfType<BadRequestObjectResult>().Subject;
         var error = badRequest.Value!.GetType().GetProperty("error")!.GetValue(badRequest.Value) as string;
-        error.Should().Contain("Application");
+        error.Should().Contain("application");
         (await _db.ScanBatches.CountAsync()).Should().Be(0);
     }
 
