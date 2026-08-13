@@ -325,8 +325,8 @@ public class ReportsServiceTests : IAsyncLifetime
         sql.Should().Contain("jsonb_agg", "property groups and rows must be aggregated in SQL");
         sql.Should().Contain("rc_api_effective_capability_scopes", "authorization must stay in the report query");
         sql.Should().Contain("@asOfDate", "the requested snapshot date must be parameterized");
-        sql.Should().Contain("TenantLedgerEntries", "rent-roll balances must use the ledger inside the authorized statement");
-        sql.Should().Contain("TenantLedgerAllocations", "rent-roll allocations must be netted inside the authorized statement");
+        sql.Should().Contain("as_of_effective_entries", "rent-roll history must use the shared as-of authority");
+        sql.Should().Contain("as_of_debit_allocations", "rent-roll history must use the shared as-of authority");
         sql.Should().Contain(
             "COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= @asOfDate",
             "allocations must be bounded by their own effective date or linked credit snapshot");
@@ -348,9 +348,90 @@ public class ReportsServiceTests : IAsyncLifetime
             .Should().Be(1, "aged rows, property buckets, and portfolio buckets must be one SQL statement");
         sql.Should().Contain("CASE", "aging buckets must be computed in SQL");
         sql.Should().Contain("jsonb_agg", "property rollups and rows must be aggregated in SQL");
-        sql.Should().Contain("TenantLedgerEntries", "aged balances must use the ledger inside the authorized statement");
-        sql.Should().Contain("TenantLedgerAllocations", "aged allocations must be netted inside the authorized statement");
+        sql.Should().Contain("as_of_effective_entries", "aged history must use the shared as-of authority");
+        sql.Should().Contain("as_of_debit_allocations", "aged history must use the shared as-of authority");
         sql.Should().Contain("reversal.\"EffectiveOn\" <= @asOfDate", "reversals must be bounded by the requested snapshot");
+    }
+
+    [Fact]
+    public async Task CurrentMoneyReports_UseCanonicalViewsInOneStatementPerEndpoint()
+    {
+        _executedSql.Clear();
+
+        await _sut.GetRentRollAsync(_scope, new ReportRangeQuery(), CancellationToken.None);
+
+        _executedSql.Should().ContainSingle();
+        _executedSql.Single().Should().Contain("vw_tenant_account_balances")
+            .And.Contain("vw_tenant_charge_balances")
+            .And.NotContain("as_of_effective_entries");
+
+        _executedSql.Clear();
+        await _sut.GetAgedReceivablesAsync(_scope, new ReportRangeQuery(), CancellationToken.None);
+
+        _executedSql.Should().ContainSingle();
+        _executedSql.Single().Should().Contain("vw_tenant_account_balances")
+            .And.Contain("vw_tenant_charge_balances")
+            .And.NotContain("as_of_effective_entries");
+    }
+
+    [Fact]
+    public async Task AsOfAuthority_OnPortfolioBusinessDate_EqualsCanonicalAccountAndChargeViews()
+    {
+        var businessDate = await _db.Database
+            .SqlQuery<DateOnly>($"SELECT rc_business_date({PortfolioId}) AS \"Value\"")
+            .SingleAsync();
+        var property = SeedProperty("As-of parity QA");
+        var lease = SeedLease(
+            property,
+            SeedUnit("1", property.Id),
+            SeedTenant("Parity", "Tenant"),
+            rent: 1_000m,
+            start: businessDate.AddDays(-60).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+        SeedPayment(
+            lease,
+            1_000m,
+            businessDate.AddDays(-20).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            paidInFull: false,
+            paidDate: businessDate.AddDays(-5).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            amountPaid: 250m);
+        SeedLedgerEntry(
+            lease,
+            TenantLedgerEntryType.PaymentReceipt,
+            TenantLedgerDirection.Credit,
+            50m,
+            businessDate.AddDays(-2),
+            "unapplied parity credit");
+        _db.ChangeTracker.Clear();
+
+        var accountId = lease.LeaseManagement!.TenantAccount!.Id;
+        var canonicalAccount = await _db.TenantAccountBalanceProjections
+            .SingleAsync(balance => balance.TenantAccountId == accountId);
+        var canonicalOpenCharges = await _db.TenantChargeBalanceProjections
+            .Where(balance => balance.TenantAccountId == accountId)
+            .SumAsync(balance => balance.OpenAmount);
+
+        _executedSql.Clear();
+        var historicalRentRoll = await _sut.GetRentRollAsync(
+            _scope,
+            new ReportRangeQuery { AsOf = businessDate },
+            CancellationToken.None);
+        var historicalRentSql = _executedSql.Should().ContainSingle().Subject;
+
+        _executedSql.Clear();
+        var historicalAged = await _sut.GetAgedReceivablesAsync(
+            _scope,
+            new ReportRangeQuery { AsOf = businessDate },
+            CancellationToken.None);
+        var historicalAgedSql = _executedSql.Should().ContainSingle().Subject;
+
+        historicalRentRoll.Rows.Should().ContainSingle().Which.CurrentBalance
+            .Should().Be(canonicalAccount.ReceivableBalance);
+        historicalAged.Rows.Should().ContainSingle().Which.Total
+            .Should().Be(canonicalOpenCharges);
+        historicalRentSql.Should().Contain("as_of_account_entry_totals")
+            .And.NotContain("vw_tenant_account_balances");
+        historicalAgedSql.Should().Contain("as_of_account_entry_totals")
+            .And.NotContain("vw_tenant_charge_balances");
     }
 
     [Fact]
@@ -485,6 +566,11 @@ public class ReportsServiceTests : IAsyncLifetime
         historicalAged.TotalOutstanding.Should().Be(1_200m);
         _executedSql.Count(command => command.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
             .Should().Be(1, "historical aged rows, buckets, and totals must remain one SQL statement");
+        var historicalAgedSql = _executedSql.Single();
+        historicalAgedSql.Should().Contain("as_of_effective_entries")
+            .And.Contain("as_of_debit_allocations");
+        historicalAgedSql.Split("FROM \"TenantLedgerEntries\" AS reversal", StringSplitOptions.None)
+            .Should().HaveCount(2, "the shared authority must render the reversal calculation once");
 
         _executedSql.Clear();
         var inverseRentRoll = await _sut.GetRentRollAsync(
