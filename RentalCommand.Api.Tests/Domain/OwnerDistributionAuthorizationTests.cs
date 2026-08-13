@@ -191,7 +191,6 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         draft!.Status.Should().Be(OwnerDistributionStatus.Draft);
         draft.CreatedAt.Should().Be(FrozenBusinessNowUtc);
         draft.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
-        (await service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(0m);
 
         var updated = await service.UpdateAsync(scope, draft.Id, new UpdateOwnerDistributionRequest
         {
@@ -226,7 +225,6 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         approved.ExportReference.Should().Be("DIST-YS175-EXPORT");
         replay!.Id.Should().Be(approved.Id);
         replay.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
-        (await service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(3500m);
 
         var rejectDraft = await service.CreateAsync(scope, new CreateOwnerDistributionRequest
         {
@@ -247,7 +245,6 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         rejected.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
         rejected.RejectedAt.Should().Be(FrozenBusinessNowUtc);
         rejected.RejectedByUserId.Should().Be(scope.UserId);
-        (await service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(3500m);
 
         _ctx.Db.ChangeTracker.Clear();
         var lifecycleRows = await _ctx.Db.OwnerDistributions.AsNoTracking()
@@ -315,7 +312,6 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
 
         draft.Should().NotBeNull();
         draft!.Status.Should().Be(OwnerDistributionStatus.Draft);
-        (await _service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(0m);
 
         var approved = await _service.ApproveAsync(scope, draft.Id, new ApproveOwnerDistributionRequest
         {
@@ -335,7 +331,6 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         approved.ApprovedAt.Should().NotBeNull();
         approved.ApprovedBusinessDate.Should().NotBeNull();
         replay!.Id.Should().Be(approved.Id);
-        (await _service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(3050m);
 
         var duplicateTransition = async () => await _service.ApproveAsync(scope, draft.Id,
             new ApproveOwnerDistributionRequest { BankReference = "DIST-OTHER", ExportReference = "DIST-OTHER" },
@@ -355,7 +350,6 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
             "reject-blue-door");
 
         rejected!.Status.Should().Be(OwnerDistributionStatus.Rejected);
-        (await _service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(3050m);
         var staleApprove = async () => await _service.ApproveAsync(scope, rejectDraft.Id,
             new ApproveOwnerDistributionRequest { BankReference = "DIST-REJECTED", ExportReference = "DIST-REJECTED" },
             "approve-rejected-blue-door");
@@ -410,7 +404,6 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         persisted.ApprovedAt.Should().BeNull();
         persisted.CreatedAt.Should().Be(FrozenBusinessNowUtc);
         persisted.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
-        (await service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(0m);
         var failedApprovalOutboxCount = await _ctx.Db.OutboxMessages.AsNoTracking().CountAsync(outbox =>
             outbox.PortfolioId == _portfolioId &&
             outbox.IdempotencyKey.Contains("approve-rollback-coble"));

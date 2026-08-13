@@ -1094,52 +1094,6 @@ public sealed class AtomicCoreCrudMutationHandler
         if (guard.Document) throw Conflict("This property has document history. Archive it instead of deleting the property.");
     }
 
-    private async Task EnsureUnitHasNoHistoryAsync(
-        int portfolioId,
-        int unitId,
-        RentalCommandDbContext db,
-        CancellationToken ct)
-    {
-        var guard = await db.Set<Unit>().IgnoreQueryFilters().AsNoTracking()
-            .Where(unit => unit.PortfolioId == portfolioId && unit.Id == unitId)
-            .Select(unit => new
-            {
-                IsOccupied = db.Set<UnitOccupancyProjection>().Any(occupancy =>
-                    occupancy.PortfolioId == portfolioId && occupancy.UnitId == unit.Id && occupancy.IsOccupied),
-                HasCurrent = db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
-                    lifecycle.PortfolioId == portfolioId && lifecycle.UnitId == unit.Id
-                    && lifecycle.Lifecycle != "Canceled" && lifecycle.Lifecycle != "Closed"
-                    && lifecycle.Lifecycle != "AccountingCloseout"),
-                HasLease = db.Set<LeaseManagement>().Any(row =>
-                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasWork = db.Set<WorkOrder>().IgnoreQueryFilters().Any(row =>
-                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasAppointment = db.Set<Appointment>().IgnoreQueryFilters().Any(row =>
-                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasInspection = db.Set<Inspection>().IgnoreQueryFilters().Any(row =>
-                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasExpense = db.Set<Expense>().IgnoreQueryFilters().Any(row =>
-                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasApplication = db.Set<RentalApplication>().IgnoreQueryFilters().Any(row =>
-                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasRecurringExpense = db.Set<RecurringExpense>().IgnoreQueryFilters().Any(row =>
-                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasDocument = db.Set<StoredFile>().IgnoreQueryFilters().Any(row =>
-                    row.PortfolioId == portfolioId && row.EntityType == nameof(Unit) && row.EntityId == unit.Id),
-            })
-            .SingleAsync(ct);
-        if (guard.IsOccupied) throw Conflict("This unit is occupied. Return possession before deleting the unit.");
-        if (guard.HasCurrent) throw Conflict("This unit has a planned or current rental relationship. Cancel or complete it before deleting the unit.");
-        if (guard.HasLease) throw Conflict("This unit has rental relationship, legal, or financial history and cannot be deleted.");
-        if (guard.HasWork) throw Conflict("This unit has work order history. Archive the work order history instead of deleting the unit.");
-        if (guard.HasAppointment) throw Conflict("This unit has appointment history. Archive the appointment history instead of deleting the unit.");
-        if (guard.HasInspection) throw Conflict("This unit has inspection history. Archive the inspection history instead of deleting the unit.");
-        if (guard.HasExpense) throw Conflict("This unit has expense history. Archive the expense history instead of deleting the unit.");
-        if (guard.HasApplication) throw Conflict("This unit has application history. Archive the applications instead of deleting the unit.");
-        if (guard.HasRecurringExpense) throw Conflict("This unit has recurring expense history. Archive the recurring expense history instead of deleting the unit.");
-        if (guard.HasDocument) throw Conflict("This unit has document history. Archive the documents instead of deleting the unit.");
-    }
-
 
     private async Task<string> SnapshotPropertyAsync(
         Property entity,

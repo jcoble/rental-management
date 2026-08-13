@@ -18,6 +18,7 @@ using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Banking;
@@ -2339,10 +2340,47 @@ public class BankingServiceTests : IAsyncLifetime
         var receipt = SeedRentPaymentInto(
             _ctx, "Emily", "Chen", 1400m, paidAt, "L-provider-fixture", providerShaped: true);
 
-        // Convert the provider-shaped receipt before the concurrent match so production's
-        // settlement branch sees the same TenantReceipt debit from undeposited-funds as a live
-        // provider payment would.
-        await new AccountingConversionService(_ctx.Db).ConvertPortfolioAsync(1);
+        // Seed the same receipt posting that the live provider-payment command owns. The banking
+        // reconciliation under test requires this pre-existing journal; historical conversion is
+        // not part of that workflow.
+        var undepositedFundsId = await AccountingPostingSupport.RequireSystemAccountIdAsync(
+            _ctx.Db, 1, "undeposited-funds");
+        var receivableId = await AccountingPostingSupport.RequireSystemAccountIdAsync(
+            _ctx.Db, 1, "tenant-accounts-receivable");
+        var context = new Mock<IAtomicCommandContext>();
+        context.SetupGet(value => value.AttemptId).Returns(Guid.NewGuid());
+        context.SetupGet(value => value.AtomicReceiptId).Returns(Guid.NewGuid());
+        var proposal = AccountingPostingSupport.BuildProposal(
+            context.Object,
+            receipt.PortfolioId,
+            JournalSourceType.TenantReceipt,
+            receipt.Id,
+            receipt.BusinessKey,
+            postingRuleVersion: 1,
+            receipt.EffectiveOn,
+            receipt.Currency,
+            receipt.Description,
+            [
+                new AccountingProposedLine
+                {
+                    LedgerAccountId = undepositedFundsId,
+                    DebitAmount = receipt.Amount,
+                    TenantAccountId = receipt.TenantAccountId,
+                    SourceLineType = "debit:undeposited-funds",
+                    SourceLineId = receipt.Id,
+                },
+                new AccountingProposedLine
+                {
+                    LedgerAccountId = receivableId,
+                    CreditAmount = receipt.Amount,
+                    TenantAccountId = receipt.TenantAccountId,
+                    SourceLineType = "credit:tenant-receivable",
+                    SourceLineId = receipt.Id,
+                },
+            ],
+            userId: 1);
+        await new AccountingPostingService(_ctx.Db).PostAsync(proposal);
+        await _ctx.Db.SaveChangesAsync();
         var receiptJournal = await _ctx.Db.JournalEntries
             .Include(entry => entry.Lines)
             .ThenInclude(line => line.LedgerAccount)
