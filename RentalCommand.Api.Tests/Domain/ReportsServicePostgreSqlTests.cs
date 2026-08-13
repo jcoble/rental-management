@@ -1,7 +1,9 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
@@ -11,6 +13,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
+using RentalCommand.Data.Accounting;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -321,7 +324,10 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
     [Fact]
     public async Task FutureEffectiveReversal_AllLiveReadModelsMatchCanonicalViewsAcrossBoundary()
     {
-        await using var context = await postgres.CreateContextAsync();
+        var commands = new ReadModelCommandRecorder();
+        await using var context = await postgres.CreateContextAsync([commands]);
+        await new ChartOfAccountsSeedService(context.Db).SeedAsync(1);
+        await context.Db.SaveChangesAsync();
         var scope = context.Db.SeedAdministratorScope(
             1,
             nameof(FutureEffectiveReversal_AllLiveReadModelsMatchCanonicalViewsAcrossBoundary));
@@ -377,7 +383,7 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
         };
         context.Db.TenantLedgerAllocations.Add(originalAllocation);
         await context.Db.SaveChangesAsync();
-        context.Db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        var reversal = new TenantLedgerEntry
         {
             PortfolioId = 1,
             TenantAccountId = account.Id,
@@ -391,6 +397,46 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             BusinessKey = $"h6-twin-reversal:{Guid.NewGuid():N}",
             ReversesEntryId = charge.Id,
             CreatedByUserId = scope.UserId,
+        };
+        context.Db.TenantLedgerEntries.Add(reversal);
+        context.Db.JournalEntries.Add(new JournalEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            EffectiveOn = charge.EffectiveOn,
+            PostedAtUtc = beforeUtc,
+            Currency = "USD",
+            Description = "H6 charge journal",
+            SourceType = JournalSourceType.TenantCharge,
+            SourceId = charge.Id,
+            SourceBusinessKey = $"h6-twin-charge-journal:{Guid.NewGuid():N}",
+            IdempotencyDigest = new string('h', 64),
+            PostingRuleVersion = 1,
+            AttemptId = Guid.NewGuid(),
+            AtomicReceiptId = Guid.NewGuid(),
+            UserId = scope.UserId,
+            Lines =
+            [
+                new JournalLine
+                {
+                    LedgerAccountId = await context.Db.LedgerAccounts
+                        .Where(account => account.PortfolioId == 1
+                            && account.SystemKey == "tenant-accounts-receivable")
+                        .Select(account => account.Id)
+                        .SingleAsync(),
+                    TenantAccountId = account.Id,
+                    DebitAmount = 100m,
+                },
+                new JournalLine
+                {
+                    LedgerAccountId = await context.Db.LedgerAccounts
+                        .Where(account => account.PortfolioId == 1
+                            && account.SystemKey == "rental-income")
+                        .Select(account => account.Id)
+                        .SingleAsync(),
+                    CreditAmount = 100m,
+                },
+            ],
         });
         context.Db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
         {
@@ -410,20 +456,24 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
         await context.ActivateApiScopeAsync(scope);
 
         await AssertReadModelsAsync(beforeUtc, expectedDueThisMonth: 100m, expectedUnappliedCredit: 0m,
-            expectedAllocationDates: [beforeOn]);
+            expectedAllocationDates: [beforeOn], expectedReplacedByEntryId: null,
+            expectChargeActions: true);
 
         await context.Db.Database.ExecuteSqlRawAsync("RESET SESSION AUTHORIZATION");
         SeedFrozenBusinessDate(context, boundaryUtc);
         await ActivateApiScopeAsync(context, scope);
 
         await AssertReadModelsAsync(boundaryUtc, expectedDueThisMonth: 0m, expectedUnappliedCredit: 100m,
-            expectedAllocationDates: [beforeOn, boundaryOn]);
+            expectedAllocationDates: [beforeOn, boundaryOn], expectedReplacedByEntryId: reversal.Id,
+            expectChargeActions: false);
 
         async Task AssertReadModelsAsync(
             DateTime businessNowUtc,
             decimal expectedDueThisMonth,
             decimal expectedUnappliedCredit,
-            DateOnly[] expectedAllocationDates)
+            DateOnly[] expectedAllocationDates,
+            long? expectedReplacedByEntryId,
+            bool expectChargeActions)
         {
             var canonical = await new TenantAccountQueryService(context.Db, TimeProvider.System)
                 .GetAsync(scope, account.Id);
@@ -437,14 +487,31 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             canonicalCharge.IsPastDue.Should().BeFalse();
 
             var ledgerService = new AccountingLedgerReadModelService(context.Db);
+            commands.Reset();
             var ledger = await ledgerService.GetTenantLedgerAsync(
                 scope, account.Id, new TenantLedgerQuery { Take = 20 });
             var ledgerCharge = ledger!.Items.Single(row => row.TenantLedgerEntryId == charge.Id);
             ledgerCharge.OpenAmount.Should().Be(canonicalCharge.OpenAmount);
             ledgerCharge.Status.Should().Be("Settled");
+            ledgerCharge.ReplacedByEntryId.Should().Be(expectedReplacedByEntryId);
+            ledgerCharge.ActionCapabilities.Should().Match<TenantLedgerActionCapabilities>(capabilities =>
+                capabilities.CanViewDetail
+                && capabilities.CanGiveCredit == expectChargeActions
+                && capabilities.CanAddRelatedCharge == expectChargeActions
+                && capabilities.CanReverseCharge == expectChargeActions
+                && !capabilities.CanReverseLedgerEntry
+                && !capabilities.CanReviewPaymentAllocation);
             ledgerCharge.Allocations.Select(row => row.EffectiveOn)
                 .Should().Equal(expectedAllocationDates);
+            commands.Count.Should().Be(2);
+            commands.Sql.Should().Contain(sql =>
+                sql.Contains("vw_tenant_charge_balances", StringComparison.Ordinal)
+                && sql.Contains("vw_tenant_account_balances", StringComparison.Ordinal)
+                && sql.Contains("EffectiveOn", StringComparison.Ordinal)
+                && sql.Contains("BusinessDate", StringComparison.Ordinal)
+                && sql.Split("\"EffectiveOn\" <=", StringSplitOptions.None).Length >= 3);
 
+            commands.Reset();
             var month = await ledgerService.GetTenantMonthSummaryAsync(
                 scope,
                 account.Id,
@@ -461,14 +528,39 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
                 .Single(row => row.TenantLedgerEntryId == charge.Id);
             monthCharge.OpenAmount.Should().Be(canonicalCharge.OpenAmount);
             monthCharge.Status.Should().Be("Settled");
+            monthCharge.ReplacedByEntryId.Should().Be(expectedReplacedByEntryId);
+            monthCharge.ActionCapabilities.Should().BeEquivalentTo(ledgerCharge.ActionCapabilities);
             monthCharge.Allocations.Select(row => row.EffectiveOn)
                 .Should().Equal(expectedAllocationDates);
+            commands.Count.Should().Be(1);
+            commands.Sql.Single().Should().Contain("vw_tenant_charge_balances")
+                .And.Contain("vw_tenant_account_balances")
+                .And.Contain("correction.\"EffectiveOn\" <= entry.\"BusinessDate\"")
+                .And.Contain("reversal.\"EffectiveOn\" <= entry.\"BusinessDate\"")
+                .And.Contain("COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\")")
+                .And.Contain("<= entry_facts.\"BusinessDate\"");
 
+            commands.Reset();
             var summary = await ledgerService.GetTenantLedgerPeriodSummaryAsync(1, account.Id, 3);
             summary.Should().NotBeNull();
             (summary!.AgingCurrent + summary.Aging1To30 + summary.Aging31To60
                 + summary.Aging61To90 + summary.Aging90Plus).Should().Be(canonical.PastDueAmount);
+            commands.Count.Should().Be(3);
+            commands.Sql.Should().ContainSingle(sql =>
+                sql.Contains("vw_tenant_account_balances", StringComparison.Ordinal)
+                && sql.Contains("BusinessDate", StringComparison.Ordinal));
+            commands.Sql.Should().ContainSingle(sql =>
+                sql.Contains("TenantLedgerEntries", StringComparison.Ordinal)
+                && sql.Contains("EffectiveOn", StringComparison.Ordinal)
+                && sql.Contains("<=", StringComparison.Ordinal)
+                && sql.Contains("SUM", StringComparison.OrdinalIgnoreCase));
+            commands.Sql.Should().ContainSingle(sql =>
+                sql.Contains("vw_tenant_charge_balances", StringComparison.Ordinal)
+                && sql.Contains("EffectiveOn", StringComparison.Ordinal)
+                && sql.Contains("<=", StringComparison.Ordinal)
+                && sql.Contains("SUM", StringComparison.OrdinalIgnoreCase));
 
+            commands.Reset();
             var dashboard = await new DashboardService(
                     context.Db,
                     new AuditDescriber(),
@@ -477,6 +569,12 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             dashboard.Should().NotBeNull();
             dashboard!.Accounting.OverdueAmount.Should().Be(canonical.PastDueAmount);
             dashboard.Accounting.DueThisMonthAmount.Should().Be(expectedDueThisMonth);
+            commands.Count.Should().Be(3);
+            commands.Sql.Should().ContainSingle(sql =>
+                sql.Contains("vw_tenant_charge_balances", StringComparison.Ordinal)
+                && sql.Contains("BusinessDate", StringComparison.Ordinal)
+                && sql.Contains("EffectiveOn", StringComparison.Ordinal)
+                && sql.Contains("<=", StringComparison.Ordinal));
         }
     }
 
@@ -551,6 +649,34 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
                 WorkspaceMembershipId: 1,
                 DefaultExperience: WorkspaceExperience.Management);
         return controller;
+    }
+
+    private sealed class ReadModelCommandRecorder : DbCommandInterceptor
+    {
+        private readonly List<string> _sql = [];
+
+        public int Count => _sql.Count;
+        public IReadOnlyList<string> Sql => _sql;
+        public void Reset() => _sql.Clear();
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            _sql.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            _sql.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 
     private static void SeedFrozenBusinessDate(

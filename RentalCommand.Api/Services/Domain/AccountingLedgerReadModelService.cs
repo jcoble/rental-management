@@ -889,7 +889,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     .Where(reversal => reversal.PortfolioId == portfolioId
                         && reversal.TenantAccountId == tenantAccountId
                         && reversal.EntryType == TenantLedgerEntryType.Reversal
-                        && reversal.ReversesEntryId == entry.Id)
+                        && reversal.ReversesEntryId == entry.Id
+                        && _db.TenantAccountBalanceProjections.Any(balance =>
+                            balance.PortfolioId == reversal.PortfolioId
+                            && balance.TenantAccountId == reversal.TenantAccountId
+                            && reversal.EffectiveOn <= balance.BusinessDate))
                     .OrderByDescending(reversal => reversal.Id)
                     .Select(reversal => (long?)reversal.Id)
                     .FirstOrDefault(),
@@ -918,6 +922,10 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && entry.Amount - (_db.TenantLedgerEntries
                             .Where(correction => correction.PortfolioId == entry.PortfolioId
                                 && correction.TenantAccountId == entry.TenantAccountId
+                                && _db.TenantAccountBalanceProjections.Any(balance =>
+                                    balance.PortfolioId == correction.PortfolioId
+                                    && balance.TenantAccountId == correction.TenantAccountId
+                                    && correction.EffectiveOn <= balance.BusinessDate)
                                 && ((correction.EntryType == TenantLedgerEntryType.Reversal
                                         && correction.ReversesEntryId == entry.Id)
                                     || (correction.EntryType == TenantLedgerEntryType.Credit
@@ -931,7 +939,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
-                            && reversal.ReversesEntryId == entry.Id),
+                            && reversal.ReversesEntryId == entry.Id
+                            && _db.TenantAccountBalanceProjections.Any(balance =>
+                                balance.PortfolioId == reversal.PortfolioId
+                                && balance.TenantAccountId == reversal.TenantAccountId
+                                && reversal.EffectiveOn <= balance.BusinessDate)),
                     CanAddRelatedCharge = entry.Direction == TenantLedgerDirection.Debit
                         && (entry.EntryType == TenantLedgerEntryType.RentCharge
                             || entry.EntryType == TenantLedgerEntryType.AddendumCharge
@@ -945,7 +957,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
-                            && reversal.ReversesEntryId == entry.Id),
+                            && reversal.ReversesEntryId == entry.Id
+                            && _db.TenantAccountBalanceProjections.Any(balance =>
+                                balance.PortfolioId == reversal.PortfolioId
+                                && balance.TenantAccountId == reversal.TenantAccountId
+                                && reversal.EffectiveOn <= balance.BusinessDate)),
                     CanReverseCharge = entry.Direction == TenantLedgerDirection.Debit
                         && (entry.EntryType == TenantLedgerEntryType.RentCharge
                             || entry.EntryType == TenantLedgerEntryType.AddendumCharge
@@ -959,7 +975,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
-                            && reversal.ReversesEntryId == entry.Id),
+                            && reversal.ReversesEntryId == entry.Id
+                            && _db.TenantAccountBalanceProjections.Any(balance =>
+                                balance.PortfolioId == reversal.PortfolioId
+                                && balance.TenantAccountId == reversal.TenantAccountId
+                                && reversal.EffectiveOn <= balance.BusinessDate)),
                     CanReverseLedgerEntry = entry.Direction == TenantLedgerDirection.Debit
                         && entry.EntryType == TenantLedgerEntryType.OpeningBalance
                         && entry.ReversesEntryId == null
@@ -969,7 +989,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
-                            && reversal.ReversesEntryId == entry.Id),
+                            && reversal.ReversesEntryId == entry.Id
+                            && _db.TenantAccountBalanceProjections.Any(balance =>
+                                balance.PortfolioId == reversal.PortfolioId
+                                && balance.TenantAccountId == reversal.TenantAccountId
+                                && reversal.EffectiveOn <= balance.BusinessDate)),
                     CanReviewPaymentAllocation = entry.Direction == TenantLedgerDirection.Credit
                         && entry.EntryType == TenantLedgerEntryType.PaymentReceipt,
                 },
@@ -1091,6 +1115,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         FROM "TenantLedgerEntries" AS correction
                         WHERE correction."PortfolioId" = entry."PortfolioId"
                           AND correction."TenantAccountId" = entry."TenantAccountId"
+                          AND correction."EffectiveOn" <= entry."BusinessDate"
                           AND ((correction."EntryType" = 'Reversal' AND correction."ReversesEntryId" = entry."Id")
                             OR (correction."EntryType" = 'Credit' AND correction."RelatedTenantLedgerEntryId" = entry."Id"))), 0) AS "CorrectedAmount"
                 FROM filtered_entries AS entry
@@ -1101,6 +1126,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                       AND reversal."TenantAccountId" = entry."TenantAccountId"
                       AND reversal."EntryType" = 'Reversal'
                       AND reversal."ReversesEntryId" = entry."Id"
+                      AND reversal."EffectiveOn" <= entry."BusinessDate"
                     ORDER BY reversal."Id" DESC
                     LIMIT 1
                 ) AS replacement ON TRUE

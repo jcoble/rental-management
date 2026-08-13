@@ -135,6 +135,11 @@ public sealed class PortfolioQaServiceTests : IAsyncLifetime
         expense.GetProperty("description").GetString().Should().Be("Paid repair");
         expense.GetProperty("status").GetString().Should().Be(nameof(ExpenseStatus.Paid));
         expense.GetProperty("date").GetString().Should().Be(now.AddDays(-1).ToString("yyyy-MM-dd"));
+        _commands.Should().HaveCount(3);
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("PaidAt", StringComparison.Ordinal)
+            && sql.Contains("IncurredAt", StringComparison.Ordinal)
+            && sql.Contains("Status", StringComparison.Ordinal));
         _commands.Should().Contain(sql =>
             sql.Contains("PaidAt", StringComparison.Ordinal)
             && sql.Contains("Status", StringComparison.Ordinal)
