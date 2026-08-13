@@ -12,6 +12,7 @@ using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Leasing;
 using RentalCommand.Data.Operations;
 using RentalCommand.Data.Payments;
+using RentalCommand.Data.Policies;
 
 namespace RentalCommand.Data.Scanning;
 
@@ -596,12 +597,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         if (normalizedEmail is not null)
         {
             var existingOpenApplicationId = await _db.Set<RentalApplication>()
-                .Where(application => application.PortfolioId == command.PortfolioId
-                    && application.Email != null
-                    && (application.Status == ApplicationStatus.Submitted
-                        || application.Status == ApplicationStatus.UnderReview
-                        || application.Status == ApplicationStatus.Approved)
-                    && application.Email.Trim().ToLower() == normalizedEmail)
+                .OpenForEmail(command.PortfolioId, normalizedEmail)
                 .OrderBy(application => application.Id)
                 .Select(application => (int?)application.Id)
                 .FirstOrDefaultAsync(ct);
@@ -1413,16 +1409,15 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         RentalCommandDbContext db,
         CancellationToken ct)
     {
-        if (propertyId is int selectedPropertyId &&
-            !await IsPropertyInPortfolioAsync(portfolioId, selectedPropertyId, _db, ct))
-        {
+        var resolution = await db.ResolvePropertyUnit(portfolioId, propertyId, unitId)
+            .SingleOrDefaultAsync(ct);
+        if (propertyId is not null
+            && (resolution is null || resolution.PropertyId is null))
             throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
-        }
-        if (unitId is int selectedUnitId && !await db.Set<Unit>()
-                .AnyAsync(unit => unit.Id == selectedUnitId
-                    && unit.Property != null
-                    && unit.Property.PortfolioId == portfolioId
-                    && (propertyId == null || unit.PropertyId == propertyId), ct))
+        if (unitId is not null
+            && (resolution is null
+                || resolution.UnitId is null
+                || resolution.UnitDoesNotBelongToProperty))
         {
             throw new ScanConfirmationValidationException("Selected unit is not in this portfolio or property.");
         }

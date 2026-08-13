@@ -9,6 +9,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Api.Services;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -252,42 +253,12 @@ public sealed class AtomicNoticeDraftMutationHandler
         RentalCommandDbContext db,
         DateTime now)
     {
-        var assignments = EffectiveAssignments(command, db, now);
-        return db.Set<Property>().AsNoTracking().Where(property =>
-            property.PortfolioId == command.PortfolioId
-            && property.DeletedAt == null
-            && assignments.Any(assignment =>
-                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                && assignment.SelectedProperties.Any(selected =>
-                    selected.PortfolioId == property.PortfolioId
-                    && selected.PropertyId == property.Id)));
+        return db.Set<Property>().AsNoTracking().WhereAuthorizedForScope(
+            db,
+            Scope(command),
+            CapabilityKeys.TenantNoticesManage,
+            now);
     }
-
-    private IQueryable<MembershipRoleAssignment> EffectiveAssignments(
-        AtomicNoticeDraftMutationCommand command,
-        RentalCommandDbContext db,
-        DateTime now) =>
-        db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null
-            && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= now
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
-            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
-            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
-            && assignment.WorkspaceMembership.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
-            && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && IdentityAuthorized(command, db, now).Any()
-            && assignment.RoleProfile!.Capabilities.Any(grant =>
-                grant.CapabilityDefinition!.Key == CapabilityKeys.TenantNoticesManage
-                && grant.CapabilityDefinition.AuthorizationTargetKind
-                    == CapabilityAuthorizationTargetKind.Property));
 
     private IQueryable<WorkspaceAccessContext> IdentityAuthorized(
         AtomicNoticeDraftMutationCommand command,

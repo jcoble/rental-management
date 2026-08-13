@@ -67,6 +67,92 @@ public static class WorkspaceAuthorizationQuery
         return keys;
     }
 
+    /// <summary>
+    /// Applies the explicit session, access-context, membership, assignment, and capability
+    /// predicates used by write handlers. Unlike the PostgreSQL request-scope function used by
+    /// read endpoints, this query remains valid inside atomic command connections while still
+    /// translating as part of the consuming SQL statement.
+    /// </summary>
+    public static IQueryable<MembershipRoleAssignment> AuthorizedAssignmentsForScope(
+        this RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilityKeys,
+        CapabilityAuthorizationTargetKind targetKind,
+        DateTime utcNow)
+    {
+        var keys = RequireCapabilityKeys(capabilityKeys);
+        return db.MembershipRoleAssignments.AsNoTracking().Where(assignment =>
+            assignment.PortfolioId == scope.PortfolioId
+            && assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null
+            && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= utcNow
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow)
+            && assignment.WorkspaceMembership!.AccessContextId == scope.AccessContextId
+            && assignment.WorkspaceMembership.PortfolioId == scope.PortfolioId
+            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
+            && assignment.WorkspaceMembership.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.RevokedAtUtc == null
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow
+            && (assignment.WorkspaceMembership.EffectiveToUtc == null
+                || assignment.WorkspaceMembership.EffectiveToUtc > utcNow)
+            && db.WorkspaceAccessContexts.Any(context =>
+                context.Id == scope.AccessContextId
+                && context.UserId == scope.UserId
+                && context.PortfolioId == scope.PortfolioId
+                && context.AccessRevision == scope.AccessRevision
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null
+                && context.RevokedAtUtc == null)
+            && db.AuthSessions.Any(session =>
+                session.Id == scope.SessionId
+                && session.UserId == scope.UserId
+                && session.ActiveAccessContextId == scope.AccessContextId
+                && session.Status == AuthSessionStatus.Active
+                && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > utcNow)
+            && assignment.RoleProfile!.Capabilities.Any(grant =>
+                keys.Contains(grant.CapabilityDefinition!.Key)
+                && grant.CapabilityDefinition.AuthorizationTargetKind == targetKind));
+    }
+
+    /// <summary>
+    /// Applies property scope to the explicit assignment query without materializing property ids.
+    /// </summary>
+    public static IQueryable<Property> WhereAuthorizedForScope(
+        this IQueryable<Property> properties,
+        RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilityKeys,
+        DateTime utcNow)
+    {
+        var assignments = db.AuthorizedAssignmentsForScope(
+            scope,
+            capabilityKeys,
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
+        return properties.Where(property =>
+            property.PortfolioId == scope.PortfolioId
+            && property.DeletedAt == null
+            && assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                && assignment.SelectedProperties.Any(selected =>
+                    selected.PortfolioId == scope.PortfolioId
+                    && selected.PropertyId == property.Id)));
+    }
+
+    public static IQueryable<Property> WhereAuthorizedForScope(
+        this IQueryable<Property> properties,
+        RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        string capabilityKey,
+        DateTime utcNow)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(capabilityKey);
+        return properties.WhereAuthorizedForScope(db, scope, [capabilityKey], utcNow);
+    }
+
     public static IQueryable<MembershipRoleAssignment> AuthorizedAllPropertyAssignments(
         this RentalCommandDbContext db,
         WorkspaceReadScope scope,

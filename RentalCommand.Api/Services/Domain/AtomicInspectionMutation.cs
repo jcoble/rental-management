@@ -10,6 +10,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Api.Services;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -980,51 +981,27 @@ public sealed class AtomicInspectionMutationHandler
         AtomicInspectionMutationCommand command,
         RentalCommandDbContext db,
         DateTime securityNow) =>
-        db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId
-            && assignment.Status == MembershipRoleAssignmentStatus.Active
-            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= securityNow
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNow)
-            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
-            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
-            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
-            && assignment.WorkspaceMembership.SuspendedAtUtc == null
-            && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= securityNow
-            && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > securityNow)
-            && db.Set<WorkspaceAccessContext>().Any(context =>
-                context.Id == command.AccessContextId && context.UserId == command.ActorUserId
-                && context.PortfolioId == command.PortfolioId
-                && context.AccessRevision == command.ExpectedAccessRevision
-                && context.Status == WorkspaceAccessContextStatus.Active
-                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && db.Set<AuthSession>().Any(session =>
-                session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
-                && session.ActiveAccessContextId == command.AccessContextId
-                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > securityNow)
-            && assignment.RoleProfile!.Capabilities.Any(grant =>
-                grant.CapabilityDefinition!.Key == CapabilityKeys.WorkManage
-                && grant.CapabilityDefinition.AuthorizationTargetKind ==
-                    CapabilityAuthorizationTargetKind.Property));
+        db.AuthorizedAssignmentsForScope(
+            Scope(command),
+            [CapabilityKeys.WorkManage],
+            CapabilityAuthorizationTargetKind.Property,
+            securityNow);
 
     private IQueryable<Property> AuthorizedProperties(
         AtomicInspectionMutationCommand command,
         RentalCommandDbContext db,
         DateTime securityNow)
     {
-        var assignments = AuthorizedAssignments(command, db, securityNow);
-        return db.Set<Property>().AsNoTracking().Where(property =>
-            property.PortfolioId == command.PortfolioId && property.DeletedAt == null
-            && assignments.Any(assignment =>
-                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                    && assignment.SelectedProperties.Any(selected =>
-                        selected.PortfolioId == command.PortfolioId
-                        && selected.PropertyId == property.Id))));
+        return db.Set<Property>().AsNoTracking().WhereAuthorizedForScope(
+            db, Scope(command), CapabilityKeys.WorkManage, securityNow);
     }
+
+    private static WorkspaceReadScope Scope(AtomicInspectionMutationCommand command) => new(
+        command.PortfolioId,
+        command.ActorUserId,
+        command.AuthSessionId,
+        command.AccessContextId,
+        command.ExpectedAccessRevision);
 
     private IQueryable<InspectionResponse> InspectionSnapshotQuery(
         RentalCommandDbContext db,
