@@ -13,10 +13,14 @@
 
 	let {
 		dashboard,
+		businessDate = null,
+		businessDatePending = false,
 		onScan,
 		onOpenTab,
 	}: {
 		dashboard: UnitDashboard;
+		businessDate?: string | null;
+		businessDatePending?: boolean;
 		onScan: (context?: Partial<ScanContext>) => void;
 		onOpenTab: (tab: string, view?: UnitView) => void;
 	} = $props();
@@ -69,7 +73,14 @@
 		</section>
 		{:else}
 		<section tabindex="-1" class="outline-none" data-testid="ledger-expenses-panel">
-			<ExpensesTab {dashboard} tabQuery="money" ledgerQuery="expenses" {onScan} />
+			<ExpensesTab
+				{dashboard}
+				{businessDate}
+				{businessDatePending}
+				tabQuery="money"
+				ledgerQuery="expenses"
+				{onScan}
+			/>
 		</section>
 		{/if}
 	</div>
