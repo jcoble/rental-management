@@ -97,19 +97,36 @@ public sealed record TransactionalWrite<TCommand, TResult>
     public Func<TCommand, IAtomicCommandContext, CancellationToken, Task> AuthorizeReplayAsync { get; }
 }
 
+/// <summary>
+/// Legacy-compatible lock sequences explicitly admitted onto the shared executor. New command
+/// families must add their observed legacy protocol here before migration; there is no safe global
+/// namespace rank across all existing shells.
+/// </summary>
+public enum WriteLockProtocol
+{
+    AuthorizationScope,
+    Possession,
+    ConfirmMoveIn,
+}
+
 public sealed class WriteLockPlan
 {
-    private static readonly IReadOnlyDictionary<string, int> CommonNamespaceOrder =
-        new Dictionary<string, int>(StringComparer.Ordinal)
+    private static readonly IReadOnlyDictionary<WriteLockProtocol, string[]> ProtocolNamespaces =
+        new Dictionary<WriteLockProtocol, string[]>
         {
-            ["AuthSession"] = 100,
-            ["WorkspaceAccessContext"] = 200,
-            ["Portfolio"] = 300,
+            [WriteLockProtocol.AuthorizationScope] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio"],
+            [WriteLockProtocol.Possession] =
+                ["Unit", "LeaseManagement"],
+            [WriteLockProtocol.ConfirmMoveIn] =
+                ["Unit", "LeaseManagement", "TenantAccount"],
         };
 
-    public static WriteLockPlan None { get; } = new([]);
+    public static WriteLockPlan None { get; } = new();
 
-    public WriteLockPlan(params WriteLock[] locks)
+    private WriteLockPlan() => Locks = [];
+
+    public WriteLockPlan(WriteLockProtocol protocol, params WriteLock[] locks)
     {
         ArgumentNullException.ThrowIfNull(locks);
         if (locks.Any(item => item is null))
@@ -117,14 +134,12 @@ public sealed class WriteLockPlan
             throw new ArgumentException("A lock plan cannot contain a null lock.", nameof(locks));
         }
 
-        var ordered = locks.OrderBy(item => NamespaceOrder(item.LockNamespace))
-            .ThenBy(item => item.LockNamespace, StringComparer.Ordinal)
-            .ThenBy(item => item.AggregateKey, StringComparer.Ordinal)
-            .ToArray();
-        if (!locks.SequenceEqual(ordered))
+        var expectedNamespaces = ProtocolNamespaces[protocol];
+        if (!locks.Select(item => item.LockNamespace).SequenceEqual(expectedNamespaces))
         {
             throw new ArgumentException(
-                "Write locks must follow the published authorization-prefix, namespace, and aggregate-key order.",
+                $"Write locks for protocol '{protocol}' must be exactly: " +
+                string.Join(" then ", expectedNamespaces) + ".",
                 nameof(locks));
         }
 
@@ -133,13 +148,12 @@ public sealed class WriteLockPlan
             throw new ArgumentException("A lock plan cannot acquire the same lock twice.", nameof(locks));
         }
 
+        Protocol = protocol;
         Locks = locks;
     }
 
+    public WriteLockProtocol? Protocol { get; }
     public IReadOnlyList<WriteLock> Locks { get; }
-
-    private static int NamespaceOrder(string lockNamespace) =>
-        CommonNamespaceOrder.GetValueOrDefault(lockNamespace, 1_000);
 }
 
 public sealed record WriteLock
