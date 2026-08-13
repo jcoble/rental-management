@@ -8,6 +8,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Outbox;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.AiIntegrations;
 
@@ -480,40 +481,28 @@ internal static class AiIntegrationCommandSupport
         RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct) =>
-        db.Set<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
-            assignment.PortfolioId == portfolioId &&
-            assignment.WorkspaceMembership != null &&
-            assignment.WorkspaceMembership.AccessContext != null &&
-            assignment.WorkspaceMembership.AccessContext.Id == command.ActorAccessContextId &&
-            assignment.WorkspaceMembership.AccessContext.UserId == command.ActorUserId &&
-            assignment.WorkspaceMembership.AccessContext.PortfolioId == portfolioId &&
-            assignment.WorkspaceMembership.AccessContext.AccessRevision == command.ActorAccessRevision &&
-            assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
-            assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
-            assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
-            assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
-            assignment.WorkspaceMembership.SuspendedAtUtc == null &&
-            assignment.WorkspaceMembership.RevokedAtUtc == null &&
-            assignment.WorkspaceMembership.EffectiveFromUtc <= now &&
-            (assignment.WorkspaceMembership.EffectiveToUtc == null ||
-             assignment.WorkspaceMembership.EffectiveToUtc > now) &&
-            assignment.Status == MembershipRoleAssignmentStatus.Active &&
-            assignment.SuspendedAtUtc == null &&
-            assignment.RevokedAtUtc == null &&
-            assignment.EffectiveFromUtc <= now &&
-            (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now) &&
-            assignment.RoleProfile!.Capabilities.Any(grant =>
-                grant.CapabilityDefinition!.Key == capability &&
-                grant.CapabilityDefinition.AuthorizationTargetKind == CapabilityAuthorizationTargetKind.Property) &&
+        PropertyCapabilityAssignments(portfolioId, command, capability, db, now).AnyAsync(ct);
+
+    internal static IQueryable<MembershipRoleAssignment> PropertyCapabilityAssignments(
+        int portfolioId,
+        IAiIntegrationActorCommand command,
+        string capability,
+        RentalCommandDbContext db,
+        DateTime now)
+    {
+        var assignments = db.AuthorizedAssignmentsForScope(
+            new WorkspaceReadScope(
+                portfolioId,
+                command.ActorUserId,
+                command.ActorAuthSessionId,
+                command.ActorAccessContextId,
+                command.ActorAccessRevision),
+            [capability],
+            CapabilityAuthorizationTargetKind.Property,
+            now);
+        return assignments.Where(assignment =>
             (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
              (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-              assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId))) &&
-            db.Set<AuthSession>().Any(session =>
-                session.Id == command.ActorAuthSessionId &&
-                session.UserId == command.ActorUserId &&
-                session.ActiveAccessContextId == command.ActorAccessContextId &&
-                session.Status == AuthSessionStatus.Active &&
-                session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > now),
-            ct);
+              assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId))));
+    }
 }
