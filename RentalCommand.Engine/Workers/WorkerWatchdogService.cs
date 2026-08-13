@@ -11,8 +11,7 @@ namespace RentalCommand.Engine.Workers;
 /// Periodically checks every worker's last heartbeat timestamp and logs a WARNING
 /// when a worker has not checked in within its configured threshold. After
 /// <see cref="RequiredConsecutiveDetections"/> consecutive stuck detections the watchdog
-/// calls <see cref="IHostApplicationLifetime.StopApplication"/> so the process manager
-/// (systemd / Docker) restarts a fresh instance.
+/// logs a critical alert while the worker's own supervisor continues isolated restarts.
 ///
 /// Thresholds are defined in <see cref="WorkerHealthThresholds.WatchdogStuckSeconds"/>.
 /// </summary>
@@ -21,24 +20,21 @@ public class WorkerWatchdogService : BackgroundService
     private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Number of consecutive stuck detections required before triggering a restart.
-    /// Prevents false-positive restarts from transient slow DB queries or brief
+    /// Number of consecutive stuck detections required before raising a critical alert.
+    /// Prevents false-positive alerts from transient slow DB queries or brief
     /// processing spikes. At 30 s check interval, 3 consecutive = ~90 s confirmed stuck.
     /// </summary>
     private const int RequiredConsecutiveDetections = 3;
 
     private readonly IServiceProvider _serviceProvider;
-    private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<WorkerWatchdogService> _logger;
     private readonly Dictionary<string, int> _consecutiveStuckCounts = new();
 
     public WorkerWatchdogService(
         IServiceProvider serviceProvider,
-        IHostApplicationLifetime lifetime,
         ILogger<WorkerWatchdogService> logger)
     {
         _serviceProvider = serviceProvider;
-        _lifetime = lifetime;
         _logger = logger;
     }
 
@@ -46,7 +42,7 @@ public class WorkerWatchdogService : BackgroundService
     {
         _logger.LogInformation(
             "WorkerWatchdog started — checking every {Interval}s, " +
-            "requires {Consecutive} consecutive stuck detections before restart",
+            "requires {Consecutive} consecutive stuck detections before a critical alert",
             CheckInterval.TotalSeconds, RequiredConsecutiveDetections);
 
         // Give workers time to start and record their first heartbeat.
@@ -105,18 +101,15 @@ public class WorkerWatchdogService : BackgroundService
                 {
                     _logger.LogWarning(
                         "WorkerWatchdog: {WorkerName} appears unhealthy — {Reason}. " +
-                        "Detection {Count}/{Required} before restart.",
+                        "Detection {Count}/{Required} before a critical alert.",
                         observation.WorkerName, reason, count, RequiredConsecutiveDetections);
                     continue;
                 }
 
                 _logger.LogCritical(
                     "WorkerWatchdog: {WorkerName} confirmed unhealthy after {Count} consecutive detections — " +
-                    "{Reason}. Triggering engine restart.",
+                    "{Reason}. The worker remains isolated and will keep restarting without stopping the Engine.",
                     observation.WorkerName, count, reason);
-
-                _lifetime.StopApplication();
-                return;
             }
             else
             {
