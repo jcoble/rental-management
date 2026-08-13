@@ -35,6 +35,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
+    private IServiceScope? _serviceScope;
     private readonly DepositBatchCommandCounter _commandCounter = new();
     private bool _dockerAvailable;
 
@@ -82,6 +83,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
             ValidateOnBuild = true,
             ValidateScopes = true,
         });
+        _serviceScope = _services.CreateScope();
 
         await using var db = NewContext();
         await db.Database.MigrateAsync();
@@ -90,6 +92,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        _serviceScope?.Dispose();
         if (_services is not null) await _services.DisposeAsync();
         if (_postgres is not null) await _postgres.DisposeAsync();
     }
@@ -639,7 +642,8 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
             .AddInterceptors(_commandCounter)
             .Options);
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private IAtomicUnitOfWork Atomic =>
+        _serviceScope!.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
 
     private static async Task<int> CountDepositChargeOutboxMessagesAsync(
         RentalCommandDbContext db,

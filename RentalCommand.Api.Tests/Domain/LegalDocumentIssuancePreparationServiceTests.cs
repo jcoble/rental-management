@@ -79,7 +79,7 @@ public sealed class LegalDocumentIssuancePreparationServiceTests
             Scope, draft.LeaseManagementId, draft.LegalDocumentId, draft.DraftRevision + 1, "operation-c");
 
         await action.Should().ThrowAsync<DomainValidationException>()
-            .WithMessage("*DraftRevision is stale*");
+            .WithMessage("*draft has changed; reload it before preparing the document.*");
         renderer.Verify(value => value.RenderExactAsync(
             It.IsAny<int>(), It.IsAny<int>(), It.IsAny<LeaseAgreementRenderData>(),
             It.IsAny<Func<byte[]>>(), It.IsAny<CancellationToken>()), Times.Never);

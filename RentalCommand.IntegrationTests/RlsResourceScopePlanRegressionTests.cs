@@ -14,6 +14,13 @@ using Xunit;
 
 namespace RentalCommand.IntegrationTests;
 
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class RlsResourceScopePlanRegressionCollection
+{
+    public const string Name = "RLS resource-scope plan regression";
+}
+
+[Collection(RlsResourceScopePlanRegressionCollection.Name)]
 public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
 {
     private const string ApiPassword = "rls-plan-test-password";

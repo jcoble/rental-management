@@ -35,6 +35,7 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
     private readonly AtomicAuditFailureInterceptor _failure = new();
     private MigratedPostgreSqlTestContext _context = null!;
     private ServiceProvider _services = null!;
+    private IServiceScope _serviceScope = null!;
 
     public LeaseLifecycleApplicationPostgreSqlTests(
         MigratedPostgreSqlFixture fixture,
@@ -67,10 +68,12 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             ValidateOnBuild = true,
             ValidateScopes = true,
         });
+        _serviceScope = _services.CreateScope();
     }
 
     public async Task DisposeAsync()
     {
+        _serviceScope?.Dispose();
         if (_services is not null) await _services.DisposeAsync();
         if (_context is not null) await _context.DisposeAsync();
     }
@@ -294,7 +297,8 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         pageSql.Should().NotContain("\"UpdatedAt\" AS");
     }
 
-    private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
+    private IAtomicUnitOfWork Atomic =>
+        _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
 
     private IReadOnlyList<string> CaptureSql() => _sqlCapture.Commands;
 
