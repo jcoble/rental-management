@@ -524,8 +524,7 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
             Recurring(decoy, "Target HVAC decoy", Now.AddDays(3)));
         await _context.Db.SaveChangesAsync();
 
-        var service = new RecurringMaintenanceTaskService(
-            _context.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
+        var service = new RecurringMaintenanceTaskService(_context.Db, TimeProvider.System);
         _commands.Clear();
         var page = await service.ListPageAuthorizedAsync(
             scope,

@@ -263,8 +263,7 @@ public class RecurringMaintenanceServiceTests : IDisposable
         failed.WorkerClaimQuarantinedAtUtc.Should().BeNull();
 
         _ctx.Db.ChangeTracker.Clear();
-        var apiPayload = await new RecurringMaintenanceTaskService(
-                _ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>())
+        var apiPayload = await new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System)
             .ListAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery());
         var failedPayload = apiPayload.Single(row => row.Id == poison.Id);
         failedPayload.AutomationFailureReason.Should().Be(failed.WorkerClaimLastFailureReason);
@@ -351,8 +350,7 @@ public class RecurringMaintenanceServiceTests : IDisposable
         (await sut.GenerateAsync()).Should().Be(0);
 
         _ctx.Db.ChangeTracker.Clear();
-        var apiPayload = await new RecurringMaintenanceTaskService(
-                _ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>())
+        var apiPayload = await new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System)
             .ListAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery());
         var reason = apiPayload.Single(row => row.Id == task.Id).AutomationFailureReason;
         reason.Should().NotBeNull();

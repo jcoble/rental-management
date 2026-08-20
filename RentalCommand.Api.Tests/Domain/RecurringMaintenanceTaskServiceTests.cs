@@ -2,9 +2,9 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -27,8 +27,7 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
     public RecurringMaintenanceTaskServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new RecurringMaintenanceTaskService(
-            _ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
+        _sut = new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -164,10 +163,8 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
 
         var scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(RecurringMaintenanceTaskServiceTests));
         using var services = AtomicDomainTestKernel.CreateForRecurringMaintenance(_ctx.ConnectionString);
-        var service = new RecurringMaintenanceTaskService(
-            _ctx.Db,
-            TimeProvider.System,
-            services.GetRequiredService<IAtomicUnitOfWork>());
+        using var serviceScope = services.CreateScope();
+        var service = serviceScope.ServiceProvider.GetRequiredService<RecurringMaintenanceTaskService>();
 
         var response = operation switch
         {
