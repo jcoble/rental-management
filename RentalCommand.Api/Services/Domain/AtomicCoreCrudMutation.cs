@@ -14,77 +14,65 @@ using RentalCommand.Api.Services;
 
 namespace RentalCommand.Api.Services.Domain;
 
-public enum AtomicCoreCrudMutationDomain { Property, OwnerEntity, Tenant, Vendor }
-public enum AtomicCoreCrudMutationOperation { Create, Update, Delete, Setup }
-
-public sealed record AtomicCoreCrudMutationCommand(
-    int PortfolioId,
-    int ActorUserId,
-    [property: AtomicFingerprintIgnore]
-    Guid AuthSessionId,
-    [property: AtomicFingerprintIgnore]
-    int AccessContextId,
-    [property: AtomicFingerprintIgnore]
-    long ExpectedAccessRevision,
-    AtomicCoreCrudMutationDomain Domain,
-    AtomicCoreCrudMutationOperation Operation,
-    int EntityId,
-    string RequestJson,
-    [property: AtomicFingerprintIgnore]
-    string DeliveryIdempotencyKey,
-    [property: AtomicFingerprintIgnore]
-    DateTime? CreatedAtUtc = null,
-    [property: AtomicFingerprintIgnore]
-    DateTime? ChangedAtUtc = null) : IAtomicCommandData;
-
-public sealed record AtomicCoreCrudMutationResult(
-    bool Found,
-    bool Applied,
-    int EntityId,
-    string? ResponseJson = null);
-
-public sealed class AtomicCoreCrudMutationHandler
-    : IAtomicCommandHandler<AtomicCoreCrudMutationCommand, AtomicCoreCrudMutationResult>
+internal sealed class PropertyTenantCrudWriteRules
 {
     private readonly RentalCommandDbContext _db;
 
-    public AtomicCoreCrudMutationHandler(RentalCommandDbContext db) => _db = db;
+    public PropertyTenantCrudWriteRules(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AtomicCoreCrudMutationResult> HandleAsync(
-        AtomicCoreCrudMutationCommand command,
+    public Task<AtomicCoreCrudMutationResult> SetupPropertyAsync(
+        CoreCrudWriteRequest command, IAtomicCommandContext attempt, CancellationToken ct) =>
+        ExecuteAsync(command, attempt,
+            AtomicCoreCrudMutationDomain.Property, AtomicCoreCrudMutationOperation.Setup, ct);
+
+    public Task<AtomicCoreCrudMutationResult> RejectPropertyCreateAsync(
+        CoreCrudWriteRequest command, IAtomicCommandContext attempt, CancellationToken ct) =>
+        ExecuteAsync(command, attempt,
+            AtomicCoreCrudMutationDomain.Property, AtomicCoreCrudMutationOperation.Create, ct);
+
+    public Task<AtomicCoreCrudMutationResult> UpdatePropertyAsync(
+        CoreCrudWriteRequest command, IAtomicCommandContext attempt, CancellationToken ct) =>
+        ExecuteAsync(command, attempt,
+            AtomicCoreCrudMutationDomain.Property, AtomicCoreCrudMutationOperation.Update, ct);
+
+    public Task<AtomicCoreCrudMutationResult> DeletePropertyAsync(
+        CoreCrudWriteRequest command, IAtomicCommandContext attempt, CancellationToken ct) =>
+        ExecuteAsync(command, attempt,
+            AtomicCoreCrudMutationDomain.Property, AtomicCoreCrudMutationOperation.Delete, ct);
+
+    public Task<AtomicCoreCrudMutationResult> CreateTenantAsync(
+        CoreCrudWriteRequest command, IAtomicCommandContext attempt, CancellationToken ct) =>
+        ExecuteAsync(command, attempt,
+            AtomicCoreCrudMutationDomain.Tenant, AtomicCoreCrudMutationOperation.Create, ct);
+
+    public Task<AtomicCoreCrudMutationResult> UpdateTenantAsync(
+        CoreCrudWriteRequest command, IAtomicCommandContext attempt, CancellationToken ct) =>
+        ExecuteAsync(command, attempt,
+            AtomicCoreCrudMutationDomain.Tenant, AtomicCoreCrudMutationOperation.Update, ct);
+
+    public Task<AtomicCoreCrudMutationResult> DeleteTenantAsync(
+        CoreCrudWriteRequest command, IAtomicCommandContext attempt, CancellationToken ct) =>
+        ExecuteAsync(command, attempt,
+            AtomicCoreCrudMutationDomain.Tenant, AtomicCoreCrudMutationOperation.Delete, ct);
+
+    private async Task<AtomicCoreCrudMutationResult> ExecuteAsync(
+        CoreCrudWriteRequest command,
         IAtomicCommandContext attempt,
+        AtomicCoreCrudMutationDomain expectedDomain,
+        AtomicCoreCrudMutationOperation expectedOperation,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await attempt.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
-        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
-        if (command.EntityId > 0)
-        {
-            var resource = command.Domain switch
-            {
-                AtomicCoreCrudMutationDomain.Property => "Property",
-                AtomicCoreCrudMutationDomain.Tenant => "Tenant",
-                AtomicCoreCrudMutationDomain.OwnerEntity or AtomicCoreCrudMutationDomain.Vendor =>
-                    throw RetiredDomain(),
-                _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
-            };
-            await attempt.AcquireLockAsync(resource, command.EntityId, ct);
-        }
-
-        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
-        return command.Domain switch
-        {
-            AtomicCoreCrudMutationDomain.Property => await MutatePropertyAsync(command, attempt, now, ct),
-            AtomicCoreCrudMutationDomain.Tenant => await MutateTenantAsync(command, attempt, now, ct),
-            AtomicCoreCrudMutationDomain.OwnerEntity or AtomicCoreCrudMutationDomain.Vendor =>
-                throw RetiredDomain(),
-            _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
-        };
+        if (command.Domain != expectedDomain || command.Operation != expectedOperation)
+            throw new ArgumentException("That core CRUD action is not supported.");
+        var now = await attempt.ReadDatabaseClockUtcAsync(ct);
+        return command.Domain == AtomicCoreCrudMutationDomain.Property
+            ? await MutatePropertyAsync(command, attempt, now, ct)
+            : await MutateTenantAsync(command, attempt, now, ct);
     }
 
     public async Task AuthorizeReplayAsync(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
@@ -102,8 +90,6 @@ public sealed class AtomicCoreCrudMutationHandler
                     CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage, ct),
             AtomicCoreCrudMutationDomain.Tenant =>
                 await AuthorizeTenantAsync(command, _db, now, ct),
-            AtomicCoreCrudMutationDomain.OwnerEntity or AtomicCoreCrudMutationDomain.Vendor =>
-                throw RetiredDomain(),
             _ => false,
         };
         if (!authorized)
@@ -111,7 +97,7 @@ public sealed class AtomicCoreCrudMutationHandler
     }
 
     private async Task<AtomicCoreCrudMutationResult> MutatePropertyAsync(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
@@ -119,7 +105,7 @@ public sealed class AtomicCoreCrudMutationHandler
         const string entityType = nameof(Property);
         var db = _db;
         if (command.Operation == AtomicCoreCrudMutationOperation.Setup)
-            return await SetupPropertyAsync(command, attempt, now, ct);
+            return await ApplyPropertySetupAsync(command, attempt, now, ct);
 
         if (command.Operation == AtomicCoreCrudMutationOperation.Create)
             throw Conflict("Properties must be created with the atomic Property setup command so their Units are committed together.");
@@ -207,8 +193,8 @@ public sealed class AtomicCoreCrudMutationHandler
         return Applied(property.Id, await SnapshotPropertyAsync(property, db, ct, mutationNow));
     }
 
-    private async Task<AtomicCoreCrudMutationResult> SetupPropertyAsync(
-        AtomicCoreCrudMutationCommand command,
+    private async Task<AtomicCoreCrudMutationResult> ApplyPropertySetupAsync(
+        CoreCrudWriteRequest command,
         IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
@@ -486,7 +472,7 @@ public sealed class AtomicCoreCrudMutationHandler
     }
 
     private async Task<int> EnsureSelfOwnerAsync(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
@@ -547,7 +533,7 @@ public sealed class AtomicCoreCrudMutationHandler
     }
 
     private async Task<OwnershipLifecycleChange> ReplaceCurrentOwnershipsAsync(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         int propertyId,
         IReadOnlyList<PropertyOwnership> replacements,
         DateTime now,
@@ -602,7 +588,7 @@ public sealed class AtomicCoreCrudMutationHandler
 
     private void StageOwnershipLifecycleAudits(
         IAtomicCommandContext attempt,
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         int propertyId,
         OwnershipLifecycleChange? change,
         DateTime occurredAtUtc)
@@ -654,7 +640,7 @@ public sealed class AtomicCoreCrudMutationHandler
     };
 
     private async Task<AtomicCoreCrudMutationResult> MutateTenantAsync(
-        AtomicCoreCrudMutationCommand command, IAtomicCommandContext attempt, DateTime now, CancellationToken ct)
+        CoreCrudWriteRequest command, IAtomicCommandContext attempt, DateTime now, CancellationToken ct)
     {
         var db = _db;
         if (command.Operation == AtomicCoreCrudMutationOperation.Create)
@@ -717,7 +703,7 @@ public sealed class AtomicCoreCrudMutationHandler
     }
 
     private Task<bool> AuthorizeAllPropertiesAsync(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         RentalCommandDbContext db,
         DateTime now,
         string capability,
@@ -725,7 +711,7 @@ public sealed class AtomicCoreCrudMutationHandler
         AuthorizeAllPropertiesEitherAsync(command, db, now, capability, capability, ct);
 
     private Task<bool> AuthorizeAllPropertiesEitherAsync(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         RentalCommandDbContext db,
         DateTime now,
         string firstCapability,
@@ -735,7 +721,7 @@ public sealed class AtomicCoreCrudMutationHandler
             .AnyAsync(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties, ct);
 
     private Task<bool> AuthorizePropertyEntityAsync(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         RentalCommandDbContext db,
         DateTime now,
         string capability,
@@ -744,7 +730,7 @@ public sealed class AtomicCoreCrudMutationHandler
             .AnyAsync(property => property.Id == command.EntityId, ct);
 
     private async Task<bool> AuthorizeTenantAsync(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
@@ -762,7 +748,7 @@ public sealed class AtomicCoreCrudMutationHandler
     }
 
     private IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         RentalCommandDbContext db,
         DateTime now,
         string firstCapability,
@@ -774,7 +760,7 @@ public sealed class AtomicCoreCrudMutationHandler
             now);
 
     private IQueryable<Property> AuthorizedProperties(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         RentalCommandDbContext db,
         DateTime now,
         string firstCapability,
@@ -787,7 +773,7 @@ public sealed class AtomicCoreCrudMutationHandler
             now);
     }
 
-    private static WorkspaceReadScope Scope(AtomicCoreCrudMutationCommand command) => new(
+    private static WorkspaceReadScope Scope(CoreCrudWriteRequest command) => new(
         command.PortfolioId,
         command.ActorUserId,
         command.AuthSessionId,
@@ -889,7 +875,7 @@ public sealed class AtomicCoreCrudMutationHandler
 
     private void StageDataUpdate(
         IAtomicCommandContext attempt,
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         string entityType,
         int entityId,
         DateTime now,
@@ -912,7 +898,7 @@ public sealed class AtomicCoreCrudMutationHandler
         });
 
     private AtomicSemanticAudit Audit(
-        AtomicCoreCrudMutationCommand command,
+        CoreCrudWriteRequest command,
         string entityType,
         AuditLogOperation operation,
         string reason,
@@ -920,7 +906,7 @@ public sealed class AtomicCoreCrudMutationHandler
             command.PortfolioId, entityType, entityId ?? command.EntityId, operation,
             UserId: command.ActorUserId, ChangeReason: reason);
 
-    private T Read<T>(AtomicCoreCrudMutationCommand command) where T : class =>
+    private T Read<T>(CoreCrudWriteRequest command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
         ?? throw new ArgumentException("The record update is invalid.");
 
@@ -930,7 +916,7 @@ public sealed class AtomicCoreCrudMutationHandler
         return trimmed.Length == 0 ? null : trimmed;
     }
 
-    private void Validate(AtomicCoreCrudMutationCommand command)
+    private void Validate(CoreCrudWriteRequest command)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0
             || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0
@@ -951,30 +937,4 @@ public sealed class AtomicCoreCrudMutationHandler
     private UnauthorizedAccessException Denied() => new(
         "The record is not authorized in the current workspace scope.");
     private DomainValidationException Conflict(string message) => new(message, 409);
-    private static InvalidOperationException RetiredDomain() => new(
-        "Owner and vendor writes no longer use the legacy core CRUD handler.");
-}
-
-public static class AtomicCoreCrudMutation
-{
-    public static readonly AtomicJsonResultCodec<AtomicCoreCrudMutationResult> Codec =
-        new("rental.core-crud-mutation.v1");
-
-    public static AtomicCoreCrudMutationCommand Command<TRequest>(
-        WorkspaceReadScope scope,
-        AtomicCoreCrudMutationDomain domain,
-        AtomicCoreCrudMutationOperation operation,
-        int entityId,
-        string operationKey,
-        TRequest request,
-        DateTime? createdAtUtc = null,
-        DateTime? changedAtUtc = null) => new(
-            scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
-            scope.AccessRevision, domain, operation, entityId,
-            JsonSerializer.Serialize(request), operationKey, createdAtUtc, changedAtUtc);
-
-    public static AtomicCommandIdentity Identity(AtomicCoreCrudMutationCommand command) => new(
-        $"rental.{command.Domain.ToString().ToLowerInvariant()}.{command.Operation.ToString().ToLowerInvariant()}",
-        $"{command.PortfolioId}:{command.AccessContextId}:{command.Domain}:{command.Operation}:" +
-        $"{command.EntityId}:{command.DeliveryIdempotencyKey}");
 }

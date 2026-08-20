@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -765,11 +766,8 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
         readback.ReceiptCount.Should().Be(0);
     }
 
-    private PropertyService CreateService() => new(
-        _context.Db,
-        Mock.Of<IDataUpdateService>(),
-        new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-        _services.GetRequiredService<IAtomicUnitOfWork>());
+    private PropertyService CreateService() =>
+        _services.GetRequiredService<PropertyService>();
 
     private async Task<SeededOwnership> SeedPropertyWithOwnersAsync(DateTime? propertyUpdatedAtUtc = null)
     {
@@ -896,10 +894,9 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
         services.AddSingleton(timeProvider);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            AtomicCoreCrudMutationCommand,
-            AtomicCoreCrudMutationResult,
-            AtomicCoreCrudMutationHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddSingleton(Mock.Of<IDataUpdateService>());
+        services.AddScoped<PropertyService>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(connectionString)

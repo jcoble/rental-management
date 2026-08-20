@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -127,11 +128,8 @@ public sealed class PropertyYearBuiltValidationPostgreSqlTests : IAsyncLifetime
         updated!.YearBuilt.Should().Be(BusinessDate.Year);
     }
 
-    private PropertyService CreateService() => new(
-        _context.Db,
-        Mock.Of<IDataUpdateService>(),
-        new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-        _services.GetRequiredService<IAtomicUnitOfWork>());
+    private PropertyService CreateService() =>
+        _services.GetRequiredService<PropertyService>();
 
     private async Task<Property> SeedPropertyAsync(int? yearBuilt)
     {
@@ -210,10 +208,9 @@ public sealed class PropertyYearBuiltValidationPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(timeProvider);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            AtomicCoreCrudMutationCommand,
-            AtomicCoreCrudMutationResult,
-            AtomicCoreCrudMutationHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddSingleton(Mock.Of<IDataUpdateService>());
+        services.AddScoped<PropertyService>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider));

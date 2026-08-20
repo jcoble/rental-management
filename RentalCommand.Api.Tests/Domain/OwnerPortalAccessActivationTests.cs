@@ -796,10 +796,6 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
             RevokeOwnerPortalAccessMutationResult,
             RevokeOwnerPortalAccessHandler>();
         services.AddAtomicCommandHandler<
-            AtomicCoreCrudMutationCommand,
-            AtomicCoreCrudMutationResult,
-            AtomicCoreCrudMutationHandler>();
-        services.AddAtomicCommandHandler<
             ActivateWorkspaceInvitationCommand,
             ActivateWorkspaceInvitationResult,
             ActivateWorkspaceInvitationHandler>();

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using Moq;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
@@ -165,10 +166,9 @@ internal static class AtomicDomainTestKernel
     {
         var services = Core(connectionString, timeProvider);
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            AtomicCoreCrudMutationCommand,
-            AtomicCoreCrudMutationResult,
-            AtomicCoreCrudMutationHandler>();
+        services.AddSingleton(Mock.Of<IDataUpdateService>());
+        services.AddScoped<PropertyService>();
+        services.AddScoped<TenantService>();
         services.AddAtomicCommandHandler<
             AtomicGuidedTenantSetupCommand,
             AtomicGuidedTenantSetupResult,
@@ -191,10 +191,10 @@ internal static class AtomicDomainTestKernel
         TimeProvider? timeProvider = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider);
-        services.AddAtomicCommandHandler<
-            AtomicCoreCrudMutationCommand,
-            AtomicCoreCrudMutationResult,
-            AtomicCoreCrudMutationHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddSingleton(Mock.Of<IDataUpdateService>());
+        services.AddScoped<PropertyService>();
+        services.AddScoped<TenantService>();
         services.AddAtomicCommandHandler<
             AtomicGuidedTenantSetupCommand,
             AtomicGuidedTenantSetupResult,
@@ -205,6 +205,11 @@ internal static class AtomicDomainTestKernel
     internal static ServiceProvider CreateForRentalCrudPostgreSql(string connectionString)
     {
         var services = CorePostgreSql(connectionString);
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton(Mock.Of<IDataUpdateService>());
+        services.AddSingleton(Mock.Of<IAuditTrailService>());
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddScoped<UnitService>();
         services.AddAtomicCommandHandler<
             AtomicRentalMutationCommand,
             AtomicRentalMutationResult,

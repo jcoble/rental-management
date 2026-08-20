@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -23,17 +24,22 @@ public class UnitService : IUnitService
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor? _writes;
+    private readonly UnitCrudWriteRules _crudRules;
 
     public UnitService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _timeProvider = timeProvider;
         _atomic = atomic;
+        _writes = writes;
+        _crudRules = new UnitCrudWriteRules(db);
     }
 
     public async Task<IReadOnlyList<UnitResponse>> ListAsync(
@@ -1182,10 +1188,12 @@ public class UnitService : IUnitService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Unit,
+        var command = RentalCrudWriteSupport.Request(scope,
             AtomicRentalMutationOperation.Create, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        var write = RentalCrudWriteSupport.Write(
+            command, _crudRules.CreateAsync, _crudRules.AuthorizeReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            RentalCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found && outcome.Value.ResponseJson is { Length: > 0 } json
             ? JsonSerializer.Deserialize<UnitResponse>(json)
               ?? throw new InvalidOperationException("The Unit receipt snapshot is invalid.")
@@ -1199,9 +1207,11 @@ public class UnitService : IUnitService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicRentalMutation.UnitUpdateCommand(scope, id, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        var command = RentalCrudWriteSupport.UnitUpdateRequest(scope, id, operationKey, request);
+        var write = RentalCrudWriteSupport.Write(
+            command, _crudRules.UpdateAsync, _crudRules.AuthorizeReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            RentalCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
     }
 
@@ -1211,13 +1221,18 @@ public class UnitService : IUnitService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Unit,
+        var command = RentalCrudWriteSupport.Request(scope,
             AtomicRentalMutationOperation.Delete, id, operationKey, new object());
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        var write = RentalCrudWriteSupport.Write(
+            command, _crudRules.DeleteAsync, _crudRules.AuthorizeReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            RentalCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found;
     }
 
     private IAtomicUnitOfWork Atomic => _atomic;
+
+    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
+        "Unit changes must use the shared write executor.");
 
 }
