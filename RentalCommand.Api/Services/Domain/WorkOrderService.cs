@@ -1,7 +1,7 @@
-using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -12,20 +12,19 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Operations;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <inheritdoc cref="IWorkOrderService"/>
 public class WorkOrderService : IWorkOrderService
 {
-    private static readonly AtomicJsonResultCodec<WorkOrderMutationResult> MutationCodec =
-        new("work-order.mutation.v2");
     private const string EntityType = "WorkOrder";
 
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IRequestWriteExecutor? _writes;
 
     public WorkOrderService(
         RentalCommandDbContext db,
@@ -34,12 +33,12 @@ public class WorkOrderService : IWorkOrderService
         IFileStorage files,
         ILogger<WorkOrderService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null)
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _files = files;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default)
@@ -484,8 +483,9 @@ public class WorkOrderService : IWorkOrderService
             request.ScheduledFor.ToUtcDateTime(), request.ScheduledWindowEnd.ToUtcDateTime(),
             request.CompletedAt.ToUtc(), request.EstimatedCost, request.ActualCost,
             request.CreatedBy, request.ExtractedData, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("work-order.create", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            WorkOrderCrudWriteSupport.Write(command, CreateWorkOrderAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -510,8 +510,9 @@ public class WorkOrderService : IWorkOrderService
             request.ScheduledWindowEnd.ToUtcDateTime(), request.CompletedAt.ToUtc(),
             request.EstimatedCost, request.ActualCost,
             _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("work-order.update", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            WorkOrderCrudWriteSupport.Write(command, UpdateWorkOrderAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -523,8 +524,9 @@ public class WorkOrderService : IWorkOrderService
     {
         var command = new DeleteWorkOrderCommand(
             scope.PortfolioId, Actor(scope), id, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("work-order.delete", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            WorkOrderCrudWriteSupport.Write(command, DeleteWorkOrderAsync, AuthorizeReplayAsync), ct);
         return outcome.Value.Outcome == OperationMutationOutcome.Applied;
     }
 
@@ -538,22 +540,49 @@ public class WorkOrderService : IWorkOrderService
         var command = new AddStaffWorkOrderCommentCommand(
             scope.PortfolioId, Actor(scope), id, request.Body, request.IsPrivate,
             _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("work-order.comment", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            WorkOrderCrudWriteSupport.Write(command, AddCommentAsync, AuthorizeReplayAsync), ct);
         return Receipt(outcome.Value);
     }
 
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Work-order changes are not available right now.");
+    private Task<WorkOrderMutationResult> CreateWorkOrderAsync(
+        CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        new CreateWorkOrderRule(_db).HandleAsync(command, context, ct);
+
+    private Task<WorkOrderMutationResult> UpdateWorkOrderAsync(
+        UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        new UpdateWorkOrderRule(_db).HandleAsync(command, context, ct);
+
+    private Task<WorkOrderMutationResult> DeleteWorkOrderAsync(
+        DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        new DeleteWorkOrderRule(_db).HandleAsync(command, context, ct);
+
+    private Task<WorkOrderMutationResult> AddCommentAsync(
+        AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        new AddStaffWorkOrderCommentRule(_db).HandleAsync(command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        new CreateWorkOrderRule(_db).AuthorizeReplayAsync(command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        new UpdateWorkOrderRule(_db).AuthorizeReplayAsync(command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        new DeleteWorkOrderRule(_db).AuthorizeReplayAsync(command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        new AddStaffWorkOrderCommentRule(_db).AuthorizeReplayAsync(command, context, ct);
+
+    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
+        "The shared request write executor is required for work-order changes.");
 
     private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
         scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);
-
-    private static AtomicCommandIdentity Identity(string operation, string key)
-    {
-        var digest = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)));
-        return new AtomicCommandIdentity(operation, digest);
-    }
 
     private static WorkOrderResponse? Response(WorkOrderMutationResult result) =>
         result.Outcome == OperationMutationOutcome.NotFound || result.Snapshot is null

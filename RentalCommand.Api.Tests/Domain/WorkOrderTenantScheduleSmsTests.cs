@@ -57,13 +57,13 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         _services = AtomicDomainTestKernel.CreateForWorkOrders(_conn.ConnectionString);
 
         _workOrders = new WorkOrderService(
-            _db,
+            _services.GetRequiredService<RentalCommandDbContext>(),
             new NoopDataUpdate(),
             Mock.Of<IMessagePublisher>(),
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
     }
 
     public void Dispose()
