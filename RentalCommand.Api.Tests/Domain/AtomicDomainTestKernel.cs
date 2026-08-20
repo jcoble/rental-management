@@ -41,6 +41,7 @@ internal static class AtomicDomainTestKernel
         IEnumerable<IInterceptor>? interceptors = null)
     {
         var services = Core(connectionString, timeProvider, interceptors);
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             CreateAppointmentCommand,
             OperationMutationResult,
@@ -62,6 +63,7 @@ internal static class AtomicDomainTestKernel
         IEnumerable<IInterceptor>? interceptors = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             CreateAppointmentCommand,
             OperationMutationResult,

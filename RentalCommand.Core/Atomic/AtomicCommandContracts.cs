@@ -110,6 +110,8 @@ public enum WriteLockProtocol
     AuthorizationScopeProperty,
     AuthorizationScopeUnit,
     AuthorizationScopeTenant,
+    WorkOrder,
+    AppointmentWorkOrder,
     Possession,
     ConfirmMoveIn,
 }
@@ -131,6 +133,9 @@ public sealed class WriteLockPlan
                 ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Unit"],
             [WriteLockProtocol.AuthorizationScopeTenant] =
                 ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Tenant"],
+            [WriteLockProtocol.WorkOrder] = ["WorkOrder"],
+            // The work-order tail is resolved by the rule only after this appointment lock is held.
+            [WriteLockProtocol.AppointmentWorkOrder] = ["Appointment"],
             [WriteLockProtocol.Possession] =
                 ["Unit", "LeaseManagement"],
             [WriteLockProtocol.ConfirmMoveIn] =
@@ -169,6 +174,8 @@ public sealed class WriteLockPlan
 
     public WriteLockProtocol? Protocol { get; }
     public IReadOnlyList<WriteLock> Locks { get; }
+    public IReadOnlyList<string> DeferredLockNamespaces =>
+        Protocol == WriteLockProtocol.AppointmentWorkOrder ? ["WorkOrder"] : [];
 }
 
 public sealed record WriteLock
