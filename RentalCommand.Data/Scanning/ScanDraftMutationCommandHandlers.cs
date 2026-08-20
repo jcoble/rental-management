@@ -13,6 +13,7 @@ public static class ScanDraftWriteSupport
     public const string FinalizeResultContract = "scan-upload.finalize.result.v1";
     public const string MutationResultContract = "scan-draft.mutation.result.v1";
     public const string RejectResultContract = "scan-draft-reject-result:v1";
+    public const string ConfirmResultContract = "scan-confirm.result.v1";
 
     public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
         string operationName,
@@ -37,6 +38,9 @@ public static class ScanDraftWriteSupport
             SetScanDraftPaymentAccountCommand value => DraftPlan(
                 value.AuthSessionId, value.AccessContextId, value.PortfolioId, value.DraftId),
             RejectScanDraftCommand => WriteLockPlan.None,
+            ConfirmScanDraftCommand => WriteLockPlan.None,
+            CreateManualLeaseCommand value => ScopePlan(
+                value.AuthSessionId, value.AccessContextId, value.PortfolioId),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
 
@@ -72,6 +76,8 @@ public static class ScanDraftWriteSupport
             case AnswerVoiceScanDraftCommand value: ScanDraftMutationValidation.Validate(value); break;
             case SetScanDraftPaymentAccountCommand value: ScanDraftMutationValidation.Validate(value); break;
             case RejectScanDraftCommand value: RejectScanDraftHandler.Validate(value); break;
+            case ConfirmScanDraftCommand value: ConfirmScanDraftHandler.Validate(value); break;
+            case CreateManualLeaseCommand value: CreateManualLeaseHandler.Validate(value); break;
             case FinalizeScanUploadCommand value when value.Files is not { Count: > 0 and <= 100 }:
                 throw new InvalidOperationException("A scan upload must contain between 1 and 100 files.");
         }

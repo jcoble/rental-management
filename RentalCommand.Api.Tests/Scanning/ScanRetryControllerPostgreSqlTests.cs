@@ -15,6 +15,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.TestCommon;
@@ -260,6 +261,7 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
             Mock.Of<IScanUploadService>(),
             _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
             _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
+            Mock.Of<IScanConfirmationTargetWriter>(),
             _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             Mock.Of<IFileStorage>(),
             TimeProvider.System)

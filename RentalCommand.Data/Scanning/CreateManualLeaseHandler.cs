@@ -16,27 +16,26 @@ public sealed class CreateManualLeaseHandler
 {
     private const string SourceLabel = "Guided Setup manual lease";
 
-    private readonly RentalCommandDbContext _db;
-    private readonly IAtomicCommandHandler<ConfirmScanDraftCommand, ConfirmScanDraftResult> _confirmation;
+    public Task<ConfirmScanDraftResult> HandleAsync(
+        CreateManualLeaseCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public CreateManualLeaseHandler(
+    public Task AuthorizeReplayAsync(
+        CreateManualLeaseCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
+
+    public static async Task<ConfirmScanDraftResult> ExecuteAsync(
         RentalCommandDbContext db,
-        IAtomicCommandHandler<ConfirmScanDraftCommand, ConfirmScanDraftResult> confirmation)
-    {
-        _db = db;
-        _confirmation = confirmation;
-    }
-
-    public async Task<ConfirmScanDraftResult> HandleAsync(
+        IScanConfirmationTargetWriter targetWriter,
         CreateManualLeaseCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         ValidateCommand(command);
-
-        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
 
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var extractedFields = JsonSerializer.Serialize(new
@@ -62,7 +61,7 @@ public sealed class CreateManualLeaseHandler
             ReviewedAt = now,
             ReviewedBy = command.UserId.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
-        _db.Add(draft);
+        db.Add(draft);
         context.BindSemanticAudit(draft, new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(ScanDraft),
@@ -78,18 +77,17 @@ public sealed class CreateManualLeaseHandler
         await context.FlushBusinessAsync(ct);
 
         var confirmation = BuildConfirmationCommand(command, draft, now);
-        return await _confirmation.HandleAsync(confirmation, context, ct);
+        return await ConfirmScanDraftHandler.ExecuteAsync(
+            db, targetWriter, confirmation, context, ct);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public static async Task AuthorizeAsync(
+        RentalCommandDbContext db,
         CreateManualLeaseCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         ValidateCommand(command);
-        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         var authorizationCommand = new ConfirmScanDraftCommand(
             command.PortfolioId,
             0,
@@ -106,7 +104,7 @@ public sealed class CreateManualLeaseHandler
             SourceLabel: SourceLabel);
         await CanonicalLeaseScanConfirmationWriter.AuthorizeAsync(
             authorizationCommand,
-            _db,
+            db,
             ct);
     }
 
@@ -156,6 +154,8 @@ public sealed class CreateManualLeaseHandler
                 null,
                 draft.SourceLabel));
     }
+
+    internal static void Validate(CreateManualLeaseCommand command) => ValidateCommand(command);
 
     private static void ValidateCommand(CreateManualLeaseCommand command)
     {
