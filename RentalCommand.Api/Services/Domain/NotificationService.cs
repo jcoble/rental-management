@@ -10,6 +10,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Notifications;
+using NotificationCrudWriteRequest = RentalCommand.Core.Atomic.TransactionalWriteDefaults.AuthorizationScopedRequest<RentalCommand.Api.Services.Domain.NotificationCrudOperation>;
 using RentalCommand.Core.Navigation;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -125,21 +126,15 @@ public class NotificationService : INotificationService
         string operationKey,
         CancellationToken ct = default)
     {
-        var request = NotificationCrudWriteSupport.Request(
+        var request = TransactionalWriteDefaults.Request(
             scope,
             NotificationCrudOperation.MarkRead,
             notificationId,
             string.Empty,
             operationKey,
             new { });
-        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
-            NotificationCrudWriteSupport.OperationName(request),
-            WriteIdempotencyPolicy.Required,
-            request,
-            NotificationCrudWriteSupport.ResultContract,
-            NotificationCrudWriteSupport.LockPlan(request),
-            MarkAsReadAsync,
-            AuthorizeNotificationCrudReplayAsync);
+        var write = NotificationCrudWriteSupport.Write(
+            request, MarkAsReadAsync, AuthorizeNotificationCrudReplayAsync);
         var outcome = await RequireWrites().ExecuteAsync(
             NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
         return outcome.Value.Found;
@@ -151,21 +146,15 @@ public class NotificationService : INotificationService
         string operationKey,
         CancellationToken ct = default)
     {
-        var request = NotificationCrudWriteSupport.Request(
+        var request = TransactionalWriteDefaults.Request(
             scope,
             NotificationCrudOperation.MarkAllRead,
             0,
             string.Empty,
             operationKey,
             new { });
-        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
-            NotificationCrudWriteSupport.OperationName(request),
-            WriteIdempotencyPolicy.Required,
-            request,
-            NotificationCrudWriteSupport.ResultContract,
-            NotificationCrudWriteSupport.LockPlan(request),
-            MarkAllAsReadAsync,
-            AuthorizeNotificationCrudReplayAsync);
+        var write = NotificationCrudWriteSupport.Write(
+            request, MarkAllAsReadAsync, AuthorizeNotificationCrudReplayAsync);
         await RequireWrites().ExecuteAsync(
             NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
     }
@@ -184,7 +173,7 @@ public class NotificationService : INotificationService
             && (isStaff || candidate.Type != "TenantMessage"), ct);
         if (notification is null)
         {
-            return NotificationCrudWriteSupport.Missing();
+            return new AtomicNotificationMutationResult(false, false, 0, 0);
         }
 
         if (await AtomicNotificationPersistence.MarkReadAsync(
@@ -198,14 +187,14 @@ public class NotificationService : INotificationService
                 ct))
         {
             context.StageSemanticEvent(
-                NotificationCrudWriteSupport.Audit(
+                TransactionalWriteDefaults.Audit(
                     request,
                     nameof(NotificationReadState),
                     AuditLogOperation.Created,
                     "Notification marked read",
                     notification.Id),
                 now);
-            NotificationCrudWriteSupport.StageDataUpdate(
+            TransactionalWriteDefaults.StageDataUpdate(
                 request, context, nameof(Notification), notification.Id, now);
             return new AtomicNotificationMutationResult(true, true, notification.Id, 1);
         }
@@ -234,14 +223,14 @@ public class NotificationService : INotificationService
                 ?? throw new InvalidOperationException(
                     "Mark-all-read inserted rows without returning a notification id.");
             context.StageSemanticEvent(
-                NotificationCrudWriteSupport.Audit(
+                TransactionalWriteDefaults.Audit(
                     request,
                     nameof(NotificationReadState),
                     AuditLogOperation.Created,
                     $"{result.Count} notifications marked read",
                     notificationId),
                 now);
-            NotificationCrudWriteSupport.StageDataUpdate(
+            TransactionalWriteDefaults.StageDataUpdate(
                 request, context, nameof(Notification), notificationId, now);
         }
 

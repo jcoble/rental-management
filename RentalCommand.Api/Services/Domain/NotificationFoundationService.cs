@@ -12,6 +12,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Data;
 using RentalCommand.Data.Notifications;
+using NotificationCrudWriteRequest = RentalCommand.Core.Atomic.TransactionalWriteDefaults.AuthorizationScopedRequest<RentalCommand.Api.Services.Domain.NotificationCrudOperation>;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -47,7 +48,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         string operationKey,
         CancellationToken ct)
     {
-        var writeRequest = NotificationCrudWriteSupport.Request(
+        var writeRequest = TransactionalWriteDefaults.Request(
             scope,
             NotificationCrudOperation.MyAlerts,
             0,
@@ -55,14 +56,8 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             operationKey,
             request,
             _clock.GetUtcNow().UtcDateTime);
-        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
-            NotificationCrudWriteSupport.OperationName(writeRequest),
-            WriteIdempotencyPolicy.Required,
-            writeRequest,
-            NotificationCrudWriteSupport.ResultContract,
-            NotificationCrudWriteSupport.LockPlan(writeRequest),
-            UpdateMyAlertsAsync,
-            AuthorizeNotificationCrudReplayAsync);
+        var write = NotificationCrudWriteSupport.Write(
+            writeRequest, UpdateMyAlertsAsync, AuthorizeNotificationCrudReplayAsync);
         var outcome = await RequireWrites().ExecuteAsync(
             NotificationCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return ReadSnapshot<MyAlertsResponse>(outcome.Value);
@@ -99,18 +94,19 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         row.UpdatedAtUtc = now;
         context.BindSemanticAudit(
             row,
-            NotificationCrudWriteSupport.Audit(
+            TransactionalWriteDefaults.Audit(
                 writeRequest,
                 nameof(UserAlertPreference),
                 operation,
                 "Personal notification destinations updated",
                 operation == AuditLogOperation.Created ? 0 : row.Id));
         await context.FlushBusinessAsync(ct);
-        NotificationCrudWriteSupport.StageDataUpdate(
+        TransactionalWriteDefaults.StageDataUpdate(
             writeRequest, context, nameof(UserAlertPreference), row.Id, now);
         var response = await MyAlertsQuery(
             writeRequest.PortfolioId, writeRequest.ActorUserId).SingleAsync(ct);
-        return NotificationCrudWriteSupport.Applied(row.Id, JsonSerializer.Serialize(response));
+        return new AtomicNotificationMutationResult(
+            true, true, row.Id, 1, JsonSerializer.Serialize(response));
     }
 
     private Task AuthorizeNotificationCrudReplayAsync(

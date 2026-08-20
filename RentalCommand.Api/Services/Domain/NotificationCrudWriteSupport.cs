@@ -1,11 +1,8 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
-using RentalCommand.Core.Authorization;
-using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Outbox;
 using RentalCommand.Data;
+using NotificationCrudWriteRequest = RentalCommand.Core.Atomic.TransactionalWriteDefaults.AuthorizationScopedRequest<RentalCommand.Api.Services.Domain.NotificationCrudOperation>;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -18,132 +15,51 @@ internal enum NotificationCrudOperation
     MarkAllRead = 13,
 }
 
-/// <summary>
-/// Immutable application input for the preference, device, and notification read-state writes.
-/// The persisted fingerprint shape intentionally matches the retired mega-handler envelope so
-/// receipts committed before the cutover remain replayable through the shared executor.
-/// </summary>
-internal sealed record NotificationCrudWriteRequest(
-    int PortfolioId,
-    int ActorUserId,
-    [property: AtomicFingerprintIgnore]
-    Guid AuthSessionId,
-    [property: AtomicFingerprintIgnore]
-    int AccessContextId,
-    [property: AtomicFingerprintIgnore]
-    long ExpectedAccessRevision,
-    NotificationCrudOperation Domain,
-    int EntityId,
-    string ResourceKey,
-    string RequestJson,
-    [property: AtomicFingerprintIgnore]
-    string DeliveryIdempotencyKey,
-    [property: AtomicFingerprintIgnore]
-    DateTime BusinessNowUtc = default) : IAtomicCommandData;
-
 internal static class NotificationCrudWriteSupport
 {
     public const string ResultContract = "rental.notification-mutation.v1";
 
-    public static NotificationCrudWriteRequest Request<TRequest>(
-        WorkspaceReadScope scope,
-        NotificationCrudOperation operation,
-        int entityId,
-        string resourceKey,
-        string operationKey,
-        TRequest request,
-        DateTime businessNowUtc = default) =>
-        new(
-            scope.PortfolioId,
-            scope.UserId,
-            scope.SessionId,
-            scope.AccessContextId,
-            scope.AccessRevision,
-            operation,
-            entityId,
-            resourceKey,
-            JsonSerializer.Serialize(request),
-            operationKey,
-            businessNowUtc);
-
-    public static string OperationName(NotificationCrudWriteRequest request) =>
-        $"rental.notification.{request.Domain.ToString().ToLowerInvariant()}";
-
     public static string IdempotencyKey(NotificationCrudWriteRequest request) =>
-        $"{request.PortfolioId}:{request.AccessContextId}:{request.Domain}:" +
-        $"{request.EntityId}:{request.ResourceKey}:{request.DeliveryIdempotencyKey}";
+        TransactionalWriteDefaults.IdempotencyKey(
+            request, request.Domain, request.EntityId, request.ResourceKey);
 
-    public static WriteLockPlan LockPlan(NotificationCrudWriteRequest request) =>
-        new(
-            WriteLockProtocol.AuthorizationScope,
-            WriteLock.For("AuthSession", request.AuthSessionId),
-            WriteLock.For("WorkspaceAccessContext", request.AccessContextId),
-            WriteLock.For("Portfolio", request.PortfolioId));
+    public static TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult> Write(
+        NotificationCrudWriteRequest request,
+        Func<NotificationCrudWriteRequest, IAtomicCommandContext, CancellationToken,
+            Task<AtomicNotificationMutationResult>> executeAsync,
+        Func<NotificationCrudWriteRequest, IAtomicCommandContext, CancellationToken, Task>
+            authorizeReplayAsync) =>
+        TransactionalWriteDefaults.AuthorizationScoped(
+            TransactionalWriteDefaults.OperationName("rental.notification", request.Domain),
+            request,
+            ResultContract,
+            executeAsync,
+            authorizeReplayAsync);
 
-    public static async Task<DateTime> BeginExecutionAsync(
+    public static Task<DateTime> BeginExecutionAsync(
         NotificationCrudWriteRequest request,
         RentalCommandDbContext db,
         IAtomicCommandContext context,
-        CancellationToken ct)
-    {
-        Validate(request);
-        var databaseNow = await context.ReadDatabaseClockUtcAsync(ct);
-        var mutationNow = BusinessNow(request, databaseNow);
-        context.UseDatabaseWallClockForAudit(mutationNow);
-        await AuthorizeAsync(request, db, databaseNow, ct);
-        return mutationNow;
-    }
+        CancellationToken ct) =>
+        TransactionalWriteDefaults.BeginExecutionAsync(
+            request,
+            context,
+            Validate,
+            (databaseNow, token) => AuthorizeAsync(request, db, databaseNow, token),
+            "Notification time must use UTC.",
+            ct);
 
-    public static async Task AuthorizeReplayAsync(
+    public static Task AuthorizeReplayAsync(
         NotificationCrudWriteRequest request,
         RentalCommandDbContext db,
         IAtomicCommandContext context,
-        CancellationToken ct)
-    {
-        Validate(request);
-        await AuthorizeAsync(request, db, await context.ReadDatabaseClockUtcAsync(ct), ct);
-    }
-
-    public static AtomicSemanticAudit Audit(
-        NotificationCrudWriteRequest request,
-        string entityType,
-        AuditLogOperation operation,
-        string reason,
-        int entityId) =>
-        new(
-            request.PortfolioId,
-            entityType,
-            entityId,
-            operation,
-            UserId: request.ActorUserId,
-            ChangeReason: reason);
-
-    public static void StageDataUpdate(
-        NotificationCrudWriteRequest request,
-        IAtomicCommandContext context,
-        string entityType,
-        int entityId,
-        DateTime now) =>
-        context.StageOutbox(new OutboxMessage
-        {
-            PortfolioId = request.PortfolioId,
-            MessageType = "data-update",
-            Payload = JsonSerializer.Serialize(new
-            {
-                entityType,
-                entityId,
-                operation = "update",
-                data = new { },
-            }),
-            IdempotencyKey = $"{request.DeliveryIdempotencyKey}:data-update",
-            CreatedAtUtc = now,
-            NextAttemptAtUtc = now,
-        });
-
-    public static AtomicNotificationMutationResult Missing() => new(false, false, 0, 0);
-
-    public static AtomicNotificationMutationResult Applied(int id, string? responseJson = null) =>
-        new(true, true, id, 1, responseJson);
+        CancellationToken ct) =>
+        TransactionalWriteDefaults.AuthorizeReplayAsync(
+            request,
+            context,
+            Validate,
+            (databaseNow, token) => AuthorizeAsync(request, db, databaseNow, token),
+            ct);
 
     private static async Task AuthorizeAsync(
         NotificationCrudWriteRequest request,
@@ -173,31 +89,9 @@ internal static class NotificationCrudWriteSupport
         }
     }
 
-    private static DateTime BusinessNow(NotificationCrudWriteRequest request, DateTime databaseNow)
-    {
-        if (request.BusinessNowUtc == default)
-        {
-            return databaseNow;
-        }
-
-        if (request.BusinessNowUtc.Kind != DateTimeKind.Utc)
-        {
-            throw new ArgumentException("Notification time must use UTC.");
-        }
-
-        return request.BusinessNowUtc;
-    }
-
     private static void Validate(NotificationCrudWriteRequest request)
     {
-        if (request.PortfolioId <= 0
-            || request.ActorUserId <= 0
-            || request.AuthSessionId == Guid.Empty
-            || request.AccessContextId <= 0
-            || request.ExpectedAccessRevision <= 0
-            || string.IsNullOrWhiteSpace(request.RequestJson)
-            || string.IsNullOrWhiteSpace(request.DeliveryIdempotencyKey)
-            || request.DeliveryIdempotencyKey.Length > 128
+        if (string.IsNullOrWhiteSpace(request.RequestJson)
             || request.Domain == NotificationCrudOperation.MarkRead && request.EntityId <= 0)
         {
             throw new ArgumentException(
