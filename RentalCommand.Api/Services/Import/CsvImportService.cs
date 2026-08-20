@@ -2,11 +2,13 @@ using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Text.Json;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Import;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Import;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Import;
 
@@ -14,6 +16,9 @@ namespace RentalCommand.Api.Services.Import;
 public sealed class CsvImportService : ICsvImportService
 {
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
+    private readonly AtomicCoreCsvImportHandler _coreImport;
+    private readonly AtomicUnitCsvImportHandler _unitImport;
     private readonly IUnitCsvImportPreviewQuery _unitPreview;
     private readonly ICoreCsvImportPreviewQuery _corePreview;
     private readonly IPaymentCsvImportPreviewQuery _paymentPreview;
@@ -30,9 +35,14 @@ public sealed class CsvImportService : ICsvImportService
         IAtomicUnitOfWork atomic,
         IUnitCsvImportPreviewQuery unitPreview,
         ICoreCsvImportPreviewQuery corePreview,
-        IPaymentCsvImportPreviewQuery paymentPreview)
+        IPaymentCsvImportPreviewQuery paymentPreview,
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes)
     {
         _atomic = atomic;
+        _writes = writes;
+        _coreImport = new AtomicCoreCsvImportHandler(db);
+        _unitImport = new AtomicUnitCsvImportHandler(db);
         _unitPreview = unitPreview;
         _corePreview = corePreview;
         _paymentPreview = paymentPreview;
@@ -144,8 +154,10 @@ public sealed class CsvImportService : ICsvImportService
                 scope.PortfolioId, commandContext.ActorUserId, commandContext.AuthSessionId,
                 commandContext.AccessContextId, commandContext.AccessRevision, domain,
                 commandContext.OperationKeyDigest, rowsJson);
-            var outcome = await _atomic.ExecuteAsync(
-                AtomicCoreCsvImport.Identity(command), command, AtomicCoreCsvImport.Codec, ct);
+            var identity = AtomicCoreCsvImport.Identity(command);
+            var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
+                AtomicCoreCsvImport.Write(
+                    command, ExecuteCoreImportAsync, AuthorizeCoreImportReplayAsync), ct);
             batch = new AtomicCoreCsvImportBatchResult(
                 true, outcome.Value.Rows, [], outcome.Value.TotalRows,
                 outcome.Value.ValidRows, outcome.Value.CreatedRows, outcome.Value.DuplicateRows);
@@ -399,8 +411,10 @@ public sealed class CsvImportService : ICsvImportService
                 scope.PortfolioId, context.ActorUserId, context.AuthSessionId,
                 context.AccessContextId, context.AccessRevision,
                 context.OperationKeyDigest, commands.ToArray());
-            var outcome = await _atomic.ExecuteAsync(
-                AtomicUnitCsvImport.Identity(command), command, AtomicUnitCsvImport.Codec, ct);
+            var identity = AtomicUnitCsvImport.Identity(command);
+            var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
+                AtomicUnitCsvImport.Write(
+                    command, ExecuteUnitImportAsync, AuthorizeUnitImportReplayAsync), ct);
             databaseRows = outcome.Value.Rows;
             totalRows = outcome.Value.TotalRows;
             validRows = outcome.Value.ValidRows;
@@ -487,6 +501,30 @@ public sealed class CsvImportService : ICsvImportService
             }),
         };
     }
+
+    private Task<AtomicCoreCsvImportResult> ExecuteCoreImportAsync(
+        AtomicCoreCsvImportCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        _coreImport.ExecuteAsync(command, context, ct);
+
+    private Task AuthorizeCoreImportReplayAsync(
+        AtomicCoreCsvImportCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        _coreImport.AuthorizeAsync(command, context, ct);
+
+    private Task<AtomicUnitCsvImportResult> ExecuteUnitImportAsync(
+        AtomicUnitCsvImportCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        _unitImport.ExecuteAsync(command, context, ct);
+
+    private Task AuthorizeUnitImportReplayAsync(
+        AtomicUnitCsvImportCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        _unitImport.AuthorizeAsync(command, context, ct);
 
     private static AtomicPaymentImportRow[] BuildPaymentRows(
         int portfolioId,
