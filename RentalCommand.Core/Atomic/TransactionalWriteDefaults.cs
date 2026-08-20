@@ -37,15 +37,31 @@ public static class TransactionalWriteDefaults
     public static TransactionalWrite<TCommand, TResult> AuthorizationScoped<TCommand, TResult>(
         string operationName, TCommand request, string resultContract,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
-        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        WriteLock? entityLock = null)
         where TCommand : notnull, IAuthorizationScopedRequest
         where TResult : notnull =>
         new(operationName, WriteIdempotencyPolicy.Required, request, resultContract,
-            new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
-                WriteLock.For("AuthSession", request.AuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", request.AccessContextId),
-                WriteLock.For("Portfolio", request.PortfolioId)),
+            AuthorizationLockPlan(request, entityLock),
             executeAsync, authorizeReplayAsync);
+
+    private static WriteLockPlan AuthorizationLockPlan(
+        IAuthorizationScopedRequest request, WriteLock? entityLock) => entityLock is null
+        ? new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
+            WriteLock.For("AuthSession", request.AuthSessionId),
+            WriteLock.For("WorkspaceAccessContext", request.AccessContextId),
+            WriteLock.For("Portfolio", request.PortfolioId))
+        : new WriteLockPlan(entityLock.LockNamespace switch
+            {
+                "OwnerEntity" => WriteLockProtocol.AuthorizationScopeOwnerEntity,
+                "Vendor" => WriteLockProtocol.AuthorizationScopeVendor,
+                _ => throw new ArgumentException(
+                    "That authorization-scoped entity lock is not supported.", nameof(entityLock)),
+            },
+            WriteLock.For("AuthSession", request.AuthSessionId),
+            WriteLock.For("WorkspaceAccessContext", request.AccessContextId),
+            WriteLock.For("Portfolio", request.PortfolioId),
+            entityLock);
 
     public static string OperationName<TDomain>(string prefix, TDomain domain)
         where TDomain : struct, Enum => $"{prefix}.{domain.ToString().ToLowerInvariant()}";
@@ -107,14 +123,15 @@ public static class TransactionalWriteDefaults
 
     public static void StageDataUpdate(
         IAuthorizationScopedRequest request, IAtomicCommandContext context,
-        string entityType, int entityId, DateTime now) =>
+        string entityType, int entityId, DateTime now,
+        string suffix = "data-update", bool deleted = false) =>
         context.StageOutbox(new OutboxMessage
         {
             PortfolioId = request.PortfolioId,
             MessageType = "data-update",
             Payload = JsonSerializer.Serialize(new
-                { entityType, entityId, operation = "update", data = new { } }),
-            IdempotencyKey = $"{request.DeliveryIdempotencyKey}:data-update",
+                { entityType, entityId, operation = deleted ? "delete" : "update", data = new { } }),
+            IdempotencyKey = $"{request.DeliveryIdempotencyKey}:{suffix}",
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
         });
