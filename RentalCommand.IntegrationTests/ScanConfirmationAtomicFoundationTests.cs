@@ -246,6 +246,55 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task CrossTargetMismatchBeforeConfirmation_AndAlreadyConfirmedAfterward_PreserveParity()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedReviewingDraftAsync("cross-target-parity");
+        var expenseCommand = Command(draftId, "cross-target-canonical");
+        var paymentCommand = expenseCommand with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Payment,
+                Payment: new ScanPaymentTargetData(expenseCommand.Target.Expense!.Receipt, 999)),
+        };
+
+        var mismatch = () => ExecuteAtomicAsync(
+            Identity(draftId, "cross-target-before"), paymentCommand, Codec);
+        await mismatch.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*target does not match*");
+
+        var confirmed = await ExecuteAtomicAsync(
+            Identity(draftId, "cross-target-confirm"), expenseCommand, Codec);
+        var alreadyConfirmed = await ExecuteAtomicAsync(
+            Identity(draftId, "cross-target-after"), paymentCommand, Codec);
+
+        confirmed.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        alreadyConfirmed.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.AlreadyConfirmed);
+        alreadyConfirmed.Value.TargetEntityId.Should().Be(confirmed.Value.TargetEntityId);
+    }
+
+    [SkippableFact]
+    public async Task Confirm_UsesInterceptorSaveTime_NotCommandBusinessTime()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedReviewingDraftAsync("confirm-separated-audit-clock");
+        var identity = Identity(draftId, "confirm-separated-audit-clock");
+
+        await ExecuteAtomicAsync(identity, Command(draftId, "clock target"), Codec);
+
+        await using var verify = Scope();
+        var timestamps = await verify.Db.AtomicAuditLogs.AsNoTracking()
+            .Where(row => row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .ToArrayAsync();
+        timestamps.Should().NotBeEmpty();
+        timestamps.Should().OnlyContain(timestamp => timestamp != CommandTime);
+        timestamps.Should().OnlyContain(timestamp =>
+            timestamp > DateTime.UtcNow.AddMinutes(-2) && timestamp < DateTime.UtcNow.AddMinutes(2));
+    }
+
+    [SkippableFact]
     public async Task SimultaneousDifferentReceipts_SerializeOnDraftAndReturnCanonicalTarget()
     {
         SkipIfDockerUnavailable();
@@ -501,13 +550,24 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
                     .SetProperty(session => session.RevokedAtUtc, CommandTime.AddMinutes(1)));
         }
 
-        var replay = () => ExecuteAtomicAsync(
-            identity,
-            RejectCommand(draftId, CommandTime.AddDays(1)),
-            RejectCodec);
+        try
+        {
+            var replay = () => ExecuteAtomicAsync(
+                identity,
+                RejectCommand(draftId, CommandTime.AddDays(1)),
+                RejectCodec);
 
-        await replay.Should().ThrowAsync<UnauthorizedAccessException>()
-            .WithMessage("*outside the caller's current review scope*");
+            await replay.Should().ThrowAsync<UnauthorizedAccessException>()
+                .WithMessage("*outside the caller's current review scope*");
+        }
+        finally
+        {
+            await using var restore = Scope();
+            await restore.Db.AuthSessions.Where(session => session.Id == _scope.SessionId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(session => session.Status, AuthSessionStatus.Active)
+                    .SetProperty(session => session.RevokedAtUtc, (DateTime?)null));
+        }
     }
 
     [SkippableFact(Skip = "RS-B05 stale test seam: direct setup or injected writer no longer enters an atomic mutation lease; receipt #rs-b05-scan-atomic-seams")]
@@ -777,7 +837,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = CommandTime,
             LastSeenAtUtc = CommandTime,
-            ExpiresAtUtc = CommandTime.AddDays(30),
+            ExpiresAtUtc = CommandTime.AddYears(10),
         };
 
         db.AddRange(assignment, session);
@@ -810,6 +870,21 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
                             db, request, context, token),
                         (request, context, token) => RejectScanDraftHandler.AuthorizeAsync(
                             db, request, context, token)));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is ConfirmScanDraftCommand confirm)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var writer = scope.ServiceProvider.GetRequiredService<IScanConfirmationTargetWriter>();
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(
+                    identity.IdempotencyKey,
+                    ScanDraftWriteSupport.Write(
+                        identity.CommandType, confirm, ScanDraftWriteSupport.ConfirmResultContract,
+                        (request, context, token) => ConfirmScanDraftHandler.ExecuteAsync(
+                            db, writer, request, context, token),
+                        (request, context, token) => ConfirmScanDraftHandler.AuthorizeAsync(
+                            writer, request, context, token)));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         return await scope.ServiceProvider
@@ -873,7 +948,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             _db = db;
             _probe = probe;
         }
-        public bool Supports(ScanConfirmationTargetKind kind) => kind == ScanConfirmationTargetKind.Expense;
+        public bool Supports(ScanConfirmationTargetKind kind) => true;
 
         public async Task<ScanConfirmationTargetWriteResult> WriteAsync(
             ConfirmScanDraftCommand command,

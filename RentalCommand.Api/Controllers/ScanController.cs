@@ -31,13 +31,11 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public class ScanController : ManagementControllerBase
 {
-    private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> ConfirmResultCodec =
-        new("scan-confirm.result.v1");
-
     private readonly IScanService _scan;
     private readonly IScanUploadService _uploads;
     private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor _writes;
+    private readonly IScanConfirmationTargetWriter _confirmationTargetWriter;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
@@ -67,6 +65,7 @@ public class ScanController : ManagementControllerBase
         IScanUploadService uploads,
         IAtomicUnitOfWork atomic,
         IRequestWriteExecutor writes,
+        IScanConfirmationTargetWriter confirmationTargetWriter,
         RentalCommandDbContext db,
         IFileStorage files,
         TimeProvider timeProvider,
@@ -76,6 +75,7 @@ public class ScanController : ManagementControllerBase
         _uploads = uploads;
         _atomic = atomic;
         _writes = writes;
+        _confirmationTargetWriter = confirmationTargetWriter;
         _db = db;
         _files = files;
         _timeProvider = timeProvider;
@@ -1185,12 +1185,15 @@ public class ScanController : ManagementControllerBase
         AtomicCommandOutcome<ConfirmScanDraftResult> atomicResult;
         try
         {
-            atomicResult = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "guided-setup.manual-lease",
-                    $"{scope.PortfolioId}:{operationDigest}"),
-                command,
-                ConfirmResultCodec,
+            atomicResult = await _writes.ExecuteAsync(
+                $"{scope.PortfolioId}:{operationDigest}",
+                ScanDraftWriteSupport.Write(
+                    "guided-setup.manual-lease", command,
+                    ScanDraftWriteSupport.ConfirmResultContract,
+                    (request, context, token) => CreateManualLeaseHandler.ExecuteAsync(
+                        _db, _confirmationTargetWriter, request, context, token),
+                    (request, context, token) => CreateManualLeaseHandler.AuthorizeAsync(
+                        _db, request, context, token)),
                 ct);
         }
         catch (ScanConfirmationValidationException ex)
@@ -1273,11 +1276,17 @@ public class ScanController : ManagementControllerBase
         AtomicCommandOutcome<ConfirmScanDraftResult> atomicResult;
         try
         {
-            atomicResult = await _atomic.ExecuteAsync(
-                ScanConfirmationCommandIdentity.Create(
-                    portfolioId, id, body.ClientOperationId),
-                command,
-                ConfirmResultCodec,
+            var identity = ScanConfirmationCommandIdentity.Create(
+                portfolioId, id, body.ClientOperationId);
+            atomicResult = await _writes.ExecuteAsync(
+                identity.IdempotencyKey,
+                ScanDraftWriteSupport.Write(
+                    identity.CommandType, command,
+                    ScanDraftWriteSupport.ConfirmResultContract,
+                    (request, context, token) => ConfirmScanDraftHandler.ExecuteAsync(
+                        _db, _confirmationTargetWriter, request, context, token),
+                    (request, context, token) => ConfirmScanDraftHandler.AuthorizeAsync(
+                        _confirmationTargetWriter, request, context, token)),
                 ct);
         }
         catch (ScanConfirmationValidationException ex)

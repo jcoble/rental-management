@@ -429,8 +429,8 @@ public class ScanControllerTests : IAsyncLifetime
     public async Task Confirm_WithoutStableOperationId_IsRejectedBeforePreparationOrAtomicAdmission()
     {
         var scan = new Mock<IScanService>(MockBehavior.Strict);
-        var atomic = new RecordingAtomicUnitOfWork();
-        var controller = CreateController(scan.Object, atomic: atomic);
+        var writes = new RecordingRequestWriteExecutor();
+        var controller = CreateController(scan.Object, writes: writes);
 
         var result = await controller.Confirm(
             17,
@@ -438,7 +438,7 @@ public class ScanControllerTests : IAsyncLifetime
             CancellationToken.None);
 
         result.Should().BeOfType<BadRequestObjectResult>();
-        atomic.Calls.Should().Be(0);
+        writes.Calls.Should().Be(0);
         scan.VerifyNoOtherCalls();
     }
 
@@ -505,7 +505,7 @@ public class ScanControllerTests : IAsyncLifetime
     [Fact]
     public async Task CreateManualLease_NormalizesDateTimesBeforeAtomicAdmission()
     {
-        var atomic = new RecordingAtomicUnitOfWork
+        var writes = new RecordingRequestWriteExecutor
         {
             Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
                 new ConfirmScanDraftResult(
@@ -517,7 +517,7 @@ public class ScanControllerTests : IAsyncLifetime
                 AtomicCommandDisposition.Executed,
                 Guid.NewGuid()),
         };
-        var controller = CreateController(Mock.Of<IScanService>(), atomic: atomic);
+        var controller = CreateController(Mock.Of<IScanService>(), writes: writes);
         var body = new CreateManualLeaseRequest
         {
             PropertyId = 12,
@@ -546,7 +546,7 @@ public class ScanControllerTests : IAsyncLifetime
             CancellationToken.None);
 
         result.Should().BeOfType<OkObjectResult>();
-        var command = atomic.Command.Should().BeOfType<CreateManualLeaseCommand>().Subject;
+        var command = writes.Command.Should().BeOfType<CreateManualLeaseCommand>().Subject;
         command.Target.StartDate.Should().Be(new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc));
         command.Target.StartDate!.Value.Kind.Should().Be(DateTimeKind.Utc);
         command.Target.EndDate.Should().Be(new DateTime(2027, 8, 31, 0, 0, 0, DateTimeKind.Utc));
@@ -570,7 +570,7 @@ public class ScanControllerTests : IAsyncLifetime
                 42, 17, 7, "{}", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ScanConfirmationPreparation(
                 ScanConfirmationPreparationOutcome.Ready, command));
-        var atomic = new RecordingAtomicUnitOfWork
+        var writes = new RecordingRequestWriteExecutor
         {
             Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
                 new ConfirmScanDraftResult(
@@ -578,7 +578,7 @@ public class ScanControllerTests : IAsyncLifetime
                 disposition,
                 Guid.NewGuid()),
         };
-        var controller = CreateController(scan.Object, atomic: atomic);
+        var controller = CreateController(scan.Object, writes: writes);
 
         var result = await controller.Confirm(
             17,
@@ -591,8 +591,8 @@ public class ScanControllerTests : IAsyncLifetime
         Property(body, "unitId").Should().Be(12);
         Property(body, "replayed").Should().Be(replayed);
         Property(body, "atomicDisposition").Should().Be(disposition.ToString());
-        atomic.Calls.Should().Be(1);
-        var admitted = atomic.Command.Should().BeOfType<ConfirmScanDraftCommand>().Subject;
+        writes.Calls.Should().Be(1);
+        var admitted = writes.Command.Should().BeOfType<ConfirmScanDraftCommand>().Subject;
         admitted.PortfolioId.Should().Be(command.PortfolioId);
         admitted.DraftId.Should().Be(command.DraftId);
         admitted.ConfirmedByUserId.Should().Be(command.ConfirmedByUserId);
@@ -603,8 +603,8 @@ public class ScanControllerTests : IAsyncLifetime
         admitted.AccessContextId.Should().Be(1);
         admitted.ExpectedAccessRevision.Should().Be(1);
         admitted.DeliveryIdempotencyKey.Should().StartWith("scan-confirm:42:17:");
-        atomic.Identity!.CommandType.Should().Be("scan.confirm");
-        atomic.Identity.IdempotencyKey.Should().StartWith("42:17:");
+        writes.Identity!.CommandType.Should().Be("scan.confirm");
+        writes.Identity.IdempotencyKey.Should().StartWith("42:17:");
         scan.VerifyAll();
     }
 
@@ -613,7 +613,7 @@ public class ScanControllerTests : IAsyncLifetime
     {
         SeedAuthorizedDraft(17);
         var scan = ReadyScan(ExpenseCommand(17));
-        var atomic = new RecordingAtomicUnitOfWork
+        var writes = new RecordingRequestWriteExecutor
         {
             Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
                 new ConfirmScanDraftResult(
@@ -622,7 +622,7 @@ public class ScanControllerTests : IAsyncLifetime
                 AtomicCommandDisposition.Executed,
                 Guid.NewGuid()),
         };
-        var controller = CreateController(scan.Object, atomic: atomic);
+        var controller = CreateController(scan.Object, writes: writes);
 
         var result = await controller.Confirm(
             17,
@@ -643,7 +643,7 @@ public class ScanControllerTests : IAsyncLifetime
     {
         SeedAuthorizedDraft(17, "Loan");
         var scan = ReadyScan(LoanCommand(17));
-        var atomic = new RecordingAtomicUnitOfWork
+        var writes = new RecordingRequestWriteExecutor
         {
             Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
                 new ConfirmScanDraftResult(
@@ -652,7 +652,7 @@ public class ScanControllerTests : IAsyncLifetime
                 AtomicCommandDisposition.Executed,
                 Guid.NewGuid()),
         };
-        var controller = CreateController(scan.Object, atomic: atomic);
+        var controller = CreateController(scan.Object, writes: writes);
 
         var result = await controller.Confirm(
             17,
@@ -677,15 +677,15 @@ public class ScanControllerTests : IAsyncLifetime
             .ReturnsAsync(new ScanConfirmationPreparation(
                 ScanConfirmationPreparationOutcome.DraftNotFound,
                 Error: "Scan draft not found."));
-        var unusedAtomic = new RecordingAtomicUnitOfWork();
-        var notFound = await CreateController(notFoundScan.Object, atomic: unusedAtomic).Confirm(
+        var unusedWrites = new RecordingRequestWriteExecutor();
+        var notFound = await CreateController(notFoundScan.Object, writes: unusedWrites).Confirm(
             17, new ConfirmScanRequest { ClientOperationId = "missing" }, CancellationToken.None);
         notFound.Should().BeOfType<NotFoundObjectResult>();
-        unusedAtomic.Calls.Should().Be(0);
+        unusedWrites.Calls.Should().Be(0);
 
         SeedAuthorizedDraft(17);
         var rejectedScan = ReadyScan(ExpenseCommand(17));
-        var rejectedAtomic = new RecordingAtomicUnitOfWork
+        var rejectedWrites = new RecordingRequestWriteExecutor
         {
             Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
                 new ConfirmScanDraftResult(
@@ -693,16 +693,16 @@ public class ScanControllerTests : IAsyncLifetime
                 AtomicCommandDisposition.Executed,
                 Guid.NewGuid()),
         };
-        var rejected = await CreateController(rejectedScan.Object, atomic: rejectedAtomic).Confirm(
+        var rejected = await CreateController(rejectedScan.Object, writes: rejectedWrites).Confirm(
             17, new ConfirmScanRequest { ClientOperationId = "rejected" }, CancellationToken.None);
         rejected.Should().BeOfType<ConflictObjectResult>();
 
         var validationScan = ReadyScan(ExpenseCommand(17));
-        var validationAtomic = new RecordingAtomicUnitOfWork
+        var validationWrites = new RecordingRequestWriteExecutor
         {
             Exception = new ScanConfirmationValidationException("Draft is not ready to confirm."),
         };
-        var validation = await CreateController(validationScan.Object, atomic: validationAtomic).Confirm(
+        var validation = await CreateController(validationScan.Object, writes: validationWrites).Confirm(
             17, new ConfirmScanRequest { ClientOperationId = "not-ready" }, CancellationToken.None);
         validation.Should().BeOfType<BadRequestObjectResult>();
     }
@@ -717,16 +717,16 @@ public class ScanControllerTests : IAsyncLifetime
             .ReturnsAsync(new ScanConfirmationPreparation(
                 ScanConfirmationPreparationOutcome.TemporarilyUnavailable,
                 Error: "Lease scan confirmation is temporarily unavailable."));
-        var atomic = new RecordingAtomicUnitOfWork();
+        var writes = new RecordingRequestWriteExecutor();
 
-        var result = await CreateController(scan.Object, atomic: atomic).Confirm(
+        var result = await CreateController(scan.Object, writes: writes).Confirm(
             17,
             new ConfirmScanRequest { ClientOperationId = "lease-confirm" },
             CancellationToken.None);
 
         var unavailable = result.Should().BeOfType<ObjectResult>().Subject;
         unavailable.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
-        atomic.Calls.Should().Be(0);
+        writes.Calls.Should().Be(0);
         scan.VerifyAll();
     }
 
@@ -734,6 +734,7 @@ public class ScanControllerTests : IAsyncLifetime
         IScanService scan,
         IFileStorage? files = null,
         IAtomicUnitOfWork? atomic = null,
+        IRequestWriteExecutor? writes = null,
         IScanUploadService? uploads = null)
     {
         var httpContext = new DefaultHttpContext();
@@ -743,7 +744,8 @@ public class ScanControllerTests : IAsyncLifetime
             scan,
             uploads ?? Mock.Of<IScanUploadService>(),
             atomic ?? Mock.Of<IAtomicUnitOfWork>(),
-            Mock.Of<IRequestWriteExecutor>(),
+            writes ?? Mock.Of<IRequestWriteExecutor>(),
+            Mock.Of<IScanConfirmationTargetWriter>(),
             _db,
             files ?? Mock.Of<IFileStorage>(),
             TimeProvider.System)
@@ -829,7 +831,7 @@ public class ScanControllerTests : IAsyncLifetime
     private static object? Property(object value, string name) =>
         value.GetType().GetProperty(name)!.GetValue(value);
 
-    private sealed class RecordingAtomicUnitOfWork : IAtomicUnitOfWork
+    private sealed class RecordingRequestWriteExecutor : IRequestWriteExecutor
     {
         public object? Outcome { get; init; }
         public Exception? Exception { get; init; }
@@ -838,16 +840,15 @@ public class ScanControllerTests : IAsyncLifetime
         public object? Command { get; private set; }
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity,
-            TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec,
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
             Calls++;
-            Identity = identity;
-            Command = command;
+            Identity = new AtomicCommandIdentity(write.OperationName, idempotencyKey);
+            Command = write.Request;
             if (Exception is not null)
                 return Task.FromException<AtomicCommandOutcome<TResult>>(Exception);
             return Task.FromResult((AtomicCommandOutcome<TResult>)Outcome!);

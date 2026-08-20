@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -81,6 +82,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             ConfirmScanDraftCommand,
             ConfirmScanDraftResult,
@@ -419,6 +421,36 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         account.LeaseManagementId.Should().Be(relationship.Id);
         party.TenantId.Should().Be(tenant.Id);
         agreement.LeaseManagementId.Should().Be(relationship.Id);
+    }
+
+    [SkippableFact]
+    public async Task GuidedSetupManualLease_UsesInterceptorSaveTime_NotCommandBusinessTime()
+    {
+        SkipIfDockerUnavailable();
+        var marker = $"manual-clock-{Guid.NewGuid():N}";
+        var command = new CreateManualLeaseCommand(
+            _portfolioId,
+            _actorUserId,
+            _authSessionId,
+            _accessContextId,
+            _accessRevision,
+            GuidedSetupManualTarget(marker),
+            $"guided-setup-manual-lease:{marker}");
+        var identity = new AtomicCommandIdentity(
+            "guided-setup.manual-lease", $"{_portfolioId}:{marker}");
+
+        await ExecuteAtomicAsync(identity, command, Codec);
+
+        await using var verify = Scope();
+        var timestamps = await verify.Db.AtomicAuditLogs.AsNoTracking()
+            .Where(row => row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .ToArrayAsync();
+        timestamps.Should().NotBeEmpty();
+        timestamps.Should().OnlyContain(timestamp => timestamp != CommandTime);
+        timestamps.Should().OnlyContain(timestamp =>
+            timestamp > DateTime.UtcNow.AddMinutes(-2) && timestamp < DateTime.UtcNow.AddMinutes(2));
     }
 
     [SkippableTheory]
@@ -1322,6 +1354,39 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         await using var verify = Scope();
         (await verify.Db.Expenses.CountAsync(row => row.Description == uniqueVendor))
             .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task ConfirmReplay_RejectsStaleAuthorization()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Expense);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "stale-replay-authorization");
+        var command = Command(draftId, ScanConfirmationTargetKind.Expense);
+        await ExecuteAtomicAsync(identity, command, Codec);
+
+        await using (var revoke = Scope())
+        {
+            await revoke.Db.AuthSessions.Where(session => session.Id == _authSessionId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(session => session.Status, AuthSessionStatus.Revoked)
+                    .SetProperty(session => session.RevokedAtUtc, CommandTime.AddMinutes(1)));
+        }
+
+        try
+        {
+            var replay = () => ExecuteAtomicAsync(identity, command, Codec);
+            await replay.Should().ThrowAsync<UnauthorizedAccessException>();
+        }
+        finally
+        {
+            await using var restore = Scope();
+            await restore.Db.AuthSessions.Where(session => session.Id == _authSessionId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(session => session.Status, AuthSessionStatus.Active)
+                    .SetProperty(session => session.RevokedAtUtc, (DateTime?)null));
+        }
     }
 
     [SkippableFact]
@@ -3525,6 +3590,34 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     {
         await using var scope =
             (_services ?? throw new InvalidOperationException()).CreateAsyncScope();
+        if (command is ConfirmScanDraftCommand confirm)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var writer = scope.ServiceProvider.GetRequiredService<IScanConfirmationTargetWriter>();
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey,
+                    ScanDraftWriteSupport.Write(
+                        identity.CommandType, confirm, ScanDraftWriteSupport.ConfirmResultContract,
+                        (request, context, token) => ConfirmScanDraftHandler.ExecuteAsync(
+                            db, writer, request, context, token),
+                        (request, context, token) => ConfirmScanDraftHandler.AuthorizeAsync(
+                            writer, request, context, token)), ct);
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is CreateManualLeaseCommand manualLease)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var writer = scope.ServiceProvider.GetRequiredService<IScanConfirmationTargetWriter>();
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey,
+                    ScanDraftWriteSupport.Write(
+                        identity.CommandType, manualLease, ScanDraftWriteSupport.ConfirmResultContract,
+                        (request, context, token) => CreateManualLeaseHandler.ExecuteAsync(
+                            db, writer, request, context, token),
+                        (request, context, token) => CreateManualLeaseHandler.AuthorizeAsync(
+                            db, request, context, token)), ct);
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
         return await scope.ServiceProvider
             .GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, codec, ct);
