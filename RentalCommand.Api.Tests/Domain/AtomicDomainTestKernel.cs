@@ -181,10 +181,8 @@ internal static class AtomicDomainTestKernel
         TimeProvider? timeProvider = null)
     {
         var services = Core(connectionString, timeProvider);
-        services.AddAtomicCommandHandler<
-            AtomicRecurringMaintenanceMutationCommand,
-            AtomicRecurringMaintenanceMutationResult,
-            AtomicRecurringMaintenanceMutationHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddScoped<RecurringMaintenanceTaskService>();
         return services.BuildServiceProvider();
     }
 

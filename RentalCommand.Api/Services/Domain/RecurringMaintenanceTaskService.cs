@@ -1,8 +1,7 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -16,21 +15,18 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IRecurringMaintenanceTaskService"/>
 public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
 {
-    private static readonly AtomicJsonResultCodec<AtomicRecurringMaintenanceMutationResult> MutationCodec =
-        new("recurring-maintenance.mutation.v1");
-
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor? _writes;
 
     public RecurringMaintenanceTaskService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default)
@@ -157,8 +153,12 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         string idempotencyKey,
         CancellationToken ct = default)
     {
-        var command = Command(scope, AtomicRecurringMaintenanceOperation.Create, 0, request, idempotencyKey);
-        var outcome = await _atomic.ExecuteAsync(Identity(command), command, MutationCodec, ct);
+        var command = RecurringMaintenanceCrudWriteSupport.Request(
+            scope, RecurringMaintenanceWriteOperation.Create, 0, request, idempotencyKey);
+        var outcome = await RequireWrites().ExecuteAsync(
+            RecurringMaintenanceCrudWriteSupport.IdempotencyKey(command),
+            RecurringMaintenanceCrudWriteSupport.Write(
+                command, CreateRecurringMaintenanceAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -169,8 +169,12 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         string idempotencyKey,
         CancellationToken ct = default)
     {
-        var command = Command(scope, AtomicRecurringMaintenanceOperation.Update, id, request, idempotencyKey);
-        var outcome = await _atomic.ExecuteAsync(Identity(command), command, MutationCodec, ct);
+        var command = RecurringMaintenanceCrudWriteSupport.Request(
+            scope, RecurringMaintenanceWriteOperation.Update, id, request, idempotencyKey);
+        var outcome = await RequireWrites().ExecuteAsync(
+            RecurringMaintenanceCrudWriteSupport.IdempotencyKey(command),
+            RecurringMaintenanceCrudWriteSupport.Write(
+                command, UpdateRecurringMaintenanceAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -182,8 +186,12 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         CancellationToken ct = default)
     {
         var request = new ToggleRecurringMaintenanceTaskActiveRequest { IsActive = isActive };
-        var command = Command(scope, AtomicRecurringMaintenanceOperation.SetActive, id, request, idempotencyKey);
-        var outcome = await _atomic.ExecuteAsync(Identity(command), command, MutationCodec, ct);
+        var command = RecurringMaintenanceCrudWriteSupport.Request(
+            scope, RecurringMaintenanceWriteOperation.SetActive, id, request, idempotencyKey);
+        var outcome = await RequireWrites().ExecuteAsync(
+            RecurringMaintenanceCrudWriteSupport.IdempotencyKey(command),
+            RecurringMaintenanceCrudWriteSupport.Write(
+                command, SetRecurringMaintenanceActiveAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -193,42 +201,266 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         string idempotencyKey,
         CancellationToken ct = default)
     {
-        var command = Command(scope, AtomicRecurringMaintenanceOperation.Delete, id, new object(), idempotencyKey);
-        var outcome = await _atomic.ExecuteAsync(Identity(command), command, MutationCodec, ct);
+        var command = RecurringMaintenanceCrudWriteSupport.Request(
+            scope, RecurringMaintenanceWriteOperation.Delete, id, new object(), idempotencyKey);
+        var outcome = await RequireWrites().ExecuteAsync(
+            RecurringMaintenanceCrudWriteSupport.IdempotencyKey(command),
+            RecurringMaintenanceCrudWriteSupport.Write(
+                command, DeleteRecurringMaintenanceAsync, AuthorizeReplayAsync), ct);
         return outcome.Value.Found;
     }
 
-    private static AtomicRecurringMaintenanceMutationCommand Command(
-        WorkspaceReadScope scope,
-        AtomicRecurringMaintenanceOperation operation,
-        int entityId,
-        object request,
-        string idempotencyKey) => new(
-            scope.PortfolioId,
-            scope.UserId,
-            scope.SessionId,
-            scope.AccessContextId,
-            scope.AccessRevision,
-            operation,
-            entityId,
-            JsonSerializer.Serialize(request),
-            idempotencyKey);
-
-    private static AtomicCommandIdentity Identity(AtomicRecurringMaintenanceMutationCommand command)
-    {
-        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            command.DeliveryIdempotencyKey)));
-        return new AtomicCommandIdentity(
-            $"recurring-maintenance.{command.Operation.ToString().ToLowerInvariant()}", digest);
-    }
-
     private static RecurringMaintenanceTaskResponse? Response(
-        AtomicRecurringMaintenanceMutationResult result) =>
+        RecurringMaintenanceWriteResult result) =>
         !result.Found || result.ResponseJson is null
             ? null
             : JsonSerializer.Deserialize<RecurringMaintenanceTaskResponse>(result.ResponseJson)
                 ?? throw new AtomicReceiptInvariantException(
                     "The recurring maintenance receipt snapshot is invalid.");
+
+    private async Task<RecurringMaintenanceWriteResult> CreateRecurringMaintenanceAsync(
+        RecurringMaintenanceWriteRequest command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await BeginExecutionAsync(command, context, replay: false, ct);
+        var request = RecurringMaintenanceCrudWriteSupport.Read<CreateRecurringMaintenanceTaskRequest>(command);
+        if (!await ReferencesExistAsync(
+                command.PortfolioId, request.PropertyId, request.UnitId, request.VendorId, ct))
+        {
+            return Missing(0);
+        }
+
+        var entity = new RecurringMaintenanceTask
+        {
+            PortfolioId = command.PortfolioId,
+            PropertyId = request.PropertyId,
+            UnitId = request.UnitId,
+            VendorId = request.VendorId,
+            Title = request.Title,
+            Description = request.Description,
+            Category = request.Category,
+            RecurrenceInterval = request.RecurrenceInterval,
+            NextDueDate = NormalizeDate(request.NextDueDate),
+            ScheduledTime = request.ScheduledTime,
+            EstimatedCost = request.EstimatedCost,
+            IsActive = request.IsActive,
+            Priority = request.Priority,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Add(entity);
+        context.BindSemanticAudit(entity, Audit(command, 0, AuditLogOperation.Created,
+            $"Recurring maintenance task {entity.Title} created"));
+        await context.FlushBusinessAsync(ct);
+        var responseJson = await SnapshotAsync(command.PortfolioId, entity.Id, ct);
+        StageDataUpdate(context, command, entity.Id, now, responseJson);
+        return Applied(entity.Id, responseJson);
+    }
+
+    private async Task<RecurringMaintenanceWriteResult> UpdateRecurringMaintenanceAsync(
+        RecurringMaintenanceWriteRequest command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await BeginExecutionAsync(command, context, replay: false, ct);
+        var entity = await FindTaskAsync(command, ct);
+        if (entity is null) return Missing(command.EntityId);
+        var request = RecurringMaintenanceCrudWriteSupport.Read<UpdateRecurringMaintenanceTaskRequest>(command);
+        var effectiveUnitId = request.UnitId ?? entity.UnitId;
+        var effectiveVendorId = request.VendorId ?? entity.VendorId;
+        if (!await ReferencesExistAsync(
+                command.PortfolioId, entity.PropertyId, effectiveUnitId, effectiveVendorId, ct))
+        {
+            return Missing(entity.Id);
+        }
+
+        if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
+        if (request.VendorId.HasValue) entity.VendorId = request.VendorId;
+        if (request.Title is not null) entity.Title = request.Title;
+        if (request.Description is not null) entity.Description = request.Description;
+        if (request.Category is not null) entity.Category = request.Category;
+        if (request.RecurrenceInterval.HasValue)
+            entity.RecurrenceInterval = request.RecurrenceInterval.Value;
+        if (request.NextDueDate.HasValue) entity.NextDueDate = NormalizeDate(request.NextDueDate.Value);
+        entity.ScheduledTime = request.ScheduledTime;
+        entity.EstimatedCost = request.EstimatedCost;
+        if (request.IsActive.HasValue) entity.IsActive = request.IsActive.Value;
+        if (request.Priority.HasValue) entity.Priority = request.Priority.Value;
+        ClearAutomationFailureState(entity);
+        entity.UpdatedAt = now;
+        context.BindSemanticAudit(entity, Audit(command, entity.Id, AuditLogOperation.Updated,
+            $"Recurring maintenance task {entity.Id} updated"));
+        await context.FlushBusinessAsync(ct);
+        var responseJson = await SnapshotAsync(command.PortfolioId, entity.Id, ct);
+        StageDataUpdate(context, command, entity.Id, now, responseJson);
+        return Applied(entity.Id, responseJson);
+    }
+
+    private async Task<RecurringMaintenanceWriteResult> SetRecurringMaintenanceActiveAsync(
+        RecurringMaintenanceWriteRequest command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await BeginExecutionAsync(command, context, replay: false, ct);
+        var entity = await FindTaskAsync(command, ct);
+        if (entity is null) return Missing(command.EntityId);
+        var request = RecurringMaintenanceCrudWriteSupport.Read<ToggleRecurringMaintenanceTaskActiveRequest>(command);
+        entity.IsActive = request.IsActive;
+        ClearAutomationFailureState(entity);
+        entity.UpdatedAt = now;
+        context.BindSemanticAudit(entity, Audit(command, entity.Id, AuditLogOperation.Updated,
+            $"Recurring maintenance task {entity.Id} {(request.IsActive ? "activated" : "deactivated")}"));
+        await context.FlushBusinessAsync(ct);
+        var responseJson = await SnapshotAsync(command.PortfolioId, entity.Id, ct);
+        StageDataUpdate(context, command, entity.Id, now, responseJson);
+        return Applied(entity.Id, responseJson);
+    }
+
+    private async Task<RecurringMaintenanceWriteResult> DeleteRecurringMaintenanceAsync(
+        RecurringMaintenanceWriteRequest command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await BeginExecutionAsync(command, context, replay: false, ct);
+        var entity = await FindTaskAsync(command, ct);
+        if (entity is null) return Missing(command.EntityId);
+        entity.DeletedAt = now;
+        entity.UpdatedAt = now;
+        context.BindSemanticAudit(entity, Audit(command, entity.Id, AuditLogOperation.Deleted,
+            $"Recurring maintenance task {entity.Id} deleted"));
+        await context.FlushBusinessAsync(ct);
+        StageDataUpdate(context, command, entity.Id, now, deleted: true);
+        return Applied(entity.Id);
+    }
+
+    private Task<DateTime> BeginExecutionAsync(
+        RecurringMaintenanceWriteRequest command,
+        IAtomicCommandContext context,
+        bool replay,
+        CancellationToken ct) =>
+        RecurringMaintenanceCrudWriteSupport.BeginExecutionAsync(
+            command, context, (now, token) => AuthorizeAsync(command, now, replay, token), ct);
+
+    private Task AuthorizeReplayAsync(
+        RecurringMaintenanceWriteRequest command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        RecurringMaintenanceCrudWriteSupport.AuthorizeReplayAsync(
+            command, context, (now, token) => AuthorizeAsync(command, now, replay: true, token), ct);
+
+    private async Task AuthorizeAsync(
+        RecurringMaintenanceWriteRequest command,
+        DateTime now,
+        bool replay,
+        CancellationToken ct)
+    {
+        int? propertyId = command.Operation == RecurringMaintenanceWriteOperation.Create
+            ? RecurringMaintenanceCrudWriteSupport.Read<CreateRecurringMaintenanceTaskRequest>(command).PropertyId
+            : await _db.RecurringMaintenanceTasks.IgnoreQueryFilters()
+                .Where(task => task.Id == command.EntityId && task.PortfolioId == command.PortfolioId)
+                .Select(task => (int?)task.PropertyId)
+                .SingleOrDefaultAsync(ct);
+        var scope = new WorkspaceReadScope(
+            command.PortfolioId, command.ActorUserId, command.AuthSessionId,
+            command.AccessContextId, command.ExpectedAccessRevision);
+        var authorized = propertyId.HasValue && await _db.Properties.AsNoTracking()
+            .WhereAuthorizedForScope(_db, scope, CapabilityKeys.WorkManage, now)
+            .AnyAsync(property => property.Id == propertyId.Value, ct);
+        if (!authorized)
+        {
+            throw new UnauthorizedAccessException(replay
+                ? "Workspace access changed. Refresh and try again."
+                : "The recurring maintenance task is outside the current Team role and property scope.");
+        }
+    }
+
+    private Task<bool> ReferencesExistAsync(
+        int portfolioId,
+        int propertyId,
+        int? unitId,
+        int? vendorId,
+        CancellationToken ct) =>
+        _db.Properties.AsNoTracking()
+            .Where(property => property.Id == propertyId && property.PortfolioId == portfolioId
+                && property.DeletedAt == null)
+            .AnyAsync(property =>
+                (unitId == null || _db.Units.Any(unit => unit.Id == unitId
+                    && unit.PortfolioId == portfolioId && unit.PropertyId == property.Id
+                    && unit.DeletedAt == null))
+                && (vendorId == null || _db.Vendors.Any(vendor => vendor.Id == vendorId
+                    && vendor.PortfolioId == portfolioId && vendor.DeletedAt == null)), ct);
+
+    private Task<RecurringMaintenanceTask?> FindTaskAsync(
+        RecurringMaintenanceWriteRequest command,
+        CancellationToken ct) =>
+        _db.RecurringMaintenanceTasks.SingleOrDefaultAsync(task =>
+            task.Id == command.EntityId && task.PortfolioId == command.PortfolioId
+            && task.DeletedAt == null, ct);
+
+    private async Task<string> SnapshotAsync(int portfolioId, int entityId, CancellationToken ct)
+    {
+        var response = await ProjectResponse(_db.RecurringMaintenanceTasks.AsNoTracking()
+                .Where(task => task.Id == entityId && task.PortfolioId == portfolioId))
+            .SingleAsync(ct);
+        return JsonSerializer.Serialize(response);
+    }
+
+    private static void StageDataUpdate(
+        IAtomicCommandContext context,
+        RecurringMaintenanceWriteRequest command,
+        int entityId,
+        DateTime now,
+        string? responseJson = null,
+        bool deleted = false)
+    {
+        object data = responseJson is null ? new { } : JsonSerializer.Deserialize<JsonElement>(responseJson);
+        context.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType = nameof(RecurringMaintenanceTask), entityId,
+                operation = deleted ? "delete" : "update", data,
+            }),
+            IdempotencyKey = $"recurring-maintenance:{command.PortfolioId}:{command.AccessContextId}:" +
+                $"{command.Operation}:{entityId}:{command.DeliveryIdempotencyKey}:data-update",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+    }
+
+    private static AtomicSemanticAudit Audit(
+        RecurringMaintenanceWriteRequest command,
+        int entityId,
+        AuditLogOperation operation,
+        string reason) =>
+        new(command.PortfolioId, nameof(RecurringMaintenanceTask), entityId, operation,
+            UserId: command.ActorUserId, ChangeReason: reason);
+
+    private static DateTime NormalizeDate(DateTime value) =>
+        DateTime.SpecifyKind(value.Date, DateTimeKind.Utc);
+
+    private static void ClearAutomationFailureState(RecurringMaintenanceTask entity)
+    {
+        entity.WorkerClaimAttemptCount = 0;
+        entity.WorkerClaimLastFailureReason = null;
+        entity.WorkerClaimLastFailureAtUtc = null;
+        entity.WorkerClaimQuarantinedAtUtc = null;
+    }
+
+    private IRequestWriteExecutor RequireWrites() =>
+        _writes ?? throw new InvalidOperationException(
+            "The shared request write executor is required for recurring maintenance changes.");
+
+    private static RecurringMaintenanceWriteResult Missing(int entityId) =>
+        new(false, false, entityId);
+
+    private static RecurringMaintenanceWriteResult Applied(
+        int entityId,
+        string? responseJson = null) =>
+        new(true, true, entityId, responseJson);
 
     private IQueryable<RecurringMaintenanceTask> AuthorizedTasks(
         WorkspaceReadScope scope,
