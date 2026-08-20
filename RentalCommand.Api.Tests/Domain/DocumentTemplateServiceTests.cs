@@ -44,11 +44,12 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(DocumentTemplateServiceTests));
         await _ctx.ActivateApiScopeAsync(_scope);
         _services = CreateAtomicServices(builder =>
-            builder.UseNpgsql(_ctx.Db.Database.GetDbConnection()));
+            builder.UseNpgsql(_ctx.Db.Database.GetDbConnection())
+                .AddInterceptors(new RecordingCommandInterceptor(_commands)));
         _sut = new DocumentTemplateService(
-            _ctx.Db, _catalog, _files,
+            _services.GetRequiredService<RentalCommandDbContext>(), _catalog, _files,
             _services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
     }
 
     public async Task DisposeAsync()
@@ -223,9 +224,9 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
             builder.UseNpgsql(postgres.Db.Database.GetDbConnection()));
         var files = new InMemoryFileStorage();
         var sut = new DocumentTemplateService(
-            postgres.Db, _catalog, files,
+            services.GetRequiredService<RentalCommandDbContext>(), _catalog, files,
             services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            services.GetRequiredService<IAtomicUnitOfWork>());
+            services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         await using var content = new MemoryStream("%PDF-1.7 sample"u8.ToArray());
 
         var result = await sut.UploadPdfAsync(
@@ -270,9 +271,9 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
             builder.UseNpgsql(postgres.Db.Database.GetDbConnection()));
         var files = new InMemoryFileStorage();
         var sut = new DocumentTemplateService(
-            postgres.Db, _catalog, files,
+            services.GetRequiredService<RentalCommandDbContext>(), _catalog, files,
             services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            services.GetRequiredService<IAtomicUnitOfWork>());
+            services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         await using var firstContent = new MemoryStream("%PDF-1.7 first empty portfolio lease"u8.ToArray());
         var first = await sut.UploadPdfAsync(
@@ -325,9 +326,9 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
             builder.UseNpgsql(postgres.Db.Database.GetDbConnection()));
         var files = new InMemoryFileStorage();
         var sut = new DocumentTemplateService(
-            postgres.Db, _catalog, files,
+            services.GetRequiredService<RentalCommandDbContext>(), _catalog, files,
             services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            services.GetRequiredService<IAtomicUnitOfWork>());
+            services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         await using var content = new MemoryStream("%PDF-1.7 morgan selected scope lease"u8.ToArray());
 
         var result = await sut.UploadPdfAsync(
@@ -369,9 +370,9 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
             builder.UseNpgsql(postgres.Db.Database.GetDbConnection())
                 .AddInterceptors(new RecordingCommandInterceptor(commands)));
         var sut = new DocumentTemplateService(
-            postgres.Db, _catalog, new InMemoryFileStorage(),
+            services.GetRequiredService<RentalCommandDbContext>(), _catalog, new InMemoryFileStorage(),
             services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            services.GetRequiredService<IAtomicUnitOfWork>());
+            services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         var result = await sut.UpdateFieldAsync(
             scope,
@@ -437,6 +438,8 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<RentalCommand.Api.Writes.IRequestWriteExecutor,
+            RentalCommand.Api.Writes.RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             RentalCommand.Core.Documents.CreateDocumentTemplateCommand,
             RentalCommand.Core.Documents.DocumentTemplateMutationResult,
