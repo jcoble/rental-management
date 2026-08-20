@@ -9,6 +9,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Leasing;
 using RentalCommand.Data.Payments;
@@ -63,7 +64,7 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         if (_context is not null) await _context.DisposeAsync();
     }
 
-    [Fact(Skip = "RS-B03 harness bug: reversible ledger seed has no original accounting journal; receipt #rs-b03-cancel-journal-seed")]
+    [Fact]
     public async Task CancelPlannedRelationship_ReturnsFinancialBlockThenSucceedsAfterLedgerReversal()
     {
         var scenario = await SeedScenarioAsync("opening-balance");
@@ -258,6 +259,28 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         };
         _context.Db.TenantLedgerEntries.Add(entry);
         await _context.Db.SaveChangesAsync();
+
+        if (entryType == TenantLedgerEntryType.OpeningBalance)
+        {
+            await new ChartOfAccountsSeedService(_context.Db).SeedAsync(scenario.PortfolioId);
+            await _context.Db.SaveChangesAsync();
+            await using var transaction = await _context.Db.Database.BeginTransactionAsync();
+            var auditScope = new AtomicAuditScope(TimeProvider.System);
+            var commandContext = new AtomicCommandContext(_context.Db, auditScope, TimeProvider.System);
+            var attemptId = Guid.NewGuid();
+            commandContext.BeginAttempt(attemptId);
+            commandContext.BindReceipt(Guid.NewGuid());
+            using var attempt = auditScope.BeginAttempt(
+                new AtomicCommandIdentity("test.cancel-planned.opening-balance", entry.BusinessKey),
+                attemptId,
+                _context.Db);
+            await MoneyAccountingPosting.PostTenantOpeningBalanceAsync(
+                _context.Db, commandContext, entry, scenario.ActorUserId);
+            await commandContext.FlushBusinessAsync();
+            await transaction.CommitAsync();
+            commandContext.EndAttempt();
+        }
+
         return entry;
     }
 
