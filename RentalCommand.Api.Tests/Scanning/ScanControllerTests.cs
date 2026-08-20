@@ -11,6 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage;
 using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
+using RentalCommand.Api.Writes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -742,6 +743,7 @@ public class ScanControllerTests : IAsyncLifetime
             scan,
             uploads ?? Mock.Of<IScanUploadService>(),
             atomic ?? Mock.Of<IAtomicUnitOfWork>(),
+            Mock.Of<IRequestWriteExecutor>(),
             _db,
             files ?? Mock.Of<IFileStorage>(),
             TimeProvider.System)

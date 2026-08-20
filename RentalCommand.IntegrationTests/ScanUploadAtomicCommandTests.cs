@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Scanning;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
@@ -68,10 +69,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<AuditFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            FinalizeScanUploadCommand,
-            FinalizeScanUploadResult,
-            FinalizeScanUploadHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddPendingFileUploadStore();
         services.AddScoped<IScanUploadService, ScanUploadService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
@@ -623,10 +621,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         var identity = new AtomicCommandIdentity(
             "scan-upload.finalize",
             $"security:{mismatch}");
-        var codec = new AtomicJsonResultCodec<FinalizeScanUploadResult>(
-            "scan-upload.finalize.result.v1");
-
-        var rejected = () => ExecuteAtomicAsync(identity, command, codec);
+        var rejected = () => ExecuteAtomicAsync(identity, command);
         await rejected.Should().ThrowAsync<InvalidOperationException>();
 
         await using var db = NewContext();
@@ -640,6 +635,48 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         (await db.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == identity.CommandType
             && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task FinalizeUpload_UsesInterceptorSaveTime_NotCommandBusinessTime()
+    {
+        SkipIfNoDocker();
+        const string operationId = "separated-audit-clock";
+        const string fingerprint = "separated-audit-clock-fingerprint";
+        var commandTime = new DateTime(2099, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+
+        PendingFileUploadAdmission admission;
+        await using (var scope = _services!.CreateAsyncScope())
+        {
+            admission = await scope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>()
+                .PrepareAsync(
+                    _portfolioId, _scope.UserId, "scan-source", $"{operationId}:0:source",
+                    fingerprint, "clock.pdf", "application/pdf", 24, DateTime.UtcNow);
+        }
+
+        var command = new FinalizeScanUploadCommand(
+            _portfolioId, _scope.UserId, _scope.SessionId, _scope.AccessContextId,
+            _scope.AccessRevision, operationId, fingerprint, "LeaseAgreement", false, null,
+            commandTime,
+            [new FinalizeScanUploadFile(
+                admission.Id, admission.StoragePath, "clock.pdf", "application/pdf", 24,
+                new string('d', 64), null, null, null, null, null)],
+            CanonicalCaptureContext());
+        var identity = new AtomicCommandIdentity(
+            "scan-upload.finalize", $"{_portfolioId}:{_scope.UserId}:separated-audit-clock");
+
+        await ExecuteAtomicAsync(identity, command);
+
+        await using var db = NewContext();
+        var timestamps = await db.AtomicAuditLogs.AsNoTracking()
+            .Where(row => row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .ToArrayAsync();
+        timestamps.Should().NotBeEmpty();
+        timestamps.Should().OnlyContain(timestamp => timestamp != commandTime);
+        timestamps.Should().OnlyContain(timestamp =>
+            timestamp > DateTime.UtcNow.AddMinutes(-2) && timestamp < DateTime.UtcNow.AddMinutes(2));
     }
 
     private async Task<FinalizeScanUploadResult> UploadAsync(
@@ -698,17 +735,20 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
     private SqlProbe Probe => _services!.GetRequiredService<SqlProbe>();
     private AuditFailureInterceptor Failure => _services!.GetRequiredService<AuditFailureInterceptor>();
 
-    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+    private async Task<AtomicCommandOutcome<FinalizeScanUploadResult>> ExecuteAtomicAsync(
         AtomicCommandIdentity identity,
-        TCommand command,
-        AtomicJsonResultCodec<TResult> codec)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
+        FinalizeScanUploadCommand command)
     {
         await using var scope = _services!.CreateAsyncScope();
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+            identity.IdempotencyKey,
+            ScanDraftWriteSupport.Write(
+                identity.CommandType, command, ScanDraftWriteSupport.FinalizeResultContract,
+                (request, context, token) => FinalizeScanUploadHandler.ExecuteAsync(
+                    db, request, context, token),
+                (request, context, token) => FinalizeScanUploadHandler.AuthorizeAsync(
+                    db, request, context, token)));
     }
 
     private void SkipIfNoDocker() =>

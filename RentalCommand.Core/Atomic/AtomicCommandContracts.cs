@@ -110,6 +110,7 @@ public enum WriteLockProtocol
     AuthorizationScopeProperty,
     AuthorizationScopeUnit,
     AuthorizationScopeTenant,
+    AuthorizationScopeScanDraft,
     Portfolio,
     StoredFile,
     WorkOrder,
@@ -136,6 +137,8 @@ public sealed class WriteLockPlan
                 ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Unit"],
             [WriteLockProtocol.AuthorizationScopeTenant] =
                 ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Tenant"],
+            [WriteLockProtocol.AuthorizationScopeScanDraft] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "ScanDraft"],
             [WriteLockProtocol.Portfolio] = ["Portfolio"],
             [WriteLockProtocol.StoredFile] = ["StoredFile"],
             [WriteLockProtocol.WorkOrder] = ["WorkOrder"],
