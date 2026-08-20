@@ -758,7 +758,6 @@ public sealed class DeleteWorkOrderRule
     public async Task<WorkOrderMutationResult> HandleAsync(
         DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
         var entity = await StaffOperationAuthorization.AuthorizedWorkOrders(
@@ -867,7 +866,6 @@ public sealed class AddStaffWorkOrderCommentRule
         AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.EnsureComment(command.Body);
-        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var entity = await StaffOperationAuthorization.AuthorizedWorkOrdersForComment(
                 command.PortfolioId, command.Actor, command.IsPrivate,
@@ -952,7 +950,6 @@ public sealed class AddTenantWorkOrderCommentRule
         AddTenantWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.EnsureComment(command.Body);
-        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var entity = await TenantWorkOrderAuthorization.AuthorizedWorkOrders(
                 command.PortfolioId, command.TenantUserId, command.TenantAuthSessionId,
@@ -1004,7 +1001,6 @@ public sealed class UpdateTenantWorkOrderRule
         UpdateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);
-        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var entity = await TenantWorkOrderAuthorization.AuthorizedWorkOrders(
                 command.PortfolioId, command.TenantUserId, command.TenantAuthSessionId,
