@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Documents;
 using RentalCommand.Core.Authorization;
@@ -16,13 +17,8 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IDocumentService"/>
 public sealed class DocumentService : IDocumentService
 {
-    private static readonly AtomicJsonResultCodec<CreateStoredDocumentResult> CreateCodec =
-        new("stored-document.create.result.v1");
-    private static readonly AtomicJsonResultCodec<DeleteStoredDocumentResult> DeleteCodec =
-        new("stored-document.delete.result.v1");
-
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly IFileStorage _storage;
     private readonly IPendingFileUploadStore _pendingUploads;
     private readonly ILogger<DocumentService> _logger;
@@ -30,14 +26,14 @@ public sealed class DocumentService : IDocumentService
 
     public DocumentService(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         IFileStorage storage,
         IPendingFileUploadStore pendingUploads,
         ILogger<DocumentService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
-        _atomic = atomic;
+        _writes = writes;
         _storage = storage;
         _pendingUploads = pendingUploads;
         _logger = logger;
@@ -127,11 +123,7 @@ public sealed class DocumentService : IDocumentService
             throw new ArgumentException("Document contentSha256 must be a 64-character SHA-256 hex digest.", nameof(contentSha256));
         }
 
-        var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "stored-document.create",
-                    $"{portfolioId}:{userId}:{Digest(normalizedOperationId)}"),
-                new CreateStoredDocumentCommand(
+        var command = new CreateStoredDocumentCommand(
                     pendingUploadId,
                     portfolioId,
                     target,
@@ -153,9 +145,12 @@ public sealed class DocumentService : IDocumentService
                             access.UserId,
                             access.AccessContextId,
                             access.AccessRevision)
-                        : null),
-                CreateCodec,
-                ct);
+                        : null);
+        var outcome = await _writes.ExecuteAsync(
+            StoredDocumentWriteSupport.CreateIdempotencyKey(
+                portfolioId, userId, Digest(normalizedOperationId)),
+            CreateRule(command),
+            ct);
 
         if (outcome.Value.Outcome is not (
             StoredDocumentMutationOutcome.Created or
@@ -188,11 +183,7 @@ public sealed class DocumentService : IDocumentService
         CancellationToken ct = default)
     {
         var normalizedOperationId = NormalizeOperationId(clientOperationId);
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "stored-document.delete",
-                $"{portfolioId}:{id}:{Digest(normalizedOperationId)}"),
-            new DeleteStoredDocumentCommand(
+        var command = new DeleteStoredDocumentCommand(
                 portfolioId,
                 id,
                 userId,
@@ -206,11 +197,30 @@ public sealed class DocumentService : IDocumentService
                         access.UserId,
                         access.AccessContextId,
                         access.AccessRevision)
-                    : null),
-            DeleteCodec,
+                    : null);
+        var outcome = await _writes.ExecuteAsync(
+            StoredDocumentWriteSupport.DeleteIdempotencyKey(
+                portfolioId, id, Digest(normalizedOperationId)),
+            DeleteRule(command),
             ct);
         return outcome.Value.Outcome == StoredDocumentMutationOutcome.Deleted;
     }
+
+    private TransactionalWrite<CreateStoredDocumentCommand, CreateStoredDocumentResult> CreateRule(
+        CreateStoredDocumentCommand command) => StoredDocumentWriteSupport.Create(
+        command,
+        (request, context, ct) =>
+            CreateStoredDocumentHandler.ExecuteAsync(_db, request, context, ct),
+        (request, context, ct) =>
+            CreateStoredDocumentHandler.AuthorizeAsync(_db, request, context, ct));
+
+    private TransactionalWrite<DeleteStoredDocumentCommand, DeleteStoredDocumentResult> DeleteRule(
+        DeleteStoredDocumentCommand command) => StoredDocumentWriteSupport.Delete(
+        command,
+        (request, context, ct) =>
+            DeleteStoredDocumentHandler.ExecuteAsync(_db, request, context, ct),
+        (request, context, ct) =>
+            DeleteStoredDocumentHandler.AuthorizeAsync(_db, request, context, ct));
 
     private static string NormalizeOperationId(string clientOperationId)
     {
