@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -28,17 +29,20 @@ public class VendorService : IVendorService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor? _writes;
     private readonly TimeProvider _timeProvider;
 
     public VendorService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IAtomicUnitOfWork atomic,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _atomic = atomic;
+        _writes = writes;
         _timeProvider = timeProvider;
     }
 
@@ -91,20 +95,24 @@ public class VendorService : IVendorService
             .FirstOrDefaultAsync(v => v.Id == id, ct);
     }
 
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<VendorResponse?> CreateAsync(
         WorkspaceReadScope scope,
         CreateVendorRequest request,
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Vendor,
+        var writeRequest = CoreCrudWriteSupport.Request(scope, AtomicCoreCrudMutationDomain.Vendor,
             AtomicCoreCrudMutationOperation.Create, 0, operationKey, request,
             createdAtUtc: _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        var write = CoreCrudWriteSupport.Write(
+            writeRequest, CreateVendorAsync, AuthorizeCoreCrudReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return DeserializeSnapshot<VendorResponse>(outcome.Value);
     }
 
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<VendorResponse?> UpdateAsync(
         WorkspaceReadScope scope,
         int id,
@@ -112,27 +120,132 @@ public class VendorService : IVendorService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Vendor,
+        var writeRequest = CoreCrudWriteSupport.Request(scope, AtomicCoreCrudMutationDomain.Vendor,
             AtomicCoreCrudMutationOperation.Update, id, operationKey, request,
             changedAtUtc: _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        var write = CoreCrudWriteSupport.Write(
+            writeRequest, UpdateVendorAsync, AuthorizeCoreCrudReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return DeserializeSnapshot<VendorResponse>(outcome.Value);
     }
 
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<bool> DeleteAsync(
         WorkspaceReadScope scope,
         int id,
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Vendor,
+        var writeRequest = CoreCrudWriteSupport.Request(scope, AtomicCoreCrudMutationDomain.Vendor,
             AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object(),
             changedAtUtc: _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        var write = CoreCrudWriteSupport.Write(
+            writeRequest, DeleteVendorAsync, AuthorizeCoreCrudReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return outcome.Value.Found;
     }
+
+    private async Task<AtomicCoreCrudMutationResult> CreateVendorAsync(
+        CoreCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await CoreCrudWriteSupport.BeginExecutionAsync(request, _db, context, ct);
+        var create = CoreCrudWriteSupport.Read<CreateVendorRequest>(request);
+        var vendor = new Vendor
+        {
+            PortfolioId = request.PortfolioId, Name = create.Name, ServiceType = create.ServiceType,
+            Email = create.Email, Phone = create.Phone, Website = create.Website, TaxId = create.TaxId,
+            AddressLine1 = create.AddressLine1, City = create.City, State = create.State,
+            PostalCode = create.PostalCode, Is1099Eligible = create.Is1099Eligible,
+            W9OnFile = create.W9OnFile, Preferred = create.Preferred, Notes = create.Notes,
+            CreatedAt = now, UpdatedAt = now,
+        };
+        _db.Add(vendor);
+        context.BindSemanticAudit(vendor, TransactionalWriteDefaults.Audit(
+            request, nameof(Vendor), AuditLogOperation.Created,
+            $"Vendor {vendor.Name} created", 0));
+        await context.FlushBusinessAsync(ct);
+        TransactionalWriteDefaults.StageDataUpdate(
+            request, context, nameof(Vendor), vendor.Id, now, "entity");
+        return new AtomicCoreCrudMutationResult(
+            true, true, vendor.Id, JsonSerializer.Serialize(VendorResponse.FromEntity(vendor)));
+    }
+
+    private async Task<AtomicCoreCrudMutationResult> UpdateVendorAsync(
+        CoreCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await CoreCrudWriteSupport.BeginExecutionAsync(request, _db, context, ct);
+        var vendor = await _db.Vendors.SingleOrDefaultAsync(entity =>
+            entity.Id == request.EntityId && entity.PortfolioId == request.PortfolioId
+            && entity.DeletedAt == null, ct);
+        if (vendor is null) return new AtomicCoreCrudMutationResult(false, false, 0);
+        var update = CoreCrudWriteSupport.Read<UpdateVendorRequest>(request);
+        if (update.Name is not null) vendor.Name = update.Name;
+        if (update.ServiceType is not null) vendor.ServiceType = update.ServiceType;
+        if (update.Email is not null) vendor.Email = update.Email;
+        if (update.Phone is not null) vendor.Phone = update.Phone;
+        if (update.Website is not null) vendor.Website = update.Website;
+        if (update.TaxId is not null) vendor.TaxId = update.TaxId;
+        if (update.AddressLine1 is not null) vendor.AddressLine1 = update.AddressLine1;
+        if (update.City is not null) vendor.City = update.City;
+        if (update.State is not null) vendor.State = update.State;
+        if (update.PostalCode is not null) vendor.PostalCode = update.PostalCode;
+        if (update.Is1099Eligible.HasValue) vendor.Is1099Eligible = update.Is1099Eligible.Value;
+        if (update.W9OnFile.HasValue) vendor.W9OnFile = update.W9OnFile.Value;
+        if (update.Preferred.HasValue) vendor.Preferred = update.Preferred.Value;
+        if (update.Notes is not null) vendor.Notes = update.Notes;
+        vendor.UpdatedAt = now;
+        context.BindSemanticAudit(vendor, TransactionalWriteDefaults.Audit(
+            request, nameof(Vendor), AuditLogOperation.Updated,
+            $"Vendor {vendor.Name} updated", vendor.Id));
+        await context.FlushBusinessAsync(ct);
+        TransactionalWriteDefaults.StageDataUpdate(
+            request, context, nameof(Vendor), vendor.Id, now, "entity");
+        return new AtomicCoreCrudMutationResult(
+            true, true, vendor.Id, JsonSerializer.Serialize(VendorResponse.FromEntity(vendor)));
+    }
+
+    private async Task<AtomicCoreCrudMutationResult> DeleteVendorAsync(
+        CoreCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await CoreCrudWriteSupport.BeginExecutionAsync(request, _db, context, ct);
+        var vendor = await _db.Vendors.SingleOrDefaultAsync(entity =>
+            entity.Id == request.EntityId && entity.PortfolioId == request.PortfolioId
+            && entity.DeletedAt == null, ct);
+        if (vendor is null) return new AtomicCoreCrudMutationResult(false, false, 0);
+        var open = await _db.WorkOrders.AsNoTracking().CountAsync(work =>
+            work.PortfolioId == request.PortfolioId && work.VendorId == vendor.Id
+            && work.Status != WorkOrderStatus.Completed && work.Status != WorkOrderStatus.Cancelled
+            && work.Status != WorkOrderStatus.Archived, ct);
+        if (open > 0) throw new DomainValidationException(
+            $"This vendor is assigned to {open} open {(open == 1 ? "work order" : "work orders")}; reassign or close them first.", 409);
+        vendor.DeletedAt = now;
+        vendor.UpdatedAt = now;
+        context.BindSemanticAudit(vendor, TransactionalWriteDefaults.Audit(
+            request, nameof(Vendor), AuditLogOperation.Deleted,
+            $"Vendor {vendor.Name} deleted", vendor.Id));
+        await context.FlushBusinessAsync(ct);
+        TransactionalWriteDefaults.StageDataUpdate(
+            request, context, nameof(Vendor), vendor.Id, now, "entity", deleted: true);
+        return new AtomicCoreCrudMutationResult(true, true, vendor.Id);
+    }
+
+    private Task AuthorizeCoreCrudReplayAsync(
+        CoreCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        CoreCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
+
+    private IRequestWriteExecutor RequireWrites() =>
+        _writes ?? throw new InvalidOperationException(
+            "The shared request write executor is required for vendor changes.");
 
     private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
         where TResponse : class =>

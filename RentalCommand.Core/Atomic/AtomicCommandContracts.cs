@@ -105,6 +105,8 @@ public sealed record TransactionalWrite<TCommand, TResult>
 public enum WriteLockProtocol
 {
     AuthorizationScope,
+    AuthorizationScopeOwnerEntity,
+    AuthorizationScopeVendor,
     Possession,
     ConfirmMoveIn,
 }
@@ -116,6 +118,10 @@ public sealed class WriteLockPlan
         {
             [WriteLockProtocol.AuthorizationScope] =
                 ["AuthSession", "WorkspaceAccessContext", "Portfolio"],
+            [WriteLockProtocol.AuthorizationScopeOwnerEntity] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "OwnerEntity"],
+            [WriteLockProtocol.AuthorizationScopeVendor] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Vendor"],
             [WriteLockProtocol.Possession] =
                 ["Unit", "LeaseManagement"],
             [WriteLockProtocol.ConfirmMoveIn] =
