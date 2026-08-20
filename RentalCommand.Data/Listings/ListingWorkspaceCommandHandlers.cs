@@ -18,302 +18,85 @@ namespace RentalCommand.Data.Listings;
 public sealed class GenerateListingWorkspaceHandler
     : IAtomicCommandHandler<GenerateListingWorkspaceCommand, ListingWorkspaceMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
-
-    public GenerateListingWorkspaceHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        GenerateListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct)
-    {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
-        var seed = await ListingWorkspaceCommandSupport.AuthorizedUnits(command, _db, now)
-            .Select(unit => new ListingSeed(
-                unit.PortfolioId, unit.PropertyId, unit.Id, unit.Property!.Name,
-                unit.Property.AddressLine1, unit.Property.AddressLine2, unit.Property.City,
-                unit.Property.State, unit.Property.PostalCode, unit.UnitNumber,
-                unit.Bedrooms, unit.Bathrooms, unit.SquareFeet, unit.MarketRent))
-            .SingleOrDefaultAsync(ct);
-        if (seed is null) return ListingWorkspaceCommandSupport.NotFound(command);
-
-        var listing = await _db.Set<RentalListing>()
-            .SingleOrDefaultAsync(item => item.PortfolioId == command.PortfolioId && item.UnitId == command.UnitId, ct);
-        var created = listing is null;
-        if (listing is null)
-        {
-            listing = ListingWorkspaceCommandSupport.CreateListing(seed, now);
-            _db.Add(listing);
-        }
-        else
-        {
-            var changed = listing.PropertyId != seed.PropertyId
-                || listing.Bedrooms != seed.Bedrooms
-                || listing.Bathrooms != seed.Bathrooms
-                || listing.SquareFeet != seed.SquareFeet;
-            listing.PropertyId = seed.PropertyId;
-            listing.Bedrooms = seed.Bedrooms;
-            listing.Bathrooms = seed.Bathrooms;
-            listing.SquareFeet = seed.SquareFeet;
-            if (changed) listing.ContentVersion++;
-            listing.UpdatedAt = now;
-        }
-
-        context.UseDatabaseWallClockForAudit(now);
-        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
-            command, nameof(RentalListing), created ? AuditLogOperation.Created : AuditLogOperation.Updated,
-            created
-                ? "Prepared provider-neutral rental listing workspace"
-                : "Synchronized non-editable unit details without replacing customized listing content"));
-        await context.FlushBusinessAsync(ct);
-        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "generate");
-        return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
-    }
+    public Task<ListingWorkspaceMutationResult> HandleAsync(
+        GenerateListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredLocalListingWrite();
 
     public Task AuthorizeReplayAsync(GenerateListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
+        throw RetiredLocalListingWrite();
+
+    private static InvalidOperationException RetiredLocalListingWrite() => new(
+        "Local listing writes no longer use the legacy listing handlers.");
 }
 
 public sealed class SaveListingWorkspaceHandler
     : IAtomicCommandHandler<SaveListingWorkspaceCommand, ListingWorkspaceMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
-
-    public SaveListingWorkspaceHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        SaveListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct)
-    {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
-        var listing = await ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
-            .SingleOrDefaultAsync(ct);
-        if (listing is null) return ListingWorkspaceCommandSupport.NotFound(command);
-
-        var contentChanged = ListingWorkspaceCommandSupport.Apply(command, listing);
-        if (contentChanged) listing.ContentVersion++;
-        listing.UpdatedAt = now;
-        var guided = command.ZillowGuided is null
-            ? null
-            : await _db.Set<ListingPublication>().SingleOrDefaultAsync(publication =>
-                publication.RentalListingId == listing.Id
-                && publication.PortfolioId == command.PortfolioId
-                && publication.ProviderKey == ListingProviderKeys.Zillow
-                && publication.Mode == ListingPublicationMode.Guided, ct);
-        ListingWorkspaceCommandSupport.Apply(command.ZillowGuided, listing, guided, now);
-
-        context.UseDatabaseWallClockForAudit(now);
-        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
-            command, nameof(RentalListing), AuditLogOperation.Updated,
-            "Updated rental listing and Zillow Guided workspace"));
-        if (guided is not null)
-        {
-            context.BindSemanticAudit(guided, ListingWorkspaceCommandSupport.Audit(
-                command, nameof(ListingPublication), AuditLogOperation.Updated,
-                "Updated Zillow Guided workspace", guided.Id));
-        }
-        await context.FlushBusinessAsync(ct);
-        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "save");
-        return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
-    }
+    public Task<ListingWorkspaceMutationResult> HandleAsync(
+        SaveListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredLocalListingWrite();
 
     public Task AuthorizeReplayAsync(SaveListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
+        throw RetiredLocalListingWrite();
+
+    private static InvalidOperationException RetiredLocalListingWrite() => new(
+        "Local listing writes no longer use the legacy listing handlers.");
 }
 
 public sealed class FinalizeListingPhotoUploadHandler
     : IAtomicCommandHandler<FinalizeListingPhotoUploadCommand, ListingWorkspaceMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
-
-    public FinalizeListingPhotoUploadHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        FinalizeListingPhotoUploadCommand command, IAtomicCommandContext context, CancellationToken ct)
-    {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
-        var photo = await (from authorizedListing in ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
-                           join item in _db.Set<ListingPhoto>() on authorizedListing.Id equals item.RentalListingId
-                           where item.Id == command.PhotoId && item.PortfolioId == command.PortfolioId
-                           select item).SingleOrDefaultAsync(ct);
-        if (photo is null) return ListingWorkspaceCommandSupport.NotFound(command);
-        var listing = await _db.Set<RentalListing>()
-            .SingleAsync(item => item.Id == photo.RentalListingId && item.PortfolioId == command.PortfolioId, ct);
-
-        var pending = (await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(_db,
-            context, command.PortfolioId,
-            command.ActorUserId,
-            [new AtomicPendingFileUploadExpectation(
-                command.PendingUploadId, command.Purpose, command.OperationKeyHash,
-                command.RequestFingerprint, command.StoragePath, command.FileName,
-                command.ContentType, command.SizeBytes)],
-            ct)).Single();
-
-        if (photo.StoredFileId is int oldFileId)
-        {
-            var old = await _db.Set<StoredFile>()
-                .SingleAsync(file => file.Id == oldFileId && file.PortfolioId == command.PortfolioId, ct);
-            old.DeletedAt = now;
-            context.StageOutbox(new OutboxMessage
-            {
-                PortfolioId = command.PortfolioId,
-                MessageType = "blob-delete",
-                Payload = JsonSerializer.Serialize(new { storedFileId = old.Id, storagePath = old.FilePath }),
-                IdempotencyKey = $"listing-photo-replace:{old.Id}",
-                CreatedAtUtc = now,
-                NextAttemptAtUtc = now,
-            });
-        }
-
-        var stored = new StoredFile
-        {
-            PortfolioId = command.PortfolioId,
-            FileName = command.FileName,
-            FilePath = command.StoragePath,
-            ContentType = command.ContentType,
-            FileSize = command.SizeBytes,
-            EntityType = nameof(ListingPhoto),
-            EntityId = photo.Id,
-            UploadedAt = now,
-        };
-        _db.Add(stored);
-        await context.FlushBusinessAsync(ct);
-
-        photo.StoredFileId = stored.Id;
-        photo.FileName = command.FileName;
-        photo.Sha256 = command.Sha256;
-        pending.State = PendingFileUploadState.Finalized;
-        pending.StoredFileId = stored.Id;
-        pending.UpdatedAtUtc = now;
-        listing.ContentVersion++;
-        listing.UpdatedAt = now;
-        context.UseDatabaseWallClockForAudit(now);
-        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
-            command, nameof(RentalListing), AuditLogOperation.Updated, "Attached listing photo"));
-        await context.FlushBusinessAsync(ct);
-        context.StageSemanticEvent(new AtomicSemanticAudit(
-            command.PortfolioId, nameof(ListingPhoto), photo.Id, AuditLogOperation.Updated,
-            command.ActorUserId,
-            NewValues: JsonSerializer.Serialize(new
-            {
-                photo.Position, photo.Category, photo.Caption, command.FileName, command.Sha256,
-            }),
-            ChangeReason: "Attached listing photo"), now);
-        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "photo-attach");
-        return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
-    }
+    public Task<ListingWorkspaceMutationResult> HandleAsync(
+        FinalizeListingPhotoUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredLocalListingWrite();
 
     public Task AuthorizeReplayAsync(FinalizeListingPhotoUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
+        throw RetiredLocalListingWrite();
+
+    private static InvalidOperationException RetiredLocalListingWrite() => new(
+        "Local listing writes no longer use the legacy listing handlers.");
 }
 
 public sealed class UpdateListingPhotoHandler
     : IAtomicCommandHandler<UpdateListingPhotoCommand, ListingWorkspaceMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
-
-    public UpdateListingPhotoHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        UpdateListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct)
-    {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
-        var target = await ListingWorkspaceCommandSupport.LoadPhotoTargetAsync(command, _db, now, ct);
-        if (target is null) return ListingWorkspaceCommandSupport.NotFound(command);
-        if (target.Photo.Category == command.Category && target.Photo.Caption == command.Caption)
-            return ListingWorkspaceCommandSupport.NoChange(command, target.Listing.Id);
-
-        target.Photo.Category = command.Category;
-        target.Photo.Caption = command.Caption;
-        target.Listing.ContentVersion++;
-        target.Listing.UpdatedAt = now;
-        ListingWorkspaceCommandSupport.AuditPhotoMutation(command, context, target, now, "Updated listing photo details");
-        await context.FlushBusinessAsync(ct);
-        ListingWorkspaceCommandSupport.StageUpdate(context, command, target.Listing.Id, now, "photo-update");
-        return ListingWorkspaceCommandSupport.Applied(command, target.Listing.Id);
-    }
+    public Task<ListingWorkspaceMutationResult> HandleAsync(
+        UpdateListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredLocalListingWrite();
 
     public Task AuthorizeReplayAsync(UpdateListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
+        throw RetiredLocalListingWrite();
+
+    private static InvalidOperationException RetiredLocalListingWrite() => new(
+        "Local listing writes no longer use the legacy listing handlers.");
 }
 
 public sealed class RemoveListingPhotoHandler
     : IAtomicCommandHandler<RemoveListingPhotoCommand, ListingWorkspaceMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
-
-    public RemoveListingPhotoHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        RemoveListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct)
-    {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
-        var target = await ListingWorkspaceCommandSupport.LoadPhotoTargetAsync(command, _db, now, ct);
-        if (target is null) return ListingWorkspaceCommandSupport.NotFound(command);
-        if (target.Photo.StoredFileId is not int fileId)
-            return ListingWorkspaceCommandSupport.NoChange(command, target.Listing.Id);
-
-        var stored = await _db.Set<StoredFile>()
-            .SingleAsync(file => file.Id == fileId && file.PortfolioId == command.PortfolioId, ct);
-        stored.DeletedAt = now;
-        target.Photo.StoredFileId = null;
-        target.Photo.FileName = null;
-        target.Photo.Sha256 = null;
-        target.Listing.ContentVersion++;
-        target.Listing.UpdatedAt = now;
-        ListingWorkspaceCommandSupport.AuditPhotoMutation(command, context, target, now, "Removed listing photo attachment");
-        await context.FlushBusinessAsync(ct);
-        context.StageOutbox(new OutboxMessage
-        {
-            PortfolioId = command.PortfolioId,
-            MessageType = "blob-delete",
-            Payload = JsonSerializer.Serialize(new { storedFileId = stored.Id, storagePath = stored.FilePath }),
-            IdempotencyKey = $"listing-photo-remove:{stored.Id}",
-            CreatedAtUtc = now,
-            NextAttemptAtUtc = now,
-        });
-        ListingWorkspaceCommandSupport.StageUpdate(context, command, target.Listing.Id, now, "photo-remove");
-        return ListingWorkspaceCommandSupport.Applied(command, target.Listing.Id);
-    }
+    public Task<ListingWorkspaceMutationResult> HandleAsync(
+        RemoveListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredLocalListingWrite();
 
     public Task AuthorizeReplayAsync(RemoveListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
+        throw RetiredLocalListingWrite();
+
+    private static InvalidOperationException RetiredLocalListingWrite() => new(
+        "Local listing writes no longer use the legacy listing handlers.");
 }
 
 public sealed class ReorderListingPhotosHandler
     : IAtomicCommandHandler<ReorderListingPhotosCommand, ListingWorkspaceMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
-
-    public ReorderListingPhotosHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        ReorderListingPhotosCommand command, IAtomicCommandContext context, CancellationToken ct)
-    {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
-        var listing = await ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
-            .SingleOrDefaultAsync(ct);
-        if (listing is null) return ListingWorkspaceCommandSupport.NotFound(command);
-        var order = await AtomicListingPersistence.ReorderPhotosAsync(_db,
-            context, command.PortfolioId, listing.Id, command.PhotoIds, ct);
-        if (!order.IsValid)
-            throw new DomainValidationException("Photo order must include every photo exactly once.");
-        if (!order.HasChanges) return ListingWorkspaceCommandSupport.NoChange(command, listing.Id);
-
-        listing.ContentVersion++;
-        listing.UpdatedAt = now;
-        context.UseDatabaseWallClockForAudit(now);
-        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
-            command, nameof(RentalListing), AuditLogOperation.Updated, "Reordered listing photo package"));
-        await context.FlushBusinessAsync(ct);
-        context.StageSemanticEvent(new AtomicSemanticAudit(
-            command.PortfolioId, nameof(ListingPhoto), listing.Id, AuditLogOperation.Updated,
-            command.ActorUserId,
-            NewValues: JsonSerializer.Serialize(new { command.PhotoIds }),
-            ChangeReason: "Reordered listing photo package"), now);
-        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "photo-reorder");
-        return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
-    }
+    public Task<ListingWorkspaceMutationResult> HandleAsync(
+        ReorderListingPhotosCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredLocalListingWrite();
 
     public Task AuthorizeReplayAsync(ReorderListingPhotosCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
+        throw RetiredLocalListingWrite();
+
+    private static InvalidOperationException RetiredLocalListingWrite() => new(
+        "Local listing writes no longer use the legacy listing handlers.");
 }
 
 public sealed class AdmitConnectedListingIntentHandler
@@ -699,8 +482,19 @@ public sealed class IngestExternalListingSignalHandler
     }
 }
 
-internal static class ListingWorkspaceCommandSupport
+public static class ListingWorkspaceCommandSupport
 {
+    public static async Task<DateTime> BeginExecutionAsync(
+        IListingWorkspaceAtomicCommand command, RentalCommandDbContext db,
+        IAtomicCommandContext context, CancellationToken ct)
+    {
+        Validate(command);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await AuthorizedUnits(command, db, now).AnyAsync(ct))
+            throw new UnauthorizedAccessException("The listing is outside the caller's current property scope.");
+        return now;
+    }
+
     internal static async Task<DateTime> AuthorizeAndLockAsync(
         IListingWorkspaceAtomicCommand command, RentalCommandDbContext db,
         IAtomicCommandContext context, CancellationToken ct)
@@ -715,7 +509,7 @@ internal static class ListingWorkspaceCommandSupport
         return now;
     }
 
-    internal static async Task AuthorizeReplayAsync(
+    public static async Task AuthorizeReplayAsync(
         IListingWorkspaceAtomicCommand command, RentalCommandDbContext db, CancellationToken ct)
     {
         Validate(command);
@@ -724,7 +518,7 @@ internal static class ListingWorkspaceCommandSupport
             throw new UnauthorizedAccessException("The listing is outside the caller's current property scope.");
     }
 
-    internal static IQueryable<Unit> AuthorizedUnits(
+    public static IQueryable<Unit> AuthorizedUnits(
         IListingWorkspaceAtomicCommand command, RentalCommandDbContext db, DateTime now)
     {
         var scope = new WorkspaceReadScope(
@@ -750,14 +544,14 @@ internal static class ListingWorkspaceCommandSupport
                     && selected.PropertyId == unit.PropertyId)));
     }
 
-    internal static IQueryable<RentalListing> AuthorizedListings(
+    public static IQueryable<RentalListing> AuthorizedListings(
         IListingWorkspaceAtomicCommand command, RentalCommandDbContext db, DateTime now) =>
         from unit in AuthorizedUnits(command, db, now)
         join listing in db.Set<RentalListing>() on unit.Id equals listing.UnitId
         where listing.PortfolioId == command.PortfolioId
         select listing;
 
-    internal static async Task<ListingPhotoTarget?> LoadPhotoTargetAsync(
+    public static async Task<ListingPhotoTarget?> LoadPhotoTargetAsync(
         IListingWorkspaceAtomicCommand command, RentalCommandDbContext db, DateTime now, CancellationToken ct)
     {
         var photoId = command switch
@@ -772,25 +566,25 @@ internal static class ListingWorkspaceCommandSupport
                       select new ListingPhotoTarget(listing, photo)).SingleOrDefaultAsync(ct);
     }
 
-    internal static void AuditPhotoMutation(
+    public static void AuditPhotoMutation(
         IListingWorkspaceAtomicCommand command, IAtomicCommandContext context,
         ListingPhotoTarget target, DateTime now, string reason)
     {
         context.UseDatabaseWallClockForAudit(now);
         context.BindSemanticAudit(target.Listing, Audit(
-            command, nameof(RentalListing), AuditLogOperation.Updated, reason));
+            command, nameof(RentalListing), AuditLogOperation.Updated, reason, target.Listing.Id));
         context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId, nameof(ListingPhoto), target.Photo.Id,
             AuditLogOperation.Updated, command.ActorUserId, ChangeReason: reason), now);
     }
 
-    internal static AtomicSemanticAudit Audit(
+    public static AtomicSemanticAudit Audit(
         IListingWorkspaceAtomicCommand command, string entityType,
         AuditLogOperation operation, string reason, int entityId = 0) =>
         new(command.PortfolioId, entityType, entityId, operation,
             UserId: command.ActorUserId, ChangeReason: reason);
 
-    internal static void StageUpdate(
+    public static void StageUpdate(
         IAtomicCommandContext context, IListingWorkspaceAtomicCommand command,
         int listingId, DateTime now, string operation)
     {
@@ -810,14 +604,14 @@ internal static class ListingWorkspaceCommandSupport
         });
     }
 
-    internal static ListingWorkspaceMutationResult Applied(IListingWorkspaceAtomicCommand command, int listingId) =>
+    public static ListingWorkspaceMutationResult Applied(IListingWorkspaceAtomicCommand command, int listingId) =>
         new(ListingWorkspaceMutationOutcome.Applied, command.PortfolioId, command.UnitId, listingId);
-    internal static ListingWorkspaceMutationResult NoChange(IListingWorkspaceAtomicCommand command, int listingId) =>
+    public static ListingWorkspaceMutationResult NoChange(IListingWorkspaceAtomicCommand command, int listingId) =>
         new(ListingWorkspaceMutationOutcome.NoChange, command.PortfolioId, command.UnitId, listingId);
-    internal static ListingWorkspaceMutationResult NotFound(IListingWorkspaceAtomicCommand command) =>
+    public static ListingWorkspaceMutationResult NotFound(IListingWorkspaceAtomicCommand command) =>
         new(ListingWorkspaceMutationOutcome.NotFound, command.PortfolioId, command.UnitId, null);
 
-    internal static RentalListing CreateListing(ListingSeed seed, DateTime now)
+    public static RentalListing CreateListing(ListingSeed seed, DateTime now)
     {
         var listing = new RentalListing
         {
@@ -861,7 +655,7 @@ internal static class ListingWorkspaceCommandSupport
         return listing;
     }
 
-    internal static bool Apply(SaveListingWorkspaceCommand command, RentalListing listing)
+    public static bool Apply(SaveListingWorkspaceCommand command, RentalListing listing)
     {
         var changed = false;
         if (!string.IsNullOrWhiteSpace(command.Status))
@@ -880,7 +674,7 @@ internal static class ListingWorkspaceCommandSupport
         return changed;
     }
 
-    internal static void Apply(
+    public static void Apply(
         GuidedListingValues? values, RentalListing listing, ListingPublication? publication, DateTime now)
     {
         if (values is null) return;
@@ -970,10 +764,10 @@ internal static class ListingWorkspaceCommandSupport
     }
 }
 
-internal sealed record ListingSeed(
+public sealed record ListingSeed(
     int PortfolioId, int PropertyId, int UnitId, string PropertyName,
     string AddressLine1, string? AddressLine2, string City, string State,
     string PostalCode, string UnitNumber, decimal Bedrooms, decimal Bathrooms,
     int? SquareFeet, decimal MarketRent);
 
-internal sealed record ListingPhotoTarget(RentalListing Listing, ListingPhoto Photo);
+public sealed record ListingPhotoTarget(RentalListing Listing, ListingPhoto Photo);
