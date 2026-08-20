@@ -22,6 +22,8 @@ namespace RentalCommand.IntegrationTests;
 [Collection(RoleAuthorityPostgreSqlCollection.Name)]
 public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
 {
+    private static readonly DateTime InterceptorNow =
+        new(2099, 8, 22, 12, 0, 0, DateTimeKind.Utc);
     private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> GrantCodec =
         new("lease-management.party.access.grant.v1");
     private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> RevokeCodec =
@@ -36,7 +38,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
     {
         _context = await _fixture.CreateContextAsync();
         var services = new ServiceCollection();
-        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(InterceptorNow));
         services.AddSingleton<ILookupNormalizer, UpperInvariantLookupNormalizer>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
@@ -112,7 +114,8 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
                 && row.CommandIdempotencyKey == grantIdentity.IdempotencyKey)
             .Select(row => row.Timestamp)
             .Distinct()
-            .ToListAsync()).Should().OnlyContain(timestamp => timestamp == grantedAtUtc);
+            .ToListAsync()).Should().OnlyContain(timestamp =>
+                timestamp == grantedAtUtc && timestamp != InterceptorNow);
         await _context.Db.MembershipRoleAssignments
             .Where(assignment =>
                 assignment.WorkspaceMembershipId == tenantMembershipId &&
@@ -206,7 +209,8 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
                 && row.CommandIdempotencyKey == revokeIdentity.IdempotencyKey)
             .Select(row => row.Timestamp)
             .Distinct()
-            .ToListAsync()).Should().OnlyContain(timestamp => timestamp == revokedAtUtc);
+            .ToListAsync()).Should().OnlyContain(timestamp =>
+                timestamp == revokedAtUtc && timestamp != InterceptorNow);
         (await _context.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == revokeIdentity.CommandType && receipt.IdempotencyKey == revokeIdentity.IdempotencyKey))
             .Should().Be(1);
@@ -811,6 +815,11 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
         public int? UserId => 1;
         public string? ActorLabel => "integration:lease-household-access";
         public string? IpAddress => "127.0.0.1";
+    }
+
+    private sealed class FixedTimeProvider(DateTime now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(now);
     }
 
     private sealed class WorkspaceInvitationActivationRow
