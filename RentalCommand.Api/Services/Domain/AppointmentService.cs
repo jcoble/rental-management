@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
@@ -12,28 +11,28 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Operations;
+using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <inheritdoc cref="IAppointmentService"/>
 public class AppointmentService : IAppointmentService
 {
-    private static readonly AtomicJsonResultCodec<OperationMutationResult> MutationCodec =
-        new("appointment.mutation.v1");
     private static readonly string[] ReadCapabilities =
         [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingShowingsManage];
     private static readonly string[] ScheduleSummaryReadCapabilities =
         [CapabilityKeys.WorkRead, CapabilityKeys.LeasingShowingsManage];
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IRequestWriteExecutor? _writes;
 
     public AppointmentService(RentalCommandDbContext db, IDataUpdateService dataUpdate,
-        TimeProvider timeProvider, IAtomicUnitOfWork? atomic = null)
+        TimeProvider timeProvider, IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<AppointmentResponse>> ListAsync(int portfolioId, int? propertyId, int? tenantId, ListQuery query, CancellationToken ct = default)
@@ -267,8 +266,10 @@ public class AppointmentService : IAppointmentService
             request.Title, request.ProspectName, request.ProspectEmail, request.Type,
             request.Status, request.ScheduledStart.ToUtc(), request.ScheduledEnd.ToUtc(),
             request.AssignedTo, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("appointment.create", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            AppointmentCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            AppointmentCrudWriteSupport.Write(
+                command, CreateAppointmentAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -283,8 +284,10 @@ public class AppointmentService : IAppointmentService
             request.Title, request.ProspectName, request.ProspectEmail, request.Type,
             request.Status, request.ScheduledStart?.ToUtc(), request.ScheduledEnd.ToUtc(),
             request.AssignedTo, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("appointment.update", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            AppointmentCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            AppointmentCrudWriteSupport.Write(
+                command, UpdateAppointmentAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -294,22 +297,42 @@ public class AppointmentService : IAppointmentService
     {
         var command = new DeleteAppointmentCommand(
             scope.PortfolioId, Actor(scope), id, expectedPropertyId, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("appointment.delete", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            AppointmentCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            AppointmentCrudWriteSupport.Write(
+                command, DeleteAppointmentAsync, AuthorizeReplayAsync), ct);
         return outcome.Value.Outcome == OperationMutationOutcome.Applied;
     }
 
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Appointment changes are not available right now.");
+    private Task<OperationMutationResult> CreateAppointmentAsync(
+        CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AppointmentCrudWriteSupport.CreateAsync(_db, command, context, ct);
+
+    private Task<OperationMutationResult> UpdateAppointmentAsync(
+        UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AppointmentCrudWriteSupport.UpdateAsync(_db, command, context, ct);
+
+    private Task<OperationMutationResult> DeleteAppointmentAsync(
+        DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AppointmentCrudWriteSupport.DeleteAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AppointmentCrudWriteSupport.AuthorizeReplayAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AppointmentCrudWriteSupport.AuthorizeReplayAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AppointmentCrudWriteSupport.AuthorizeReplayAsync(_db, command, context, ct);
+
+    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
+        "The shared request write executor is required for appointment changes.");
 
     private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
         scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);
-
-    private static AtomicCommandIdentity Identity(string operation, string key)
-    {
-        var digest = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)));
-        return new AtomicCommandIdentity(operation, digest);
-    }
 
     private static AppointmentResponse? Response(OperationMutationResult result) =>
         result.Outcome == OperationMutationOutcome.NotFound || result.ResponseJson is null

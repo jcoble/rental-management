@@ -162,10 +162,10 @@ public sealed class AppointmentMutationClockPostgreSqlTests : IAsyncLifetime
     }
 
     private AppointmentService Service(ServiceProvider services) => new(
-        _context.Db,
+        services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
         new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-        services.GetRequiredService<IAtomicUnitOfWork>());
+        services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
     private async Task<Property> SeedPropertyAsync()
     {

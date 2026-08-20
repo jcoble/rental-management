@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
@@ -33,10 +34,10 @@ public sealed class AppointmentMutationAuthorizationTests : IDisposable
             new FixedTimeProvider(new DateTimeOffset(SeededAtUtc)),
             [new RecordingCommandInterceptor(_commands)]);
         _sut = new AppointmentService(
-            _ctx.Db,
+            _services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
             Mock.Of<IDataUpdateService>(),
             new FixedTimeProvider(new DateTimeOffset(SeededAtUtc)),
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<IRequestWriteExecutor>());
     }
 
     public void Dispose()

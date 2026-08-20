@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core;
@@ -14,30 +16,99 @@ namespace RentalCommand.Data.Operations;
 public sealed class CreateAppointmentHandler
     : IAtomicCommandHandler<CreateAppointmentCommand, OperationMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<OperationMutationResult> HandleAsync(
+        CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AppointmentCrudWriteSupport.RetiredPath();
 
-    public CreateAppointmentHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AppointmentCrudWriteSupport.RetiredPath();
+}
 
-    public async Task<OperationMutationResult> HandleAsync(
-        CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
+public sealed class UpdateAppointmentHandler
+    : IAtomicCommandHandler<UpdateAppointmentCommand, OperationMutationResult>
+{
+    public Task<OperationMutationResult> HandleAsync(
+        UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AppointmentCrudWriteSupport.RetiredPath();
+
+    public Task AuthorizeReplayAsync(
+        UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AppointmentCrudWriteSupport.RetiredPath();
+}
+
+public sealed class DeleteAppointmentHandler
+    : IAtomicCommandHandler<DeleteAppointmentCommand, OperationMutationResult>
+{
+    public Task<OperationMutationResult> HandleAsync(
+        DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AppointmentCrudWriteSupport.RetiredPath();
+
+    public Task AuthorizeReplayAsync(
+        DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AppointmentCrudWriteSupport.RetiredPath();
+}
+
+public static class AppointmentCrudWriteSupport
+{
+    public const string ResultContract = "appointment.mutation.v1";
+
+    public static string IdempotencyKey(string deliveryIdempotencyKey) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(deliveryIdempotencyKey)));
+
+    public static TransactionalWrite<CreateAppointmentCommand, OperationMutationResult> Write(
+        CreateAppointmentCommand command,
+        Func<CreateAppointmentCommand, IAtomicCommandContext, CancellationToken, Task<OperationMutationResult>> executeAsync,
+        Func<CreateAppointmentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
     {
         AppointmentOperationValidation.Validate(command);
-        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
+        return new("appointment.create", WriteIdempotencyPolicy.Required, command, ResultContract,
+            command.WorkOrderId.HasValue
+                ? new WriteLockPlan(WriteLockProtocol.WorkOrder,
+                    WriteLock.For("WorkOrder", command.WorkOrderId.Value))
+                : WriteLockPlan.None,
+            executeAsync, authorizeReplayAsync);
+    }
+
+    public static TransactionalWrite<UpdateAppointmentCommand, OperationMutationResult> Write(
+        UpdateAppointmentCommand command,
+        Func<UpdateAppointmentCommand, IAtomicCommandContext, CancellationToken, Task<OperationMutationResult>> executeAsync,
+        Func<UpdateAppointmentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+    {
+        AppointmentOperationValidation.Validate(command);
+        return new("appointment.update", WriteIdempotencyPolicy.Required, command, ResultContract,
+            AppointmentPlan(command.AppointmentId), executeAsync, authorizeReplayAsync);
+    }
+
+    public static TransactionalWrite<DeleteAppointmentCommand, OperationMutationResult> Write(
+        DeleteAppointmentCommand command,
+        Func<DeleteAppointmentCommand, IAtomicCommandContext, CancellationToken, Task<OperationMutationResult>> executeAsync,
+        Func<DeleteAppointmentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+    {
+        AppointmentOperationValidation.Validate(command);
+        return new("appointment.delete", WriteIdempotencyPolicy.Required, command, ResultContract,
+            AppointmentPlan(command.AppointmentId), executeAsync, authorizeReplayAsync);
+    }
+
+    public static async Task<OperationMutationResult> CreateAsync(
+        RentalCommandDbContext db, CreateAppointmentCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
+    {
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
         var capability = AppointmentOperationValidation.ManageCapability(command.Type);
         if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(
                 command.PortfolioId, command.Actor, command.PropertyId,
-                capability, _db, businessNow, securityNow, ct))
+                capability, db, businessNow, securityNow, ct))
             return new(OperationMutationOutcome.NotFound, 0);
         if (!AppointmentOperationValidation.ValidRange(command.ScheduledStartUtc, command.ScheduledEndUtc))
             throw new DomainValidationException("The end time must be after the start time");
         if (!await AppointmentOperationValidation.ReferencesMatchAsync(
-                _db, command.PortfolioId, command.PropertyId, command.UnitId,
+                db, command.PortfolioId, command.PropertyId, command.UnitId,
                 command.LeaseManagementId, command.RentalApplicationId, command.TenantId, ct))
             return new(OperationMutationOutcome.NotFound, 0);
         if (!await AppointmentOperationValidation.WorkOrderMatchesAsync(
-                _db, command.PortfolioId, command.Actor, command.WorkOrderId,
+                db, command.PortfolioId, command.Actor, command.WorkOrderId,
                 command.PropertyId, command.UnitId, command.TenantId, businessNow, securityNow, ct))
             return new(OperationMutationOutcome.NotFound, 0);
 
@@ -52,67 +123,28 @@ public sealed class CreateAppointmentHandler
             AssignedTo = Clean(command.AssignedTo), Notes = Clean(command.Notes),
             CreatedAt = businessNow, UpdatedAt = businessNow,
         };
-        _db.Add(entity);
+        db.Add(entity);
         context.UseDatabaseWallClockForAudit(businessNow);
         context.BindSemanticAudit(entity, Audit(command, entity, AuditLogOperation.Created, 0));
         await context.FlushBusinessAsync(ct);
-        var snapshot = await AppointmentSnapshot.LoadAsync(_db, command.PortfolioId, entity.Id, ct);
+        var snapshot = await AppointmentSnapshot.LoadAsync(db, command.PortfolioId, entity.Id, ct);
         await AppointmentTenantNotifications.StageAsync(
-            _db, context, entity, AppointmentTenantNotificationLifecycle.Scheduled, businessNow, ct);
+            db, context, entity, AppointmentTenantNotificationLifecycle.Scheduled, businessNow, ct);
         context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
             $"appointment-create:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
 
-    public async Task AuthorizeReplayAsync(CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task<OperationMutationResult> UpdateAsync(
+        RentalCommandDbContext db, UpdateAppointmentCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
-        AppointmentOperationValidation.Validate(command);
-        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
-        var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
-        var capability = AppointmentOperationValidation.ManageCapability(command.Type);
-        if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(command.PortfolioId, command.Actor,
-                command.PropertyId, capability, _db, command.BusinessNowUtc, securityNow, ct))
-            throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
-        if (!await AppointmentOperationValidation.WorkOrderMatchesAsync(
-                _db, command.PortfolioId, command.Actor, command.WorkOrderId,
-                command.PropertyId, command.UnitId, command.TenantId,
-                command.BusinessNowUtc, securityNow, ct))
-            throw new UnauthorizedAccessException("The active assignment cannot manage this work order appointment.");
-    }
-
-    internal static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    internal static AtomicSemanticAudit Audit(CreateAppointmentCommand command, Appointment entity,
-        AuditLogOperation operation, int id) => new(command.PortfolioId, nameof(Appointment), id, operation,
-        command.Actor.UserId, NewValues: JsonSerializer.Serialize(new
-        {
-            entity.PropertyId, entity.UnitId, entity.Title, entity.Type, entity.Status,
-            entity.ScheduledStart, entity.ScheduledEnd, entity.WorkOrderId,
-        }), ChangeReason: operation == AuditLogOperation.Created ? "Created appointment." : "Updated appointment.");
-}
-
-public sealed class UpdateAppointmentHandler
-    : IAtomicCommandHandler<UpdateAppointmentCommand, OperationMutationResult>
-{
-    private readonly RentalCommandDbContext _db;
-
-    public UpdateAppointmentHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<OperationMutationResult> HandleAsync(
-        UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
-    {
-        AppointmentOperationValidation.Validate(command);
-        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
-        var currentWorkOrderId = await _db.Set<Appointment>()
-            .AsNoTracking()
-            .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
-            .Select(item => item.WorkOrderId)
-            .SingleOrDefaultAsync(ct);
-        await WorkOrderProgressionLock.AcquireAsync(
-            context, ct, currentWorkOrderId, command.WorkOrderId);
+        var currentWorkOrderId = await CurrentWorkOrderIdAsync(db, command.PortfolioId, command.AppointmentId, ct);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, currentWorkOrderId, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
         var entity = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
-                command.PortfolioId, command.Actor, _db,
+                command.PortfolioId, command.Actor, db,
                 businessNow, securityNow, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.AppointmentId, ct);
         if (entity is null) return new(OperationMutationOutcome.NotFound, command.AppointmentId);
@@ -120,18 +152,18 @@ public sealed class UpdateAppointmentHandler
         var destinationCapability = AppointmentOperationValidation.ManageCapability(command.Type ?? entity.Type);
         if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(command.PortfolioId, command.Actor,
                 destinationProperty, destinationCapability,
-                _db, businessNow, securityNow, ct))
+                db, businessNow, securityNow, ct))
             return new(OperationMutationOutcome.NotFound, command.AppointmentId);
         var effectiveUnit = command.UnitId ?? entity.UnitId;
         var effectiveManagement = command.LeaseManagementId ?? entity.LeaseManagementId;
         var effectiveApplication = command.RentalApplicationId ?? entity.RentalApplicationId;
         var effectiveTenant = command.TenantId ?? entity.TenantId;
         var effectiveWorkOrder = command.WorkOrderId ?? entity.WorkOrderId;
-        if (!await AppointmentOperationValidation.ReferencesMatchAsync(_db, command.PortfolioId,
+        if (!await AppointmentOperationValidation.ReferencesMatchAsync(db, command.PortfolioId,
                 destinationProperty, effectiveUnit, effectiveManagement, effectiveApplication, effectiveTenant, ct))
             return new(OperationMutationOutcome.NotFound, command.AppointmentId);
         if (!await AppointmentOperationValidation.WorkOrderMatchesAsync(
-                _db, command.PortfolioId, command.Actor, effectiveWorkOrder,
+                db, command.PortfolioId, command.Actor, effectiveWorkOrder,
                 destinationProperty, effectiveUnit, effectiveTenant, businessNow, securityNow, ct))
             return new(OperationMutationOutcome.NotFound, command.AppointmentId);
 
@@ -143,20 +175,20 @@ public sealed class UpdateAppointmentHandler
         if (command.TenantId.HasValue) entity.TenantId = command.TenantId;
         if (command.WorkOrderId.HasValue) entity.WorkOrderId = command.WorkOrderId;
         if (command.Title is not null) entity.Title = command.Title.Trim();
-        if (command.ProspectName is not null) entity.ProspectName = CreateAppointmentHandler.Clean(command.ProspectName);
-        if (command.ProspectEmail is not null) entity.ProspectEmail = CreateAppointmentHandler.Clean(command.ProspectEmail);
+        if (command.ProspectName is not null) entity.ProspectName = Clean(command.ProspectName);
+        if (command.ProspectEmail is not null) entity.ProspectEmail = Clean(command.ProspectEmail);
         if (command.Type.HasValue) entity.Type = command.Type.Value;
         if (command.Status.HasValue) entity.Status = command.Status.Value;
         if (command.ScheduledStartUtc.HasValue) entity.ScheduledStart = command.ScheduledStartUtc.Value;
         if (command.ScheduledEndUtc.HasValue) entity.ScheduledEnd = command.ScheduledEndUtc;
-        if (command.AssignedTo is not null) entity.AssignedTo = CreateAppointmentHandler.Clean(command.AssignedTo);
-        if (command.Notes is not null) entity.Notes = CreateAppointmentHandler.Clean(command.Notes);
+        if (command.AssignedTo is not null) entity.AssignedTo = Clean(command.AssignedTo);
+        if (command.Notes is not null) entity.Notes = Clean(command.Notes);
         if (!AppointmentOperationValidation.ValidRange(entity.ScheduledStart, entity.ScheduledEnd))
             throw new DomainValidationException("The end time must be after the start time");
         if (!hasChanges)
         {
             var currentSnapshot = await AppointmentSnapshot.LoadAsync(
-                _db, command.PortfolioId, entity.Id, ct);
+                db, command.PortfolioId, entity.Id, ct);
             return new(OperationMutationOutcome.Applied, entity.Id, currentSnapshot);
         }
 
@@ -169,9 +201,9 @@ public sealed class UpdateAppointmentHandler
                 entity.ScheduledStart, entity.ScheduledEnd, entity.WorkOrderId,
             }), ChangeReason: "Updated appointment."));
         await context.FlushBusinessAsync(ct);
-        var snapshot = await AppointmentSnapshot.LoadAsync(_db, command.PortfolioId, entity.Id, ct);
+        var snapshot = await AppointmentSnapshot.LoadAsync(db, command.PortfolioId, entity.Id, ct);
         await AppointmentTenantNotifications.StageAsync(
-            _db,
+            db,
             context,
             entity,
             entity.Status == AppointmentStatus.Cancelled
@@ -184,20 +216,61 @@ public sealed class UpdateAppointmentHandler
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
 
-    public async Task AuthorizeReplayAsync(UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task<OperationMutationResult> DeleteAsync(
+        RentalCommandDbContext db, DeleteAppointmentCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
+    {
+        var currentWorkOrderId = await CurrentWorkOrderIdAsync(db, command.PortfolioId, command.AppointmentId, ct);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, currentWorkOrderId);
+        var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
+        var entity = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
+                command.PortfolioId, command.Actor, db,
+                businessNow, securityNow, tracking: true)
+            .SingleOrDefaultAsync(item => item.Id == command.AppointmentId, ct);
+        if (entity is null || entity.PropertyId != command.ExpectedPropertyId)
+            return new(OperationMutationOutcome.NotFound, command.AppointmentId);
+        db.Remove(entity);
+        context.UseDatabaseWallClockForAudit(businessNow);
+        context.BindSemanticAudit(entity, new AtomicSemanticAudit(
+            command.PortfolioId, nameof(Appointment), entity.Id, AuditLogOperation.Deleted,
+            command.Actor.UserId, ChangeReason: "Deleted appointment."));
+        await AppointmentTenantNotifications.StageAsync(
+            db, context, entity, AppointmentTenantNotificationLifecycle.Cancelled, businessNow, ct);
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
+            $"appointment-delete:{command.DeliveryIdempotencyKey}", businessNow, operation: "delete"));
+        return new(OperationMutationOutcome.Applied, entity.Id);
+    }
+
+    public static async Task AuthorizeReplayAsync(
+        RentalCommandDbContext db, CreateAppointmentCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
+    {
+        AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
+        var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
+        var capability = AppointmentOperationValidation.ManageCapability(command.Type);
+        if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(command.PortfolioId, command.Actor,
+                command.PropertyId, capability, db, command.BusinessNowUtc, securityNow, ct))
+            throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
+        if (!await AppointmentOperationValidation.WorkOrderMatchesAsync(
+                db, command.PortfolioId, command.Actor, command.WorkOrderId,
+                command.PropertyId, command.UnitId, command.TenantId,
+                command.BusinessNowUtc, securityNow, ct))
+            throw new UnauthorizedAccessException("The active assignment cannot manage this work order appointment.");
+    }
+
+    public static async Task AuthorizeReplayAsync(
+        RentalCommandDbContext db, UpdateAppointmentCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
         await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
-        var currentWorkOrderId = await _db.Set<Appointment>()
-            .AsNoTracking()
-            .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
-            .Select(item => item.WorkOrderId)
-            .SingleOrDefaultAsync(ct);
-        await WorkOrderProgressionLock.AcquireAsync(
-            context, ct, currentWorkOrderId, command.WorkOrderId);
-        var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var currentWorkOrderId = await CurrentWorkOrderIdAsync(db, command.PortfolioId, command.AppointmentId, ct);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, currentWorkOrderId, command.WorkOrderId);
+        var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var current = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
-                command.PortfolioId, command.Actor, _db,
+                command.PortfolioId, command.Actor, db,
                 command.BusinessNowUtc, securityNow, tracking: false)
             .Where(item => item.Id == command.AppointmentId)
             .Select(item => new { item.PropertyId, item.UnitId, item.TenantId, item.WorkOrderId, item.Type })
@@ -207,94 +280,77 @@ public sealed class UpdateAppointmentHandler
         var destinationCapability = AppointmentOperationValidation.ManageCapability(command.Type ?? current.Type);
         if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(command.PortfolioId, command.Actor,
                 command.PropertyId ?? current.PropertyId, destinationCapability,
-                _db, command.BusinessNowUtc, securityNow, ct))
+                db, command.BusinessNowUtc, securityNow, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
         if (!await AppointmentOperationValidation.WorkOrderMatchesAsync(
-                _db, command.PortfolioId, command.Actor, command.WorkOrderId ?? current.WorkOrderId,
+                db, command.PortfolioId, command.Actor, command.WorkOrderId ?? current.WorkOrderId,
                 command.PropertyId ?? current.PropertyId, command.UnitId ?? current.UnitId,
                 command.TenantId ?? current.TenantId, command.BusinessNowUtc, securityNow, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this work order appointment.");
     }
 
-    private static bool HasChanges(UpdateAppointmentCommand command, Appointment entity)
-    {
-        return (command.PropertyId.HasValue && entity.PropertyId != command.PropertyId.Value)
-            || (command.UnitId.HasValue && entity.UnitId != command.UnitId.Value)
-            || (command.LeaseManagementId.HasValue && entity.LeaseManagementId != command.LeaseManagementId.Value)
-            || (command.RentalApplicationId.HasValue && entity.RentalApplicationId != command.RentalApplicationId.Value)
-            || (command.TenantId.HasValue && entity.TenantId != command.TenantId.Value)
-            || (command.WorkOrderId.HasValue && entity.WorkOrderId != command.WorkOrderId.Value)
-            || (command.Title is not null && entity.Title != command.Title.Trim())
-            || (command.ProspectName is not null
-                && entity.ProspectName != CreateAppointmentHandler.Clean(command.ProspectName))
-            || (command.ProspectEmail is not null
-                && entity.ProspectEmail != CreateAppointmentHandler.Clean(command.ProspectEmail))
-            || (command.Type.HasValue && entity.Type != command.Type.Value)
-            || (command.Status.HasValue && entity.Status != command.Status.Value)
-            || (command.ScheduledStartUtc.HasValue && entity.ScheduledStart != command.ScheduledStartUtc.Value)
-            || (command.ScheduledEndUtc.HasValue && entity.ScheduledEnd != command.ScheduledEndUtc.Value)
-            || (command.AssignedTo is not null
-                && entity.AssignedTo != CreateAppointmentHandler.Clean(command.AssignedTo))
-            || (command.Notes is not null && entity.Notes != CreateAppointmentHandler.Clean(command.Notes));
-    }
-}
-
-public sealed class DeleteAppointmentHandler
-    : IAtomicCommandHandler<DeleteAppointmentCommand, OperationMutationResult>
-{
-    private readonly RentalCommandDbContext _db;
-
-    public DeleteAppointmentHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<OperationMutationResult> HandleAsync(DeleteAppointmentCommand command,
+    public static async Task AuthorizeReplayAsync(
+        RentalCommandDbContext db, DeleteAppointmentCommand command,
         IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
         await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
-        var currentWorkOrderId = await _db.Set<Appointment>()
-            .AsNoTracking()
-            .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
-            .Select(item => item.WorkOrderId)
-            .SingleOrDefaultAsync(ct);
+        var currentWorkOrderId = await CurrentWorkOrderIdAsync(db, command.PortfolioId, command.AppointmentId, ct);
         await WorkOrderProgressionLock.AcquireAsync(context, ct, currentWorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
-        var businessNow = command.BusinessNowUtc;
-        var entity = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
-                command.PortfolioId, command.Actor, _db,
-                businessNow, securityNow, tracking: true)
-            .SingleOrDefaultAsync(item => item.Id == command.AppointmentId, ct);
-        if (entity is null || entity.PropertyId != command.ExpectedPropertyId)
-            return new(OperationMutationOutcome.NotFound, command.AppointmentId);
-        _db.Remove(entity);
-        context.UseDatabaseWallClockForAudit(businessNow);
-        context.BindSemanticAudit(entity, new AtomicSemanticAudit(
-            command.PortfolioId, nameof(Appointment), entity.Id, AuditLogOperation.Deleted,
-            command.Actor.UserId, ChangeReason: "Deleted appointment."));
-        await AppointmentTenantNotifications.StageAsync(
-            _db, context, entity, AppointmentTenantNotificationLifecycle.Cancelled, businessNow, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
-            $"appointment-delete:{command.DeliveryIdempotencyKey}", businessNow, operation: "delete"));
-        return new(OperationMutationOutcome.Applied, entity.Id);
-    }
-
-    public async Task AuthorizeReplayAsync(DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
-    {
-        AppointmentOperationValidation.Validate(command);
-        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
-        var currentWorkOrderId = await _db.Set<Appointment>()
-            .AsNoTracking()
-            .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
-            .Select(item => item.WorkOrderId)
-            .SingleOrDefaultAsync(ct);
-        await WorkOrderProgressionLock.AcquireAsync(context, ct, currentWorkOrderId);
-        var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await StaffOperationAuthorization.AuthorizedAppointmentsByType(
-                command.PortfolioId, command.Actor, _db,
+                command.PortfolioId, command.Actor, db,
                 command.BusinessNowUtc, securityNow, tracking: false)
             .AnyAsync(item => item.Id == command.AppointmentId &&
                 item.PropertyId == command.ExpectedPropertyId, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
     }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Appointment writes no longer use the legacy appointment mutation handlers.");
+
+    private static WriteLockPlan AppointmentPlan(int appointmentId) => new(
+        WriteLockProtocol.AppointmentWorkOrder,
+        WriteLock.For("Appointment", appointmentId));
+
+    private static Task<int?> CurrentWorkOrderIdAsync(
+        RentalCommandDbContext db, int portfolioId, int appointmentId, CancellationToken ct) =>
+        db.Set<Appointment>().AsNoTracking()
+            .Where(item => item.Id == appointmentId && item.PortfolioId == portfolioId)
+            .Select(item => item.WorkOrderId)
+            .SingleOrDefaultAsync(ct);
+
+    private static string? Clean(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static AtomicSemanticAudit Audit(
+        CreateAppointmentCommand command, Appointment entity,
+        AuditLogOperation operation, int id) => new(
+            command.PortfolioId, nameof(Appointment), id, operation,
+            command.Actor.UserId, NewValues: JsonSerializer.Serialize(new
+            {
+                entity.PropertyId, entity.UnitId, entity.Title, entity.Type, entity.Status,
+                entity.ScheduledStart, entity.ScheduledEnd, entity.WorkOrderId,
+            }), ChangeReason: operation == AuditLogOperation.Created
+                ? "Created appointment."
+                : "Updated appointment.");
+
+    private static bool HasChanges(UpdateAppointmentCommand command, Appointment entity) =>
+        (command.PropertyId.HasValue && entity.PropertyId != command.PropertyId.Value)
+        || (command.UnitId.HasValue && entity.UnitId != command.UnitId.Value)
+        || (command.LeaseManagementId.HasValue && entity.LeaseManagementId != command.LeaseManagementId.Value)
+        || (command.RentalApplicationId.HasValue && entity.RentalApplicationId != command.RentalApplicationId.Value)
+        || (command.TenantId.HasValue && entity.TenantId != command.TenantId.Value)
+        || (command.WorkOrderId.HasValue && entity.WorkOrderId != command.WorkOrderId.Value)
+        || (command.Title is not null && entity.Title != command.Title.Trim())
+        || (command.ProspectName is not null && entity.ProspectName != Clean(command.ProspectName))
+        || (command.ProspectEmail is not null && entity.ProspectEmail != Clean(command.ProspectEmail))
+        || (command.Type.HasValue && entity.Type != command.Type.Value)
+        || (command.Status.HasValue && entity.Status != command.Status.Value)
+        || (command.ScheduledStartUtc.HasValue && entity.ScheduledStart != command.ScheduledStartUtc.Value)
+        || (command.ScheduledEndUtc.HasValue && entity.ScheduledEnd != command.ScheduledEndUtc.Value)
+        || (command.AssignedTo is not null && entity.AssignedTo != Clean(command.AssignedTo))
+        || (command.Notes is not null && entity.Notes != Clean(command.Notes));
 }
 
 internal enum AppointmentTenantNotificationLifecycle
