@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Documents;
@@ -27,14 +28,12 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         CapabilityKeys.LeasingAgreementsPrepare,
     ];
 
-    private static readonly AtomicJsonResultCodec<DocumentTemplateMutationResult> MutationCodec =
-        new("document-template.mutation.v1");
     private readonly RentalCommandDbContext _db;
     private readonly IDocumentTemplateFieldCatalog _catalog;
     private readonly IFileStorage _files;
     private readonly IPendingFileUploadStore _pendingUploads;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public DocumentTemplateService(
         RentalCommandDbContext db,
@@ -42,14 +41,14 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         IFileStorage files,
         IPendingFileUploadStore pendingUploads,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _catalog = catalog;
         _files = files;
         _pendingUploads = pendingUploads;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<DocumentTemplateResponse>> ListAsync(
@@ -193,8 +192,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             scope.PortfolioId, Actor(scope), businessNowUtc, request.Kind, request.RenderMode, request.Name,
             request.Description, request.OriginalStoredFileId, request.CompiledStoredFileId,
             request.PropertyId, request.DefaultForPortfolio, request.DraftHtml, digest);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("document-template.create", scope.PortfolioId, digest), command, MutationCodec, ct);
+        var outcome = await _writes.ExecuteAsync(
+            DocumentTemplateWriteSupport.IdempotencyKey(scope.PortfolioId, digest),
+            DocumentTemplateWriteSupport.Write(
+                "document-template.create", command, CreateAsync, AuthorizeReplayAsync), ct);
         return MapTemplateResult(outcome.Value);
     }
 
@@ -258,9 +259,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             portfolioId, Actor(scope), businessNowUtc, admission.Id, purpose, digest, fingerprint,
             admission.StoragePath, safeFileName, contentType, bytes.LongLength, sha256,
             normalizedName, normalizedDescription, defaultForPortfolio, propertyId, digest);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("document-template.upload.finalize", portfolioId, digest),
-            command, MutationCodec, ct);
+        var outcome = await _writes.ExecuteAsync(
+            DocumentTemplateWriteSupport.IdempotencyKey(portfolioId, digest),
+            DocumentTemplateWriteSupport.Write(
+                "document-template.upload.finalize", command, FinalizeUploadAsync, AuthorizeReplayAsync), ct);
         return MapTemplateResult(outcome.Value);
     }
 
@@ -274,8 +276,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             scope.PortfolioId, Actor(scope), businessNowUtc, id, request.Status, request.RenderMode, request.Name,
             request.Description, request.OriginalStoredFileId, request.CompiledStoredFileId,
             request.PropertyId, request.DefaultForPortfolio, request.DraftHtml, digest);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("document-template.update", scope.PortfolioId, digest), command, MutationCodec, ct);
+        var outcome = await _writes.ExecuteAsync(
+            DocumentTemplateWriteSupport.IdempotencyKey(scope.PortfolioId, digest),
+            DocumentTemplateWriteSupport.Write(
+                "document-template.update", command, UpdateAsync, AuthorizeReplayAsync), ct);
         return MapTemplateResult(outcome.Value);
     }
 
@@ -299,8 +303,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             request.WidthPct, request.HeightPct,
             request.Required || catalogItem?.RequiredForSignature == true,
             request.Locked, request.SortOrder, request.DefaultText, digest);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("document-template.field.add", scope.PortfolioId, digest), command, MutationCodec, ct);
+        var outcome = await _writes.ExecuteAsync(
+            DocumentTemplateWriteSupport.IdempotencyKey(scope.PortfolioId, digest),
+            DocumentTemplateWriteSupport.Write(
+                "document-template.field.add", command, AddFieldAsync, AuthorizeReplayAsync), ct);
         return MapFieldResult(outcome.Value);
     }
 
@@ -315,8 +321,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             request.Kind, request.SignerRole, request.PageNumber, request.XPct, request.YPct,
             request.WidthPct, request.HeightPct, request.Required, request.Locked,
             request.SortOrder, request.DefaultText, digest);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("document-template.field.update", scope.PortfolioId, digest), command, MutationCodec, ct);
+        var outcome = await _writes.ExecuteAsync(
+            DocumentTemplateWriteSupport.IdempotencyKey(scope.PortfolioId, digest),
+            DocumentTemplateWriteSupport.Write(
+                "document-template.field.update", command, UpdateFieldAsync, AuthorizeReplayAsync), ct);
         return MapFieldResult(outcome.Value);
     }
 
@@ -328,8 +336,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         var businessNowUtc = _timeProvider.UtcNow();
         var command = new DeleteDocumentTemplateFieldCommand(
             scope.PortfolioId, Actor(scope), businessNowUtc, templateId, fieldId, digest);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("document-template.field.delete", scope.PortfolioId, digest), command, MutationCodec, ct);
+        var outcome = await _writes.ExecuteAsync(
+            DocumentTemplateWriteSupport.IdempotencyKey(scope.PortfolioId, digest),
+            DocumentTemplateWriteSupport.Write(
+                "document-template.field.delete", command, DeleteFieldAsync, AuthorizeReplayAsync), ct);
         return outcome.Value.Outcome switch
         {
             DocumentTemplateMutationOutcome.Applied => DocumentTemplateOperationResult<bool>.Success(true),
@@ -338,6 +348,54 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             _ => DocumentTemplateOperationResult<bool>.Invalid(outcome.Value.Error ?? "Document template field is invalid"),
         };
     }
+
+    private Task<DocumentTemplateMutationResult> CreateAsync(
+        CreateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        CreateDocumentTemplateHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task<DocumentTemplateMutationResult> FinalizeUploadAsync(
+        FinalizeDocumentTemplateUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        FinalizeDocumentTemplateUploadHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task<DocumentTemplateMutationResult> UpdateAsync(
+        UpdateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        UpdateDocumentTemplateHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task<DocumentTemplateMutationResult> AddFieldAsync(
+        AddDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AddDocumentTemplateFieldHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task<DocumentTemplateMutationResult> UpdateFieldAsync(
+        UpdateDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        UpdateDocumentTemplateFieldHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task<DocumentTemplateMutationResult> DeleteFieldAsync(
+        DeleteDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        DeleteDocumentTemplateFieldHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        CreateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        CreateDocumentTemplateHandler.AuthorizeAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        FinalizeDocumentTemplateUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        FinalizeDocumentTemplateUploadHandler.AuthorizeAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        UpdateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        UpdateDocumentTemplateHandler.AuthorizeAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        AddDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AddDocumentTemplateFieldHandler.AuthorizeAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        UpdateDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        UpdateDocumentTemplateFieldHandler.AuthorizeAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        DeleteDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        DeleteDocumentTemplateFieldHandler.AuthorizeAsync(_db, command, context, ct);
 
     public async Task<DocumentTemplateOperationResult<DocumentTemplatePreviewResult>> PreviewLeasePdfAsync(
         WorkspaceReadScope scope,
@@ -601,9 +659,6 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
     private static string Digest(string idempotencyKey) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)))
             .ToLowerInvariant();
-
-    private static AtomicCommandIdentity Identity(string operation, int portfolioId, string digest) =>
-        new(operation, $"{portfolioId}:{digest}");
 
     private static string? NormalizeNullable(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
