@@ -42,7 +42,7 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
         if (_context is not null) await _context.DisposeAsync();
     }
 
-    [Fact(Skip = "RS-B06 harness bug: hand-built schema is missing current migrated columns or views; receipt #rs-b06-stale-schema")]
+    [Fact]
     public async Task ListAndGet_EmitTypedIntentWithServerSidePaging()
     {
         var now = DateTime.UtcNow;
@@ -133,7 +133,7 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
         CaptureSql("DETAIL", detailSql);
     }
 
-    [Fact(Skip = "RS-B06 harness bug: hand-built schema is missing current migrated columns or views; receipt #rs-b06-stale-schema")]
+    [Fact]
     public async Task CrossContextIntent_IsNotProjected()
     {
         var now = DateTime.UtcNow;
@@ -181,7 +181,7 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
         CaptureSql("CROSS_CONTEXT", sql);
     }
 
-    [Fact(Skip = "RS-B06 harness bug: hand-built schema is missing current migrated columns or views; receipt #rs-b06-stale-schema")]
+    [Fact]
     public async Task List_ProjectsAuthorizedTenantLedgerEntryIntentAndRejectsUnsafeVariants()
     {
         var now = DateTime.UtcNow;
@@ -262,7 +262,7 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
         CaptureSql("TENANT_LEDGER_LIST", sql);
     }
 
-    [Fact(Skip = "RS-B06 harness bug: hand-built schema is missing current migrated columns or views; receipt #rs-b06-stale-schema")]
+    [Fact]
     public async Task HistoricalNotificationBackfill_RequiresOneAuthorizedMatchingResource()
     {
         await RunAtL02BoundaryAsync(async db =>
@@ -447,7 +447,7 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
         });
     }
 
-    [Fact(Skip = "RS-B06 harness bug: hand-built schema is missing current migrated columns or views; receipt #rs-b06-stale-schema")]
+    [Fact]
     public async Task QueuedPushBackfill_RequiresMatchingExistingAuthorizedResource()
     {
         await RunAtL02BoundaryAsync(async db =>
@@ -650,6 +650,23 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
             db = new RentalCommandDbContext(options);
             await db.Database.MigrateAsync(
                 "20260716120000_AddExpenseOperationalScopeAndAllocations");
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE "AspNetUsers" ADD COLUMN "TermsPrivacyAccepted" boolean NOT NULL DEFAULT FALSE;
+                ALTER TABLE "AspNetUsers" ADD COLUMN "TermsPrivacyAcceptedAtUtc" timestamp with time zone NULL;
+                ALTER TABLE "AspNetUsers" ADD COLUMN "TermsPrivacyVersion" character varying(100) NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "AccessWarnings" character varying(2000) NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "CallBeforeEntry" boolean NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "CallIfNotHome" boolean NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "ChronologyRepairOriginalUpdatedAtUtc" timestamp with time zone NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "EntryNotes" character varying(2000) NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "PermissionToEnter" boolean NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "PetWarnings" character varying(2000) NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "RequesterEmail" character varying(320) NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "RequesterName" character varying(200) NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "RequesterPhone" character varying(64) NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "ResidentMustBePresent" boolean NULL;
+                ALTER TABLE "WorkOrders" ADD COLUMN "SubmittedByLabel" character varying(120) NULL;
+                """);
             var seededAt = DateTime.UtcNow;
             db.AddRange(
                 new Portfolio
@@ -937,6 +954,49 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
             CreatedByUserId = 1,
         };
         _context.Db.AddRange(property, unit, relationship, account, entry);
+        if (portfolioId == 1 && suffix == "tenant-ledger-valid")
+        {
+            var tenant = new Tenant
+            {
+                PortfolioId = portfolioId,
+                FirstName = "Typed",
+                LastName = "Navigation",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            var party = new LeaseManagementParty
+            {
+                PortfolioId = portfolioId,
+                LeaseManagement = relationship,
+                Tenant = tenant,
+                Role = LeaseManagementPartyRole.PrimaryTenant,
+                EffectiveFrom = DateOnly.FromDateTime(now.AddDays(-1)),
+                ChangeReason = "Typed navigation access proof",
+                CreatedAtUtc = now,
+                CreatedByUserId = 1,
+            };
+            var accessContext = new WorkspaceAccessContext
+            {
+                Id = 6,
+                UserId = 1,
+                PortfolioId = portfolioId,
+                Status = WorkspaceAccessContextStatus.Active,
+                LastAuthorizedExperience = WorkspaceExperience.Tenant,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            };
+            _context.Db.AddRange(tenant, party, accessContext, new TenantUserAccess
+            {
+                PublicId = Guid.NewGuid(),
+                PortfolioId = portfolioId,
+                AccessContext = accessContext,
+                ApplicationUserId = 1,
+                LeaseManagementParty = party,
+                GrantedAtUtc = now,
+                GrantedByUserId = 1,
+                Reason = "Typed navigation access proof",
+            });
+        }
         await _context.Db.SaveChangesAsync();
         return (account, entry);
     }
@@ -975,6 +1035,7 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
         int relatedEntityId) => new()
     {
         PortfolioId = 1,
+        UserId = 1,
         Type = "VendorJobCompleted",
         Title = title,
         Message = "Open the typed destination.",
