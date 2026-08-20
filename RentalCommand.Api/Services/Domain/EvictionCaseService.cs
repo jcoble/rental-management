@@ -1,7 +1,7 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -11,24 +11,23 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Operations;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public class EvictionCaseService : IEvictionCaseService
 {
-    private static readonly AtomicJsonResultCodec<OperationMutationResult> MutationCodec =
-        new("eviction-case.mutation.v1");
     private static readonly string[] ReadCapabilities = [CapabilityKeys.RentalsRead];
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IRequestWriteExecutor? _writes;
 
     public EvictionCaseService(RentalCommandDbContext db, IDataUpdateService dataUpdate,
-        TimeProvider timeProvider, IAtomicUnitOfWork? atomic = null)
+        TimeProvider timeProvider, IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<EvictionCaseResponse>> ListAsync(int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default)
@@ -97,8 +96,9 @@ public class EvictionCaseService : IEvictionCaseService
             request.RespondentLeaseManagementPartyIds.ToArray(), request.Status,
             request.FiledOnDate?.ToUtc(), request.HearingDate?.ToUtc(), request.CourtName,
             request.CaseNumber, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("eviction-case.create", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            EvictionCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            EvictionCrudWriteSupport.Write(command, CreateEvictionCaseAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -110,8 +110,9 @@ public class EvictionCaseService : IEvictionCaseService
             scope.PortfolioId, Actor(scope), id, request.Status, request.FiledOnDate?.ToUtc(),
             request.HearingDate?.ToUtc(), request.ResolvedOnDate?.ToUtc(), request.CourtName,
             request.CaseNumber, request.Resolution, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("eviction-case.update", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            EvictionCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            EvictionCrudWriteSupport.Write(command, UpdateEvictionCaseAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -122,8 +123,9 @@ public class EvictionCaseService : IEvictionCaseService
         var command = new AddEvictionCaseEventCommand(
             scope.PortfolioId, Actor(scope), id, request.EventType, request.EventDate.ToUtc(),
             request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("eviction-case.event.create", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            EvictionCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            EvictionCrudWriteSupport.Write(command, AddEvictionCaseEventAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -132,22 +134,49 @@ public class EvictionCaseService : IEvictionCaseService
     {
         var command = new DeleteEvictionCaseCommand(
             scope.PortfolioId, Actor(scope), id, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await Atomic.ExecuteAsync(
-            Identity("eviction-case.delete", idempotencyKey), command, MutationCodec, ct);
+        var outcome = await RequireWrites().ExecuteAsync(
+            EvictionCrudWriteSupport.IdempotencyKey(idempotencyKey),
+            EvictionCrudWriteSupport.Write(command, DeleteEvictionCaseAsync, AuthorizeReplayAsync), ct);
         return outcome.Value.Outcome == OperationMutationOutcome.Applied;
     }
 
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Eviction case changes are not available right now.");
+    private Task<OperationMutationResult> CreateEvictionCaseAsync(
+        CreateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        CreateEvictionCaseHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task<OperationMutationResult> UpdateEvictionCaseAsync(
+        UpdateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        UpdateEvictionCaseHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task<OperationMutationResult> AddEvictionCaseEventAsync(
+        AddEvictionCaseEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AddEvictionCaseEventHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task<OperationMutationResult> DeleteEvictionCaseAsync(
+        DeleteEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        DeleteEvictionCaseHandler.ExecuteAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        CreateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        CreateEvictionCaseHandler.AuthorizeAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        UpdateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        UpdateEvictionCaseHandler.AuthorizeAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        AddEvictionCaseEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        AddEvictionCaseEventHandler.AuthorizeAsync(_db, command, context, ct);
+
+    private Task AuthorizeReplayAsync(
+        DeleteEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        DeleteEvictionCaseHandler.AuthorizeAsync(_db, command, context, ct);
+
+    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
+        "The shared request write executor is required for eviction case changes.");
 
     private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
         scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);
-
-    private static AtomicCommandIdentity Identity(string operation, string key)
-    {
-        var digest = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)));
-        return new AtomicCommandIdentity(operation, digest);
-    }
 
     private static EvictionCaseResponse? Response(OperationMutationResult result) =>
         result.Outcome == OperationMutationOutcome.NotFound || result.ResponseJson is null
