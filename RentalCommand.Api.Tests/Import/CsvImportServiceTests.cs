@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Import;
 using RentalCommand.Api.Tests.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Import;
 using RentalCommand.Core.Authorization;
@@ -50,6 +51,8 @@ public class CsvImportServiceTests : IDisposable
             _atomic,
             _atomic,
             _atomic,
+            _atomic,
+            _ctx.Db,
             _atomic);
     }
 
@@ -428,7 +431,8 @@ public class CsvImportServiceTests : IDisposable
     }
 
     private sealed class CapturingAtomicUnitOfWork
-        : IAtomicUnitOfWork, IUnitCsvImportPreviewQuery, ICoreCsvImportPreviewQuery,
+        : IAtomicUnitOfWork, IRequestWriteExecutor,
+          IUnitCsvImportPreviewQuery, ICoreCsvImportPreviewQuery,
           IPaymentCsvImportPreviewQuery
     {
         public List<AtomicPaymentCsvImportCommand> PaymentCommands { get; } = [];
@@ -476,30 +480,6 @@ public class CsvImportServiceTests : IDisposable
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
-            if (command is AtomicUnitCsvImportCommand unit
-                && typeof(TResult) == typeof(AtomicUnitCsvImportResult))
-            {
-                UnitCommands.Add(unit);
-                var batch = UnitResult(unit.Rows, created: true);
-                var result = new AtomicUnitCsvImportResult(
-                    batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
-                    batch.CreatedCount, batch.DuplicateRows);
-                return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
-                    new AtomicCommandOutcome<AtomicUnitCsvImportResult>(
-                        result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
-            }
-            if (command is AtomicCoreCsvImportCommand core
-                && typeof(TResult) == typeof(AtomicCoreCsvImportResult))
-            {
-                CoreCommands.Add(core);
-                var batch = CoreResult(core.Domain, core.RowsJson, created: true);
-                var result = new AtomicCoreCsvImportResult(
-                    batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
-                    batch.CreatedCount, batch.DuplicateRows);
-                return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
-                    new AtomicCommandOutcome<AtomicCoreCsvImportResult>(
-                        result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
-            }
             if (command is AtomicPaymentCsvImportCommand payment
                 && typeof(TResult) == typeof(AtomicPaymentCsvImportResult))
             {
@@ -513,6 +493,40 @@ public class CsvImportServiceTests : IDisposable
                         result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
             }
             throw new InvalidOperationException("Unexpected atomic command in CSV import test.");
+        }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            if (write.Request is AtomicUnitCsvImportCommand unit
+                && typeof(TResult) == typeof(AtomicUnitCsvImportResult))
+            {
+                UnitCommands.Add(unit);
+                var batch = UnitResult(unit.Rows, created: true);
+                var result = new AtomicUnitCsvImportResult(
+                    batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
+                    batch.CreatedCount, batch.DuplicateRows);
+                return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
+                    new AtomicCommandOutcome<AtomicUnitCsvImportResult>(
+                        result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+            }
+            if (write.Request is AtomicCoreCsvImportCommand core
+                && typeof(TResult) == typeof(AtomicCoreCsvImportResult))
+            {
+                CoreCommands.Add(core);
+                var batch = CoreResult(core.Domain, core.RowsJson, created: true);
+                var result = new AtomicCoreCsvImportResult(
+                    batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
+                    batch.CreatedCount, batch.DuplicateRows);
+                return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
+                    new AtomicCommandOutcome<AtomicCoreCsvImportResult>(
+                        result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+            }
+            throw new InvalidOperationException("Unexpected request write in CSV import test.");
         }
 
         private static AtomicPaymentCsvImportBatchResult PaymentResult(
