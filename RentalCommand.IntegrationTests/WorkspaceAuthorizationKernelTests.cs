@@ -129,10 +129,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             WorkspaceTeamMutationResult,
             ChangeWorkspaceMembershipStatusHandler>();
         services.AddAtomicCommandHandler<
-            AtomicCoreCrudMutationCommand,
-            AtomicCoreCrudMutationResult,
-            AtomicCoreCrudMutationHandler>();
-        services.AddAtomicCommandHandler<
             UnsafeWorkspaceAssignmentMutationCommand,
             WorkspaceAccessMutationResult,
             UnsafeWorkspaceAssignmentMutationHandler>();
@@ -472,39 +468,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         (await verify.Loans.CountAsync(row => row.PropertyId == _unscopedPropertyId)).Should().Be(0);
         (await verify.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
-    }
-
-    [SkippableFact]
-    public async Task AtomicCoreCrudMutation_VendorCreate_ThrowsRetiredPathMessage()
-    {
-        SkipIfNoDocker();
-        var scope = new WorkspaceReadScope(
-            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Vendor,
-            AtomicCoreCrudMutationOperation.Create, 0, "selected-work-vendor-create",
-            new CreateVendorRequest
-            {
-                Name = "Summit Roofing",
-                ServiceType = "Roofing",
-                Email = "summit@example.test",
-                Phone = "555-0100",
-                Is1099Eligible = true,
-                Preferred = true,
-            },
-            createdAtUtc: _now);
-        var identity = AtomicCoreCrudMutation.Identity(command);
-
-        Func<Task> act = async () => await ExecuteAtomicAsync(
-            identity, command, AtomicCoreCrudMutation.Codec);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Owner and vendor writes no longer use the legacy core CRUD handler.");
-        await using var verify = NewContext();
-        (await verify.Vendors.AsNoTracking().CountAsync(row =>
-            row.PortfolioId == _portfolioId && row.Name == "Summit Roofing")).Should().Be(0);
-        (await verify.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
-            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
-            .Should().Be(0);
     }
 
     [SkippableFact]
