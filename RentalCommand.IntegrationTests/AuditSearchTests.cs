@@ -221,6 +221,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
                 CommandIdempotencyKey = Guid.NewGuid().ToString("N"), MutationOrdinal = 1,
                 PortfolioId = _portfolioId, EntityType = "Expense", EntityId = 76,
                 Operation = AuditLogOperation.Created, ActorLabel = "Jane Landlord",
+                NewValues = """{"providerEventId":"evt_forensic_only"}""",
                 IpAddress = "203.0.113.5", Timestamp = DateTime.UtcNow.AddMinutes(-3),
             },
             new AtomicAuditLog
@@ -258,7 +259,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         }
     }
 
-    [SkippableFact(Skip = "RS-B02 product defect, tracked: PostgreSQL LIKE is applied to jsonb; receipt #rs-b02-audit-jsonb-like")]
+    [SkippableFact]
     public async Task Search_Matches_Visible_Fields_On_Postgres()
     {
         SkipIfNoDocker();
@@ -289,6 +290,8 @@ public sealed class AuditSearchTests : IAsyncLifetime
         (await SearchIds("bob")).Should().Equal(12);
         // IP address via ILIKE substring → both Jane rows share 203.0.113.5.
         (await SearchIds("203.0.113")).Should().BeEquivalentTo(new[] { 76, 7 });
+        // JSONB payload text is cast and searched inside PostgreSQL.
+        (await SearchIds("evt_forensic_only")).Should().Equal(76);
         // Action verb → operation. "updated" narrows to the WorkOrder row.
         (await SearchIds("updated")).Should().Equal(12);
         // Friendly verbs map to the stored Created operation, so both Created rows match.
@@ -340,7 +343,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         commands.ReaderCommands[0].Should().Contain("FROM \"AtomicAuditLogs\"");
     }
 
-    [SkippableFact(Skip = "RS-B02 product defect, tracked: PostgreSQL LIKE is applied to jsonb; receipt #rs-b02-audit-jsonb-like")]
+    [SkippableFact]
     public async Task Search_Matches_WorkOrder_Target_Title_Inside_One_Translated_Paged_Command()
     {
         SkipIfNoDocker();
@@ -371,6 +374,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
 
         translatedSql.Should().Contain("\"WorkOrders\"");
         translatedSql.Should().Contain("\"Title\"");
+        translatedSql.Should().Contain("\"NewValues\"::text ILIKE");
         translatedSql.Should().Contain("ILIKE");
         translatedSql.Should().Contain("ORDER BY");
         translatedSql.Should().Contain("LIMIT");
