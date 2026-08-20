@@ -7,6 +7,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using NotificationCrudWriteRequest = RentalCommand.Core.Atomic.TransactionalWriteDefaults.AuthorizationScopedRequest<RentalCommand.Api.Services.Domain.NotificationCrudOperation>;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -31,21 +32,15 @@ public class DeviceService : IDeviceService
         string operationKey,
         CancellationToken ct = default)
     {
-        var request = NotificationCrudWriteSupport.Request(
+        var request = TransactionalWriteDefaults.Request(
             scope,
             NotificationCrudOperation.DeviceRegister,
             0,
             TokenHash(token),
             operationKey,
             new { Token = token, Platform = platform });
-        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
-            NotificationCrudWriteSupport.OperationName(request),
-            WriteIdempotencyPolicy.Required,
-            request,
-            NotificationCrudWriteSupport.ResultContract,
-            NotificationCrudWriteSupport.LockPlan(request),
-            RegisterDeviceAsync,
-            AuthorizeReplayAsync);
+        var write = NotificationCrudWriteSupport.Write(
+            request, RegisterDeviceAsync, AuthorizeReplayAsync);
         await _writes.ExecuteAsync(NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
     }
 
@@ -57,21 +52,15 @@ public class DeviceService : IDeviceService
         string operationKey,
         CancellationToken ct = default)
     {
-        var request = NotificationCrudWriteSupport.Request(
+        var request = TransactionalWriteDefaults.Request(
             scope,
             NotificationCrudOperation.DeviceUnregister,
             0,
             TokenHash(token),
             operationKey,
             new { Token = token, Platform = (string?)null });
-        var write = new TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult>(
-            NotificationCrudWriteSupport.OperationName(request),
-            WriteIdempotencyPolicy.Required,
-            request,
-            NotificationCrudWriteSupport.ResultContract,
-            NotificationCrudWriteSupport.LockPlan(request),
-            UnregisterDeviceAsync,
-            AuthorizeReplayAsync);
+        var write = NotificationCrudWriteSupport.Write(
+            request, UnregisterDeviceAsync, AuthorizeReplayAsync);
         var outcome = await _writes.ExecuteAsync(
             NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
         return outcome.Value.Found;
@@ -111,14 +100,14 @@ public class DeviceService : IDeviceService
         row.LastSeenAt = now;
         context.BindSemanticAudit(
             row,
-            NotificationCrudWriteSupport.Audit(
+            TransactionalWriteDefaults.Audit(
                 request,
                 nameof(DeviceToken),
                 operation,
                 "Push notification device registered",
                 operation == AuditLogOperation.Created ? 0 : row.Id));
         await context.FlushBusinessAsync(ct);
-        return NotificationCrudWriteSupport.Applied(row.Id);
+        return new AtomicNotificationMutationResult(true, true, row.Id, 1);
     }
 
     private async Task<AtomicNotificationMutationResult> UnregisterDeviceAsync(
@@ -140,13 +129,13 @@ public class DeviceService : IDeviceService
             && candidate.Token == token, ct);
         if (row is null)
         {
-            return NotificationCrudWriteSupport.Missing();
+            return new AtomicNotificationMutationResult(false, false, 0, 0);
         }
 
         _db.Remove(row);
         context.BindSemanticAudit(
             row,
-            NotificationCrudWriteSupport.Audit(
+            TransactionalWriteDefaults.Audit(
                 request,
                 nameof(DeviceToken),
                 AuditLogOperation.Deleted,
