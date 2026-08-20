@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
+using RentalCommand.Api.Writes;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
@@ -67,6 +68,7 @@ public class ScanServiceTests : IDisposable
         _sut = new ScanService(
             _db,
             new ScanRejectAtomicUnitOfWork(_db),
+            new ScanRejectRequestWriteExecutor(_db),
             NullLogger<ScanService>.Instance,
             _timeProvider);
     }
@@ -101,6 +103,7 @@ public class ScanServiceTests : IDisposable
         var translationService = new ScanService(
             translationDb,
             new ScanRejectAtomicUnitOfWork(translationDb),
+            new ScanRejectRequestWriteExecutor(translationDb),
             NullLogger<ScanService>.Instance,
             TimeProvider.System);
 
@@ -872,6 +875,33 @@ public class ScanServiceTests : IDisposable
                 (TResult)(object)result,
                 AtomicCommandDisposition.Executed,
                 Guid.NewGuid());
+        }
+    }
+
+    private sealed class ScanRejectRequestWriteExecutor(RentalCommandDbContext db) : IRequestWriteExecutor
+    {
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            var reject = write.Request.Should().BeOfType<RejectScanDraftCommand>().Subject;
+            var draft = await db.ScanDrafts.SingleAsync(item => item.Id == reject.DraftId, ct);
+            var rejected = draft.Status is not ("Confirmed" or "Rejected" or "Confirming");
+            if (rejected)
+            {
+                draft.Status = "Rejected";
+                draft.ReviewedAt = reject.ReviewedAtUtc;
+                draft.ReviewedBy = reject.UserId.ToString();
+                if (!string.IsNullOrWhiteSpace(reject.Reason)) draft.FailureReason = reject.Reason;
+                await db.SaveChangesAsync(ct);
+            }
+            var result = new RejectScanDraftResult(
+                rejected, reject.DraftId, rejected ? reject.ReviewedAtUtc : null);
+            return new AtomicCommandOutcome<TResult>(
+                (TResult)(object)result, AtomicCommandDisposition.Executed, Guid.NewGuid());
         }
     }
 

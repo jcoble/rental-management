@@ -8,26 +8,99 @@ using RentalCommand.Core.Scanning;
 
 namespace RentalCommand.Data.Scanning;
 
+public static class ScanDraftWriteSupport
+{
+    public const string FinalizeResultContract = "scan-upload.finalize.result.v1";
+    public const string MutationResultContract = "scan-draft.mutation.result.v1";
+    public const string RejectResultContract = "scan-draft-reject-result:v1";
+
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        string operationName,
+        TCommand command,
+        string resultContract,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        var lockPlan = command switch
+        {
+            FinalizeScanUploadCommand value => new WriteLockPlan(
+                WriteLockProtocol.Portfolio,
+                WriteLock.For("Portfolio", value.PortfolioId)),
+            RetryScanDraftCommand value => DraftPlan(value.AuthSessionId, value.AccessContextId,
+                value.PortfolioId, value.DraftId),
+            CreateVoiceScanDraftCommand value => ScopePlan(
+                value.AuthSessionId, value.AccessContextId, value.PortfolioId),
+            AnswerVoiceScanDraftCommand value => DraftPlan(value.AuthSessionId, value.AccessContextId,
+                value.PortfolioId, value.DraftId),
+            SetScanDraftPaymentAccountCommand value => DraftPlan(
+                value.AuthSessionId, value.AccessContextId, value.PortfolioId, value.DraftId),
+            RejectScanDraftCommand => WriteLockPlan.None,
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+        Validate(command);
+        return new TransactionalWrite<TCommand, TResult>(
+            operationName, WriteIdempotencyPolicy.Required, command, resultContract,
+            lockPlan, executeAsync, authorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Scan upload and draft mutations no longer use the legacy atomic handlers.");
+
+    private static WriteLockPlan ScopePlan(Guid sessionId, int accessContextId, int portfolioId) =>
+        new(WriteLockProtocol.AuthorizationScope,
+            WriteLock.For("AuthSession", sessionId),
+            WriteLock.For("WorkspaceAccessContext", accessContextId),
+            WriteLock.For("Portfolio", portfolioId));
+
+    private static WriteLockPlan DraftPlan(
+        Guid sessionId, int accessContextId, int portfolioId, int draftId) =>
+        new(WriteLockProtocol.AuthorizationScopeScanDraft,
+            WriteLock.For("AuthSession", sessionId),
+            WriteLock.For("WorkspaceAccessContext", accessContextId),
+            WriteLock.For("Portfolio", portfolioId),
+            WriteLock.For("ScanDraft", draftId));
+
+    private static void Validate<TCommand>(TCommand command)
+    {
+        switch (command)
+        {
+            case RetryScanDraftCommand value: ScanDraftMutationValidation.Validate(value); break;
+            case CreateVoiceScanDraftCommand value: ScanDraftMutationValidation.Validate(value); break;
+            case AnswerVoiceScanDraftCommand value: ScanDraftMutationValidation.Validate(value); break;
+            case SetScanDraftPaymentAccountCommand value: ScanDraftMutationValidation.Validate(value); break;
+            case RejectScanDraftCommand value: RejectScanDraftHandler.Validate(value); break;
+            case FinalizeScanUploadCommand value when value.Files is not { Count: > 0 and <= 100 }:
+                throw new InvalidOperationException("A scan upload must contain between 1 and 100 files.");
+        }
+    }
+}
+
 public sealed class RetryScanDraftHandler
     : IAtomicCommandHandler<RetryScanDraftCommand, ScanDraftMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<ScanDraftMutationResult> HandleAsync(
+        RetryScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public RetryScanDraftHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        RetryScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public async Task<ScanDraftMutationResult> HandleAsync(
-        RetryScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task<ScanDraftMutationResult> ExecuteAsync(
+        RentalCommandDbContext db, RetryScanDraftCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         ScanDraftMutationValidation.Validate(command);
-        await ScanDraftMutationAuthorization.LockAsync(command.AuthSessionId,
-            command.AccessContextId, command.PortfolioId, command.DraftId, context, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
-        if (!await AtomicScanConfirmationPersistence.IsAuthorizedForReviewAsync(_db, context, scope, command.DraftId, now, ct))
+        if (!await AtomicScanConfirmationPersistence.IsAuthorizedForReviewAsync(db, context, scope, command.DraftId, now, ct))
             return ScanDraftMutationResults.NotFound(command.DraftId);
 
-        var draft = await _db.Set<ScanDraft>().SingleOrDefaultAsync(candidate =>
+        var draft = await db.Set<ScanDraft>().SingleOrDefaultAsync(candidate =>
             candidate.Id == command.DraftId && candidate.PortfolioId == command.PortfolioId, ct);
         if (draft is null) return ScanDraftMutationResults.NotFound(command.DraftId);
         if (draft.Status != "Failed")
@@ -56,18 +129,19 @@ public sealed class RetryScanDraftHandler
         context.StageOutbox(ScanDraftMutationResults.DataUpdate(
             command.PortfolioId, draft.Id, "retry", command.DeliveryIdempotencyKey, now));
         return ScanDraftMutationResults.Applied(await ScanDraftMutationResults.SnapshotAsync(
-            _db, command.PortfolioId, draft.Id, ct));
+            db, command.PortfolioId, draft.Id, ct));
     }
 
-    public async Task AuthorizeReplayAsync(
-        RetryScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task AuthorizeAsync(
+        RentalCommandDbContext db, RetryScanDraftCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         ScanDraftMutationValidation.Validate(command);
-        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var now = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
         if (!await AtomicScanAuthorizationQueries.IsAuthorizedForReviewAsync(
-                _db, context, scope, command.DraftId, now, ct))
+                db, context, scope, command.DraftId, now, ct))
             throw new UnauthorizedAccessException("The scan draft is outside the current review scope.");
     }
 }
@@ -75,20 +149,23 @@ public sealed class RetryScanDraftHandler
 public sealed class CreateVoiceScanDraftHandler
     : IAtomicCommandHandler<CreateVoiceScanDraftCommand, ScanDraftMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<ScanDraftMutationResult> HandleAsync(
+        CreateVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public CreateVoiceScanDraftHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        CreateVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public async Task<ScanDraftMutationResult> HandleAsync(
-        CreateVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task<ScanDraftMutationResult> ExecuteAsync(
+        RentalCommandDbContext db, CreateVoiceScanDraftCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         ScanDraftMutationValidation.Validate(command);
-        await ScanDraftMutationAuthorization.LockAsync(command.AuthSessionId,
-            command.AccessContextId, command.PortfolioId, null, context, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
-        if (!await AtomicScanConfirmationPersistence.CanCreateAuthorizedAsync(_db,
+        if (!await AtomicScanConfirmationPersistence.CanCreateAuthorizedAsync(db,
                 context, scope, command.TargetEntityType, command.CapturePropertyId, now, ct))
             throw new UnauthorizedAccessException("The current assignment cannot create this voice draft.");
 
@@ -106,7 +183,7 @@ public sealed class CreateVoiceScanDraftHandler
                 EntityType = nameof(ScanDraft),
                 UploadedAt = now,
             };
-            _db.Add(source);
+            db.Add(source);
             context.BindSemanticAudit(source, new AtomicSemanticAudit(
                 command.PortfolioId, nameof(StoredFile), 0, AuditLogOperation.Created,
                 command.UserId,
@@ -139,7 +216,7 @@ public sealed class CreateVoiceScanDraftHandler
             CreatedAt = now,
             ReviewedAt = now,
         };
-        _db.Add(draft);
+        db.Add(draft);
         context.BindSemanticAudit(draft, ScanDraftMutationResults.Audit(
             command.PortfolioId, 0, AuditLogOperation.Created, command.UserId,
             "Voice note classified into a review draft"));
@@ -159,17 +236,18 @@ public sealed class CreateVoiceScanDraftHandler
         context.StageOutbox(ScanDraftMutationResults.DataUpdate(
             command.PortfolioId, draft.Id, "create", command.DeliveryIdempotencyKey, now));
         return ScanDraftMutationResults.Applied(await ScanDraftMutationResults.SnapshotAsync(
-            _db, command.PortfolioId, draft.Id, ct));
+            db, command.PortfolioId, draft.Id, ct));
     }
 
-    public async Task AuthorizeReplayAsync(
-        CreateVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task AuthorizeAsync(
+        RentalCommandDbContext db, CreateVoiceScanDraftCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         ScanDraftMutationValidation.Validate(command);
-        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var now = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
-        if (!await AtomicScanAuthorizationQueries.CanCreateAsync(_db,
+        if (!await AtomicScanAuthorizationQueries.CanCreateAsync(db,
                 context, scope, command.TargetEntityType, command.CapturePropertyId, now, ct))
             throw new UnauthorizedAccessException("The current assignment cannot create this voice draft.");
     }
@@ -178,26 +256,29 @@ public sealed class CreateVoiceScanDraftHandler
 public sealed class AnswerVoiceScanDraftHandler
     : IAtomicCommandHandler<AnswerVoiceScanDraftCommand, ScanDraftMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<ScanDraftMutationResult> HandleAsync(
+        AnswerVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public AnswerVoiceScanDraftHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        AnswerVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public async Task<ScanDraftMutationResult> HandleAsync(
-        AnswerVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task<ScanDraftMutationResult> ExecuteAsync(
+        RentalCommandDbContext db, AnswerVoiceScanDraftCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         ScanDraftMutationValidation.Validate(command);
-        await ScanDraftMutationAuthorization.LockAsync(command.AuthSessionId,
-            command.AccessContextId, command.PortfolioId, command.DraftId, context, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
-        if (!await AtomicScanConfirmationPersistence.IsAuthorizedForReviewAsync(_db, context, scope, command.DraftId, now, ct))
+        if (!await AtomicScanConfirmationPersistence.IsAuthorizedForReviewAsync(db, context, scope, command.DraftId, now, ct))
             return ScanDraftMutationResults.NotFound(command.DraftId);
-        if (!await AtomicScanConfirmationPersistence.CanCreateAuthorizedAsync(_db,
+        if (!await AtomicScanConfirmationPersistence.CanCreateAuthorizedAsync(db,
                 context, scope, command.TargetEntityType, command.CapturePropertyId, now, ct))
             throw new UnauthorizedAccessException("The current assignment cannot update this voice draft.");
 
-        var draft = await _db.Set<ScanDraft>().SingleOrDefaultAsync(candidate =>
+        var draft = await db.Set<ScanDraft>().SingleOrDefaultAsync(candidate =>
             candidate.Id == command.DraftId && candidate.PortfolioId == command.PortfolioId, ct);
         if (draft is null) return ScanDraftMutationResults.NotFound(command.DraftId);
         if (draft.Status != "Reviewing")
@@ -220,19 +301,20 @@ public sealed class AnswerVoiceScanDraftHandler
         context.StageOutbox(ScanDraftMutationResults.DataUpdate(
             command.PortfolioId, draft.Id, "update", command.DeliveryIdempotencyKey, now));
         return ScanDraftMutationResults.Applied(await ScanDraftMutationResults.SnapshotAsync(
-            _db, command.PortfolioId, draft.Id, ct));
+            db, command.PortfolioId, draft.Id, ct));
     }
 
-    public async Task AuthorizeReplayAsync(
-        AnswerVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task AuthorizeAsync(
+        RentalCommandDbContext db, AnswerVoiceScanDraftCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         ScanDraftMutationValidation.Validate(command);
-        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var now = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
         if (!await AtomicScanAuthorizationQueries.IsAuthorizedForReviewAsync(
-                _db, context, scope, command.DraftId, now, ct)
-            || !await AtomicScanAuthorizationQueries.CanCreateAsync(_db,
+                db, context, scope, command.DraftId, now, ct)
+            || !await AtomicScanAuthorizationQueries.CanCreateAsync(db,
                 context, scope, command.TargetEntityType, command.CapturePropertyId, now, ct))
             throw new UnauthorizedAccessException("The voice draft is outside the current review scope.");
     }
@@ -241,28 +323,31 @@ public sealed class AnswerVoiceScanDraftHandler
 public sealed class SetScanDraftPaymentAccountHandler
     : IAtomicCommandHandler<SetScanDraftPaymentAccountCommand, ScanDraftMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<ScanDraftMutationResult> HandleAsync(
+        SetScanDraftPaymentAccountCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public SetScanDraftPaymentAccountHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        SetScanDraftPaymentAccountCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public async Task<ScanDraftMutationResult> HandleAsync(
-        SetScanDraftPaymentAccountCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task<ScanDraftMutationResult> ExecuteAsync(
+        RentalCommandDbContext db, SetScanDraftPaymentAccountCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         ScanDraftMutationValidation.Validate(command);
-        await ScanDraftMutationAuthorization.LockAsync(command.AuthSessionId,
-            command.AccessContextId, command.PortfolioId, command.DraftId, context, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
-        if (!await AtomicScanConfirmationPersistence.IsAuthorizedForReviewAsync(_db, context, scope, command.DraftId, now, ct))
+        if (!await AtomicScanConfirmationPersistence.IsAuthorizedForReviewAsync(db, context, scope, command.DraftId, now, ct))
             return ScanDraftMutationResults.NotFound(command.DraftId);
 
-        var accountIsAuthorized = await AtomicScanAuthorizationQueries.IsTenantAccountAuthorizedForPaymentReviewAsync(_db,
+        var accountIsAuthorized = await AtomicScanAuthorizationQueries.IsTenantAccountAuthorizedForPaymentReviewAsync(db,
             context, scope, command.DraftId, command.TenantAccountId, now, ct);
         if (!accountIsAuthorized)
             return ScanDraftMutationResults.NotFound(command.DraftId);
 
-        var draft = await _db.Set<ScanDraft>().SingleOrDefaultAsync(candidate =>
+        var draft = await db.Set<ScanDraft>().SingleOrDefaultAsync(candidate =>
             candidate.Id == command.DraftId && candidate.PortfolioId == command.PortfolioId, ct);
         if (draft is null) return ScanDraftMutationResults.NotFound(command.DraftId);
         if (draft.Status != "Reviewing" || !string.Equals(draft.TargetEntityType, "Payment", StringComparison.Ordinal))
@@ -279,19 +364,20 @@ public sealed class SetScanDraftPaymentAccountHandler
         context.StageOutbox(ScanDraftMutationResults.DataUpdate(
             command.PortfolioId, draft.Id, "update", command.DeliveryIdempotencyKey, now));
         return ScanDraftMutationResults.Applied(await ScanDraftMutationResults.SnapshotAsync(
-            _db, command.PortfolioId, draft.Id, ct));
+            db, command.PortfolioId, draft.Id, ct));
     }
 
-    public async Task AuthorizeReplayAsync(
-        SetScanDraftPaymentAccountCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task AuthorizeAsync(
+        RentalCommandDbContext db, SetScanDraftPaymentAccountCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         ScanDraftMutationValidation.Validate(command);
-        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var now = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
         if (!await AtomicScanAuthorizationQueries.IsAuthorizedForReviewAsync(
-                _db, context, scope, command.DraftId, now, ct)
-            || !await AtomicScanAuthorizationQueries.IsTenantAccountAuthorizedForPaymentReviewAsync(_db,
+                db, context, scope, command.DraftId, now, ct)
+            || !await AtomicScanAuthorizationQueries.IsTenantAccountAuthorizedForPaymentReviewAsync(db,
                 context, scope, command.DraftId, command.TenantAccountId, now, ct))
         {
             throw new UnauthorizedAccessException("The scan draft or payment account is outside the current review scope.");
@@ -305,16 +391,6 @@ internal static class ScanDraftMutationAuthorization
         int portfolioId, int userId, Guid sessionId, int accessContextId, long accessRevision) =>
         new(portfolioId, userId, sessionId, accessContextId, accessRevision);
 
-    internal static async Task LockAsync(
-        Guid sessionId, int accessContextId, int portfolioId, int? draftId,
-        IAtomicCommandContext context, CancellationToken ct)
-    {
-        await context.AcquireLockAsync("AuthSession", sessionId, ct);
-        await context.AcquireLockAsync("WorkspaceAccessContext", accessContextId, ct);
-        await context.AcquireLockAsync("Portfolio", portfolioId, ct);
-        if (draftId is > 0)
-            await context.AcquireLockAsync("ScanDraft", draftId.Value, ct);
-    }
 }
 
 internal static class ScanDraftMutationValidation

@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -58,14 +59,11 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         services.AddSingleton<AtomicCompanionFailureInterceptor>();
         services.AddScoped<IScanConfirmationTargetWriter, TestExpenseTargetWriter>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             ConfirmScanDraftCommand,
             ConfirmScanDraftResult,
             ConfirmScanDraftHandler>();
-        services.AddAtomicCommandHandler<
-            RejectScanDraftCommand,
-            RejectScanDraftResult,
-            RejectScanDraftHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -450,7 +448,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         (await verify.Db.StoredFiles.CountAsync(file => file.FilePath == draft.FilePath)).Should().Be(0);
     }
 
-    [SkippableFact(Skip = "RS-B05 stale test seam: direct setup or injected writer no longer enters an atomic mutation lease; receipt #rs-b05-scan-atomic-seams")]
+    [SkippableFact]
     public async Task RejectDraft_UsesFrozenBusinessTimeAndReplaysExactCommittedResult()
     {
         SkipIfDockerUnavailable();
@@ -800,6 +798,20 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = Services.CreateAsyncScope();
+        if (command is RejectScanDraftCommand reject)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(
+                    identity.IdempotencyKey,
+                    ScanDraftWriteSupport.Write(
+                        identity.CommandType, reject, ScanDraftWriteSupport.RejectResultContract,
+                        (request, context, token) => RejectScanDraftHandler.ExecuteAsync(
+                            db, request, context, token),
+                        (request, context, token) => RejectScanDraftHandler.AuthorizeAsync(
+                            db, request, context, token)));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
         return await scope.ServiceProvider
             .GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, codec);

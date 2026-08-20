@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Imaging;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
@@ -11,28 +12,29 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
 using RentalCommand.Data.Documents;
+using RentalCommand.Data.Scanning;
 
 namespace RentalCommand.Api.Scanning;
 
 public sealed class ScanUploadService : IScanUploadService
 {
-    private static readonly AtomicJsonResultCodec<FinalizeScanUploadResult> ResultCodec =
-        new("scan-upload.finalize.result.v1");
-
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
+    private readonly RentalCommand.Data.RentalCommandDbContext _db;
     private readonly IFileStorage _storage;
     private readonly IPendingFileUploadStore _pendingUploads;
     private readonly UploadSettings _settings;
     private readonly TimeProvider _timeProvider;
 
     public ScanUploadService(
-        IAtomicUnitOfWork atomic,
+        RentalCommand.Data.RentalCommandDbContext db,
+        IRequestWriteExecutor writes,
         IFileStorage storage,
         IPendingFileUploadStore pendingUploads,
         IOptions<UploadSettings> settings,
         TimeProvider timeProvider)
     {
-        _atomic = atomic;
+        _db = db;
+        _writes = writes;
         _storage = storage;
         _pendingUploads = pendingUploads;
         _settings = settings.Value;
@@ -175,11 +177,7 @@ public sealed class ScanUploadService : IScanUploadService
             file.File.ThumbnailBytes?.LongLength,
             file.File.ThumbnailSha256)).ToArray();
 
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scan-upload.finalize",
-                $"{portfolioId}:{userId}:{Digest(operationId)}"),
-            new FinalizeScanUploadCommand(
+        var command = new FinalizeScanUploadCommand(
                 portfolioId,
                 userId,
                 scope.SessionId,
@@ -192,8 +190,15 @@ public sealed class ScanUploadService : IScanUploadService
                 normalizedBatchName,
                 now,
                 commandFiles,
-                captureContext),
-            ResultCodec,
+                captureContext);
+        var outcome = await _writes.ExecuteAsync(
+            $"{portfolioId}:{userId}:{Digest(operationId)}",
+            ScanDraftWriteSupport.Write(
+                "scan-upload.finalize", command, ScanDraftWriteSupport.FinalizeResultContract,
+                (request, context, token) => FinalizeScanUploadHandler.ExecuteAsync(
+                    _db, request, context, token),
+                (request, context, token) => FinalizeScanUploadHandler.AuthorizeAsync(
+                    _db, request, context, token)),
             ct);
         return outcome.Value;
     }
