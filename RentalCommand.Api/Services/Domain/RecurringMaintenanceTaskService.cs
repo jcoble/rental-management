@@ -479,7 +479,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
                 property.Id == task.PropertyId && property.PortfolioId == task.PortfolioId));
     }
 
-    internal static IQueryable<RecurringMaintenanceTaskResponse> ProjectResponse(IQueryable<RecurringMaintenanceTask> query) =>
+    private static IQueryable<RecurringMaintenanceTaskResponse> ProjectResponse(IQueryable<RecurringMaintenanceTask> query) =>
         query.Select(t => new RecurringMaintenanceTaskResponse
         {
             Id = t.Id,
