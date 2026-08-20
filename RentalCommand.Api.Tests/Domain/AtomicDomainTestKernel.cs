@@ -112,6 +112,7 @@ internal static class AtomicDomainTestKernel
 
     private static void AddWorkOrderHandlers(IServiceCollection services)
     {
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             CreateWorkOrderCommand,
             WorkOrderMutationResult,

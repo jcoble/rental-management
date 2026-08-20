@@ -591,7 +591,8 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new InMemoryFileStorage(),
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System,
-            editScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            writes: new RequestWriteExecutor(
+                editScope.ServiceProvider.GetRequiredService<IWriteExecutor>()));
         var commentService = new WorkOrderService(
             commentDb,
             new NoopInspectionDataUpdate(),
@@ -599,7 +600,8 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new InMemoryFileStorage(),
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System,
-            commentScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            writes: new RequestWriteExecutor(
+                commentScope.ServiceProvider.GetRequiredService<IWriteExecutor>()));
 
         var appointmentTask = Task.Run(() => appointmentService.CreateAuthorizedAsync(
             _scope,
