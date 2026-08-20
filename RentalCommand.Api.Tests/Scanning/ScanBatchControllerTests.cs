@@ -420,7 +420,8 @@ public class ScanBatchControllerTests : IAsyncLifetime
         var files = Mock.Of<IFileStorage>();
         var controller = new ScanController(
             scan, uploads ?? Mock.Of<IScanUploadService>(),
-            _atomic, Mock.Of<IRequestWriteExecutor>(), _db, files,
+            _atomic, Mock.Of<IRequestWriteExecutor>(),
+            Mock.Of<IScanConfirmationTargetWriter>(), _db, files,
             TimeProvider.System)
         {
             ControllerContext = new ControllerContext
