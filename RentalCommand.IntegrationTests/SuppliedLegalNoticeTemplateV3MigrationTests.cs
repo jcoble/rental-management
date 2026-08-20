@@ -49,7 +49,7 @@ public sealed class SuppliedLegalNoticeTemplateV3MigrationTests : IAsyncLifetime
         }
     }
 
-    [SkippableFact(Skip = "RS-B06 harness bug: hand-built schema is missing current migrated columns or views; receipt #rs-b06-stale-schema")]
+    [SkippableFact]
     public async Task Migration_UpgradesOnlyExactUnreviewedDraftV2Bindings_AndPreservesHistory()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; supplied legal v3 migration proof skipped.");
@@ -181,7 +181,7 @@ public sealed class SuppliedLegalNoticeTemplateV3MigrationTests : IAsyncLifetime
             .Should().Equal(SuppliedNoticeTemplateBaseline.V2Legal.Select(template => template.Body));
     }
 
-    [SkippableFact(Skip = "RS-B06 harness bug: hand-built schema is missing current migrated columns or views; receipt #rs-b06-stale-schema")]
+    [SkippableFact]
     public async Task Migration_FailureRollsBackSystemWorkspaceAndPolicyChanges()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; supplied legal v3 rollback proof skipped.");
@@ -269,6 +269,12 @@ public sealed class SuppliedLegalNoticeTemplateV3MigrationTests : IAsyncLifetime
         }.ConnectionString;
         await using var db = NewContext(databaseConnection);
         await db.GetService<IMigrator>().MigrateAsync(PreV3Migration);
+        await db.Database.ExecuteSqlRawAsync("""
+            ALTER TABLE "AspNetUsers" ADD COLUMN "TermsPrivacyAccepted" boolean NOT NULL DEFAULT FALSE;
+            ALTER TABLE "AspNetUsers" ADD COLUMN "TermsPrivacyAcceptedAtUtc" timestamp with time zone NULL;
+            ALTER TABLE "AspNetUsers" ADD COLUMN "TermsPrivacyVersion" character varying(100) NULL;
+            ALTER TABLE "TenantAccounts" ADD COLUMN "RentTrackingStartOn" date NULL;
+            """);
         return databaseConnection;
     }
 
