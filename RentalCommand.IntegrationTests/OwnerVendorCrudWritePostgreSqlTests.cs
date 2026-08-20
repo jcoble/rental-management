@@ -81,7 +81,7 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
         var receipt = await _context.Db.AtomicCommandReceipts.AsNoTracking().SingleAsync(row =>
             row.CommandType == identity.CommandType
             && row.IdempotencyKey == identity.IdempotencyKey);
-        var legacyCommand = AtomicCoreCrudMutation.Command(
+        var legacyCommand = CoreCrudWriteSupport.Request(
             scope,
             AtomicCoreCrudMutationDomain.Vendor,
             AtomicCoreCrudMutationOperation.Create,

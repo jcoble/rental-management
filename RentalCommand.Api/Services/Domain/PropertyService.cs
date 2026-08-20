@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -22,18 +23,23 @@ public class PropertyService : IPropertyService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IRequestWriteExecutor? _writes;
+    private readonly PropertyTenantCrudWriteRules _crudRules;
     private readonly TimeProvider _timeProvider;
 
     public PropertyService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null)
+        IAtomicUnitOfWork? atomic = null,
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
         _atomic = atomic;
+        _writes = writes;
+        _crudRules = new PropertyTenantCrudWriteRules(db);
     }
 
     public async Task<PropertyResponse?> UpdateAsync(
@@ -44,11 +50,13 @@ public class PropertyService : IPropertyService
         CancellationToken ct = default)
     {
         var changedAtUtc = _timeProvider.UtcNow();
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
+        var command = CoreCrudWriteSupport.Request(scope, AtomicCoreCrudMutationDomain.Property,
             AtomicCoreCrudMutationOperation.Update, id, operationKey, request,
             changedAtUtc: changedAtUtc);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        var write = CoreCrudWriteSupport.Write(
+            command, _crudRules.UpdatePropertyAsync, _crudRules.AuthorizeReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return DeserializeSnapshot<PropertyResponse>(outcome.Value);
     }
 
@@ -59,12 +67,14 @@ public class PropertyService : IPropertyService
         CancellationToken ct = default)
     {
         var setupAtUtc = _timeProvider.UtcNow();
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
+        var command = CoreCrudWriteSupport.Request(scope, AtomicCoreCrudMutationDomain.Property,
             AtomicCoreCrudMutationOperation.Setup, request.PropertyId.GetValueOrDefault(), operationKey, request,
             createdAtUtc: setupAtUtc,
             changedAtUtc: setupAtUtc);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        var write = CoreCrudWriteSupport.Write(
+            command, _crudRules.SetupPropertyAsync, _crudRules.AuthorizeReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return DeserializeSnapshot<PropertySetupResponse>(outcome.Value);
     }
 
@@ -74,15 +84,20 @@ public class PropertyService : IPropertyService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
+        var command = CoreCrudWriteSupport.Request(scope, AtomicCoreCrudMutationDomain.Property,
             AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object());
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        var write = CoreCrudWriteSupport.Write(
+            command, _crudRules.DeletePropertyAsync, _crudRules.AuthorizeReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found;
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
         "Property changes must use the standard save process.");
+
+    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
+        "Property changes must use the shared write executor.");
 
     private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
         where TResponse : class =>
