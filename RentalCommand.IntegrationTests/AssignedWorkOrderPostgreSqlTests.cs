@@ -40,6 +40,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _context = null!;
     private ServiceProvider _services = null!;
+    private IServiceScope _serviceScope = null!;
 
     public AssignedWorkOrderPostgreSqlTests(MigratedPostgreSqlFixture fixture) => _fixture = fixture;
 
@@ -67,15 +68,17 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             ValidateOnBuild = true,
             ValidateScopes = true,
         });
+        _serviceScope = _services.CreateScope();
     }
 
     public async Task DisposeAsync()
     {
+        _serviceScope?.Dispose();
         if (_services is not null) await _services.DisposeAsync();
         if (_context is not null) await _context.DisposeAsync();
     }
 
-    [Fact(Skip = "RS-B01 harness bug: scoped atomic service resolved from root provider; receipt #rs-b01-scoped-di")]
+    [Fact]
     public async Task AssignedTechnician_UpdateReplaysOnce_AndUnassignedWorkIsRejected()
     {
         var scenario = await SeedScenarioAsync();
@@ -98,9 +101,13 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             "assigned-work-order.update",
             $"{scenario.PortfolioId}:{scenario.AccessContextId}:{scenario.AssignedWorkOrderId}:assigned-update-replay");
 
+        using var firstScope = _services.CreateScope();
+        using var secondScope = _services.CreateScope();
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(identity, command, UpdateCodec),
-            Atomic.ExecuteAsync(identity, command, UpdateCodec));
+            firstScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
+                .ExecuteAsync(identity, command, UpdateCodec),
+            secondScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
+                .ExecuteAsync(identity, command, UpdateCodec));
 
         outcomes.Select(outcome => outcome.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -148,7 +155,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             receipt.IdempotencyKey.EndsWith(":unassigned-update-denied"))).Should().Be(0);
     }
 
-    [Fact(Skip = "RS-B01 harness bug: scoped atomic service resolved from root provider; receipt #rs-b01-scoped-di")]
+    [Fact]
     public async Task AssignedTechnician_EntryMessageAndReadMutations_RejectUnassignedAndStaleAuthority()
     {
         var scenario = await SeedScenarioAsync();
@@ -219,15 +226,16 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             .Should().Be(0);
     }
 
-    [Fact(Skip = "RS-B01 harness bug: scoped atomic service resolved from root provider; receipt #rs-b01-scoped-di")]
+    [Fact]
     public async Task AssignResponsibility_UsesBusinessClockForLifecycleAuditAndOutbox_AndReplaysOriginalResult()
     {
         var scenario = await SeedResponsibilityAssignmentScenarioAsync("business-clock");
         await using var services = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc));
+        using var serviceScope = services.CreateScope();
         var command = AssignCommand(scenario, "business-clock");
         var identity = AssignIdentity(scenario, command);
 
-        var executed = await services.GetRequiredService<IAtomicUnitOfWork>()
+        var executed = await serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, AssignCodec);
 
         executed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -274,7 +282,8 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             "access-context revision metadata remains on the database/security clock");
 
         await using var replayServices = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc.AddDays(1)));
-        var replayed = await replayServices.GetRequiredService<IAtomicUnitOfWork>()
+        using var replayScope = replayServices.CreateScope();
+        var replayed = await replayScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, AssignCodec);
 
         replayed.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -292,16 +301,17 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             .Should().Be(1);
     }
 
-    [Fact(Skip = "RS-B01 harness bug: scoped atomic service resolved from root provider; receipt #rs-b01-scoped-di")]
+    [Fact]
     public async Task AssignResponsibility_RollsBackLifecycleRevisionAuditReceiptAndOutbox_WhenOutboxInsertFails()
     {
         var scenario = await SeedResponsibilityAssignmentScenarioAsync("rollback");
         var failure = new ThrowOnOutboxInsertInterceptor();
         await using var services = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc), failure);
+        using var serviceScope = services.CreateScope();
         var command = AssignCommand(scenario, "rollback");
         var identity = AssignIdentity(scenario, command);
 
-        var act = async () => await services.GetRequiredService<IAtomicUnitOfWork>()
+        var act = async () => await serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, AssignCodec);
 
         await act.Should().ThrowAsync<DbUpdateException>()
@@ -329,16 +339,18 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             .Should().Be(0);
     }
 
-    [Fact(Skip = "RS-B01 harness bug: scoped atomic service resolved from root provider; receipt #rs-b01-scoped-di")]
+    [Fact]
     public async Task CloseResponsibility_UsesBusinessClockForLifecycleAuditAndOutbox()
     {
         var scenario = await SeedResponsibilityAssignmentScenarioAsync("close-clock");
         await using var assignServices = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc));
+        using var assignScope = assignServices.CreateScope();
         var assignCommand = AssignCommand(scenario, "close-clock-assign");
-        var assigned = await assignServices.GetRequiredService<IAtomicUnitOfWork>()
+        var assigned = await assignScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(AssignIdentity(scenario, assignCommand), assignCommand, AssignCodec);
         var closeNow = BusinessNowUtc.AddHours(4);
         await using var closeServices = BuildResponsibilityServices(new FixedTimeProvider(closeNow));
+        using var closeScope = closeServices.CreateScope();
         var closeCommand = new CloseWorkOrderResponsibilityCommand(
             scenario.PortfolioId,
             scenario.ManagerUserId,
@@ -357,7 +369,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             "work-order-responsibility.close",
             $"{scenario.PortfolioId}:{scenario.WorkOrderId}:{closeCommand.DeliveryIdempotencyKey}");
 
-        var closed = await closeServices.GetRequiredService<IAtomicUnitOfWork>()
+        var closed = await closeScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(closeIdentity, closeCommand, CloseCodec);
 
         closed.Value.EffectiveToUtc.Should().Be(closeNow);
@@ -674,7 +686,8 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
-    private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
+    private IAtomicUnitOfWork Atomic =>
+        _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
 
     private ServiceProvider BuildResponsibilityServices(
         TimeProvider timeProvider,
