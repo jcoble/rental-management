@@ -88,6 +88,9 @@ public sealed class CreateManualLeaseHandler
         CancellationToken ct)
     {
         ValidateCommand(command);
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         var authorizationCommand = new ConfirmScanDraftCommand(
             command.PortfolioId,
             0,

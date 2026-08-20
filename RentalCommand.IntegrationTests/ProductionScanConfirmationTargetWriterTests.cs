@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -31,6 +32,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
 {
     private static readonly DateTime CommandTime =
         new(2026, 7, 11, 14, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime InterceptorSaveTime =
+        new(2031, 3, 17, 9, 30, 0, DateTimeKind.Utc);
     private static readonly DateTime StatementDate =
         new(2027, 1, 20, 0, 0, 0, DateTimeKind.Utc);
     private const decimal StatementOpeningBalance = 125_825m;
@@ -78,7 +81,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         await _postgres.StartAsync();
 
         var services = new ServiceCollection();
-        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(InterceptorSaveTime));
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
         services.AddAtomicPersistenceKernel();
@@ -439,18 +442,62 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         var identity = new AtomicCommandIdentity(
             "guided-setup.manual-lease", $"{_portfolioId}:{marker}");
 
+        DateTime databaseBusinessClock;
+        await using (var before = Scope())
+        {
+            databaseBusinessClock = await before.Db.Database
+                .SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"")
+                .SingleAsync();
+        }
+
         await ExecuteAtomicAsync(identity, command, Codec);
 
         await using var verify = Scope();
-        var timestamps = await verify.Db.AtomicAuditLogs.AsNoTracking()
+        var trackedAuditTimestamps = await verify.Db.AtomicAuditLogs.AsNoTracking()
             .Where(row => row.CommandType == identity.CommandType
-                && row.CommandIdempotencyKey == identity.IdempotencyKey)
+                && row.CommandIdempotencyKey == identity.IdempotencyKey
+                && row.EntityType != nameof(Unit))
             .Select(row => row.Timestamp)
             .ToArrayAsync();
-        timestamps.Should().NotBeEmpty();
-        timestamps.Should().OnlyContain(timestamp => timestamp != CommandTime);
-        timestamps.Should().OnlyContain(timestamp =>
-            timestamp > DateTime.UtcNow.AddMinutes(-2) && timestamp < DateTime.UtcNow.AddMinutes(2));
+        trackedAuditTimestamps.Should().NotBeEmpty();
+        trackedAuditTimestamps.Should().OnlyContain(timestamp => timestamp == InterceptorSaveTime);
+        trackedAuditTimestamps.Should().OnlyContain(timestamp => timestamp != databaseBusinessClock);
+    }
+
+    [SkippableFact]
+    public async Task GuidedSetupManualLease_ReplayAuthorization_AcquiresLegacyScopeLocksInOrder()
+    {
+        SkipIfDockerUnavailable();
+        var command = new CreateManualLeaseCommand(
+            _portfolioId,
+            _actorUserId,
+            _authSessionId,
+            _accessContextId,
+            _accessRevision,
+            GuidedSetupManualTarget($"manual-lock-{Guid.NewGuid():N}"),
+            $"guided-setup-manual-lease:lock:{Guid.NewGuid():N}");
+        var acquired = new List<string>();
+        var context = new Mock<IAtomicCommandContext>();
+        context.SetupGet(item => item.BusinessNowUtc).Returns(CommandTime);
+        context.Setup(item => item.AcquireLockAsync(
+                It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Callback<string, Guid, CancellationToken>((lockNamespace, id, _) =>
+                acquired.Add($"{lockNamespace}:{id}"))
+            .Returns(Task.CompletedTask);
+        context.Setup(item => item.AcquireLockAsync(
+                It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Callback<string, int, CancellationToken>((lockNamespace, id, _) =>
+                acquired.Add($"{lockNamespace}:{id}"))
+            .Returns(Task.CompletedTask);
+
+        await using var scope = Scope();
+        await CreateManualLeaseHandler.AuthorizeAsync(
+            scope.Db, command, context.Object, CancellationToken.None);
+
+        acquired.Should().Equal(
+            $"AuthSession:{_authSessionId}",
+            $"WorkspaceAccessContext:{_accessContextId}",
+            $"Portfolio:{_portfolioId}");
     }
 
     [SkippableTheory]
@@ -3691,5 +3738,10 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             return new TestScope(scope, scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         }
         public ValueTask DisposeAsync() => scope.DisposeAsync();
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
     }
 }
