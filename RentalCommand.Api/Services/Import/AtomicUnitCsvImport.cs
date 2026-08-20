@@ -38,6 +38,26 @@ public static class AtomicUnitCsvImport
     public static AtomicCommandIdentity Identity(AtomicUnitCsvImportCommand command) => new(
         "unit.csv-import",
         $"{command.PortfolioId}:{command.AccessContextId}:{command.ImportOperationDigest}");
+
+    public static TransactionalWrite<AtomicUnitCsvImportCommand, AtomicUnitCsvImportResult> Write(
+        AtomicUnitCsvImportCommand command,
+        Func<AtomicUnitCsvImportCommand, IAtomicCommandContext, CancellationToken,
+            Task<AtomicUnitCsvImportResult>> executeAsync,
+        Func<AtomicUnitCsvImportCommand, IAtomicCommandContext, CancellationToken, Task>
+            authorizeReplayAsync)
+    {
+        var identity = Identity(command);
+        return new(identity.CommandType, WriteIdempotencyPolicy.Required, command,
+            Codec.ContractName,
+            new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
+                WriteLock.For("AuthSession", command.AuthSessionId),
+                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
+                WriteLock.For("Portfolio", command.PortfolioId)),
+            executeAsync, authorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Unit CSV imports must use the shared request write executor.");
 }
 
 /// <summary>One receipt-backed Unit CSV command; PostgreSQL owns the whole row set.</summary>
@@ -48,16 +68,18 @@ public sealed class AtomicUnitCsvImportHandler
 
     public AtomicUnitCsvImportHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AtomicUnitCsvImportResult> HandleAsync(
+    public Task<AtomicUnitCsvImportResult> HandleAsync(
+        AtomicUnitCsvImportCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) =>
+        throw AtomicUnitCsvImport.RetiredPath();
+
+    internal async Task<AtomicUnitCsvImportResult> ExecuteAsync(
         AtomicUnitCsvImportCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await attempt.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         var scope = new WorkspaceReadScope(
             command.PortfolioId, command.ActorUserId, command.AuthSessionId,
@@ -124,7 +146,13 @@ public sealed class AtomicUnitCsvImportHandler
         }
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        AtomicUnitCsvImportCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw AtomicUnitCsvImport.RetiredPath();
+
+    internal async Task AuthorizeAsync(
         AtomicUnitCsvImportCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
