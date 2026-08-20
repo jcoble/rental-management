@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -28,6 +29,7 @@ public class OwnerEntityService : IOwnerEntityService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IRequestWriteExecutor? _writes;
     private readonly TimeProvider _timeProvider;
     private readonly string _webBaseUrl;
 
@@ -36,28 +38,34 @@ public class OwnerEntityService : IOwnerEntityService
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
         IAtomicUnitOfWork? atomic = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
         _atomic = atomic;
+        _writes = writes;
         _webBaseUrl = configuration?["App:WebBaseUrl"] ?? "https://localhost:5667";
     }
 
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<OwnerEntityResponse?> CreateAsync(
         WorkspaceReadScope scope,
         CreateOwnerEntityRequest request,
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.OwnerEntity,
+        var writeRequest = CoreCrudWriteSupport.Request(scope, AtomicCoreCrudMutationDomain.OwnerEntity,
             AtomicCoreCrudMutationOperation.Create, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        var write = CoreCrudWriteSupport.Write(
+            writeRequest, CreateOwnerAsync, AuthorizeCoreCrudReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return DeserializeSnapshot<OwnerEntityResponse>(outcome.Value);
     }
 
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<OwnerEntityResponse?> UpdateAsync(
         WorkspaceReadScope scope,
         int id,
@@ -65,25 +73,154 @@ public class OwnerEntityService : IOwnerEntityService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.OwnerEntity,
+        var writeRequest = CoreCrudWriteSupport.Request(scope, AtomicCoreCrudMutationDomain.OwnerEntity,
             AtomicCoreCrudMutationOperation.Update, id, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        var write = CoreCrudWriteSupport.Write(
+            writeRequest, UpdateOwnerAsync, AuthorizeCoreCrudReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return DeserializeSnapshot<OwnerEntityResponse>(outcome.Value);
     }
 
+    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<bool> DeleteAsync(
         WorkspaceReadScope scope,
         int id,
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.OwnerEntity,
+        var writeRequest = CoreCrudWriteSupport.Request(scope, AtomicCoreCrudMutationDomain.OwnerEntity,
             AtomicCoreCrudMutationOperation.Delete, id, operationKey, new { });
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        var write = CoreCrudWriteSupport.Write(
+            writeRequest, DeleteOwnerAsync, AuthorizeCoreCrudReplayAsync);
+        var outcome = await RequireWrites().ExecuteAsync(
+            CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return outcome.Value.Found;
     }
+
+    private async Task<AtomicCoreCrudMutationResult> CreateOwnerAsync(
+        CoreCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await CoreCrudWriteSupport.BeginExecutionAsync(request, _db, context, ct);
+        var create = CoreCrudWriteSupport.Read<CreateOwnerEntityRequest>(request);
+        var owner = new OwnerEntity
+        {
+            PortfolioId = request.PortfolioId, OwnerEntityType = create.OwnerEntityType,
+            Name = create.Name, TaxId = create.TaxId, AddressLine1 = create.AddressLine1,
+            AddressLine2 = create.AddressLine2, City = create.City, State = create.State,
+            PostalCode = create.PostalCode, Phone = create.Phone, Email = create.Email,
+            CreatedAt = now, UpdatedAt = now,
+        };
+        _db.Add(owner);
+        context.BindSemanticAudit(owner, TransactionalWriteDefaults.Audit(
+            request, nameof(OwnerEntity), AuditLogOperation.Created,
+            $"Owner {owner.Name} created", 0));
+        await context.FlushBusinessAsync(ct);
+        TransactionalWriteDefaults.StageDataUpdate(
+            request, context, nameof(OwnerEntity), owner.Id, now, "entity");
+        return new AtomicCoreCrudMutationResult(
+            true, true, owner.Id, await SnapshotOwnerAsync(owner, context, ct));
+    }
+
+    private async Task<AtomicCoreCrudMutationResult> UpdateOwnerAsync(
+        CoreCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await CoreCrudWriteSupport.BeginExecutionAsync(
+            request, _db, context, ct, authorize: false);
+        var owner = await _db.OwnerEntities.SingleOrDefaultAsync(entity =>
+            entity.Id == request.EntityId && entity.PortfolioId == request.PortfolioId
+            && entity.DeletedAt == null, ct);
+        if (owner is null) return new AtomicCoreCrudMutationResult(false, false, 0);
+        await CoreCrudWriteSupport.AuthorizeExecutionAsync(request, _db, now, ct);
+        var update = CoreCrudWriteSupport.Read<UpdateOwnerEntityRequest>(request);
+        if (update.OwnerEntityType.HasValue) owner.OwnerEntityType = update.OwnerEntityType.Value;
+        if (update.Name is not null) owner.Name = update.Name;
+        if (update.TaxId is not null) owner.TaxId = update.TaxId;
+        if (update.AddressLine1 is not null) owner.AddressLine1 = update.AddressLine1;
+        if (update.AddressLine2 is not null) owner.AddressLine2 = update.AddressLine2;
+        if (update.City is not null) owner.City = update.City;
+        if (update.State is not null) owner.State = update.State;
+        if (update.PostalCode is not null) owner.PostalCode = update.PostalCode;
+        if (update.Phone is not null) owner.Phone = update.Phone;
+        if (update.Email is not null) owner.Email = update.Email;
+        owner.UpdatedAt = now;
+        context.BindSemanticAudit(owner, TransactionalWriteDefaults.Audit(
+            request, nameof(OwnerEntity), AuditLogOperation.Updated,
+            $"Owner {owner.Name} updated", owner.Id));
+        await context.FlushBusinessAsync(ct);
+        TransactionalWriteDefaults.StageDataUpdate(
+            request, context, nameof(OwnerEntity), owner.Id, now, "entity");
+        return new AtomicCoreCrudMutationResult(
+            true, true, owner.Id, await SnapshotOwnerAsync(owner, context, ct));
+    }
+
+    private async Task<AtomicCoreCrudMutationResult> DeleteOwnerAsync(
+        CoreCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await CoreCrudWriteSupport.BeginExecutionAsync(
+            request, _db, context, ct, authorize: false);
+        var owner = await _db.OwnerEntities.SingleOrDefaultAsync(entity =>
+            entity.Id == request.EntityId && entity.PortfolioId == request.PortfolioId
+            && entity.DeletedAt == null, ct);
+        if (owner is null) return new AtomicCoreCrudMutationResult(false, false, 0);
+        await CoreCrudWriteSupport.AuthorizeExecutionAsync(request, _db, now, ct);
+        var deleteGuard = await _db.OwnerEntities
+            .AsNoTracking()
+            .Where(candidate =>
+                candidate.PortfolioId == request.PortfolioId &&
+                candidate.Id == owner.Id)
+            .Select(candidate => new
+            {
+                PropertyCount = _db.PropertyOwnerships
+                    .Where(ownership =>
+                        ownership.PortfolioId == request.PortfolioId &&
+                        ownership.OwnerEntityId == candidate.Id &&
+                        (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now) &&
+                        ownership.Property != null &&
+                        ownership.Property.DeletedAt == null)
+                    .Select(ownership => ownership.PropertyId)
+                    .Distinct()
+                    .Count(),
+                PortalAccessCount = _db.OwnerUserAccesses.Count(access =>
+                    access.PortfolioId == request.PortfolioId &&
+                    access.OwnerEntityId == candidate.Id &&
+                    access.RevokedAtUtc == null),
+            })
+            .SingleAsync(ct);
+        if (deleteGuard.PropertyCount > 0)
+            throw Conflict($"This owner is assigned to {deleteGuard.PropertyCount} {(deleteGuard.PropertyCount == 1 ? "property" : "properties")}. Reassign or clear those properties before deleting this owner.");
+        if (deleteGuard.PortalAccessCount > 0)
+            throw Conflict("Revoke this owner's portal access before deleting the owner.");
+        var distributions = await _db.OwnerDistributions.AsNoTracking().CountAsync(row =>
+            row.PortfolioId == request.PortfolioId && row.OwnerEntityId == owner.Id, ct);
+        if (distributions > 0)
+            throw Conflict($"This owner has {distributions} recorded {(distributions == 1 ? "distribution" : "distributions")}. Delete or reassign them first.");
+        var contributions = await _db.OwnerContributions.AsNoTracking().CountAsync(row =>
+            row.PortfolioId == request.PortfolioId && row.OwnerEntityId == owner.Id, ct);
+        if (contributions > 0)
+            throw Conflict($"This owner has {contributions} recorded {(contributions == 1 ? "contribution" : "contributions")}. Delete or reassign them first.");
+        owner.DeletedAt = now;
+        owner.UpdatedAt = now;
+        context.BindSemanticAudit(owner, TransactionalWriteDefaults.Audit(
+            request, nameof(OwnerEntity), AuditLogOperation.Deleted,
+            $"Owner {owner.Name} deleted", owner.Id));
+        await context.FlushBusinessAsync(ct);
+        TransactionalWriteDefaults.StageDataUpdate(
+            request, context, nameof(OwnerEntity), owner.Id, now, "entity", deleted: true);
+        return new AtomicCoreCrudMutationResult(true, true, owner.Id);
+    }
+
+    private Task AuthorizeCoreCrudReplayAsync(
+        CoreCrudWriteRequest request,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        CoreCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
 
     public async Task<ActivateOwnerPortalAccessResponse> ActivateOwnerPortalAccessAsync(
         WorkspaceReadScope scope,
@@ -307,6 +444,32 @@ public class OwnerEntityService : IOwnerEntityService
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
         "Owner changes must use the standard save process.");
+
+    private IRequestWriteExecutor RequireWrites() =>
+        _writes ?? throw new InvalidOperationException(
+            "The shared request write executor is required for owner changes.");
+
+    private async Task<string> SnapshotOwnerAsync(
+        OwnerEntity owner,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var assigned = await _db.PropertyOwnerships.AsNoTracking()
+            .Where(ownership =>
+                ownership.PortfolioId == owner.PortfolioId
+                && ownership.OwnerEntityId == owner.Id
+                && ownership.EffectiveFromUtc <= now
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                && ownership.Property != null
+                && ownership.Property.DeletedAt == null)
+            .Select(ownership => ownership.PropertyId)
+            .Distinct()
+            .CountAsync(ct);
+        return JsonSerializer.Serialize(OwnerEntityResponse.FromEntity(owner, assigned));
+    }
+
+    private static DomainValidationException Conflict(string message) => new(message, 409);
 
     private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
         where TResponse : class =>
