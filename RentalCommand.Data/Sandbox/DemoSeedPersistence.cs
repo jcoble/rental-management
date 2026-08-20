@@ -1,9 +1,6 @@
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
-using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
-using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Data.Sandbox;
 
@@ -60,74 +57,13 @@ public static class DemoSeedPersistence
         DateTime createdAtUtc,
         CancellationToken ct)
     {
-        if (!db.Database.IsNpgsql())
-        {
-            var existing = await db.Set<LegalDocumentSourceVersion>()
-                .SingleOrDefaultAsync(source =>
-                    source.PortfolioId == portfolioId
-                    && source.SourceKind == LegalDocumentSourceKind.BuiltInRenderer
-                    && source.RendererKey == BuiltInLeaseAgreementSource.RendererKey
-                    && source.RendererVersion == BuiltInLeaseAgreementSource.RendererVersion,
-                    ct);
-            if (existing is not null)
-            {
-                return existing.Id;
-            }
-
-            var source = new LegalDocumentSourceVersion
-            {
-                PublicId = Guid.NewGuid(),
-                PortfolioId = portfolioId,
-                SourceKind = LegalDocumentSourceKind.BuiltInRenderer,
-                BusinessKey = BuiltInLeaseAgreementSource.BusinessKey,
-                RendererKey = BuiltInLeaseAgreementSource.RendererKey,
-                RendererVersion = BuiltInLeaseAgreementSource.RendererVersion,
-                SnapshotPayload = BuiltInLeaseAgreementSource.SnapshotPayload,
-                CreatedAtUtc = createdAtUtc,
-                CreatedByUserId = actorUserId,
-            };
-            db.Add(source);
-            await context.FlushBusinessAsync(ct);
-            return source.Id;
-        }
-
-        var rows = await db.ExecuteAtomicSqlMutationAsync<BuiltInSourceRow>(context, $$"""
-            WITH inserted AS (
-                INSERT INTO "LegalDocumentSourceVersions"
-                    ("PublicId", "PortfolioId", "SourceKind", "BusinessKey",
-                     "RendererKey", "RendererVersion", "SnapshotPayload", "CreatedAtUtc", "CreatedByUserId")
-                VALUES
-                    (gen_random_uuid(), {{portfolioId}}, 'BuiltInRenderer',
-                     {{BuiltInLeaseAgreementSource.BusinessKey}},
-                     {{BuiltInLeaseAgreementSource.RendererKey}},
-                     {{BuiltInLeaseAgreementSource.RendererVersion}},
-                     {{BuiltInLeaseAgreementSource.SnapshotPayload}}::jsonb,
-                     {{createdAtUtc}}, {{actorUserId}})
-                ON CONFLICT ("PortfolioId", "RendererKey", "RendererVersion")
-                    WHERE "SourceKind" = 'BuiltInRenderer'
-                DO NOTHING
-                RETURNING "Id"
-            )
-            SELECT "Id" AS "Value" FROM inserted
-            UNION ALL
-            SELECT source."Id" AS "Value"
-            FROM "LegalDocumentSourceVersions" AS source
-            WHERE source."PortfolioId" = {{portfolioId}}
-              AND source."SourceKind" = 'BuiltInRenderer'
-              AND source."RendererKey" = {{BuiltInLeaseAgreementSource.RendererKey}}
-              AND source."RendererVersion" = {{BuiltInLeaseAgreementSource.RendererVersion}}
-              AND NOT EXISTS (SELECT 1 FROM inserted)
-            LIMIT 1
-            """,
-            [new AtomicSqlMutationTarget(
-                nameof(RentalCommandDbContext.LegalDocumentSourceVersions),
-                AtomicSqlMutationOperation.Insert)],
+        var source = await AtomicLeaseMutationPersistence.ResolveBuiltInDocumentSourceVersionAsync(
+            db,
+            context,
+            portfolioId,
+            actorUserId,
+            createdAtUtc,
             ct);
-        return rows.SingleOrDefault()?.Value ?? 0;
-    }
-
-    private sealed class BuiltInSourceRow
-    {
-        public int Value { get; set; }
+        return source.DocumentSourceVersionId;
     }
 }
