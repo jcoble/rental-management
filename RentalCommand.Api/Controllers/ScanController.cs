@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -17,6 +18,7 @@ using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Documents;
+using RentalCommand.Data.Scanning;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -31,12 +33,11 @@ public class ScanController : ManagementControllerBase
 {
     private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> ConfirmResultCodec =
         new("scan-confirm.result.v1");
-    private static readonly AtomicJsonResultCodec<ScanDraftMutationResult> DraftMutationCodec =
-        new("scan-draft.mutation.result.v1");
 
     private readonly IScanService _scan;
     private readonly IScanUploadService _uploads;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
@@ -65,6 +66,7 @@ public class ScanController : ManagementControllerBase
         IScanService scan,
         IScanUploadService uploads,
         IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         RentalCommandDbContext db,
         IFileStorage files,
         TimeProvider timeProvider,
@@ -73,6 +75,7 @@ public class ScanController : ManagementControllerBase
         _scan = scan;
         _uploads = uploads;
         _atomic = atomic;
+        _writes = writes;
         _db = db;
         _files = files;
         _timeProvider = timeProvider;
@@ -915,12 +918,14 @@ public class ScanController : ManagementControllerBase
         ScanDraftMutationResult result;
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "scan-draft.retry",
-                    $"{scope.PortfolioId}:{id}:{operationDigest}"),
-                command,
-                DraftMutationCodec,
+            var outcome = await _writes.ExecuteAsync(
+                $"{scope.PortfolioId}:{id}:{operationDigest}",
+                ScanDraftWriteSupport.Write(
+                    "scan-draft.retry", command, ScanDraftWriteSupport.MutationResultContract,
+                    (request, context, token) => RetryScanDraftHandler.ExecuteAsync(
+                        _db, request, context, token),
+                    (request, context, token) => RetryScanDraftHandler.AuthorizeAsync(
+                        _db, request, context, token)),
                 ct);
             result = outcome.Value;
         }
@@ -978,12 +983,15 @@ public class ScanController : ManagementControllerBase
         ScanDraftMutationResult result;
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "scan-draft.payment-account",
-                    $"{scope.PortfolioId}:{id}:{operationDigest}"),
-                command,
-                DraftMutationCodec,
+            var outcome = await _writes.ExecuteAsync(
+                $"{scope.PortfolioId}:{id}:{operationDigest}",
+                ScanDraftWriteSupport.Write(
+                    "scan-draft.payment-account", command,
+                    ScanDraftWriteSupport.MutationResultContract,
+                    (request, context, token) => SetScanDraftPaymentAccountHandler.ExecuteAsync(
+                        _db, request, context, token),
+                    (request, context, token) => SetScanDraftPaymentAccountHandler.AuthorizeAsync(
+                        _db, request, context, token)),
                 ct);
             result = outcome.Value;
         }

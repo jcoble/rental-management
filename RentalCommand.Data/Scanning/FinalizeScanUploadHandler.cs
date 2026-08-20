@@ -14,11 +14,18 @@ namespace RentalCommand.Data.Scanning;
 public sealed class FinalizeScanUploadHandler
     : IAtomicCommandHandler<FinalizeScanUploadCommand, FinalizeScanUploadResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<FinalizeScanUploadResult> HandleAsync(
+        FinalizeScanUploadCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public FinalizeScanUploadHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        FinalizeScanUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public async Task<FinalizeScanUploadResult> HandleAsync(
+    public static async Task<FinalizeScanUploadResult> ExecuteAsync(
+        RentalCommandDbContext db,
         FinalizeScanUploadCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -28,8 +35,7 @@ public sealed class FinalizeScanUploadHandler
 
         var captureContext = command.CaptureContext
             ?? throw new InvalidOperationException("A canonical scan capture context is required.");
-        await AuthorizeCaptureContextAsync(command, captureContext, _db, ct);
-        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        await AuthorizeCaptureContextAsync(command, captureContext, db, ct);
 
         var expectations = new List<AtomicPendingFileUploadExpectation>(command.Files.Count * 2);
         for (var index = 0; index < command.Files.Count; index++)
@@ -82,7 +88,7 @@ public sealed class FinalizeScanUploadHandler
         // One PostgreSQL statement matches every security/integrity field and locks the complete
         // set in UUID order. Cleanup uses FOR UPDATE SKIP LOCKED, so it cannot claim or abandon any
         // admission while this transaction is finalizing the set.
-        var pendingRows = await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(_db,
+        var pendingRows = await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(db,
             context, command.PortfolioId,
             command.UploadedByUserId,
             expectations,
@@ -98,7 +104,7 @@ public sealed class FinalizeScanUploadHandler
         var pendingById = pendingRows.ToDictionary(upload => upload.Id);
         var activeStatusNames = new[] { "Pending", "Processing", "Reviewing" };
         var sourceHashes = command.Files.Select(file => file.SourceSha256).Distinct().ToArray();
-        var duplicateMatchesByHash = await _db.Set<ScanDraft>()
+        var duplicateMatchesByHash = await db.Set<ScanDraft>()
             .Where(draft => draft.PortfolioId == command.PortfolioId
                 && draft.TargetEntityType == command.TargetEntityType
                 && draft.SourceContentSha256 != null
@@ -145,7 +151,7 @@ public sealed class FinalizeScanUploadHandler
                 FileCount = command.Files.Count,
                 CreatedAtUtc = command.UploadedAtUtc,
             };
-            _db.Add(batch);
+            db.Add(batch);
         }
 
         var sourceRows = new List<StoredFile?>(command.Files.Count);
@@ -163,7 +169,7 @@ public sealed class FinalizeScanUploadHandler
             var source = CreateStoredFile(command, file.SourceFileName, file.SourceStoragePath,
                 file.SourceContentType, file.SourceSizeBytes);
             sourceRows.Add(source);
-            _db.Add(source);
+            db.Add(source);
             BindFileAudit(context, command, source, file.SourceSha256, "source", index);
 
             StoredFile? thumbnail = null;
@@ -171,7 +177,7 @@ public sealed class FinalizeScanUploadHandler
             {
                 thumbnail = CreateStoredFile(command, file.ThumbnailFileName!, file.ThumbnailStoragePath!,
                     "image/jpeg", file.ThumbnailSizeBytes!.Value);
-                _db.Add(thumbnail);
+                db.Add(thumbnail);
                 BindFileAudit(context, command, thumbnail, file.ThumbnailSha256!, "thumbnail", index);
             }
             thumbnailRows.Add(thumbnail);
@@ -235,7 +241,7 @@ public sealed class FinalizeScanUploadHandler
                 CreatedAt = command.UploadedAtUtc,
             };
             drafts.Add(draft);
-            _db.Add(draft);
+            db.Add(draft);
             context.BindSemanticAudit(draft, new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(ScanDraft),
@@ -316,12 +322,13 @@ public sealed class FinalizeScanUploadHandler
                 .ToArray());
     }
 
-    public Task AuthorizeReplayAsync(
+    public static Task AuthorizeAsync(
+        RentalCommandDbContext db,
         FinalizeScanUploadCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var captureContext = command.CaptureContext
             ?? throw new InvalidOperationException("A canonical scan capture context is required.");
-        return AuthorizeCaptureContextAsync(command, captureContext, _db, ct);
+        return AuthorizeCaptureContextAsync(command, captureContext, db, ct);
     }
 
     private static async Task AuthorizeCaptureContextAsync(

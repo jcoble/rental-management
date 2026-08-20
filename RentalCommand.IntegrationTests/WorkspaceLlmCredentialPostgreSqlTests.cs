@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
+using RentalCommand.Api.Writes;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.AiIntegrations;
 using RentalCommand.Core.Atomic;
@@ -280,6 +281,7 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
         var scanService = new ScanService(
             _context.Db,
             Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>(),
+            Mock.Of<IRequestWriteExecutor>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ScanService>.Instance,
             TimeProvider.System);
         var scope = new WorkspaceReadScope(

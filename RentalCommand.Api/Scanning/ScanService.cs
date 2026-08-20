@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -17,6 +18,7 @@ using RentalCommand.Core.Time;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Scanning;
 
 namespace RentalCommand.Api.Scanning;
 
@@ -41,10 +43,9 @@ public sealed class ScanService : IScanService
         CapabilityKeys.LeasingApplicationsManage,
         CapabilityKeys.LeasingAgreementsPrepare,
     ];
-    private static readonly AtomicJsonResultCodec<RejectScanDraftResult> RejectResultCodec =
-        new("scan-draft-reject-result:v1");
     private readonly RentalCommandDbContext _db;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly ILogger<ScanService> _logger;
     private readonly TimeProvider _timeProvider;
     private static readonly Regex ExpenseUnitReferenceRegex = new(
@@ -59,11 +60,13 @@ public sealed class ScanService : IScanService
     public ScanService(
         RentalCommandDbContext db,
         IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         ILogger<ScanService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
         _atomic = atomic;
+        _writes = writes;
         _logger = logger;
         _timeProvider = timeProvider;
     }
@@ -1026,12 +1029,14 @@ public sealed class ScanService : IScanService
             normalizedReason);
         try
         {
-            var result = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "scan-draft.reject",
-                    $"{scope.PortfolioId}:{draftId}:{reasonDigest}"),
-                command,
-                RejectResultCodec,
+            var result = await _writes.ExecuteAsync(
+                $"{scope.PortfolioId}:{draftId}:{reasonDigest}",
+                ScanDraftWriteSupport.Write(
+                    "scan-draft.reject", command, ScanDraftWriteSupport.RejectResultContract,
+                    (request, context, token) => RejectScanDraftHandler.ExecuteAsync(
+                        _db, request, context, token),
+                    (request, context, token) => RejectScanDraftHandler.AuthorizeAsync(
+                        _db, request, context, token)),
                 ct);
             return result.Value.Rejected;
         }

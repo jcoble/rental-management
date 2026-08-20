@@ -6,6 +6,7 @@ using Moq;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
@@ -33,6 +34,7 @@ public class VoiceConversationTests : IAsyncLifetime
     private MigratedPostgreSqlTestContext _ctx = null!;
     private WorkspaceReadScope _scope;
     private ServiceProvider _services = null!;
+    private AsyncServiceScope _serviceScope;
 
     public VoiceConversationTests(MigratedPostgreSqlFixture fixture)
     {
@@ -48,31 +50,26 @@ public class VoiceConversationTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            CreateVoiceScanDraftCommand,
-            ScanDraftMutationResult,
-            CreateVoiceScanDraftHandler>();
-        services.AddAtomicCommandHandler<
-            AnswerVoiceScanDraftCommand,
-            ScanDraftMutationResult,
-            AnswerVoiceScanDraftHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(
                     _ctx.Db.Database.GetDbConnection(),
                     contextOwnsConnection: false)
                 .UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
+        _serviceScope = _services.CreateAsyncScope();
     }
 
     public async Task DisposeAsync()
     {
+        await _serviceScope.DisposeAsync();
         await _services.DisposeAsync();
         await _ctx.DisposeAsync();
     }
 
     private VoiceIntakeService CreateSut() => new(
-        _ctx.Db,
-        _services.GetRequiredService<IAtomicUnitOfWork>(),
+        _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+        _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
         _llm.Object,
         _transcriber.Object,
         _storage.Object,
@@ -136,7 +133,8 @@ public class VoiceConversationTests : IAsyncLifetime
         turn1.MissingRequired.Should().Contain("amount");
         turn1.NextPrompt.Should().Be("How much was it?");
 
-        _services.GetRequiredService<RentalCommandDbContext>().ChangeTracker.Clear();
+        _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()
+            .ChangeTracker.Clear();
         var answered = await sut.AnswerAsync(
             scope: _scope,
             draftId: draft.Id,
@@ -222,7 +220,8 @@ public class VoiceConversationTests : IAsyncLifetime
 
         ScanDraftResponse.FromEntity(draft).WithVoiceSlots().Ambiguous.Should().BeTrue();
 
-        _services.GetRequiredService<RentalCommandDbContext>().ChangeTracker.Clear();
+        _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()
+            .ChangeTracker.Clear();
         var answered = await sut.AnswerAsync(
             scope: _scope,
             draftId: draft.Id,

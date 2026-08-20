@@ -7,18 +7,25 @@ namespace RentalCommand.Data.Scanning;
 public sealed class RejectScanDraftHandler
     : IAtomicCommandHandler<RejectScanDraftCommand, RejectScanDraftResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<RejectScanDraftResult> HandleAsync(
+        RejectScanDraftCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public RejectScanDraftHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        RejectScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ScanDraftWriteSupport.RetiredPath();
 
-    public async Task<RejectScanDraftResult> HandleAsync(
+    public static async Task<RejectScanDraftResult> ExecuteAsync(
+        RentalCommandDbContext db,
         RejectScanDraftCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
         context.UseDatabaseWallClockForAudit(command.ReviewedAtUtc);
-        var rejected = await AtomicScanConfirmationPersistence.RejectAuthorizedAsync(_db,
+        var rejected = await AtomicScanConfirmationPersistence.RejectAuthorizedAsync(db,
             context, Scope(command), command.DraftId, command.Reason, command.ReviewedAtUtc, ct);
         return new RejectScanDraftResult(
             rejected,
@@ -26,12 +33,13 @@ public sealed class RejectScanDraftHandler
             rejected ? command.ReviewedAtUtc : null);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public static async Task AuthorizeAsync(
+        RentalCommandDbContext db,
         RejectScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
-        var authorized = await AtomicScanAuthorizationQueries.IsAuthorizedForReviewAsync(_db,
+        var authorized = await AtomicScanAuthorizationQueries.IsAuthorizedForReviewAsync(db,
             context, Scope(command), command.DraftId, now, ct);
         if (!authorized)
         {
@@ -43,7 +51,7 @@ public sealed class RejectScanDraftHandler
         new(command.PortfolioId, command.UserId, command.AuthSessionId,
             command.AccessContextId, command.ExpectedAccessRevision);
 
-    private static void Validate(RejectScanDraftCommand command)
+    internal static void Validate(RejectScanDraftCommand command)
     {
         if (command.PortfolioId <= 0 || command.DraftId <= 0 || command.UserId <= 0 ||
             command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0 ||
