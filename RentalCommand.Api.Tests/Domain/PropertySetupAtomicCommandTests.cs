@@ -1,9 +1,11 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -37,11 +39,7 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(PropertySetupAtomicCommandTests));
         _services = AtomicDomainTestKernel.CreateForCoreCrud(_ctx.ConnectionString, _timeProvider);
         _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
-        _sut = new PropertyService(
-            _ctx.Db,
-            Mock.Of<IDataUpdateService>(),
-            _timeProvider,
-            _atomic);
+        _sut = _services.GetRequiredService<PropertyService>();
     }
 
     public void Dispose()
@@ -157,16 +155,8 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
             context.ConnectionString, _timeProvider);
         await using var firstScope = firstProvider.CreateAsyncScope();
         await using var secondScope = secondProvider.CreateAsyncScope();
-        var firstService = new PropertyService(
-            firstScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            Mock.Of<IDataUpdateService>(),
-            _timeProvider,
-            firstScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
-        var secondService = new PropertyService(
-            secondScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            Mock.Of<IDataUpdateService>(),
-            _timeProvider,
-            secondScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var firstService = firstScope.ServiceProvider.GetRequiredService<PropertyService>();
+        var secondService = secondScope.ServiceProvider.GetRequiredService<PropertyService>();
         var firstRequest = SingleRentalRequest();
         firstRequest.Property.Name = "Concurrent First Property A";
         firstRequest.Property.AddressLine1 = "101 Concurrent Way";
@@ -320,7 +310,7 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
     public async Task Ordinary_property_create_is_rejected_without_writing_invalid_inventory()
     {
         var request = SingleRentalRequest().Property;
-        var command = AtomicCoreCrudMutation.Command(
+        var command = CoreCrudWriteSupport.Request(
             _scope,
             AtomicCoreCrudMutationDomain.Property,
             AtomicCoreCrudMutationOperation.Create,
@@ -328,10 +318,13 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
             operationKey: "ordinary-create-is-disabled",
             request: request);
 
-        Func<Task> act = async () => await _atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command),
-            command,
-            AtomicCoreCrudMutation.Codec);
+        var rules = new PropertyTenantCrudWriteRules(
+            _services.GetRequiredService<RentalCommandDbContext>());
+        var write = CoreCrudWriteSupport.Write(
+            command, rules.RejectPropertyCreateAsync, rules.AuthorizeReplayAsync);
+        Func<Task> act = async () => await _services
+            .GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(CoreCrudWriteSupport.IdempotencyKey(command), write);
 
         await act.Should().ThrowAsync<DomainValidationException>()
             .WithMessage("*atomic Property setup command*");
@@ -390,19 +383,9 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
             "structural transitions belong only to the atomic Property setup contract");
 
         var requestJson = "{\"rentalStructure\":\"MultiRental\",\"notes\":\"ordinary edit\"}";
-        var command = new AtomicCoreCrudMutationCommand(
-            _scope.PortfolioId,
-            _scope.UserId,
-            _scope.SessionId,
-            _scope.AccessContextId,
-            _scope.AccessRevision,
-            AtomicCoreCrudMutationDomain.Property,
-            AtomicCoreCrudMutationOperation.Update,
-            created!.Property.Id,
-            requestJson,
-            "patch-structure-ignored");
-        await _atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec);
+        var request = JsonSerializer.Deserialize<UpdatePropertyRequest>(requestJson)!;
+        await _sut.UpdateAsync(
+            _scope, created!.Property.Id, request, "patch-structure-ignored");
 
         (await _ctx.Db.Properties.SingleAsync()).RentalStructure.Should().Be(RentalStructure.SingleRental);
         (await _ctx.Db.Units.CountAsync()).Should().Be(1);
@@ -417,10 +400,9 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            AtomicCoreCrudMutationCommand,
-            AtomicCoreCrudMutationResult,
-            AtomicCoreCrudMutationHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddSingleton(Mock.Of<IDataUpdateService>());
+        services.AddScoped<PropertyService>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(context.ConnectionString)
                 .UseAtomicPersistenceKernel(provider));
@@ -439,11 +421,7 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
                    set_config('app.current_access_context_id', {scope.AccessContextId.ToString()}, false),
                    set_config('app.access_revision', {scope.AccessRevision.ToString()}, false);
             """);
-        var sut = new PropertyService(
-            db,
-            Mock.Of<IDataUpdateService>(),
-            _timeProvider,
-            serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var sut = serviceScope.ServiceProvider.GetRequiredService<PropertyService>();
 
         var created = await sut.SetupAsync(
             scope, SingleRentalRequest(), "patch-financial-fields-create");

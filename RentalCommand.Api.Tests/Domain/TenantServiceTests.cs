@@ -29,6 +29,7 @@ public class TenantServiceTests : IDisposable
         new DateTimeOffset(2027, 1, 31, 5, 0, 0, TimeSpan.Zero));
     private readonly ServiceProvider _services;
     private readonly TenantService _sut;
+    private readonly TenantService _writeSut;
     private readonly WorkspaceReadScope _scope;
 
     public TenantServiceTests()
@@ -40,6 +41,7 @@ public class TenantServiceTests : IDisposable
         _sut = new TenantService(
             _ctx.Db, Mock.Of<IDataUpdateService>(), _timeProvider,
             _services.GetRequiredService<IAtomicUnitOfWork>());
+        _writeSut = _services.GetRequiredService<TenantService>();
     }
 
     private void SeedCanonicalLeaseReadModel()
@@ -128,7 +130,7 @@ public class TenantServiceTests : IDisposable
     {
         var createdAtUtc = _timeProvider.GetUtcNow().UtcDateTime;
 
-        var created = await _sut.CreateAuthorizedAsync(
+        var created = await _writeSut.CreateAuthorizedAsync(
             _scope,
             new CreateTenantRequest
             {
@@ -145,7 +147,7 @@ public class TenantServiceTests : IDisposable
         var updatedAtUtc = new DateTimeOffset(2027, 2, 1, 15, 30, 0, TimeSpan.Zero);
         _timeProvider.SetUtcNow(updatedAtUtc);
 
-        var updated = await _sut.UpdateAuthorizedAsync(
+        var updated = await _writeSut.UpdateAuthorizedAsync(
             _scope,
             created.Id,
             new UpdateTenantRequest { Phone = "614-555-0131" },
@@ -546,7 +548,7 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenantWithRelationship(occupying: true);
 
-        var act = async () => await _sut.DeleteAuthorizedAsync(
+        var act = async () => await _writeSut.DeleteAuthorizedAsync(
             _scope, tenant.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
@@ -560,7 +562,7 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenantWithRelationship(occupying: false);
 
-        var act = async () => await _sut.DeleteAuthorizedAsync(
+        var act = async () => await _writeSut.DeleteAuthorizedAsync(
             _scope, tenant.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
@@ -575,7 +577,7 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenant("Unlinked", "Tenant", activeRelationshipCount: 0);
 
-        var deleted = await _sut.DeleteAuthorizedAsync(
+        var deleted = await _writeSut.DeleteAuthorizedAsync(
             _scope, tenant.Id, Guid.NewGuid().ToString("N"));
 
         deleted.Should().BeTrue();

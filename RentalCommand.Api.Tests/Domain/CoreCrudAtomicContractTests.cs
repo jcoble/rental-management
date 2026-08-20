@@ -28,14 +28,18 @@ public sealed class CoreCrudAtomicContractTests
     }
 
     [Fact]
-    public void CoreCrudHandlerReauthorizesReplaysAndHasNoDirectSetBasedEscapeHatch()
+    public void CoreCrudExecutorRulesReauthorizeReplaysAndRetireTheMegaHandler()
     {
-        typeof(AtomicCoreCrudMutationHandler)
-            .Should().Implement<IAtomicCommandHandler<AtomicCoreCrudMutationCommand, AtomicCoreCrudMutationResult>>();
+        typeof(PropertyService).Assembly.GetType(
+                "RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationHandler")
+            .Should().BeNull();
+        typeof(PropertyService).Assembly.GetType(
+                "RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationCommand")
+            .Should().BeNull();
 
         var source = ReadSource("RentalCommand.Api", "Services", "Domain", "AtomicCoreCrudMutation.cs");
         source.Should().Contain("BindSemanticAudit");
-        source.Should().Contain("StageDataUpdate");
+        source.Should().Contain("AuthorizeReplayAsync");
         source.Should().Contain("ReadDatabaseClockUtcAsync");
         source.Should().NotContain("ExecuteUpdateAsync");
         source.Should().NotContain("ExecuteDeleteAsync");

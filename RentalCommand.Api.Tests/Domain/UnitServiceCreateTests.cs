@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -40,8 +41,7 @@ public class UnitServiceCreateTests : IAsyncLifetime
         _ctx = await _fixture.CreateContextAsync();
         _services = AtomicDomainTestKernel.CreateForRentalCrudPostgreSql(_ctx.ConnectionString);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(UnitServiceCreateTests));
-        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(),
-            TimeProvider.System, _services.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+        _sut = _services.GetRequiredService<UnitService>();
     }
 
     public async Task DisposeAsync()
@@ -215,8 +215,10 @@ public class UnitServiceCreateTests : IAsyncLifetime
         var unit = await _sut.CreateAsync(_scope, create, Guid.NewGuid().ToString("N"));
         var operationKey = Guid.NewGuid().ToString("N");
         var request = new UpdateUnitRequest { FloorPlan = null, Notes = null };
-        var identity = AtomicRentalMutation.Identity(
-            AtomicRentalMutation.UnitUpdateCommand(_scope, unit!.Id, operationKey, request));
+        var writeRequest = RentalCrudWriteSupport.UnitUpdateRequest(
+            _scope, unit!.Id, operationKey, request);
+        var identity = new AtomicCommandIdentity(
+            "rental.unit.update", RentalCrudWriteSupport.IdempotencyKey(writeRequest));
 
         var updated = await _sut.UpdateAsync(_scope, unit.Id, request, operationKey);
         var replayed = await _sut.UpdateAsync(_scope, unit.Id, request, operationKey);
