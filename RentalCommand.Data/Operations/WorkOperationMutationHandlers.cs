@@ -14,9 +14,201 @@ namespace RentalCommand.Data.Operations;
 public sealed class CreateWorkOrderHandler
     : IAtomicCommandHandler<CreateWorkOrderCommand, WorkOrderMutationResult>
 {
+    public CreateWorkOrderHandler(RentalCommandDbContext db) { }
+
+    public Task<WorkOrderMutationResult> HandleAsync(
+        CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+
+    public Task AuthorizeReplayAsync(
+        CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+
+    internal static OutboxMessage DataUpdate(
+        int portfolioId, string entityType, int entityId, string key, DateTime now,
+        string? operation = null) =>
+        CreateWorkOrderRule.DataUpdate(portfolioId, entityType, entityId, key, now, operation);
+}
+
+public sealed class UpdateWorkOrderHandler
+    : IAtomicCommandHandler<UpdateWorkOrderCommand, WorkOrderMutationResult>
+{
+    public UpdateWorkOrderHandler(RentalCommandDbContext db) { }
+    public Task<WorkOrderMutationResult> HandleAsync(
+        UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+    public Task AuthorizeReplayAsync(
+        UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+}
+
+public sealed class DeleteWorkOrderHandler
+    : IAtomicCommandHandler<DeleteWorkOrderCommand, WorkOrderMutationResult>
+{
+    public DeleteWorkOrderHandler(RentalCommandDbContext db) { }
+    public Task<WorkOrderMutationResult> HandleAsync(
+        DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+    public Task AuthorizeReplayAsync(
+        DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+}
+
+public sealed class CreateTenantWorkOrderHandler
+    : IAtomicCommandHandler<CreateTenantWorkOrderCommand, WorkOrderMutationResult>
+{
+    public CreateTenantWorkOrderHandler(RentalCommandDbContext db) { }
+    public Task<WorkOrderMutationResult> HandleAsync(
+        CreateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+    public Task AuthorizeReplayAsync(
+        CreateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+}
+
+public sealed class AddStaffWorkOrderCommentHandler
+    : IAtomicCommandHandler<AddStaffWorkOrderCommentCommand, WorkOrderMutationResult>
+{
+    public AddStaffWorkOrderCommentHandler(RentalCommandDbContext db) { }
+    public Task<WorkOrderMutationResult> HandleAsync(
+        AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+    public Task AuthorizeReplayAsync(
+        AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+
+    internal static WorkOrderStatusEvent AddActivity(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        WorkOrder entity,
+        int portfolioId,
+        int actorUserId,
+        string actorLabel,
+        string kind,
+        string visibility,
+        string? note,
+        DateTime businessNow) =>
+        AddStaffWorkOrderCommentRule.AddActivity(
+            db, context, entity, portfolioId, actorUserId, actorLabel,
+            kind, visibility, note, businessNow);
+}
+
+public sealed class AddTenantWorkOrderCommentHandler
+    : IAtomicCommandHandler<AddTenantWorkOrderCommentCommand, WorkOrderMutationResult>
+{
+    public AddTenantWorkOrderCommentHandler(RentalCommandDbContext db) { }
+    public Task<WorkOrderMutationResult> HandleAsync(
+        AddTenantWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+    public Task AuthorizeReplayAsync(
+        AddTenantWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+}
+
+public sealed class UpdateTenantWorkOrderHandler
+    : IAtomicCommandHandler<UpdateTenantWorkOrderCommand, WorkOrderMutationResult>
+{
+    public UpdateTenantWorkOrderHandler(RentalCommandDbContext db) { }
+    public Task<WorkOrderMutationResult> HandleAsync(
+        UpdateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+    public Task AuthorizeReplayAsync(
+        UpdateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+}
+
+public sealed class CancelTenantWorkOrderHandler
+    : IAtomicCommandHandler<CancelTenantWorkOrderCommand, WorkOrderMutationResult>
+{
+    public CancelTenantWorkOrderHandler(RentalCommandDbContext db) { }
+    public Task<WorkOrderMutationResult> HandleAsync(
+        CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+    public Task AuthorizeReplayAsync(
+        CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw WorkOrderCrudWriteSupport.RetiredPath();
+}
+
+public static class WorkOrderCrudWriteSupport
+{
+    public const string StaffResultContract = "work-order.mutation.v2";
+    public const string TenantResultContract = "portal.work-order.mutation.v2";
+
+    public static string IdempotencyKey(string deliveryIdempotencyKey) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes(deliveryIdempotencyKey)));
+
+    public static TransactionalWrite<CreateWorkOrderCommand, WorkOrderMutationResult> Write(
+        CreateWorkOrderCommand command,
+        Func<CreateWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
+        Func<CreateWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay) =>
+        New("work-order.create", command, StaffResultContract, WriteLockPlan.None, execute, authorizeReplay);
+
+    public static TransactionalWrite<UpdateWorkOrderCommand, WorkOrderMutationResult> Write(
+        UpdateWorkOrderCommand command,
+        Func<UpdateWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
+        Func<UpdateWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay) =>
+        New("work-order.update", command, StaffResultContract, ProgressionPlan(), execute, authorizeReplay);
+
+    public static TransactionalWrite<DeleteWorkOrderCommand, WorkOrderMutationResult> Write(
+        DeleteWorkOrderCommand command,
+        Func<DeleteWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
+        Func<DeleteWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay) =>
+        New("work-order.delete", command, StaffResultContract, WorkOrderPlan(command.WorkOrderId), execute, authorizeReplay);
+
+    public static TransactionalWrite<AddStaffWorkOrderCommentCommand, WorkOrderMutationResult> Write(
+        AddStaffWorkOrderCommentCommand command,
+        Func<AddStaffWorkOrderCommentCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
+        Func<AddStaffWorkOrderCommentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay) =>
+        New("work-order.comment", command, StaffResultContract, WorkOrderPlan(command.WorkOrderId), execute, authorizeReplay);
+
+    public static TransactionalWrite<CreateTenantWorkOrderCommand, WorkOrderMutationResult> Write(
+        CreateTenantWorkOrderCommand command,
+        Func<CreateTenantWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
+        Func<CreateTenantWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay) =>
+        New("portal.work-order.create", command, TenantResultContract, WriteLockPlan.None, execute, authorizeReplay);
+
+    public static TransactionalWrite<AddTenantWorkOrderCommentCommand, WorkOrderMutationResult> Write(
+        AddTenantWorkOrderCommentCommand command,
+        Func<AddTenantWorkOrderCommentCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
+        Func<AddTenantWorkOrderCommentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay) =>
+        New("portal.work-order.comment", command, TenantResultContract, WorkOrderPlan(command.WorkOrderId), execute, authorizeReplay);
+
+    public static TransactionalWrite<UpdateTenantWorkOrderCommand, WorkOrderMutationResult> Write(
+        UpdateTenantWorkOrderCommand command,
+        Func<UpdateTenantWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
+        Func<UpdateTenantWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay) =>
+        New("portal.work-order.update", command, TenantResultContract, WorkOrderPlan(command.WorkOrderId), execute, authorizeReplay);
+
+    public static TransactionalWrite<CancelTenantWorkOrderCommand, WorkOrderMutationResult> Write(
+        CancelTenantWorkOrderCommand command,
+        Func<CancelTenantWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
+        Func<CancelTenantWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay) =>
+        New("portal.work-order.cancel", command, TenantResultContract, ProgressionPlan(), execute, authorizeReplay);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Work-order CRUD and comments no longer use the legacy mutation handlers.");
+
+    private static TransactionalWrite<TCommand, WorkOrderMutationResult> New<TCommand>(
+        string operation, TCommand command, string resultContract, WriteLockPlan lockPlan,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay)
+        where TCommand : notnull, IAtomicCommandData =>
+        new(operation, WriteIdempotencyPolicy.Required, command, resultContract,
+            lockPlan, execute, authorizeReplay);
+
+    private static WriteLockPlan WorkOrderPlan(int workOrderId) => new(
+        WriteLockProtocol.WorkOrder, WriteLock.For("WorkOrder", workOrderId));
+
+    private static WriteLockPlan ProgressionPlan() => new(
+        WriteLockProtocol.WorkOrderAppointmentProgression);
+}
+
+public sealed class CreateWorkOrderRule
+{
     private readonly RentalCommandDbContext _db;
 
-    public CreateWorkOrderHandler(RentalCommandDbContext db) => _db = db;
+    public CreateWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<WorkOrderMutationResult> HandleAsync(
         CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -175,12 +367,11 @@ public sealed class CreateWorkOrderHandler
     }
 }
 
-public sealed class UpdateWorkOrderHandler
-    : IAtomicCommandHandler<UpdateWorkOrderCommand, WorkOrderMutationResult>
+public sealed class UpdateWorkOrderRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public UpdateWorkOrderHandler(RentalCommandDbContext db) => _db = db;
+    public UpdateWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<WorkOrderMutationResult> HandleAsync(
         UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -558,12 +749,11 @@ internal sealed record WorkOrderAppointmentSyncResult(
     string Operation,
     bool NotifyTenant);
 
-public sealed class DeleteWorkOrderHandler
-    : IAtomicCommandHandler<DeleteWorkOrderCommand, WorkOrderMutationResult>
+public sealed class DeleteWorkOrderRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public DeleteWorkOrderHandler(RentalCommandDbContext db) => _db = db;
+    public DeleteWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<WorkOrderMutationResult> HandleAsync(
         DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -599,12 +789,11 @@ public sealed class DeleteWorkOrderHandler
     }
 }
 
-public sealed class CreateTenantWorkOrderHandler
-    : IAtomicCommandHandler<CreateTenantWorkOrderCommand, WorkOrderMutationResult>
+public sealed class CreateTenantWorkOrderRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CreateTenantWorkOrderHandler(RentalCommandDbContext db) => _db = db;
+    public CreateTenantWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<WorkOrderMutationResult> HandleAsync(
         CreateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -668,12 +857,11 @@ public sealed class CreateTenantWorkOrderHandler
     }
 }
 
-public sealed class AddStaffWorkOrderCommentHandler
-    : IAtomicCommandHandler<AddStaffWorkOrderCommentCommand, WorkOrderMutationResult>
+public sealed class AddStaffWorkOrderCommentRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public AddStaffWorkOrderCommentHandler(RentalCommandDbContext db) => _db = db;
+    public AddStaffWorkOrderCommentRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<WorkOrderMutationResult> HandleAsync(
         AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -754,12 +942,11 @@ public sealed class AddStaffWorkOrderCommentHandler
     }
 }
 
-public sealed class AddTenantWorkOrderCommentHandler
-    : IAtomicCommandHandler<AddTenantWorkOrderCommentCommand, WorkOrderMutationResult>
+public sealed class AddTenantWorkOrderCommentRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public AddTenantWorkOrderCommentHandler(RentalCommandDbContext db) => _db = db;
+    public AddTenantWorkOrderCommentRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<WorkOrderMutationResult> HandleAsync(
         AddTenantWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -807,12 +994,11 @@ public sealed class AddTenantWorkOrderCommentHandler
     }
 }
 
-public sealed class UpdateTenantWorkOrderHandler
-    : IAtomicCommandHandler<UpdateTenantWorkOrderCommand, WorkOrderMutationResult>
+public sealed class UpdateTenantWorkOrderRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public UpdateTenantWorkOrderHandler(RentalCommandDbContext db) => _db = db;
+    public UpdateTenantWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<WorkOrderMutationResult> HandleAsync(
         UpdateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -902,12 +1088,11 @@ public sealed class UpdateTenantWorkOrderHandler
     }
 }
 
-public sealed class CancelTenantWorkOrderHandler
-    : IAtomicCommandHandler<CancelTenantWorkOrderCommand, WorkOrderMutationResult>
+public sealed class CancelTenantWorkOrderRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CancelTenantWorkOrderHandler(RentalCommandDbContext db) => _db = db;
+    public CancelTenantWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<WorkOrderMutationResult> HandleAsync(
         CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)

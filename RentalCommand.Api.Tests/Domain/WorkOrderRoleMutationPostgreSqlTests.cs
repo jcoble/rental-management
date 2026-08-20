@@ -602,7 +602,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
             new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)));
         using var workOrderScope = workOrderServices.CreateScope();
         using var appointmentScope = appointmentServices.CreateScope();
-        var workOrderAtomic = workOrderScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var workOrderAtomic = new WorkOrderCrudTestExecutor(workOrderScope.ServiceProvider);
         var appointmentDb = appointmentScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var appointmentWrites = appointmentScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
 
@@ -779,7 +779,53 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
         migration.Should().Contain("Visibility");
     }
 
-    private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
+    private WorkOrderCrudTestExecutor Atomic => new(_services);
+
+    private sealed class WorkOrderCrudTestExecutor(IServiceProvider services)
+    {
+        private RentalCommandDbContext Db => services.GetRequiredService<RentalCommandDbContext>();
+        private IRequestWriteExecutor Writes => services.GetRequiredService<IRequestWriteExecutor>();
+
+        public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
+            AtomicCommandIdentity identity, AddStaffWorkOrderCommentCommand command,
+            AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
+            Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
+                command,
+                (request, context, ct) => new AddStaffWorkOrderCommentRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new AddStaffWorkOrderCommentRule(Db).AuthorizeReplayAsync(request, context, ct)));
+
+        public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
+            AtomicCommandIdentity identity, UpdateWorkOrderCommand command,
+            AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
+            Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
+                command,
+                (request, context, ct) => new UpdateWorkOrderRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new UpdateWorkOrderRule(Db).AuthorizeReplayAsync(request, context, ct)));
+
+        public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
+            AtomicCommandIdentity identity, AddTenantWorkOrderCommentCommand command,
+            AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
+            Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
+                command,
+                (request, context, ct) => new AddTenantWorkOrderCommentRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new AddTenantWorkOrderCommentRule(Db).AuthorizeReplayAsync(request, context, ct)));
+
+        public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
+            AtomicCommandIdentity identity, UpdateTenantWorkOrderCommand command,
+            AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
+            Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
+                command,
+                (request, context, ct) => new UpdateTenantWorkOrderRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new UpdateTenantWorkOrderRule(Db).AuthorizeReplayAsync(request, context, ct)));
+
+        public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
+            AtomicCommandIdentity identity, CancelTenantWorkOrderCommand command,
+            AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
+            Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
+                command,
+                (request, context, ct) => new CancelTenantWorkOrderRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new CancelTenantWorkOrderRule(Db).AuthorizeReplayAsync(request, context, ct)));
+    }
 
     private static AtomicCommandIdentity Identity(string type, string key) => new(type, key);
 
@@ -943,7 +989,8 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
         _context.Db,
         Mock.Of<ILeaseQaService>(),
         new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-        Atomic);
+        _services.GetRequiredService<IAtomicUnitOfWork>(),
+        _services.GetRequiredService<IRequestWriteExecutor>());
 
     private WorkOrderService WorkOrderService() => new(
         _context.Db,
@@ -952,7 +999,8 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
         Mock.Of<IFileStorage>(),
         NullLogger<WorkOrderService>.Instance,
         new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-        Atomic);
+        _services.GetRequiredService<IAtomicUnitOfWork>(),
+        _services.GetRequiredService<IRequestWriteExecutor>());
 
     private async Task<WorkOrderDetailResponse?> GetAuthorizedWorkOrderAsAsync(
         WorkspaceReadScope scope,
