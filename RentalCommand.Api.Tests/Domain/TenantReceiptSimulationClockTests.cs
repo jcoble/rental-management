@@ -22,6 +22,7 @@ using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
 using RentalCommand.Api.Tests.Scanning;
+using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -33,8 +34,6 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         new(2027, 01, 05, 14, 30, 00, DateTimeKind.Utc);
     private static readonly AtomicJsonResultCodec<RecordTenantReceiptResult> ReceiptCodec =
         new("tenant-account.receipt.record.v1");
-    private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> ScanCodec =
-        new("scan-confirm.result.v1");
     private static readonly AtomicJsonResultCodec<SecurityDepositMutationResult> DepositCodec =
         new("tenant-account.security-deposit.mutation.v1");
 
@@ -361,10 +360,9 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         var draft = SeedPaymentScanDraft(graph.AccountId, graph.ChargeEntryId);
         var command = ScanCommand(draft, graph.AccountId, 1_875m, SimulatedEntryAtUtc);
 
-        var outcome = await _atomic.ExecuteAsync(
+        var outcome = await ExecuteScanAsync(
             ScanConfirmationCommandIdentity.Create(PortfolioId, draft.Id, "scan-sim-clock"),
-            command,
-            ScanCodec);
+            command);
 
         outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
         var ledgerEntryId = outcome.Value.LedgerEntryId!.Value;
@@ -418,10 +416,9 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             SimulatedEntryAtUtc,
             repeatedCheckNumber);
 
-        var outcome = await _atomic.ExecuteAsync(
+        var outcome = await ExecuteScanAsync(
             ScanConfirmationCommandIdentity.Create(PortfolioId, draft.Id, "scan-same-check"),
-            scanCommand,
-            ScanCodec);
+            scanCommand);
 
         outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
         _ctx.Db.ChangeTracker.Clear();
@@ -616,6 +613,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         services.AddSingleton<NotificationFailureInterceptor>();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
         services.AddAtomicCommandHandler<
             RecordTenantReceiptCommand,
@@ -636,6 +634,24 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
                     provider.GetRequiredService<CommandRecorder>(),
                     provider.GetRequiredService<NotificationFailureInterceptor>()));
         return services.BuildServiceProvider();
+    }
+
+    private async Task<AtomicCommandOutcome<ConfirmScanDraftResult>> ExecuteScanAsync(
+        AtomicCommandIdentity identity,
+        ConfirmScanDraftCommand command)
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writer = scope.ServiceProvider.GetRequiredService<IScanConfirmationTargetWriter>();
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(
+                identity.IdempotencyKey,
+                ScanDraftWriteSupport.Write(
+                    identity.CommandType, command, ScanDraftWriteSupport.ConfirmResultContract,
+                    (request, context, token) => ConfirmScanDraftHandler.ExecuteAsync(
+                        db, writer, request, context, token),
+                    (request, context, token) => ConfirmScanDraftHandler.AuthorizeAsync(
+                        writer, request, context, token)));
     }
 
     private async Task FreezeSimulationClockAsync()
