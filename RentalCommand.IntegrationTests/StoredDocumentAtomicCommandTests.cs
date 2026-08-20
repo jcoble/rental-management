@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Documents;
@@ -28,10 +29,6 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
 {
     private const int ActorUserId = 73;
     private const string ContentHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    private static readonly AtomicJsonResultCodec<CreateStoredDocumentResult> CreateCodec =
-        new("stored-document.create.result.v1");
-    private static readonly AtomicJsonResultCodec<DeleteStoredDocumentResult> DeleteCodec =
-        new("stored-document.delete.result.v1");
     private static readonly DateTime BusinessAtUtc =
         new(2027, 1, 14, 5, 0, 0, DateTimeKind.Utc);
     private PostgreSqlContainer? _postgres;
@@ -91,14 +88,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<IFileStorage>(provider => provider.GetRequiredService<CapturingFileStorage>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            CreateStoredDocumentCommand,
-            CreateStoredDocumentResult,
-            CreateStoredDocumentHandler>();
-        services.AddAtomicCommandHandler<
-            DeleteStoredDocumentCommand,
-            DeleteStoredDocumentResult,
-            DeleteStoredDocumentHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddPendingFileUploadStore();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
@@ -149,8 +139,10 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             .ToListAsync();
         audits.Should().Contain(audit => audit.EntityType == nameof(StoredFile) && audit.EntityId == first.Id);
         audits.Should().Contain(audit => audit.EntityType == nameof(Unit) && audit.EntityId == _unitId);
-        typeof(CreateStoredDocumentHandler).Should()
-            .Implement<IAtomicCommandHandler<CreateStoredDocumentCommand, CreateStoredDocumentResult>>();
+        var retired = new CreateStoredDocumentHandler();
+        await FluentActions.Invoking(() => retired.HandleAsync(null!, null!, default))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Stored document writes no longer use the legacy stored document handlers.");
     }
 
     [SkippableFact]
@@ -498,7 +490,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Authorization_queries_are_server_translated_and_handlers_only_depend_on_scoped_db_context()
+    public async Task Authorization_queries_are_server_translated_and_legacy_handlers_are_retired()
     {
         SkipIfNoDocker();
         Probe.Clear();
@@ -513,12 +505,17 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             && sql.Contains("\"PortfolioId\"", StringComparison.Ordinal)
             && sql.Contains("@", StringComparison.Ordinal))
             .Should().Be(1, "target eligibility is one parameterized DB-side statement even when EF wraps filtered tables");
-        typeof(CreateStoredDocumentHandler).GetConstructors().Single().GetParameters()
-            .Select(parameter => parameter.ParameterType)
-            .Should().Equal(typeof(RentalCommandDbContext));
-        typeof(DeleteStoredDocumentHandler).GetConstructors().Single().GetParameters()
-            .Select(parameter => parameter.ParameterType)
-            .Should().Equal(typeof(RentalCommandDbContext));
+        var create = new CreateStoredDocumentHandler();
+        var delete = new DeleteStoredDocumentHandler();
+        await FluentActions.Invoking(() => create.AuthorizeReplayAsync(null!, null!, default))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Stored document writes no longer use the legacy stored document handlers.");
+        await FluentActions.Invoking(() => delete.HandleAsync(null!, null!, default))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Stored document writes no longer use the legacy stored document handlers.");
+        await FluentActions.Invoking(() => delete.AuthorizeReplayAsync(null!, null!, default))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Stored document writes no longer use the legacy stored document handlers.");
     }
 
     private CapturingFileStorage Storage => _services!.GetRequiredService<CapturingFileStorage>();
@@ -558,11 +555,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     {
         var fingerprint = ContentHash;
         var pendingUploadId = await PreparePendingUploadAsync(operationId, storagePath, fingerprint);
-        return await ExecuteAtomicAsync(
-            new AtomicCommandIdentity(
-                "stored-document.create",
-                $"{_portfolioId}:{ActorUserId}:{Digest(operationId)}"),
-            new CreateStoredDocumentCommand(
+        var command = new CreateStoredDocumentCommand(
                 pendingUploadId,
                 _portfolioId,
                 StoredDocumentTarget.Unit,
@@ -578,18 +571,25 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
                 "application/pdf",
                 42,
                 uploadedAtUtc,
-                ManagementAccess()),
-            CreateCodec);
+                ManagementAccess());
+        await using var scope = _services!.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+            StoredDocumentWriteSupport.CreateIdempotencyKey(
+                _portfolioId, ActorUserId, Digest(operationId)),
+            StoredDocumentWriteSupport.Create(
+                command,
+                (request, context, ct) => CreateStoredDocumentHandler.ExecuteAsync(
+                    db, request, context, ct),
+                (request, context, ct) => CreateStoredDocumentHandler.AuthorizeAsync(
+                    db, request, context, ct)));
     }
 
     private Task<AtomicCommandOutcome<DeleteStoredDocumentResult>> ExecuteDeleteCommandAsync(
         int storedFileId,
         string operationId,
         DateTime deletedAtUtc) =>
-        ExecuteAtomicAsync(
-            new AtomicCommandIdentity(
-                "stored-document.delete",
-                $"{_portfolioId}:{storedFileId}:{Digest(operationId)}"),
+        ExecuteDeleteWriteAsync(
             new DeleteStoredDocumentCommand(
                 _portfolioId,
                 storedFileId,
@@ -599,19 +599,23 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
                 operationId,
                 deletedAtUtc,
                 ManagementAccess()),
-            DeleteCodec);
+            operationId);
 
-    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
-        AtomicCommandIdentity identity,
-        TCommand command,
-        AtomicJsonResultCodec<TResult> codec)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
+    private async Task<AtomicCommandOutcome<DeleteStoredDocumentResult>> ExecuteDeleteWriteAsync(
+        DeleteStoredDocumentCommand command,
+        string operationId)
     {
         await using var scope = _services!.CreateAsyncScope();
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+            StoredDocumentWriteSupport.DeleteIdempotencyKey(
+                command.PortfolioId, command.StoredFileId, Digest(operationId)),
+            StoredDocumentWriteSupport.Delete(
+                command,
+                (request, context, ct) => DeleteStoredDocumentHandler.ExecuteAsync(
+                    db, request, context, ct),
+                (request, context, ct) => DeleteStoredDocumentHandler.AuthorizeAsync(
+                    db, request, context, ct)));
     }
 
     private async Task<Guid> PreparePendingUploadAsync(

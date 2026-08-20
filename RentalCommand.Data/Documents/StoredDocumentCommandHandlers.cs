@@ -8,22 +8,60 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Documents;
 
+public static class StoredDocumentWriteSupport
+{
+    public const string CreateResultContract = "stored-document.create.result.v1";
+    public const string DeleteResultContract = "stored-document.delete.result.v1";
+
+    public static string CreateIdempotencyKey(int portfolioId, int userId, string digest) =>
+        $"{portfolioId}:{userId}:{digest}";
+
+    public static string DeleteIdempotencyKey(int portfolioId, int storedFileId, string digest) =>
+        $"{portfolioId}:{storedFileId}:{digest}";
+
+    public static TransactionalWrite<CreateStoredDocumentCommand, CreateStoredDocumentResult> Create(
+        CreateStoredDocumentCommand command,
+        Func<CreateStoredDocumentCommand, IAtomicCommandContext, CancellationToken,
+            Task<CreateStoredDocumentResult>> executeAsync,
+        Func<CreateStoredDocumentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync) =>
+        new("stored-document.create", WriteIdempotencyPolicy.Required, command, CreateResultContract,
+            new WriteLockPlan(WriteLockProtocol.Portfolio,
+                WriteLock.For("Portfolio", command.PortfolioId)),
+            executeAsync, authorizeReplayAsync);
+
+    public static TransactionalWrite<DeleteStoredDocumentCommand, DeleteStoredDocumentResult> Delete(
+        DeleteStoredDocumentCommand command,
+        Func<DeleteStoredDocumentCommand, IAtomicCommandContext, CancellationToken,
+            Task<DeleteStoredDocumentResult>> executeAsync,
+        Func<DeleteStoredDocumentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync) =>
+        new("stored-document.delete", WriteIdempotencyPolicy.Required, command, DeleteResultContract,
+            new WriteLockPlan(WriteLockProtocol.StoredFile,
+                WriteLock.For("StoredFile", command.StoredFileId)),
+            executeAsync, authorizeReplayAsync);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Stored document writes no longer use the legacy stored document handlers.");
+}
+
 public sealed class CreateStoredDocumentHandler
     : IAtomicCommandHandler<CreateStoredDocumentCommand, CreateStoredDocumentResult>
 {
-    private readonly RentalCommandDbContext _db;
-
-    public CreateStoredDocumentHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<CreateStoredDocumentResult> HandleAsync(
+    public Task<CreateStoredDocumentResult> HandleAsync(
         CreateStoredDocumentCommand command,
         IAtomicCommandContext context,
-        CancellationToken ct)
+        CancellationToken ct) => throw StoredDocumentWriteSupport.RetiredPath();
+
+    public Task AuthorizeReplayAsync(
+        CreateStoredDocumentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw StoredDocumentWriteSupport.RetiredPath();
+
+    public static async Task<CreateStoredDocumentResult> ExecuteAsync(
+        RentalCommandDbContext db, CreateStoredDocumentCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
-        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         var securityAtUtc = await context.ReadDatabaseClockUtcAsync(ct);
 
-        var pendingUpload = await _db.Set<PendingFileUpload>()
+        var pendingUpload = await db.Set<PendingFileUpload>()
             .SingleOrDefaultAsync(upload => upload.Id == command.PendingUploadId
                 && upload.PortfolioId == command.PortfolioId
                 && upload.State == PendingFileUploadState.Prepared
@@ -38,13 +76,13 @@ public sealed class CreateStoredDocumentHandler
         }
 
         if (!await StoredDocumentAuthorization.TargetExistsAsync(
-                command, _db, ct, securityAtUtc))
+                command, db, ct, securityAtUtc))
         {
             return NotFound(command);
         }
 
         var entityType = command.Target.ToString();
-        var existing = await _db.Set<StoredFile>()
+        var existing = await db.Set<StoredFile>()
             .Where(file => file.PortfolioId == command.PortfolioId
                 && file.EntityType == entityType
                 && file.EntityId == command.EntityId
@@ -96,7 +134,7 @@ public sealed class CreateStoredDocumentHandler
             UploadedAt = command.UploadedAtUtc,
         };
 
-        _db.Add(row);
+        db.Add(row);
         context.BindSemanticAudit(row, new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(StoredFile),
@@ -142,12 +180,13 @@ public sealed class CreateStoredDocumentHandler
             row.UploadedAt);
     }
 
-    public async Task AuthorizeReplayAsync(
-        CreateStoredDocumentCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task AuthorizeAsync(
+        RentalCommandDbContext db, CreateStoredDocumentCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
-        var securityAtUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var securityAtUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var authorized = await StoredDocumentAuthorization.TargetExistsAsync(
-            command, _db, ct, securityAtUtc);
+            command, db, ct, securityAtUtc);
         if (!authorized)
         {
             throw new UnauthorizedAccessException(
@@ -188,16 +227,19 @@ public sealed class CreateStoredDocumentHandler
 public sealed class DeleteStoredDocumentHandler
     : IAtomicCommandHandler<DeleteStoredDocumentCommand, DeleteStoredDocumentResult>
 {
-    private readonly RentalCommandDbContext _db;
-
-    public DeleteStoredDocumentHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<DeleteStoredDocumentResult> HandleAsync(
+    public Task<DeleteStoredDocumentResult> HandleAsync(
         DeleteStoredDocumentCommand command,
         IAtomicCommandContext context,
-        CancellationToken ct)
+        CancellationToken ct) => throw StoredDocumentWriteSupport.RetiredPath();
+
+    public Task AuthorizeReplayAsync(
+        DeleteStoredDocumentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw StoredDocumentWriteSupport.RetiredPath();
+
+    public static async Task<DeleteStoredDocumentResult> ExecuteAsync(
+        RentalCommandDbContext db, DeleteStoredDocumentCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
-        await context.AcquireLockAsync("StoredFile", command.StoredFileId, ct);
         var securityAtUtc = await context.ReadDatabaseClockUtcAsync(ct);
 
         // This is one translated, portfolio-scoped authorization query. Tenant-only callers can
@@ -205,7 +247,7 @@ public sealed class DeleteStoredDocumentHandler
         StoredFile? row;
         if (command.IsStaff)
         {
-            var target = await _db.Set<StoredFile>()
+            var target = await db.Set<StoredFile>()
                 .Where(file => file.Id == command.StoredFileId && file.PortfolioId == command.PortfolioId)
                 .Select(file => new { file.EntityType, file.EntityId })
                 .SingleOrDefaultAsync(ct);
@@ -214,16 +256,16 @@ public sealed class DeleteStoredDocumentHandler
                   command.ManagementAccess is { } access &&
                   await StoredDocumentAuthorization.StaffTargetExistsAsync(
                       command.PortfolioId, parsed, target.EntityId.Value, access,
-                      command.DeletedAtUtc, securityAtUtc, _db, ct)
-                ? await _db.Set<StoredFile>().SingleAsync(file =>
+                      command.DeletedAtUtc, securityAtUtc, db, ct)
+                ? await db.Set<StoredFile>().SingleAsync(file =>
                     file.Id == command.StoredFileId && file.PortfolioId == command.PortfolioId, ct)
                 : null;
         }
         else if (command.TenantId.HasValue)
         {
             row = await (
-                from file in _db.Set<StoredFile>()
-                join workOrder in _db.Set<WorkOrder>()
+                from file in db.Set<StoredFile>()
+                join workOrder in db.Set<WorkOrder>()
                     on file.EntityId equals (long?)workOrder.Id
                 where file.Id == command.StoredFileId
                     && file.PortfolioId == command.PortfolioId
@@ -294,11 +336,12 @@ public sealed class DeleteStoredDocumentHandler
             command.DeletedAtUtc);
     }
 
-    public async Task AuthorizeReplayAsync(
-        DeleteStoredDocumentCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public static async Task AuthorizeAsync(
+        RentalCommandDbContext db, DeleteStoredDocumentCommand command,
+        IAtomicCommandContext context, CancellationToken ct)
     {
-        var securityAtUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
-        var target = await _db.Set<StoredFile>()
+        var securityAtUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var target = await db.Set<StoredFile>()
             .IgnoreQueryFilters()
             .Where(file => file.Id == command.StoredFileId && file.PortfolioId == command.PortfolioId)
             .Select(file => new { file.EntityType, file.EntityId })
@@ -313,11 +356,11 @@ public sealed class DeleteStoredDocumentHandler
               && Enum.TryParse<StoredDocumentTarget>(target.EntityType, true, out var parsed)
               && await StoredDocumentAuthorization.StaffTargetExistsAsync(
                   command.PortfolioId, parsed, target.EntityId.Value, access,
-                  command.DeletedAtUtc, securityAtUtc, _db, ct)
+                  command.DeletedAtUtc, securityAtUtc, db, ct)
             : command.TenantId.HasValue
               && await (
-                  from file in _db.Set<StoredFile>().IgnoreQueryFilters()
-                  join workOrder in _db.Set<WorkOrder>()
+                  from file in db.Set<StoredFile>().IgnoreQueryFilters()
+                  join workOrder in db.Set<WorkOrder>()
                       on file.EntityId equals (long?)workOrder.Id
                   where file.Id == command.StoredFileId
                       && file.PortfolioId == command.PortfolioId
