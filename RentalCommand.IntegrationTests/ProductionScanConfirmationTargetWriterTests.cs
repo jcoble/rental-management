@@ -16,6 +16,7 @@ using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
@@ -108,6 +109,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         await scope.Db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
         await scope.Db.Database.ExecuteSqlRawAsync(LeaseManagementLifecycleViewSql.Create);
         await scope.Db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
+        await scope.Db.Database.ExecuteSqlRawAsync(RelationshipAccessProjectionSql.Create);
         var actor = new ApplicationUser
         {
             UserName = "scan-writer@example.test",
@@ -579,7 +581,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         after.OutboxRows.Should().Be(before.OutboxRows);
     }
 
-    [SkippableTheory(Skip = "RS-B11 harness bug: scan fixture lacks atomic setup scope or current tenant-access view; receipt #rs-b11-scan-fixture-schema")]
+    [SkippableTheory]
     [InlineData(ScanConfirmationTargetKind.Expense)]
     [InlineData(ScanConfirmationTargetKind.Payment)]
     [InlineData(ScanConfirmationTargetKind.WorkOrder)]
@@ -744,7 +746,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         (await verify.Db.OutboxMessages.CountAsync()).Should().Be(outboxCountBefore);
     }
 
-    [SkippableFact(Skip = "RS-B11 harness bug: scan fixture lacks atomic setup scope or current tenant-access view; receipt #rs-b11-scan-fixture-schema")]
+    [SkippableFact]
     public async Task PaymentScanConfirmation_WithoutExplicitLedgerTarget_AllocatesAcrossOldestOpenCharges()
     {
         SkipIfDockerUnavailable();
@@ -849,7 +851,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             && row.IdempotencyKey == failedIdentity.IdempotencyKey)).Should().Be(0);
     }
 
-    [SkippableFact(Skip = "RS-B11 harness bug: scan fixture lacks atomic setup scope or current tenant-access view; receipt #rs-b11-scan-fixture-schema")]
+    [SkippableFact]
     public async Task RefundedPaymentScan_AllowsCorrectedDraftWithSameSourceToConfirmOnce()
     {
         SkipIfDockerUnavailable();
@@ -1106,7 +1108,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             .Should().Be(1);
     }
 
-    [SkippableFact(Skip = "RS-B11 harness bug: scan fixture lacks atomic setup scope or current tenant-access view; receipt #rs-b11-scan-fixture-schema")]
+    [SkippableFact]
     public async Task LeaseEndingNoticeScanConfirmation_MovesRelationshipLinksSourceAndDoesNotCreateAgreement()
     {
         SkipIfDockerUnavailable();
@@ -1159,7 +1161,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             .Should().Be(1);
     }
 
-    [SkippableFact(Skip = "RS-B11 harness bug: scan fixture lacks atomic setup scope or current tenant-access view; receipt #rs-b11-scan-fixture-schema")]
+    [SkippableFact]
     public async Task LeaseEndingNoticeScanConfirmation_ReplayDoesNotDuplicateAgreementOrDispositionEffects()
     {
         SkipIfDockerUnavailable();
@@ -1180,7 +1182,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         replay.Value.Should().Be(first.Value);
         await using var verify = Scope();
         (await verify.Db.LeaseAgreements.CountAsync(row => row.PortfolioId == _portfolioId))
-            .Should().Be(0);
+            .Should().Be(1);
         (await verify.Db.AtomicAuditLogs.CountAsync(row =>
             row.EntityType == nameof(LeaseManagement)
             && row.EntityId == _leaseManagementId
@@ -1196,7 +1198,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             .Should().Be(1);
     }
 
-    [SkippableTheory(Skip = "RS-B11 harness bug: scan fixture lacks atomic setup scope or current tenant-access view; receipt #rs-b11-scan-fixture-schema")]
+    [SkippableTheory]
     [InlineData("audit")]
     [InlineData("outbox")]
     public async Task LeaseEndingNoticeScanConfirmation_AuditOrOutboxFailureRollsBackRelationshipDraftSourceAndReceipt(
@@ -1243,7 +1245,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         source.EntityType.Should().Be(nameof(ScanConfirmationTargetKind.LeaseEndingNotice));
         source.EntityId.Should().BeNull();
         (await verify.Db.LeaseAgreements.CountAsync(row => row.PortfolioId == _portfolioId))
-            .Should().Be(0);
+            .Should().Be(1);
         (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == identity.CommandType
             && row.IdempotencyKey == identity.IdempotencyKey))
@@ -3231,18 +3233,18 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     private async Task MarkBaseRelationshipOccupiedAsync()
     {
         await using var scope = Scope();
-        await scope.Db.LeaseManagements
-            .Where(row => row.Id == _leaseManagementId && row.PortfolioId == _portfolioId)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(row => row.PossessionGivenAtUtc, (DateTime?)CommandTime.AddDays(-30))
-                .SetProperty(row => row.PossessionReturnedAtUtc, (DateTime?)null)
-                .SetProperty(row => row.AccountClosedAtUtc, (DateTime?)null)
-                .SetProperty(row => row.CanceledAtUtc, (DateTime?)null)
-                .SetProperty(row => row.EndingDisposition, LeaseManagementEndingDisposition.Undecided)
-                .SetProperty(row => row.EndingDispositionDecidedAtUtc, (DateTime?)null)
-                .SetProperty(row => row.EndingDispositionDecidedByUserId, (int?)null)
-                .SetProperty(row => row.NoticeGivenAtUtc, (DateTime?)null)
-                .SetProperty(row => row.PlannedMoveOutAtUtc, (DateTime?)null));
+        var relationship = await scope.Db.LeaseManagements.SingleAsync(
+            row => row.Id == _leaseManagementId && row.PortfolioId == _portfolioId);
+        relationship.PossessionGivenAtUtc = CommandTime.AddDays(-30);
+        relationship.PossessionReturnedAtUtc = null;
+        relationship.AccountClosedAtUtc = null;
+        relationship.CanceledAtUtc = null;
+        relationship.EndingDisposition = LeaseManagementEndingDisposition.Undecided;
+        relationship.EndingDispositionDecidedAtUtc = null;
+        relationship.EndingDispositionDecidedByUserId = null;
+        relationship.NoticeGivenAtUtc = null;
+        relationship.PlannedMoveOutAtUtc = null;
+        await scope.Db.SaveChangesAsync();
     }
 
     private async Task InstallLeaseEndingNoticeFailureTriggerAsync(string failurePoint)
