@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -21,6 +22,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
     private const int PortfolioId = 1;
     private readonly SqliteTestContext _context = new();
     private readonly CapturingAtomicUnitOfWork _atomic = new();
+    private readonly CapturingRequestWriteExecutor _writes = new();
     private readonly ListingWorkspaceService _service;
 
     public ListingWorkspaceServiceTests()
@@ -31,7 +33,8 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
             new ListingChannelAdapterResolver([new DisabledZillowListingChannelAdapter()]),
             NullLogger<ListingWorkspaceService>.Instance,
             TimeProvider.System,
-            _atomic);
+            _atomic,
+            _writes);
 
     public void Dispose() => _context.Dispose();
 
@@ -44,9 +47,9 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         var result = await _service.GenerateAsync(scope, listing.UnitId, "generate-1");
 
         result.Should().NotBeNull();
-        _atomic.LastIdentity!.CommandType.Should().Be("listing-workspace.generate");
-        _atomic.LastIdentity.IdempotencyKey.Should().StartWith($"{PortfolioId}:{listing.UnitId}:");
-        _atomic.LastCommand.Should().BeEquivalentTo(new GenerateListingWorkspaceCommand(
+        _writes.LastOperationName.Should().Be("listing-workspace.generate");
+        _writes.LastIdempotencyKey.Should().StartWith($"{PortfolioId}:{listing.UnitId}:");
+        _writes.LastCommand.Should().BeEquivalentTo(new GenerateListingWorkspaceCommand(
             scope.PortfolioId, listing.UnitId, scope.UserId, scope.SessionId,
             scope.AccessContextId, scope.AccessRevision));
     }
@@ -62,7 +65,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
 
         await action.Should().ThrowAsync<DomainValidationException>()
             .WithMessage("*Request key is required*");
-        _atomic.LastCommand.Should().BeNull();
+        _writes.LastCommand.Should().BeNull();
     }
 
     [Fact]
@@ -75,7 +78,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         await _service.ReorderPhotosAsync(scope, listing.UnitId,
             new ReorderListingPhotosRequest { PhotoIds = requestedOrder }, "reorder-1");
 
-        _atomic.LastCommand.Should().BeEquivalentTo(new ReorderListingPhotosCommand(
+        _writes.LastCommand.Should().BeEquivalentTo(new ReorderListingPhotosCommand(
             scope.PortfolioId, listing.UnitId, scope.UserId, scope.SessionId,
             scope.AccessContextId, scope.AccessRevision, requestedOrder));
     }
@@ -235,5 +238,33 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
             IListingWorkspaceAtomicCommand listing => listing.UnitId,
             _ => throw new NotSupportedException($"Unexpected command type {typeof(TCommand).Name}."),
         };
+    }
+
+    private sealed class CapturingRequestWriteExecutor : IRequestWriteExecutor
+    {
+        public string? LastIdempotencyKey { get; private set; }
+        public string? LastOperationName { get; private set; }
+        public object? LastCommand { get; private set; }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            LastIdempotencyKey = idempotencyKey;
+            LastOperationName = write.OperationName;
+            LastCommand = write.Request;
+            object result = typeof(TResult) == typeof(ListingWorkspaceMutationResult)
+                ? new ListingWorkspaceMutationResult(
+                    ListingWorkspaceMutationOutcome.Applied,
+                    PortfolioId,
+                    ((IListingWorkspaceAtomicCommand)(object)write.Request).UnitId,
+                    1)
+                : throw new NotSupportedException($"Unexpected result type {typeof(TResult).Name}.");
+            return Task.FromResult(new AtomicCommandOutcome<TResult>(
+                (TResult)result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+        }
     }
 }

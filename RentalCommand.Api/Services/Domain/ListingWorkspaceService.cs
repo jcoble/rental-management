@@ -4,9 +4,11 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -14,6 +16,7 @@ using RentalCommand.Core.Listings;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Documents;
+using RentalCommand.Data.Listings;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -36,13 +39,15 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private readonly ILogger<ListingWorkspaceService> _logger;
     private readonly TimeProvider _time;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor? _writes;
 
     public ListingWorkspaceService(RentalCommandDbContext db,
         IFileStorage files,
         IPendingFileUploadStore pendingUploads, IListingChannelAdapterResolver listingChannels,
-        ILogger<ListingWorkspaceService> logger, TimeProvider time, IAtomicUnitOfWork atomic)
-        => (_db, _files, _pendingUploads, _listingChannels, _logger, _time, _atomic) =
-            (db, files, pendingUploads, listingChannels, logger, time, atomic);
+        ILogger<ListingWorkspaceService> logger, TimeProvider time, IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor? writes = null)
+        => (_db, _files, _pendingUploads, _listingChannels, _logger, _time, _atomic, _writes) =
+            (db, files, pendingUploads, listingChannels, logger, time, atomic, writes);
 
     public Task<bool> UnitExistsInPortfolioAsync(int portfolioId, int unitId, CancellationToken ct = default)
         => _db.Units.AsNoTracking().AnyAsync(unit => unit.Id == unitId && unit.PortfolioId == portfolioId, ct);
@@ -56,13 +61,11 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     public async Task<ListingWorkspaceResponse?> GenerateAsync(
         WorkspaceReadScope scope, int unitId, string clientOperationId, CancellationToken ct = default)
     {
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("listing-workspace.generate", scope.PortfolioId, unitId, clientOperationId),
-            new GenerateListingWorkspaceCommand(
-                scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
-                scope.AccessContextId, scope.AccessRevision),
-            MutationCodec,
-            ct);
+        var command = new GenerateListingWorkspaceCommand(
+            scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
+            scope.AccessContextId, scope.AccessRevision);
+        var outcome = await ExecuteLocalAsync(
+            "listing-workspace.generate", clientOperationId, command, GenerateListingAsync, ct);
         return outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound
             ? null
             : await GetAsync(scope.PortfolioId, unitId, ct);
@@ -80,16 +83,14 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             request.ZillowGuided.TermsConfirmed, request.ZillowGuided.PhotosConfirmed,
             request.ZillowGuided.ProviderWorkspaceOpened,
             request.ZillowGuided.MarkCurrentVersionPublished);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("listing-workspace.save", scope.PortfolioId, unitId, clientOperationId),
-            new SaveListingWorkspaceCommand(
-                scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
-                scope.AccessContextId, scope.AccessRevision, request.Status, request.Headline,
-                request.Description, request.Rent, request.SecurityDeposit, request.AvailableOn,
-                request.LeaseTerms, request.PetPolicy, request.Utilities, request.Parking,
-                request.Amenities, guided),
-            MutationCodec,
-            ct);
+        var command = new SaveListingWorkspaceCommand(
+            scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
+            scope.AccessContextId, scope.AccessRevision, request.Status, request.Headline,
+            request.Description, request.Rent, request.SecurityDeposit, request.AvailableOn,
+            request.LeaseTerms, request.PetPolicy, request.Utilities, request.Parking,
+            request.Amenities, guided);
+        var outcome = await ExecuteLocalAsync(
+            "listing-workspace.save", clientOperationId, command, SaveListingAsync, ct);
         return outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound
             ? null
             : await GetAsync(scope.PortfolioId, unitId, ct);
@@ -119,15 +120,13 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         await using (var content = new MemoryStream(bytes, writable: false))
             await _files.UploadAtAsync(content, admission.StoragePath, fileName, contentType, ct);
 
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("listing-workspace.photo.finalize", portfolioId, unitId, operationId),
-            new FinalizeListingPhotoUploadCommand(
-                portfolioId, unitId, scope.UserId, scope.SessionId, scope.AccessContextId,
-                scope.AccessRevision, photoId, admission.Id, "listing-photo",
-                OperationHash(operationId), fingerprint, admission.StoragePath, fileName,
-                contentType, bytes.LongLength, sha256),
-            MutationCodec,
-            ct);
+        var command = new FinalizeListingPhotoUploadCommand(
+            portfolioId, unitId, scope.UserId, scope.SessionId, scope.AccessContextId,
+            scope.AccessRevision, photoId, admission.Id, "listing-photo",
+            OperationHash(operationId), fingerprint, admission.StoragePath, fileName,
+            contentType, bytes.LongLength, sha256);
+        var outcome = await ExecuteLocalAsync(
+            "listing-workspace.photo.finalize", operationId, command, FinalizeListingPhotoAsync, ct);
         return outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound
             ? null
             : await GetAsync(portfolioId, unitId, ct);
@@ -139,13 +138,11 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     {
         var category = CleanRequired(request.Category, "Photo category");
         var caption = CleanOptional(request.Caption);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("listing-workspace.photo.update", scope.PortfolioId, unitId, clientOperationId),
-            new UpdateListingPhotoCommand(
-                scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
-                scope.AccessContextId, scope.AccessRevision, photoId, category, caption),
-            MutationCodec,
-            ct);
+        var command = new UpdateListingPhotoCommand(
+            scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
+            scope.AccessContextId, scope.AccessRevision, photoId, category, caption);
+        var outcome = await ExecuteLocalAsync(
+            "listing-workspace.photo.update", clientOperationId, command, UpdateListingPhotoAsync, ct);
         return outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound
             ? null
             : await GetAsync(scope.PortfolioId, unitId, ct);
@@ -155,13 +152,11 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         WorkspaceReadScope scope, int unitId, int photoId, string clientOperationId,
         CancellationToken ct = default)
     {
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("listing-workspace.photo.remove", scope.PortfolioId, unitId, clientOperationId),
-            new RemoveListingPhotoCommand(
-                scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
-                scope.AccessContextId, scope.AccessRevision, photoId),
-            MutationCodec,
-            ct);
+        var command = new RemoveListingPhotoCommand(
+            scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
+            scope.AccessContextId, scope.AccessRevision, photoId);
+        var outcome = await ExecuteLocalAsync(
+            "listing-workspace.photo.remove", clientOperationId, command, RemoveListingPhotoAsync, ct);
         return outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound
             ? null
             : await GetAsync(scope.PortfolioId, unitId, ct);
@@ -171,17 +166,308 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         WorkspaceReadScope scope, int unitId, ReorderListingPhotosRequest request,
         string clientOperationId, CancellationToken ct = default)
     {
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("listing-workspace.photo.reorder", scope.PortfolioId, unitId, clientOperationId),
-            new ReorderListingPhotosCommand(
-                scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
-                scope.AccessContextId, scope.AccessRevision, request.PhotoIds.ToArray()),
-            MutationCodec,
-            ct);
+        var command = new ReorderListingPhotosCommand(
+            scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
+            scope.AccessContextId, scope.AccessRevision, request.PhotoIds.ToArray());
+        var outcome = await ExecuteLocalAsync(
+            "listing-workspace.photo.reorder", clientOperationId, command, ReorderListingPhotosAsync, ct);
         return outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound
             ? null
             : await GetAsync(scope.PortfolioId, unitId, ct);
     }
+
+    private Task<AtomicCommandOutcome<ListingWorkspaceMutationResult>> ExecuteLocalAsync<TCommand>(
+        string operationName,
+        string clientOperationId,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken,
+            Task<ListingWorkspaceMutationResult>> executeAsync,
+        CancellationToken ct)
+        where TCommand : notnull, IListingWorkspaceAtomicCommand
+    {
+        var identity = Identity(
+            operationName, command.PortfolioId, command.UnitId, clientOperationId);
+        var write = new TransactionalWrite<TCommand, ListingWorkspaceMutationResult>(
+            operationName,
+            WriteIdempotencyPolicy.Required,
+            command,
+            MutationCodec.ContractName,
+            new WriteLockPlan(
+                WriteLockProtocol.AuthorizationScopeUnit,
+                WriteLock.For("AuthSession", command.AuthSessionId),
+                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
+                WriteLock.For("Portfolio", command.PortfolioId),
+                WriteLock.For("Unit", command.UnitId)),
+            executeAsync,
+            AuthorizeLocalReplayAsync);
+        return RequireWrites().ExecuteAsync(identity.IdempotencyKey, write, ct);
+    }
+
+    private async Task<ListingWorkspaceMutationResult> GenerateListingAsync(
+        GenerateListingWorkspaceCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await ListingWorkspaceCommandSupport.BeginExecutionAsync(command, _db, context, ct);
+        var seed = await ListingWorkspaceCommandSupport.AuthorizedUnits(command, _db, now)
+            .Select(unit => new ListingSeed(
+                unit.PortfolioId, unit.PropertyId, unit.Id, unit.Property!.Name,
+                unit.Property.AddressLine1, unit.Property.AddressLine2, unit.Property.City,
+                unit.Property.State, unit.Property.PostalCode, unit.UnitNumber,
+                unit.Bedrooms, unit.Bathrooms, unit.SquareFeet, unit.MarketRent))
+            .SingleOrDefaultAsync(ct);
+        if (seed is null) return ListingWorkspaceCommandSupport.NotFound(command);
+
+        var listing = await _db.RentalListings.SingleOrDefaultAsync(item =>
+            item.PortfolioId == command.PortfolioId && item.UnitId == command.UnitId, ct);
+        var created = listing is null;
+        if (listing is null)
+        {
+            listing = ListingWorkspaceCommandSupport.CreateListing(seed, now);
+            _db.Add(listing);
+        }
+        else
+        {
+            var changed = listing.PropertyId != seed.PropertyId
+                || listing.Bedrooms != seed.Bedrooms
+                || listing.Bathrooms != seed.Bathrooms
+                || listing.SquareFeet != seed.SquareFeet;
+            listing.PropertyId = seed.PropertyId;
+            listing.Bedrooms = seed.Bedrooms;
+            listing.Bathrooms = seed.Bathrooms;
+            listing.SquareFeet = seed.SquareFeet;
+            if (changed) listing.ContentVersion++;
+            listing.UpdatedAt = now;
+        }
+
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
+            command, nameof(RentalListing),
+            created ? AuditLogOperation.Created : AuditLogOperation.Updated,
+            created
+                ? "Prepared provider-neutral rental listing workspace"
+                : "Synchronized non-editable unit details without replacing customized listing content",
+            created ? 0 : listing.Id));
+        await context.FlushBusinessAsync(ct);
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "generate");
+        return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
+    }
+
+    private async Task<ListingWorkspaceMutationResult> SaveListingAsync(
+        SaveListingWorkspaceCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await ListingWorkspaceCommandSupport.BeginExecutionAsync(command, _db, context, ct);
+        var listing = await ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
+            .SingleOrDefaultAsync(ct);
+        if (listing is null) return ListingWorkspaceCommandSupport.NotFound(command);
+
+        var contentChanged = ListingWorkspaceCommandSupport.Apply(command, listing);
+        if (contentChanged) listing.ContentVersion++;
+        listing.UpdatedAt = now;
+        var guided = command.ZillowGuided is null
+            ? null
+            : await _db.ListingPublications.SingleOrDefaultAsync(publication =>
+                publication.RentalListingId == listing.Id
+                && publication.PortfolioId == command.PortfolioId
+                && publication.ProviderKey == ListingProviderKeys.Zillow
+                && publication.Mode == ListingPublicationMode.Guided, ct);
+        ListingWorkspaceCommandSupport.Apply(command.ZillowGuided, listing, guided, now);
+
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
+            command, nameof(RentalListing), AuditLogOperation.Updated,
+            "Updated rental listing and Zillow Guided workspace", listing.Id));
+        if (guided is not null)
+        {
+            context.BindSemanticAudit(guided, ListingWorkspaceCommandSupport.Audit(
+                command, nameof(ListingPublication), AuditLogOperation.Updated,
+                "Updated Zillow Guided workspace", guided.Id));
+        }
+        await context.FlushBusinessAsync(ct);
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "save");
+        return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
+    }
+
+    private async Task<ListingWorkspaceMutationResult> FinalizeListingPhotoAsync(
+        FinalizeListingPhotoUploadCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await ListingWorkspaceCommandSupport.BeginExecutionAsync(command, _db, context, ct);
+        var photo = await (from authorizedListing in
+                               ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
+                           join item in _db.ListingPhotos on authorizedListing.Id equals item.RentalListingId
+                           where item.Id == command.PhotoId && item.PortfolioId == command.PortfolioId
+                           select item).SingleOrDefaultAsync(ct);
+        if (photo is null) return ListingWorkspaceCommandSupport.NotFound(command);
+        var listing = await _db.RentalListings.SingleAsync(item =>
+            item.Id == photo.RentalListingId && item.PortfolioId == command.PortfolioId, ct);
+
+        var pending = (await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(
+            _db, context, command.PortfolioId, command.ActorUserId,
+            [new AtomicPendingFileUploadExpectation(
+                command.PendingUploadId, command.Purpose, command.OperationKeyHash,
+                command.RequestFingerprint, command.StoragePath, command.FileName,
+                command.ContentType, command.SizeBytes)], ct)).Single();
+
+        if (photo.StoredFileId is int oldFileId)
+        {
+            var old = await _db.StoredFiles.SingleAsync(file =>
+                file.Id == oldFileId && file.PortfolioId == command.PortfolioId, ct);
+            old.DeletedAt = now;
+            context.StageOutbox(new OutboxMessage
+            {
+                PortfolioId = command.PortfolioId,
+                MessageType = "blob-delete",
+                Payload = JsonSerializer.Serialize(new
+                    { storedFileId = old.Id, storagePath = old.FilePath }),
+                IdempotencyKey = $"listing-photo-replace:{old.Id}",
+                CreatedAtUtc = now,
+                NextAttemptAtUtc = now,
+            });
+        }
+
+        var stored = new StoredFile
+        {
+            PortfolioId = command.PortfolioId,
+            FileName = command.FileName,
+            FilePath = command.StoragePath,
+            ContentType = command.ContentType,
+            FileSize = command.SizeBytes,
+            EntityType = nameof(ListingPhoto),
+            EntityId = photo.Id,
+            UploadedAt = now,
+        };
+        _db.Add(stored);
+        await context.FlushBusinessAsync(ct);
+
+        photo.StoredFileId = stored.Id;
+        photo.FileName = command.FileName;
+        photo.Sha256 = command.Sha256;
+        pending.State = PendingFileUploadState.Finalized;
+        pending.StoredFileId = stored.Id;
+        pending.UpdatedAtUtc = now;
+        listing.ContentVersion++;
+        listing.UpdatedAt = now;
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
+            command, nameof(RentalListing), AuditLogOperation.Updated,
+            "Attached listing photo", listing.Id));
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(new AtomicSemanticAudit(
+            command.PortfolioId, nameof(ListingPhoto), photo.Id, AuditLogOperation.Updated,
+            command.ActorUserId,
+            NewValues: JsonSerializer.Serialize(new
+            {
+                photo.Position, photo.Category, photo.Caption, command.FileName, command.Sha256,
+            }),
+            ChangeReason: "Attached listing photo"), now);
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "photo-attach");
+        return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
+    }
+
+    private async Task<ListingWorkspaceMutationResult> UpdateListingPhotoAsync(
+        UpdateListingPhotoCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await ListingWorkspaceCommandSupport.BeginExecutionAsync(command, _db, context, ct);
+        var target = await ListingWorkspaceCommandSupport.LoadPhotoTargetAsync(command, _db, now, ct);
+        if (target is null) return ListingWorkspaceCommandSupport.NotFound(command);
+        if (target.Photo.Category == command.Category && target.Photo.Caption == command.Caption)
+            return ListingWorkspaceCommandSupport.NoChange(command, target.Listing.Id);
+
+        target.Photo.Category = command.Category;
+        target.Photo.Caption = command.Caption;
+        target.Listing.ContentVersion++;
+        target.Listing.UpdatedAt = now;
+        ListingWorkspaceCommandSupport.AuditPhotoMutation(
+            command, context, target, now, "Updated listing photo details");
+        await context.FlushBusinessAsync(ct);
+        ListingWorkspaceCommandSupport.StageUpdate(
+            context, command, target.Listing.Id, now, "photo-update");
+        return ListingWorkspaceCommandSupport.Applied(command, target.Listing.Id);
+    }
+
+    private async Task<ListingWorkspaceMutationResult> RemoveListingPhotoAsync(
+        RemoveListingPhotoCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await ListingWorkspaceCommandSupport.BeginExecutionAsync(command, _db, context, ct);
+        var target = await ListingWorkspaceCommandSupport.LoadPhotoTargetAsync(command, _db, now, ct);
+        if (target is null) return ListingWorkspaceCommandSupport.NotFound(command);
+        if (target.Photo.StoredFileId is not int fileId)
+            return ListingWorkspaceCommandSupport.NoChange(command, target.Listing.Id);
+
+        var stored = await _db.StoredFiles.SingleAsync(file =>
+            file.Id == fileId && file.PortfolioId == command.PortfolioId, ct);
+        stored.DeletedAt = now;
+        target.Photo.StoredFileId = null;
+        target.Photo.FileName = null;
+        target.Photo.Sha256 = null;
+        target.Listing.ContentVersion++;
+        target.Listing.UpdatedAt = now;
+        ListingWorkspaceCommandSupport.AuditPhotoMutation(
+            command, context, target, now, "Removed listing photo attachment");
+        await context.FlushBusinessAsync(ct);
+        context.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "blob-delete",
+            Payload = JsonSerializer.Serialize(new
+                { storedFileId = stored.Id, storagePath = stored.FilePath }),
+            IdempotencyKey = $"listing-photo-remove:{stored.Id}",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+        ListingWorkspaceCommandSupport.StageUpdate(
+            context, command, target.Listing.Id, now, "photo-remove");
+        return ListingWorkspaceCommandSupport.Applied(command, target.Listing.Id);
+    }
+
+    private async Task<ListingWorkspaceMutationResult> ReorderListingPhotosAsync(
+        ReorderListingPhotosCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var now = await ListingWorkspaceCommandSupport.BeginExecutionAsync(command, _db, context, ct);
+        var listing = await ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
+            .SingleOrDefaultAsync(ct);
+        if (listing is null) return ListingWorkspaceCommandSupport.NotFound(command);
+        var order = await AtomicListingPersistence.ReorderPhotosAsync(
+            _db, context, command.PortfolioId, listing.Id, command.PhotoIds, ct);
+        if (!order.IsValid)
+            throw new DomainValidationException("Photo order must include every photo exactly once.");
+        if (!order.HasChanges)
+            return ListingWorkspaceCommandSupport.NoChange(command, listing.Id);
+
+        listing.ContentVersion++;
+        listing.UpdatedAt = now;
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
+            command, nameof(RentalListing), AuditLogOperation.Updated,
+            "Reordered listing photo package", listing.Id));
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(new AtomicSemanticAudit(
+            command.PortfolioId, nameof(ListingPhoto), listing.Id, AuditLogOperation.Updated,
+            command.ActorUserId,
+            NewValues: JsonSerializer.Serialize(new { command.PhotoIds }),
+            ChangeReason: "Reordered listing photo package"), now);
+        ListingWorkspaceCommandSupport.StageUpdate(
+            context, command, listing.Id, now, "photo-reorder");
+        return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
+    }
+
+    private Task AuthorizeLocalReplayAsync<TCommand>(
+        TCommand command, IAtomicCommandContext context, CancellationToken ct)
+        where TCommand : IListingWorkspaceAtomicCommand =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
+
+    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
+        "The shared request write executor is required for local listing changes.");
 
     public async Task<ListingPhotoFileResult?> OpenPhotoAsync(int portfolioId, int unitId, int photoId, CancellationToken ct = default)
     {
