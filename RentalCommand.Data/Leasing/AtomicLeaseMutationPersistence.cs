@@ -241,7 +241,8 @@ public static partial class AtomicLeaseMutationPersistence
 
         using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("TenantUserAccesses", AtomicRawDmlOperation.Update),
-            new("TenantUserAccesses", AtomicRawDmlOperation.Insert));
+            new("TenantUserAccesses", AtomicRawDmlOperation.Insert),
+            new("WorkspaceAccessContexts", AtomicRawDmlOperation.Update));
         var row = await db.Database.SingleTopLevelResultAsync<AccessTransitionRow>(
             AccessTransitionSql, parameters, ct);
         if (!row.InputValid)
