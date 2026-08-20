@@ -199,6 +199,102 @@ public sealed class WorkOrderCrudWritePostgreSqlTests : IAsyncLifetime
         await AssertRetiredAsync(new CancelTenantWorkOrderHandler(_context.Db), tenantCancel);
     }
 
+    [Fact]
+    public async Task ForwardAndReplayLockAcquisitionSequences_MatchLegacySingleWorkOrderLock()
+    {
+        var scope = await SeedScopeAsync(BusinessNow.AddDays(-1));
+        var relationship = await SeedRelationshipAsync(BusinessNow.AddDays(-30));
+        var partyId = await _context.Db.LeaseManagementParties
+            .Where(row => row.LeaseManagementId == relationship.ManagementId)
+            .Select(row => row.Id)
+            .SingleAsync();
+        _context.Db.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = scope.PortfolioId,
+            AccessContextId = scope.AccessContextId, ApplicationUserId = scope.UserId,
+            LeaseManagementPartyId = partyId, GrantedAtUtc = BusinessNow.AddDays(-1),
+            GrantedByUserId = scope.UserId, Reason = "Work-order lock sequence proof",
+        });
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = scope.PortfolioId, PropertyId = relationship.PropertyId,
+            UnitId = relationship.UnitId, TenantId = relationship.TenantId,
+            LeaseManagementId = relationship.ManagementId, Title = "Lock sequence",
+            Description = "Freeze forward and replay acquisition order.", Category = "General",
+            Priority = WorkOrderPriority.Normal, Status = WorkOrderStatus.New,
+            RequestedAt = BusinessNow.AddHours(-1), UpdatedAt = BusinessNow.AddHours(-1),
+            CreatedBy = "Tenant",
+        };
+        _context.Db.Add(workOrder);
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+
+        var acquired = new List<string>();
+        var context = new Mock<IAtomicCommandContext>();
+        context.Setup(item => item.ReadDatabaseClockUtcAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BusinessNow);
+        context.Setup(item => item.AcquireLockAsync(
+                It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Callback<string, int, CancellationToken>((lockNamespace, id, _) =>
+                acquired.Add($"{lockNamespace}:{id}"))
+            .Returns(Task.CompletedTask);
+        context.Setup(item => item.FlushBusinessAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AtomicBusinessFlush(0, []));
+
+        var actor = new StaffOperationActor(
+            scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);
+        var staffComment = new AddStaffWorkOrderCommentCommand(
+            scope.PortfolioId, actor, workOrder.Id, "Staff comment", false,
+            BusinessNow, "lock-staff-comment");
+        var tenantComment = new AddTenantWorkOrderCommentCommand(
+            scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
+            scope.AccessRevision, workOrder.Id, "Tenant comment", BusinessNow, "lock-tenant-comment");
+        var tenantUpdate = new UpdateTenantWorkOrderCommand(
+            scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
+            scope.AccessRevision, workOrder.Id, "Updated lock sequence", null, null, null, null,
+            null, null, null, null, null, null, null, BusinessNow, "lock-tenant-update");
+        var delete = new DeleteWorkOrderCommand(
+            scope.PortfolioId, actor, workOrder.Id, BusinessNow, "lock-staff-delete");
+
+        var staffCommentRule = new AddStaffWorkOrderCommentRule(_context.Db);
+        await AssertLockSequencesAsync(_context.Db, context.Object, acquired,
+            WorkOrderCrudWriteSupport.Write(
+                staffComment, staffCommentRule.HandleAsync, staffCommentRule.AuthorizeReplayAsync), workOrder.Id);
+        var tenantCommentRule = new AddTenantWorkOrderCommentRule(_context.Db);
+        await AssertLockSequencesAsync(_context.Db, context.Object, acquired,
+            WorkOrderCrudWriteSupport.Write(
+                tenantComment, tenantCommentRule.HandleAsync, tenantCommentRule.AuthorizeReplayAsync), workOrder.Id);
+        var tenantUpdateRule = new UpdateTenantWorkOrderRule(_context.Db);
+        await AssertLockSequencesAsync(_context.Db, context.Object, acquired,
+            WorkOrderCrudWriteSupport.Write(
+                tenantUpdate, tenantUpdateRule.HandleAsync, tenantUpdateRule.AuthorizeReplayAsync), workOrder.Id);
+        var deleteRule = new DeleteWorkOrderRule(_context.Db);
+        await AssertLockSequencesAsync(_context.Db, context.Object, acquired,
+            WorkOrderCrudWriteSupport.Write(
+                delete, deleteRule.HandleAsync, deleteRule.AuthorizeReplayAsync), workOrder.Id);
+    }
+
+    private static async Task AssertLockSequencesAsync<TCommand>(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        List<string> acquired,
+        TransactionalWrite<TCommand, WorkOrderMutationResult> write,
+        int workOrderId)
+        where TCommand : notnull, IAtomicCommandData
+    {
+        acquired.Clear();
+        foreach (var writeLock in write.LockPlan.Locks)
+            await writeLock.AcquireAsync(context);
+        await write.ExecuteAsync(write.Request, context, CancellationToken.None);
+        acquired.Should().Equal($"WorkOrder:{workOrderId}");
+        db.ChangeTracker.Clear();
+
+        acquired.Clear();
+        await write.AuthorizeReplayAsync(write.Request, context, CancellationToken.None);
+        acquired.Should().Equal($"WorkOrder:{workOrderId}");
+        db.ChangeTracker.Clear();
+    }
+
     private static async Task AssertRetiredAsync<TCommand>(
         IAtomicCommandHandler<TCommand, WorkOrderMutationResult> handler, TCommand command)
         where TCommand : IAtomicCommandData

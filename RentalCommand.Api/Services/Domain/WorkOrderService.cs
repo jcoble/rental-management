@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
@@ -34,7 +33,6 @@ public class WorkOrderService : IWorkOrderService
         IFileStorage files,
         ILogger<WorkOrderService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null,
         IRequestWriteExecutor? writes = null)
     {
         _db = db;
