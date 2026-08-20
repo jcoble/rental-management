@@ -475,7 +475,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task AtomicCoreCrudMutation_VendorCreate_AllowsSelectedPropertyWorkManageScope()
+    public async Task AtomicCoreCrudMutation_VendorCreate_ThrowsRetiredPathMessage()
     {
         SkipIfNoDocker();
         var scope = new WorkspaceReadScope(
@@ -494,27 +494,17 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             createdAtUtc: _now);
         var identity = AtomicCoreCrudMutation.Identity(command);
 
-        var outcome = await ExecuteAtomicAsync(
+        Func<Task> act = async () => await ExecuteAtomicAsync(
             identity, command, AtomicCoreCrudMutation.Codec);
 
-        outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
-        outcome.Value.Found.Should().BeTrue();
-        outcome.Value.Applied.Should().BeTrue();
-        outcome.Value.EntityId.Should().BePositive();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Owner and vendor writes no longer use the legacy core CRUD handler.");
         await using var verify = NewContext();
-        var persisted = await verify.Vendors.AsNoTracking()
-            .Where(row => row.Id == outcome.Value.EntityId && row.PortfolioId == _portfolioId)
-            .Select(row => new { row.Name, row.ServiceType, row.Email })
-            .SingleAsync();
-        persisted.Should().BeEquivalentTo(new
-        {
-            Name = "Summit Roofing",
-            ServiceType = "Roofing",
-            Email = "summit@example.test",
-        });
+        (await verify.Vendors.AsNoTracking().CountAsync(row =>
+            row.PortfolioId == _portfolioId && row.Name == "Summit Roofing")).Should().Be(0);
         (await verify.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
             row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
-            .Should().Be(1);
+            .Should().Be(0);
     }
 
     [SkippableFact]

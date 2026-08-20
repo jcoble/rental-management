@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -41,10 +42,11 @@ public sealed class VendorServiceMutationClockTests : IDisposable
         _ctx.Db.SaveChanges();
         _services = AtomicDomainTestKernel.CreateForCoreCrud(_ctx.ConnectionString, _timeProvider);
         _sut = new VendorService(
-            _ctx.Db,
+            _services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
             Mock.Of<IDataUpdateService>(),
             _services.GetRequiredService<IAtomicUnitOfWork>(),
-            _timeProvider);
+            _timeProvider,
+            _services.GetRequiredService<IRequestWriteExecutor>());
     }
 
     public void Dispose()

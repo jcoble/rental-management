@@ -13,6 +13,7 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -769,7 +770,8 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         _ctx.Db,
         Mock.Of<IDataUpdateService>(),
         new FixedTimeProvider(FrozenBusinessNowUtc),
-        _services.GetRequiredService<IAtomicUnitOfWork>());
+        _services.GetRequiredService<IAtomicUnitOfWork>(),
+        writes: _services.GetRequiredService<IRequestWriteExecutor>());
 
     private static ServiceProvider BuildServices(
         string connectionString,
@@ -784,6 +786,7 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         }
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             ActivateOwnerPortalAccessCommand,
             ActivateOwnerPortalAccessMutationResult,

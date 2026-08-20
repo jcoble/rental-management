@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Interfaces;
@@ -163,6 +164,7 @@ internal static class AtomicDomainTestKernel
     internal static ServiceProvider CreateForCoreCrud(string connectionString, TimeProvider? timeProvider = null)
     {
         var services = Core(connectionString, timeProvider);
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             AtomicCoreCrudMutationCommand,
             AtomicCoreCrudMutationResult,
