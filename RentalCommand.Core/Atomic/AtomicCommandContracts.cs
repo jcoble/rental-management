@@ -118,6 +118,9 @@ public enum WriteLockProtocol
     WorkOrderAppointmentProgression,
     Possession,
     ConfirmMoveIn,
+    LeaseParty,
+    LeasePartyAccessGrant,
+    LeasePartyAccessRevoke,
 }
 
 public sealed class WriteLockPlan
@@ -150,6 +153,9 @@ public sealed class WriteLockPlan
                 ["Unit", "LeaseManagement"],
             [WriteLockProtocol.ConfirmMoveIn] =
                 ["Unit", "LeaseManagement", "TenantAccount"],
+            [WriteLockProtocol.LeaseParty] = ["LeaseManagement"],
+            [WriteLockProtocol.LeasePartyAccessGrant] = ["LeaseManagement"],
+            [WriteLockProtocol.LeasePartyAccessRevoke] = ["LeaseManagement"],
         };
 
     public static WriteLockPlan None { get; } = new();
@@ -189,6 +195,9 @@ public sealed class WriteLockPlan
         {
             WriteLockProtocol.AppointmentWorkOrder => ["WorkOrder"],
             WriteLockProtocol.WorkOrderAppointmentProgression => ["Appointment", "WorkOrder"],
+            WriteLockProtocol.LeasePartyAccessGrant =>
+                ["TenantIdentityEmail", "WorkspaceAccessContext"],
+            WriteLockProtocol.LeasePartyAccessRevoke => ["WorkspaceAccessContext"],
             _ => [],
         };
 }

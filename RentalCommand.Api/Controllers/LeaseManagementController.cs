@@ -4,8 +4,11 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Data;
+using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -16,16 +19,6 @@ public sealed class LeaseManagementController : ManagementControllerBase
 {
     private static readonly AtomicJsonResultCodec<PrepareMoveInResult> ResultCodec =
         new("lease-management.prepare-move-in.v2");
-    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> AddPartyResultCodec =
-        new("lease-management.party.add.v1");
-    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> EndPartyResultCodec =
-        new("lease-management.party.end.v1");
-    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> ChangePartyRoleResultCodec =
-        new("lease-management.party.change-role.v1");
-    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> GrantAccessResultCodec =
-        new("lease-management.party.access.grant.v1");
-    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> RevokeAccessResultCodec =
-        new("lease-management.party.access.revoke.v1");
     private static readonly AtomicJsonResultCodec<GivePossessionResult> GivePossessionCodec =
         new("lease-management.give-possession.v1");
     private static readonly AtomicJsonResultCodec<ReconcileHistoricalPossessionResult>
@@ -43,6 +36,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.transfer-unit.v1");
 
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
+    private readonly RentalCommandDbContext _db;
     private readonly ILeaseManagementQueryService _queryService;
     private readonly ILeaseQaService _qa;
     private readonly TimeProvider _timeProvider;
@@ -53,12 +48,16 @@ public sealed class LeaseManagementController : ManagementControllerBase
         ILeaseManagementQueryService queryService,
         ILeaseQaService qa,
         IConfiguration configuration,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IRequestWriteExecutor writes,
+        RentalCommandDbContext db)
     {
         _atomic = atomic;
         _queryService = queryService;
         _qa = qa;
         _timeProvider = timeProvider;
+        _writes = writes;
+        _db = db;
         _webBaseUrl = (configuration["App:WebBaseUrl"] ?? "https://localhost:5667").TrimEnd('/');
     }
 
@@ -356,11 +355,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
             envelope.AccessRevision,
             $"lease-party-add:{envelope.PortfolioId}:{leaseManagementId}:{envelope.KeyDigest}");
         return await ExecuteMutation(
-            "lease-management.party.add",
-            $"{leaseManagementId}",
             envelope.KeyDigest,
             command,
-            AddPartyResultCodec,
             StatusCodes.Status201Created,
             ct);
     }
@@ -408,11 +404,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
             envelope.AccessRevision,
             $"lease-party-end:{envelope.PortfolioId}:{leaseManagementId}:{partyId}:{envelope.KeyDigest}");
         return await ExecuteMutation(
-            "lease-management.party.end",
-            $"{leaseManagementId}:{partyId}",
             envelope.KeyDigest,
             command,
-            EndPartyResultCodec,
             StatusCodes.Status200OK,
             ct);
     }
@@ -464,11 +457,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
             envelope.AccessRevision,
             $"lease-party-role:{envelope.PortfolioId}:{leaseManagementId}:{partyId}:{envelope.KeyDigest}");
         return await ExecuteMutation(
-            "lease-management.party.change-role",
-            $"{leaseManagementId}:{partyId}",
             envelope.KeyDigest,
             command,
-            ChangePartyRoleResultCodec,
             StatusCodes.Status200OK,
             ct);
     }
@@ -507,11 +497,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
             envelope.AccessRevision,
             $"tenant-access-grant:{envelope.PortfolioId}:{leaseManagementId}:{partyId}:{envelope.KeyDigest}");
         return await ExecuteMutation(
-            "lease-management.party.access.grant",
-            $"{leaseManagementId}:{partyId}",
             envelope.KeyDigest,
             command,
-            GrantAccessResultCodec,
             StatusCodes.Status201Created,
             ct);
     }
@@ -551,33 +538,27 @@ public sealed class LeaseManagementController : ManagementControllerBase
             envelope.AccessRevision,
             $"tenant-access-revoke:{envelope.PortfolioId}:{leaseManagementId}:{partyId}:{tenantUserAccessId}:{envelope.KeyDigest}");
         return await ExecuteMutation(
-            "lease-management.party.access.revoke",
-            $"{leaseManagementId}:{partyId}:{tenantUserAccessId}",
             envelope.KeyDigest,
             command,
-            RevokeAccessResultCodec,
             StatusCodes.Status200OK,
             ct);
     }
 
     private async Task<IActionResult> ExecuteMutation<TCommand>(
-        string commandType,
-        string identityTarget,
         string keyDigest,
         TCommand command,
-        AtomicJsonResultCodec<LeasePartyMutationResult> codec,
         int successStatus,
         CancellationToken ct)
-        where TCommand : notnull, IAtomicCommandData
+        where TCommand : notnull, ILeasePartyAccessCommand
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    commandType,
-                    $"{GetPortfolioId()}:{identityTarget}:{keyDigest}"),
-                command,
-                codec,
+            var outcome = await _writes.ExecuteAsync(
+                LeasePartyAccessWriteSupport.IdempotencyKey(command, keyDigest),
+                LeasePartyAccessWriteSupport.Write(
+                    command,
+                    ExecuteLeasePartyMutationAsync,
+                    AuthorizeLeasePartyReplayAsync),
                 ct);
             if (outcome.Value.Outcome == LeasePartyMutationOutcome.Applied)
             {
@@ -611,6 +592,40 @@ public sealed class LeaseManagementController : ManagementControllerBase
             return BadRequest(new { error = exception.Message });
         }
     }
+
+    private Task<LeasePartyMutationResult> ExecuteLeasePartyMutationAsync<TCommand>(
+        TCommand command, IAtomicCommandContext context, CancellationToken ct)
+        where TCommand : notnull, ILeasePartyAccessCommand => command switch
+        {
+            AddEffectivePartyCommand value =>
+                AddEffectivePartyHandler.ExecuteAsync(_db, value, context, ct),
+            EndEffectivePartyCommand value =>
+                EndEffectivePartyHandler.ExecuteAsync(_db, value, context, ct),
+            ChangeEffectivePartyRoleCommand value =>
+                ChangeEffectivePartyRoleHandler.ExecuteAsync(_db, value, context, ct),
+            GrantTenantUserAccessCommand value =>
+                GrantTenantUserAccessHandler.ExecuteAsync(_db, value, context, ct),
+            RevokeTenantUserAccessCommand value =>
+                RevokeTenantUserAccessHandler.ExecuteAsync(_db, value, context, ct),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+    private Task AuthorizeLeasePartyReplayAsync<TCommand>(
+        TCommand command, IAtomicCommandContext context, CancellationToken ct)
+        where TCommand : notnull, ILeasePartyAccessCommand => command switch
+        {
+            AddEffectivePartyCommand value =>
+                AddEffectivePartyHandler.AuthorizeAsync(_db, value, context, ct),
+            EndEffectivePartyCommand value =>
+                EndEffectivePartyHandler.AuthorizeAsync(_db, value, context, ct),
+            ChangeEffectivePartyRoleCommand value =>
+                ChangeEffectivePartyRoleHandler.AuthorizeAsync(_db, value, context, ct),
+            GrantTenantUserAccessCommand value =>
+                GrantTenantUserAccessHandler.AuthorizeAsync(_db, value, context, ct),
+            RevokeTenantUserAccessCommand value =>
+                RevokeTenantUserAccessHandler.AuthorizeAsync(_db, value, context, ct),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
 
     private bool TryPrepareMutation(
         string? idempotencyKey,

@@ -7,6 +7,7 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
@@ -279,7 +280,9 @@ public sealed class LeaseManagementControllerTests
             Mock.Of<ILeaseManagementQueryService>(),
             Mock.Of<ILeaseQaService>(),
             new ConfigurationBuilder().Build(),
-            TimeProvider.System));
+            TimeProvider.System,
+            Mock.Of<IRequestWriteExecutor>(),
+            null!));
 
     private static TenantAccountLifecycleController CreateCloseController(
         IAtomicUnitOfWork atomic) =>
