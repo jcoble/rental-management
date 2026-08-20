@@ -37,14 +37,16 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         await _context.DisposeAsync();
 
     [Fact]
-    public async Task CoreImport_PreservesFingerprintRetryPartialBatchClockOutboxAndStaleAuthorization()
+    public async Task CoreImport_PreservesAliasPartialBatchFingerprintRetryClockOutboxAndStaleAuthorization()
     {
         var scope = await SeedScopeAsync(DateTime.UtcNow, "core");
+        var property = await _context.Db.Properties.AsNoTracking().SingleAsync(row =>
+            row.Name == "CSV core alias property");
         const string operationKey = "family-p4-core-csv";
         const string csv =
-            "firstName,lastName,email,phone\n" +
-            "Ada,Importer,ada-importer@example.test,555-0100\n" +
-            "Bad,Email,not-an-email,555-0101\n";
+            "propertyName,lender,originalAmount,currentBalance,annualInterestRatePct,termMonths,startDate,dayOfMonthDue,monthlyPrincipalInterest,monthlyEscrow\n" +
+            "csv CORE alias PROPERTY,Alias Bank,200000,198500,6.25,360,2024-01-01,1,1231.43,350\n" +
+            "missing property,Missing Bank,100000,99000,5,120,2024-02-01,1,1000,200\n";
 
         CsvImportResult first;
         CsvImportResult replay;
@@ -53,9 +55,9 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         await using (var requestScope = services.CreateAsyncScope())
         {
             var sut = requestScope.ServiceProvider.GetRequiredService<CsvImportService>();
-            first = await sut.ImportAsync(scope, "tenant", Csv(csv), false,
+            first = await sut.ImportAsync(scope, "loan", Csv(csv), false,
                 CommandContext(scope, operationKey));
-            replay = await sut.ImportAsync(scope, "tenant", Csv(csv), false,
+            replay = await sut.ImportAsync(scope, "loan", Csv(csv), false,
                 CommandContext(scope, operationKey));
         }
         var databaseAfter = DateTime.UtcNow;
@@ -65,40 +67,79 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         first.CreatedRows.Should().Be(1);
         first.ValidRows.Should().Be(1);
         first.DuplicateRows.Should().Be(0);
-        first.Rows.Should().ContainSingle(row => !row.Valid);
-        (await _context.Db.Tenants.AsNoTracking().CountAsync(row =>
-            row.Email == "ada-importer@example.test")).Should().Be(1);
+        var loan = await _context.Db.Loans.AsNoTracking().SingleAsync(row =>
+            row.Lender == "Alias Bank");
+        loan.PropertyId.Should().Be(property.Id);
+        first.Rows.Should().BeEquivalentTo(
+            [
+                new CsvImportRowResult
+                {
+                    RowNumber = 2,
+                    Valid = true,
+                    Errors = [],
+                    CreatedId = loan.Id,
+                    IsDuplicate = false,
+                    SkipReason = null,
+                },
+                new CsvImportRowResult
+                {
+                    RowNumber = 3,
+                    Valid = false,
+                    Errors = ["Property was not found in this portfolio."],
+                    CreatedId = null,
+                    IsDuplicate = false,
+                    SkipReason = null,
+                },
+            ], options => options.WithStrictOrdering());
 
         var identity = new AtomicCommandIdentity(
-            "tenant.csv-import", $"{scope.PortfolioId}:{scope.AccessContextId}:{operationKey}");
+            "loan.csv-import", $"{scope.PortfolioId}:{scope.AccessContextId}:{operationKey}");
         var receipt = await ReceiptAsync(identity);
         var rowsJson = JsonSerializer.Serialize(new[]
         {
             new
             {
-                RowNumber = 2, FirstName = "Ada", LastName = "Importer",
-                Email = "ada-importer@example.test", Phone = "555-0100",
+                RowNumber = 2, PropertyName = "csv CORE alias PROPERTY",
+                Lender = "Alias Bank", OriginalAmount = 200000m,
+                CurrentBalance = (decimal?)198500m, AnnualInterestRatePct = 6.25m,
+                TermMonths = 360,
+                StartDate = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                DayOfMonthDue = 1, MonthlyPrincipalInterest = 1231.43m,
+                MonthlyEscrow = 350m,
                 Errors = Array.Empty<string>(),
             },
             new
             {
-                RowNumber = 3, FirstName = "Bad", LastName = "Email",
-                Email = "not-an-email", Phone = "555-0101",
-                Errors = new[] { "The Email field is not a valid e-mail address." },
+                RowNumber = 3, PropertyName = "missing property",
+                Lender = "Missing Bank", OriginalAmount = 100000m,
+                CurrentBalance = (decimal?)99000m, AnnualInterestRatePct = 5m,
+                TermMonths = 120,
+                StartDate = new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+                DayOfMonthDue = 1, MonthlyPrincipalInterest = 1000m,
+                MonthlyEscrow = 200m,
+                Errors = Array.Empty<string>(),
             },
         });
         var frozenCommand = new AtomicCoreCsvImportCommand(
             scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
-            scope.AccessRevision, AtomicCoreCsvImportDomain.Tenant, operationKey, rowsJson);
+            scope.AccessRevision, AtomicCoreCsvImportDomain.Loan, operationKey, rowsJson);
         receipt.RequestFingerprint.Should().Be(AtomicCommandFingerprint.Create(frozenCommand));
         receipt.ResultContract.Should().Be(AtomicCoreCsvImport.Codec.ContractName);
+        AtomicCoreCsvImport.Codec.Deserialize(receipt.ResultJson!).Rows.Should().BeEquivalentTo(
+            [
+                new AtomicCoreCsvImportRowResult(
+                    2, true, false, loan.Id, property.Id, []),
+                new AtomicCoreCsvImportRowResult(
+                    3, false, false, null, null,
+                    ["Property was not found in this portfolio."]),
+            ], options => options.WithStrictOrdering());
 
-        var audit = await AuditAsync(identity, nameof(Tenant));
+        var audit = await AuditAsync(identity, nameof(Loan));
         audit.Timestamp.Should().BeOnOrAfter(databaseBefore.AddSeconds(-1));
         audit.Timestamp.Should().BeOnOrBefore(databaseAfter.AddSeconds(1));
         audit.Timestamp.Should().NotBe(SeparatedAuditClock);
         (await _context.Db.OutboxMessages.AsNoTracking().CountAsync(row =>
-            row.IdempotencyKey.StartsWith($"tenant-import:{operationKey}:tenant:")))
+            row.IdempotencyKey.StartsWith($"loan-import:{operationKey}:loan:")))
             .Should().Be(1);
 
         await RevokeAsync(scope, DateTime.UtcNow);
@@ -106,7 +147,7 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         await using var staleScope = staleServices.CreateAsyncScope();
         Func<Task> staleReplay = () => staleScope.ServiceProvider
             .GetRequiredService<CsvImportService>()
-            .ImportAsync(scope, "tenant", Csv(csv), false,
+            .ImportAsync(scope, "loan", Csv(csv), false,
                 CommandContext(scope, operationKey));
         await staleReplay.Should().ThrowAsync<UnauthorizedAccessException>()
             .WithMessage("Workspace access changed. Refresh and try again.");
@@ -164,12 +205,30 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         first.TotalRows.Should().Be(2);
         first.ValidRows.Should().Be(1);
         first.CreatedRows.Should().Be(1);
-        first.Rows[0].CreatedId.Should().BePositive();
-        first.Rows[0].Valid.Should().BeTrue();
-        first.Rows[1].Valid.Should().BeFalse();
-        first.Rows[1].Errors.Should().ContainMatch("*not found*");
-        (await _context.Db.Units.AsNoTracking().CountAsync(row =>
-            row.PropertyId == property.Id && row.UnitNumber == "101")).Should().Be(1);
+        first.DuplicateRows.Should().Be(0);
+        var unit = await _context.Db.Units.AsNoTracking().SingleAsync(row =>
+            row.PropertyId == property.Id && row.UnitNumber == "101");
+        first.Rows.Should().BeEquivalentTo(
+            [
+                new CsvImportRowResult
+                {
+                    RowNumber = 2,
+                    Valid = true,
+                    Errors = [],
+                    CreatedId = unit.Id,
+                    IsDuplicate = false,
+                    SkipReason = null,
+                },
+                new CsvImportRowResult
+                {
+                    RowNumber = 3,
+                    Valid = false,
+                    Errors = ["Property was not found in this portfolio."],
+                    CreatedId = null,
+                    IsDuplicate = false,
+                    SkipReason = null,
+                },
+            ], options => options.WithStrictOrdering());
 
         var identity = new AtomicCommandIdentity(
             "unit.csv-import", $"{scope.PortfolioId}:{scope.AccessContextId}:{operationKey}");
@@ -185,6 +244,14 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
             ]);
         receipt.RequestFingerprint.Should().Be(AtomicCommandFingerprint.Create(frozenCommand));
         receipt.ResultContract.Should().Be(AtomicUnitCsvImport.Codec.ContractName);
+        AtomicUnitCsvImport.Codec.Deserialize(receipt.ResultJson!).Rows.Should().BeEquivalentTo(
+            [
+                new AtomicUnitImportRowResult(
+                    2, true, false, unit.Id, property.Id, "101", 2, 1.5m, 1200, []),
+                new AtomicUnitImportRowResult(
+                    3, false, false, null, null, "102", 1, 1, 900,
+                    ["Property was not found in this portfolio."]),
+            ], options => options.WithStrictOrdering());
 
         var audit = await AuditAsync(identity, nameof(Unit));
         audit.Timestamp.Should().BeOnOrAfter(databaseBefore.AddSeconds(-1));
@@ -241,7 +308,7 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         var property = new Property
         {
             PortfolioId = 1,
-            Name = suffix == "unit" ? "CSV unit alias property" : "CSV core property",
+            Name = suffix == "unit" ? "CSV unit alias property" : "CSV core alias property",
             AddressLine1 = $"{suffix} Executor Way",
             City = "Columbus",
             State = "OH",
