@@ -85,6 +85,115 @@ public static partial class AtomicLeaseMutationPersistence
         return await ResolveLegalDocumentSourceVersionAsync(db, ResolveBuiltInSql, parameters, ct);
     }
 
+    internal static Task<ResolvedAuthoredDocumentSourceVersion?> ResolveActiveOverlayForRendererAsync(
+        RentalCommandDbContext db,
+        AtomicAuditScope auditScope,
+        int portfolioId,
+        int propertyId,
+        int actorUserId,
+        DateTime createdAtUtc,
+        CancellationToken ct = default) =>
+        ResolveAuthoredForRendererAsync(
+            db,
+            auditScope,
+            ResolveActiveOverlayForRendererSql,
+            [
+                Integer("portfolioId", portfolioId),
+                Integer("propertyId", propertyId),
+                Integer("actorUserId", actorUserId),
+                Timestamp("createdAtUtc", createdAtUtc),
+            ],
+            ct);
+
+    internal static Task<ResolvedAuthoredDocumentSourceVersion?> ResolveAuthoredTemplateForRendererAsync(
+        RentalCommandDbContext db,
+        AtomicAuditScope auditScope,
+        int portfolioId,
+        int documentTemplateId,
+        int actorUserId,
+        DateTime createdAtUtc,
+        CancellationToken ct = default) =>
+        ResolveAuthoredForRendererAsync(
+            db,
+            auditScope,
+            ResolveAuthoredTemplateForRendererSql,
+            [
+                Integer("portfolioId", portfolioId),
+                Integer("documentTemplateId", documentTemplateId),
+                Integer("actorUserId", actorUserId),
+                Timestamp("createdAtUtc", createdAtUtc),
+            ],
+            ct);
+
+    internal static async Task<int> ResolveBuiltInForRendererAsync(
+        RentalCommandDbContext db,
+        AtomicAuditScope auditScope,
+        int portfolioId,
+        string businessKey,
+        string rendererKey,
+        int rendererVersion,
+        string snapshotPayload,
+        int actorUserId,
+        DateTime createdAtUtc,
+        CancellationToken ct = default)
+    {
+        var parameters = new NpgsqlParameter[]
+        {
+            Integer("portfolioId", portfolioId),
+            Text("businessKey", businessKey),
+            Text("rendererKey", rendererKey),
+            Integer("rendererVersion", rendererVersion),
+            JsonParameter("snapshotPayload", snapshotPayload),
+            Integer("actorUserId", actorUserId),
+            Timestamp("createdAtUtc", createdAtUtc),
+        };
+
+        for (var attempt = 0; attempt < ConcurrentSourceResolutionAttempts; attempt++)
+        {
+            using var lease = BeginSourceVersionInsertLeaseIfRequired(auditScope);
+            var row = await db.Database.SingleTopLevelResultAsync<LegalDocumentSourceVersionRow>(
+                ResolveBuiltInSql, CloneSourceResolutionParameters(parameters), ct);
+            if (row.DocumentSourceVersionId > 0)
+            {
+                return row.DocumentSourceVersionId;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Built-in legal-document source {rendererKey}/v{rendererVersion} could not be resolved.");
+    }
+
+    private static async Task<ResolvedAuthoredDocumentSourceVersion?> ResolveAuthoredForRendererAsync(
+        RentalCommandDbContext db,
+        AtomicAuditScope auditScope,
+        string sql,
+        NpgsqlParameter[] parameters,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < ConcurrentSourceResolutionAttempts; attempt++)
+        {
+            using var lease = BeginSourceVersionInsertLeaseIfRequired(auditScope);
+            var row = await db.Database.SingleOrDefaultTopLevelResultAsync<AuthoredSourceRow>(
+                sql, CloneSourceResolutionParameters(parameters), ct);
+            if (row is not null && row.DocumentSourceVersionId > 0)
+            {
+                return new(
+                    row.DocumentSourceVersionId,
+                    row.SnapshotPayload,
+                    row.OriginalStoragePath);
+            }
+        }
+
+        return null;
+    }
+
+    private static IDisposable? BeginSourceVersionInsertLeaseIfRequired(AtomicAuditScope auditScope) =>
+        auditScope.IsActive
+            ? auditScope.BeginInternalRawDml(
+                "LegalDocumentSourceVersions",
+                AtomicRawDmlOperation.Insert)
+            : null;
+
     private static async Task<AtomicLegalDocumentSourceVersionResult> ResolveLegalDocumentSourceVersionAsync(
         RentalCommandDbContext db,
         string sql,
@@ -119,6 +228,13 @@ public static partial class AtomicLeaseMutationPersistence
     private sealed class LegalDocumentSourceVersionRow
     {
         public int DocumentSourceVersionId { get; set; }
+    }
+
+    private sealed class AuthoredSourceRow
+    {
+        public int DocumentSourceVersionId { get; set; }
+        public string SnapshotPayload { get; set; } = string.Empty;
+        public string? OriginalStoragePath { get; set; }
     }
 
     private const string ResolveAuthoredSql = """
@@ -214,6 +330,101 @@ public static partial class AtomicLeaseMutationPersistence
              WHERE source."PortfolioId" = @portfolioId
                AND source."SourceKind" = 'ImportedExternalDocument'),
             0) AS "DocumentSourceVersionId"
+        """;
+
+    private const string RendererSnapshotPayloadSql = """
+        jsonb_build_object(
+            'documentTemplateId', template."Id",
+            'documentTemplateVersion', template."Version",
+            'renderMode', template."RenderMode",
+            'originalStoredFileId', template."OriginalStoredFileId",
+            'compiledStoredFileId', template."CompiledStoredFileId",
+            'draftHtml', template."DraftHtml",
+            'fields', COALESCE((
+                SELECT jsonb_agg(jsonb_build_object(
+                    'id', field."Id", 'fieldKey', field."FieldKey", 'label', field."Label",
+                    'kind', field."Kind", 'signerRole', field."SignerRole",
+                    'pageNumber', field."PageNumber", 'xPct', field."XPct", 'yPct', field."YPct",
+                    'widthPct', field."WidthPct", 'heightPct', field."HeightPct",
+                    'required', field."Required", 'locked', field."Locked",
+                    'sortOrder', field."SortOrder", 'defaultText', field."DefaultText")
+                    ORDER BY field."SortOrder", field."Id")
+                FROM "DocumentTemplateFields" AS field
+                WHERE field."DocumentTemplateId" = template."Id"
+                  AND field."PortfolioId" = template."PortfolioId"
+            ), '[]'::jsonb)
+        )
+        """;
+
+    private static readonly string ResolveActiveOverlayForRendererSql = BuildResolveAuthoredForRendererSql("""
+        template."PortfolioId" = @portfolioId
+        AND template."Kind" = 'Lease'
+        AND template."Status" = 'Active'
+        AND template."RenderMode" = 'Overlay'
+        AND template."ArchivedAtUtc" IS NULL
+        AND template."OriginalStoredFileId" IS NOT NULL
+        AND template."DefaultForPortfolio"
+        AND (template."PropertyId" = @propertyId OR template."PropertyId" IS NULL)
+        ORDER BY CASE WHEN template."PropertyId" = @propertyId THEN 1 ELSE 0 END DESC,
+                 template."UpdatedAtUtc" DESC,
+                 template."Id" DESC
+        LIMIT 1
+        """);
+
+    private static readonly string ResolveAuthoredTemplateForRendererSql = BuildResolveAuthoredForRendererSql("""
+        template."PortfolioId" = @portfolioId
+        AND template."Id" = @documentTemplateId
+        AND template."Kind" = 'Lease'
+        AND template."Status" = 'Active'
+        AND template."ArchivedAtUtc" IS NULL
+        LIMIT 1
+        """);
+
+    private static string BuildResolveAuthoredForRendererSql(string candidatePredicate) => $$"""
+        WITH candidate AS MATERIALIZED (
+            SELECT template."Id", template."Version", template."RenderMode",
+                   'template:' || template."Id"::text || ':v' || template."Version"::text AS business_key,
+                   {{RendererSnapshotPayloadSql}} AS snapshot_payload,
+                   original_file."FilePath" AS original_storage_path
+            FROM "DocumentTemplates" AS template
+            LEFT JOIN "StoredFiles" AS original_file
+              ON original_file."PortfolioId" = template."PortfolioId"
+             AND original_file."Id" = template."OriginalStoredFileId"
+             AND original_file."DeletedAt" IS NULL
+            WHERE {{candidatePredicate}}
+        ), inserted AS (
+            INSERT INTO "LegalDocumentSourceVersions"
+                ("PublicId", "PortfolioId", "SourceKind", "BusinessKey",
+                 "DocumentTemplateId", "DocumentTemplateVersion", "RendererKey", "RendererVersion",
+                 "SnapshotPayload", "CreatedAtUtc", "CreatedByUserId")
+            SELECT gen_random_uuid(), @portfolioId, 'AuthoredTemplateSnapshot', candidate.business_key,
+                   candidate."Id", candidate."Version", lower(candidate."RenderMode"), 1,
+                   candidate.snapshot_payload, @createdAtUtc, @actorUserId
+            FROM candidate
+            ON CONFLICT ("PortfolioId", "BusinessKey") DO NOTHING
+            RETURNING "Id", "BusinessKey", "SnapshotPayload"
+        ), resolved AS (
+            SELECT inserted."Id", inserted."SnapshotPayload", candidate.original_storage_path
+            FROM inserted
+            JOIN candidate ON candidate.business_key = inserted."BusinessKey"
+            UNION ALL
+            SELECT source."Id", source."SnapshotPayload", stored_file."FilePath"
+            FROM candidate
+            JOIN "LegalDocumentSourceVersions" AS source
+              ON source."PortfolioId" = @portfolioId
+             AND source."BusinessKey" = candidate.business_key
+             AND source."SourceKind" = 'AuthoredTemplateSnapshot'
+            LEFT JOIN "StoredFiles" AS stored_file
+              ON stored_file."PortfolioId" = source."PortfolioId"
+             AND stored_file."Id" = NULLIF(source."SnapshotPayload" ->> 'originalStoredFileId', '')::integer
+             AND stored_file."DeletedAt" IS NULL
+            WHERE NOT EXISTS (SELECT 1 FROM inserted)
+        )
+        SELECT resolved."Id" AS "DocumentSourceVersionId",
+               resolved."SnapshotPayload"::text AS "SnapshotPayload",
+               resolved.original_storage_path AS "OriginalStoragePath"
+        FROM resolved
+        LIMIT 1
         """;
 
     private const string ResolveBuiltInSql = """

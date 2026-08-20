@@ -40,7 +40,7 @@ public sealed class LegalDocumentSourceVersionResolverSqlTests
     [Fact]
     public void Active_overlay_capture_is_one_snapshot_insert_and_return_statement()
     {
-        var sql = StaticSql("ResolveActiveOverlaySql");
+        var sql = StaticAtomicSql("ResolveActiveOverlayForRendererSql");
 
         sql.Should().Contain("WITH candidate AS MATERIALIZED");
         sql.Should().Contain("jsonb_agg(jsonb_build_object(");
@@ -65,26 +65,13 @@ public sealed class LegalDocumentSourceVersionResolverSqlTests
     [Fact]
     public void Built_in_resolver_targets_the_filtered_renderer_identity()
     {
-        var sql = StaticSql("ResolveBuiltInSql");
+        var sql = StaticAtomicSql("ResolveBuiltInSql");
 
         sql.Should().Contain("ON CONFLICT (\"PortfolioId\", \"RendererKey\", \"RendererVersion\")");
         sql.Should().Contain("WHERE \"SourceKind\" = 'BuiltInRenderer'");
         sql.Should().Contain("DO NOTHING");
         sql.Should().Contain("RETURNING \"Id\"");
         sql.Should().NotContain("UPDATE");
-    }
-
-    [Fact]
-    public void Atomic_built_in_resolver_uses_the_same_filtered_renderer_identity()
-    {
-        var sql = StaticAtomicSql("ResolveBuiltInSql");
-
-        sql.Should().Contain("'BuiltInRenderer'");
-        sql.Should().Contain("ON CONFLICT (\"PortfolioId\", \"RendererKey\", \"RendererVersion\")");
-        sql.Should().Contain("WHERE \"SourceKind\" = 'BuiltInRenderer'");
-        sql.Should().Contain("DO NOTHING");
-        sql.Should().Contain("RETURNING \"Id\"");
-        sql.Should().NotContain("DO UPDATE");
     }
 
     [Fact]
@@ -112,12 +99,6 @@ public sealed class LegalDocumentSourceVersionResolverSqlTests
         index.IsUnique.Should().BeTrue();
         index.GetFilter().Should().Be("\"SourceKind\" = 'BuiltInRenderer'");
     }
-
-    private static string StaticSql(string fieldName) =>
-        (string)(typeof(LegalDocumentSourceVersionResolver)
-            .GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Static)!
-            .GetValue(null)
-            ?? throw new InvalidOperationException($"Missing SQL field {fieldName}."));
 
     private static string StaticAtomicSql(string fieldName) =>
         (string)(typeof(AtomicLeaseMutationPersistence)
