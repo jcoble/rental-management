@@ -73,7 +73,6 @@ internal static class CoreCrudWriteSupport
         var mutationNow = request.Operation == AtomicCoreCrudMutationOperation.Create
             ? request.CreatedAtUtc ?? databaseNow
             : request.ChangedAtUtc ?? databaseNow;
-        context.UseDatabaseWallClockForAudit(mutationNow);
         if (authorize)
         {
             await AuthorizeAsync(request, db, databaseNow, ct);

@@ -36,7 +36,8 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
     public async Task VendorCreate_PreservesLegacyRows_ReplaysExactly_AndRejectsStaleAuthorization()
     {
         var now = DateTime.UtcNow;
-        var scope = await SeedAdministratorScopeAsync(now);
+        var auditNow = now.AddHours(1);
+        var scope = await SeedScopeAsync(now);
         var request = new CreateVendorRequest
         {
             Name = "Phase 3 Plumbing",
@@ -58,7 +59,7 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
 
         VendorResponse first;
         VendorResponse replay;
-        await using (var services = BuildServices(now))
+        await using (var services = BuildServices(new FirstThenFixedTimeProvider(now, auditNow)))
         await using (var serviceScope = services.CreateAsyncScope())
         {
             var sut = serviceScope.ServiceProvider.GetRequiredService<VendorService>();
@@ -105,7 +106,7 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
             EntityId = vendor.Id,
             Operation = AuditLogOperation.Created,
             ChangeReason = $"Vendor {vendor.Name} created",
-            Timestamp = now,
+            Timestamp = auditNow,
             AttemptId = receipt.AttemptId,
         }, options => options.ExcludingMissingMembers());
 
@@ -133,7 +134,7 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
         await _context.Db.SaveChangesAsync();
         _context.Db.ChangeTracker.Clear();
 
-        await using (var services = BuildServices(now.AddMinutes(2)))
+        await using (var services = BuildServices(new FixedTimeProvider(now.AddMinutes(2))))
         await using (var serviceScope = services.CreateAsyncScope())
         {
             var sut = serviceScope.ServiceProvider.GetRequiredService<VendorService>();
@@ -151,7 +152,32 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
             row.IdempotencyKey == operationKey + ":entity")).Should().Be(1);
     }
 
-    private async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(DateTime now)
+    [Fact]
+    public async Task VendorCreate_AllowsSelectedPropertyWorkManageScope_ThroughExecutor()
+    {
+        var now = DateTime.UtcNow;
+        var scope = await SeedScopeAsync(now, selectedPropertyScope: true);
+
+        await using var services = BuildServices(new FixedTimeProvider(now));
+        await using var serviceScope = services.CreateAsyncScope();
+        var sut = serviceScope.ServiceProvider.GetRequiredService<VendorService>();
+
+        var created = await sut.CreateAsync(scope, new CreateVendorRequest
+        {
+            Name = "Selected Scope Roofing",
+            ServiceType = "Roofing",
+            Email = "selected-scope@example.test",
+        }, "selected-work-vendor-create");
+
+        created.Should().NotBeNull();
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.Vendors.AsNoTracking().CountAsync(row =>
+            row.Id == created!.Id && row.PortfolioId == scope.PortfolioId)).Should().Be(1);
+    }
+
+    private async Task<WorkspaceReadScope> SeedScopeAsync(
+        DateTime now,
+        bool selectedPropertyScope = false)
     {
         var user = await _context.Db.Users.SingleAsync(row => row.Id == 1);
         var accessContext = new WorkspaceAccessContext
@@ -177,9 +203,13 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
             WorkspaceMembership = membership,
             PortfolioId = 1,
             RoleProfileId = AccessCatalog.Roles.Single(role =>
-                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+                role.Key == (selectedPropertyScope
+                    ? RoleProfileKeys.PropertyManager
+                    : RoleProfileKeys.WorkspaceAdministrator)).Id,
             Status = MembershipRoleAssignmentStatus.Active,
-            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            ScopeKind = selectedPropertyScope
+                ? MembershipRoleAssignmentScopeKind.SelectedProperties
+                : MembershipRoleAssignmentScopeKind.AllProperties,
             EffectiveFromUtc = now.AddMinutes(-5),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
@@ -205,6 +235,15 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
             CreatedAt = now,
             UpdatedAt = now,
         };
+        if (selectedPropertyScope)
+        {
+            assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+            {
+                MembershipRoleAssignment = assignment,
+                PortfolioId = 1,
+                Property = property,
+            });
+        }
         _context.Db.AddRange(accessContext, membership, assignment, session, property);
         await _context.Db.SaveChangesAsync();
         _context.Db.ChangeTracker.Clear();
@@ -212,10 +251,10 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
             1, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
-    private ServiceProvider BuildServices(DateTime now)
+    private ServiceProvider BuildServices(TimeProvider timeProvider)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
+        services.AddSingleton(timeProvider);
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
@@ -231,6 +270,15 @@ public sealed class OwnerVendorCrudWritePostgreSqlTests : IAsyncLifetime
     private sealed class FixedTimeProvider(DateTime now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => new(now);
+    }
+
+    private sealed class FirstThenFixedTimeProvider(DateTime first, DateTime subsequent)
+        : TimeProvider
+    {
+        private int _calls;
+
+        public override DateTimeOffset GetUtcNow() =>
+            new(Interlocked.Increment(ref _calls) == 1 ? first : subsequent);
     }
 
     private sealed class TestActor : ICurrentActor
