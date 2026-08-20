@@ -480,30 +480,6 @@ public class CsvImportServiceTests : IDisposable
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
-            if (command is AtomicUnitCsvImportCommand unit
-                && typeof(TResult) == typeof(AtomicUnitCsvImportResult))
-            {
-                UnitCommands.Add(unit);
-                var batch = UnitResult(unit.Rows, created: true);
-                var result = new AtomicUnitCsvImportResult(
-                    batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
-                    batch.CreatedCount, batch.DuplicateRows);
-                return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
-                    new AtomicCommandOutcome<AtomicUnitCsvImportResult>(
-                        result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
-            }
-            if (command is AtomicCoreCsvImportCommand core
-                && typeof(TResult) == typeof(AtomicCoreCsvImportResult))
-            {
-                CoreCommands.Add(core);
-                var batch = CoreResult(core.Domain, core.RowsJson, created: true);
-                var result = new AtomicCoreCsvImportResult(
-                    batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
-                    batch.CreatedCount, batch.DuplicateRows);
-                return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
-                    new AtomicCommandOutcome<AtomicCoreCsvImportResult>(
-                        result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
-            }
             if (command is AtomicPaymentCsvImportCommand payment
                 && typeof(TResult) == typeof(AtomicPaymentCsvImportResult))
             {
