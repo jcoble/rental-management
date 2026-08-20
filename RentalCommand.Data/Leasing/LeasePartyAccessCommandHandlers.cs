@@ -13,21 +13,79 @@ using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Leasing;
 
+public static class LeasePartyAccessWriteSupport
+{
+    public static string IdempotencyKey(ILeasePartyAccessCommand command, string digest) =>
+        command switch
+        {
+            AddEffectivePartyCommand =>
+                $"{command.PortfolioId}:{command.LeaseManagementId}:{digest}",
+            EndEffectivePartyCommand value =>
+                $"{value.PortfolioId}:{value.LeaseManagementId}:{value.PartyId}:{digest}",
+            ChangeEffectivePartyRoleCommand value =>
+                $"{value.PortfolioId}:{value.LeaseManagementId}:{value.PartyId}:{digest}",
+            GrantTenantUserAccessCommand value =>
+                $"{value.PortfolioId}:{value.LeaseManagementId}:{value.PartyId}:{digest}",
+            RevokeTenantUserAccessCommand value =>
+                $"{value.PortfolioId}:{value.LeaseManagementId}:{value.PartyId}:{value.TenantUserAccessId}:{digest}",
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+    public static TransactionalWrite<TCommand, LeasePartyMutationResult> Write<TCommand>(
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<LeasePartyMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, ILeasePartyAccessCommand
+    {
+        LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
+        var (operationName, resultContract, protocol) = command switch
+        {
+            AddEffectivePartyCommand =>
+                ("lease-management.party.add", "lease-management.party.add.v1", WriteLockProtocol.LeaseParty),
+            EndEffectivePartyCommand =>
+                ("lease-management.party.end", "lease-management.party.end.v1", WriteLockProtocol.LeaseParty),
+            ChangeEffectivePartyRoleCommand =>
+                ("lease-management.party.change-role", "lease-management.party.change-role.v1", WriteLockProtocol.LeaseParty),
+            GrantTenantUserAccessCommand =>
+                ("lease-management.party.access.grant", "lease-management.party.access.grant.v1", WriteLockProtocol.LeasePartyAccessGrant),
+            RevokeTenantUserAccessCommand =>
+                ("lease-management.party.access.revoke", "lease-management.party.access.revoke.v1", WriteLockProtocol.LeasePartyAccessRevoke),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return new TransactionalWrite<TCommand, LeasePartyMutationResult>(
+            operationName,
+            WriteIdempotencyPolicy.Required,
+            command,
+            resultContract,
+            new WriteLockPlan(protocol,
+                WriteLock.For("LeaseManagement", command.LeaseManagementId)),
+            executeAsync,
+            authorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Lease-party and access writes no longer use the legacy atomic handlers.");
+}
+
 public sealed class AddEffectivePartyHandler
     : IAtomicCommandHandler<AddEffectivePartyCommand, LeasePartyMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<LeasePartyMutationResult> HandleAsync(
+        AddEffectivePartyCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public AddEffectivePartyHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        AddEffectivePartyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public async Task<LeasePartyMutationResult> HandleAsync(
+    public static async Task<LeasePartyMutationResult> ExecuteAsync(
+        RentalCommandDbContext _db,
         AddEffectivePartyCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var nowUtc = times.WallClockUtc;
         var currentDate = times.BusinessDate;
@@ -133,7 +191,8 @@ public sealed class AddEffectivePartyHandler
             null);
     }
 
-    public Task AuthorizeReplayAsync(
+    public static Task AuthorizeAsync(
+        RentalCommandDbContext _db,
         AddEffectivePartyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
@@ -148,18 +207,22 @@ public sealed class AddEffectivePartyHandler
 public sealed class EndEffectivePartyHandler
     : IAtomicCommandHandler<EndEffectivePartyCommand, LeasePartyMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<LeasePartyMutationResult> HandleAsync(
+        EndEffectivePartyCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public EndEffectivePartyHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        EndEffectivePartyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public async Task<LeasePartyMutationResult> HandleAsync(
+    public static async Task<LeasePartyMutationResult> ExecuteAsync(
+        RentalCommandDbContext _db,
         EndEffectivePartyCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var nowUtc = times.WallClockUtc;
         var currentDate = times.BusinessDate;
@@ -335,7 +398,8 @@ public sealed class EndEffectivePartyHandler
             null);
     }
 
-    public Task AuthorizeReplayAsync(
+    public static Task AuthorizeAsync(
+        RentalCommandDbContext _db,
         EndEffectivePartyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
@@ -350,18 +414,22 @@ public sealed class EndEffectivePartyHandler
 public sealed class ChangeEffectivePartyRoleHandler
     : IAtomicCommandHandler<ChangeEffectivePartyRoleCommand, LeasePartyMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<LeasePartyMutationResult> HandleAsync(
+        ChangeEffectivePartyRoleCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public ChangeEffectivePartyRoleHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        ChangeEffectivePartyRoleCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public async Task<LeasePartyMutationResult> HandleAsync(
+    public static async Task<LeasePartyMutationResult> ExecuteAsync(
+        RentalCommandDbContext _db,
         ChangeEffectivePartyRoleCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var nowUtc = times.WallClockUtc;
         var currentDate = times.BusinessDate;
@@ -566,7 +634,8 @@ public sealed class ChangeEffectivePartyRoleHandler
             null);
     }
 
-    public Task AuthorizeReplayAsync(
+    public static Task AuthorizeAsync(
+        RentalCommandDbContext _db,
         ChangeEffectivePartyRoleCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
@@ -581,18 +650,22 @@ public sealed class ChangeEffectivePartyRoleHandler
 public sealed class GrantTenantUserAccessHandler
     : IAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<LeasePartyMutationResult> HandleAsync(
+        GrantTenantUserAccessCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public GrantTenantUserAccessHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        GrantTenantUserAccessCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public async Task<LeasePartyMutationResult> HandleAsync(
+    public static async Task<LeasePartyMutationResult> ExecuteAsync(
+        RentalCommandDbContext _db,
         GrantTenantUserAccessCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var changedAtUtc = times.EffectiveNowUtc;
@@ -843,7 +916,8 @@ public sealed class GrantTenantUserAccessHandler
             null);
     }
 
-    public Task AuthorizeReplayAsync(
+    public static Task AuthorizeAsync(
+        RentalCommandDbContext _db,
         GrantTenantUserAccessCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
@@ -977,18 +1051,22 @@ public sealed class GrantTenantUserAccessHandler
 public sealed class RevokeTenantUserAccessHandler
     : IAtomicCommandHandler<RevokeTenantUserAccessCommand, LeasePartyMutationResult>
 {
-    private readonly RentalCommandDbContext _db;
+    public Task<LeasePartyMutationResult> HandleAsync(
+        RevokeTenantUserAccessCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public RevokeTenantUserAccessHandler(RentalCommandDbContext db) => _db = db;
+    public Task AuthorizeReplayAsync(
+        RevokeTenantUserAccessCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw LeasePartyAccessWriteSupport.RetiredPath();
 
-    public async Task<LeasePartyMutationResult> HandleAsync(
+    public static async Task<LeasePartyMutationResult> ExecuteAsync(
+        RentalCommandDbContext _db,
         RevokeTenantUserAccessCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var changedAtUtc = times.EffectiveNowUtc;
@@ -1086,7 +1164,8 @@ public sealed class RevokeTenantUserAccessHandler
             null);
     }
 
-    public Task AuthorizeReplayAsync(
+    public static Task AuthorizeAsync(
+        RentalCommandDbContext _db,
         RevokeTenantUserAccessCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
