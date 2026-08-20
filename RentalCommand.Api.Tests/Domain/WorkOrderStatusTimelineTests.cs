@@ -61,13 +61,13 @@ public class WorkOrderStatusTimelineTests : IDisposable
         _services = AtomicDomainTestKernel.CreateForWorkOrders(_conn.ConnectionString);
 
         _service = new WorkOrderService(
-            _db,
+            _services.GetRequiredService<RentalCommandDbContext>(),
             new NoopDataUpdateService(),
             new NoopMessagePublisher(),
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         _portal = new PortalService(_db, new NoopLeaseQaService(), TimeProvider.System);
     }
 
