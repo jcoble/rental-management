@@ -9,6 +9,7 @@ using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Tests;
 using RentalCommand.Api.Tests.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -31,6 +32,7 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
     private MigratedPostgreSqlTestContext _ctx = null!;
     private RentalCommandDbContext _db = null!;
     private ServiceProvider _services = null!;
+    private AsyncServiceScope _serviceScope;
     private CanonicalScanTestAuthorization _authorization = null!;
 
     public ScanRetryControllerPostgreSqlTests(MigratedPostgreSqlFixture fixture)
@@ -43,6 +45,7 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         _ctx = await _fixture.CreateContextAsync();
         _db = _ctx.Db;
         _services = AtomicDomainTestKernel.CreateForScanRetryPostgreSql(_ctx.ConnectionString);
+        _serviceScope = _services.CreateAsyncScope();
         SeedPortfolio(PortfolioId);
         _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
             _db, PortfolioId, userId: 7, sessionId: SessionId);
@@ -50,6 +53,7 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        await _serviceScope.DisposeAsync();
         await _services.DisposeAsync();
         await _ctx.DisposeAsync();
     }
@@ -144,6 +148,8 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
                 .WhereAuthorizedForReview(_db, _authorization.Scope, now)
                 .AnyAsync(candidate => candidate.Id == draft.Id))
             .Should().BeTrue();
+        var writeDb = _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        await ActivateApiScopeAsync(writeDb, _authorization.Scope);
         var controller = CreateController();
 
         var result = await controller.SetPaymentAccount(
@@ -252,8 +258,9 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         var controller = new ScanController(
             Mock.Of<IScanService>(),
             Mock.Of<IScanUploadService>(),
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
-            _db,
+            _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
+            _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             Mock.Of<IFileStorage>(),
             TimeProvider.System)
         {
@@ -399,5 +406,20 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         session.ExpiresAtUtc = expiresAtUtc;
         await _db.SaveChangesAsync();
         _db.ChangeTracker.Clear();
+    }
+
+    private static async Task ActivateApiScopeAsync(
+        RentalCommandDbContext db,
+        WorkspaceReadScope scope)
+    {
+        await db.Database.OpenConnectionAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {scope.AccessRevision.ToString()}, false);
+            """);
     }
 }

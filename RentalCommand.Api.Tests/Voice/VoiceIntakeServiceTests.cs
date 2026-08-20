@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
@@ -44,14 +45,7 @@ public class VoiceIntakeServiceTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            CreateVoiceScanDraftCommand,
-            ScanDraftMutationResult,
-            CreateVoiceScanDraftHandler>();
-        services.AddAtomicCommandHandler<
-            AnswerVoiceScanDraftCommand,
-            ScanDraftMutationResult,
-            AnswerVoiceScanDraftHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(
                     _ctx.Db.Database.GetDbConnection(),
@@ -97,9 +91,10 @@ public class VoiceIntakeServiceTests : IAsyncLifetime
             }
             """);
 
+        await using var serviceScope = _services.CreateAsyncScope();
         var sut = new VoiceIntakeService(
-            _ctx.Db,
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
             _llm.Object,
             _transcriber.Object,
             _storage.Object,
@@ -139,9 +134,10 @@ public class VoiceIntakeServiceTests : IAsyncLifetime
     public async Task CreateDraftAsync_LowQualityInitialTranscript_ThrowsBeforeCreatingNoisyDraft(string transcript)
     {
         await _ctx.ActivateApiScopeAsync(_scope);
+        await using var serviceScope = _services.CreateAsyncScope();
         var sut = new VoiceIntakeService(
-            _ctx.Db,
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
             _llm.Object,
             _transcriber.Object,
             _storage.Object,

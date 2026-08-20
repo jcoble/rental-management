@@ -9,19 +9,18 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
+using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Scanning;
 
 namespace RentalCommand.Api.Services.Voice;
 
 public sealed class VoiceIntakeService : IVoiceIntakeService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly AtomicJsonResultCodec<ScanDraftMutationResult> MutationCodec =
-        new("scan-draft.mutation.result.v1");
-
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly ILlmProvider _llm;
     private readonly IAudioTranscriptionService _transcriber;
     private readonly IFileStorage _storage;
@@ -40,7 +39,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
 
     public VoiceIntakeService(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         ILlmProvider llm,
         IAudioTranscriptionService transcriber,
         IFileStorage storage,
@@ -48,7 +47,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         TimeProvider timeProvider)
     {
         _db = db;
-        _atomic = atomic;
+        _writes = writes;
         _llm = llm;
         _transcriber = transcriber;
         _storage = storage;
@@ -127,12 +126,14 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
             audioBytes.LongLength,
             sourceContentSha256,
             $"voice-create:{operationDigest}");
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "voice-scan-draft.create",
-                $"{portfolioId}:{scope.UserId}:{operationDigest}"),
-            command,
-            MutationCodec,
+        var outcome = await _writes.ExecuteAsync(
+            $"{portfolioId}:{scope.UserId}:{operationDigest}",
+            ScanDraftWriteSupport.Write(
+                "voice-scan-draft.create", command, ScanDraftWriteSupport.MutationResultContract,
+                (request, context, token) => CreateVoiceScanDraftHandler.ExecuteAsync(
+                    _db, request, context, token),
+                (request, context, token) => CreateVoiceScanDraftHandler.AuthorizeAsync(
+                    _db, request, context, token)),
             ct);
         return ToEntity(RequireApplied(outcome.Value));
     }
@@ -185,12 +186,14 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
             classification.TokensUsed,
             propertyId,
             operationKey);
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "voice-scan-draft.answer",
-                $"{portfolioId}:{scope.UserId}:{draftId}:{Digest(operationKey)}"),
-            command,
-            MutationCodec,
+        var outcome = await _writes.ExecuteAsync(
+            $"{portfolioId}:{scope.UserId}:{draftId}:{Digest(operationKey)}",
+            ScanDraftWriteSupport.Write(
+                "voice-scan-draft.answer", command, ScanDraftWriteSupport.MutationResultContract,
+                (request, context, token) => AnswerVoiceScanDraftHandler.ExecuteAsync(
+                    _db, request, context, token),
+                (request, context, token) => AnswerVoiceScanDraftHandler.AuthorizeAsync(
+                    _db, request, context, token)),
             ct);
         return outcome.Value.Outcome switch
         {

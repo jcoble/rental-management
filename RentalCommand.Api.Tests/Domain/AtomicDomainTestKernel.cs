@@ -345,14 +345,7 @@ internal static class AtomicDomainTestKernel
     internal static ServiceProvider CreateForScanRetryPostgreSql(string connectionString)
     {
         var services = CorePostgreSql(connectionString);
-        services.AddAtomicCommandHandler<
-            RetryScanDraftCommand,
-            ScanDraftMutationResult,
-            RetryScanDraftHandler>();
-        services.AddAtomicCommandHandler<
-            SetScanDraftPaymentAccountCommand,
-            ScanDraftMutationResult,
-            SetScanDraftPaymentAccountHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
