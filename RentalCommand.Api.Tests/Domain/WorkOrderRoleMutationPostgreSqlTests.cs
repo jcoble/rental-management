@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -17,6 +18,7 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Operations;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -601,7 +603,8 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
         using var workOrderScope = workOrderServices.CreateScope();
         using var appointmentScope = appointmentServices.CreateScope();
         var workOrderAtomic = workOrderScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-        var appointmentAtomic = appointmentScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var appointmentDb = appointmentScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var appointmentWrites = appointmentScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
 
         var cancelIdentity = Identity(
             "portal.work-order.cancel",
@@ -646,10 +649,14 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
         {
             await linkedSetGate.SecondSetReadReached.WaitAsync(TimeSpan.FromSeconds(10));
 
-            var created = await Task.Run(() => appointmentAtomic.ExecuteAsync(
-                    createIdentity,
-                    createCommand,
-                    new AtomicJsonResultCodec<OperationMutationResult>("appointment-mutation-tests.v1")))
+            var created = await Task.Run(() => appointmentWrites.ExecuteAsync(
+                    AppointmentCrudWriteSupport.IdempotencyKey(createCommand.DeliveryIdempotencyKey),
+                    AppointmentCrudWriteSupport.Write(
+                        createCommand,
+                        (command, context, ct) => AppointmentCrudWriteSupport.CreateAsync(
+                            appointmentDb, command, context, ct),
+                        (command, context, ct) => AppointmentCrudWriteSupport.AuthorizeReplayAsync(
+                            appointmentDb, command, context, ct))))
                 .WaitAsync(TimeSpan.FromSeconds(15));
             created.Value.Outcome.Should().Be(OperationMutationOutcome.Applied);
 

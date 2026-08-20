@@ -11,6 +11,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -581,7 +582,8 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             appointmentDb,
             new NoopInspectionDataUpdate(),
             TimeProvider.System,
-            appointmentScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            new RequestWriteExecutor(
+                appointmentScope.ServiceProvider.GetRequiredService<IWriteExecutor>()));
         var editService = new WorkOrderService(
             editDb,
             new NoopInspectionDataUpdate(),
@@ -681,12 +683,12 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             updaterDb,
             new NoopInspectionDataUpdate(),
             TimeProvider.System,
-            updaterScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            updaterScope.ServiceProvider.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         var relinkService = new AppointmentService(
             relinkDb,
             new NoopInspectionDataUpdate(),
             TimeProvider.System,
-            relinkScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            relinkScope.ServiceProvider.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         appointmentGate.Arm();
         _reopenProgressionGate.Arm();
