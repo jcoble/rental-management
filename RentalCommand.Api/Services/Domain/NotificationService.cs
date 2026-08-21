@@ -263,7 +263,7 @@ public class NotificationService : INotificationService
     {
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.Broadcast, 0, string.Empty, operationKey, request);
-        var outcome = await _writes.ExecuteAsync(
+        var outcome = await _writes.ExecuteExactAsync(
             AtomicNotificationMutation.Identity(command).IdempotencyKey,
             AtomicNotificationMutation.Write(_db, command), ct);
         return outcome.Value.ResponseJson is not null
