@@ -3,8 +3,11 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Operations;
+using RentalCommand.Data;
+using RentalCommand.Data.Operations;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -12,25 +15,20 @@ namespace RentalCommand.Api.Controllers;
 [Route("api/v1/technician")]
 public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<RecordTechnicianWorkEntryResult> EntryCodec =
-        new("technician-work-entry.v1");
-    private static readonly AtomicJsonResultCodec<SendTechnicianAssignmentMessageResult> MessageCodec =
-        new("technician-assignment-message.v1");
-    private static readonly AtomicJsonResultCodec<MarkTechnicianAssignmentConversationReadResult> ReadCodec =
-        new("technician-assignment-conversation-read.v1");
-    private static readonly AtomicJsonResultCodec<UpdateAssignedWorkOrderResult> UpdateCodec =
-        new("assigned-work-order.update.v1");
     private readonly ITechnicianExperienceService _service;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
 
     public TechnicianController(
         ITechnicianExperienceService service,
-        IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes,
         TimeProvider timeProvider)
     {
         _service = service;
-        _atomic = atomic;
+        _db = db;
+        _writes = writes;
         _timeProvider = timeProvider;
     }
 
@@ -93,13 +91,9 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
             digest);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "assigned-work-order.update",
-                    $"{envelope.PortfolioId}:{workOrderId}:{digest}"),
-                command,
-                UpdateCodec,
-                ct);
+            var operationKey = $"{envelope.PortfolioId}:{workOrderId}:{digest}";
+            var outcome = await _writes.ExecuteAsync(
+                operationKey, UpdateAssignedWorkOrderHandler.Write(command, _db), ct);
             return outcome.Value.Outcome == UpdateAssignedWorkOrderOutcome.Stale
                 ? Conflict(new
                 {
@@ -133,9 +127,9 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
             request.OccurredAt?.UtcDateTime ?? default, digest);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(
-                "technician-work-entry.record", $"{envelope.PortfolioId}:{workOrderId}:{digest}"),
-                command, EntryCodec, ct);
+            var operationKey = $"{envelope.PortfolioId}:{workOrderId}:{digest}";
+            var outcome = await _writes.ExecuteAsync(
+                operationKey, RecordTechnicianWorkEntryHandler.Write(command, _db), ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -154,9 +148,9 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
             request.Body, digest);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(
-                "technician-assignment-message.send", $"{envelope.PortfolioId}:{workOrderId}:{digest}"),
-                command, MessageCodec, ct);
+            var operationKey = $"{envelope.PortfolioId}:{workOrderId}:{digest}";
+            var outcome = await _writes.ExecuteAsync(
+                operationKey, SendTechnicianAssignmentMessageHandler.Write(command, _db), ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -174,9 +168,9 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
             workOrderId, digest);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(
-                "technician-assignment-conversation.read",
-                $"{envelope.PortfolioId}:{workOrderId}:{digest}"), command, ReadCodec, ct);
+            var operationKey = $"{envelope.PortfolioId}:{workOrderId}:{digest}";
+            var outcome = await _writes.ExecuteAsync(operationKey,
+                MarkTechnicianAssignmentConversationReadHandler.Write(command, _db), ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }

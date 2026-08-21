@@ -14,6 +14,7 @@ using RentalCommand.Core.Time;
 using RentalCommand.Core.Vendors;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Vendors;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -23,25 +24,19 @@ public class VendorService : IVendorService
     private const string EntityType = "Vendor";
     private static readonly string[] ReadCapabilities =
         [CapabilityKeys.WorkRead, CapabilityKeys.WorkManage];
-    private static readonly AtomicJsonResultCodec<RequestVendorW9Result> RequestW9Codec =
-        new("vendor-w9.request.result.v1");
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor? _writes;
     private readonly TimeProvider _timeProvider;
 
     public VendorService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        IAtomicUnitOfWork atomic,
         TimeProvider timeProvider,
         IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
-        _atomic = atomic;
         _writes = writes;
         _timeProvider = timeProvider;
     }
@@ -273,11 +268,8 @@ public class VendorService : IVendorService
         var operationDigest = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(normalizedOperationId)))
             .ToLowerInvariant();
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "vendor-w9.request",
-                $"{portfolioId}:{id}:{operationDigest}"),
-            new RequestVendorW9Command(
+        var operationKey = $"{portfolioId}:{id}:{operationDigest}";
+        var command = new RequestVendorW9Command(
                 portfolioId,
                 id,
                 normalizedOperationId,
@@ -286,9 +278,9 @@ public class VendorService : IVendorService
                 scope.UserId,
                 scope.AccessContextId,
                 scope.AccessRevision,
-                _timeProvider.UtcNow()),
-            RequestW9Codec,
-            ct);
+                _timeProvider.UtcNow());
+        var outcome = await RequireWrites().ExecuteAsync(
+            operationKey, RequestVendorW9Handler.Write(command, _db), ct);
 
         return outcome.Value.Outcome switch
         {

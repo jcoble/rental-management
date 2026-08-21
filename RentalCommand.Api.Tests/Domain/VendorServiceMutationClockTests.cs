@@ -44,7 +44,6 @@ public sealed class VendorServiceMutationClockTests : IDisposable
         _sut = new VendorService(
             _services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
             Mock.Of<IDataUpdateService>(),
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
             _timeProvider,
             _services.GetRequiredService<IRequestWriteExecutor>());
     }
