@@ -497,6 +497,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         {
             AllocateOldestCharges = target.TenantLedgerEntryId is null,
         };
+        await context.AcquireLockAsync("TenantAccount", target.TenantAccountId, ct);
         var result = await new RecordTenantReceiptHandler(_db).ExecuteAsync(receiptCommand, context, ct);
         return new ScanConfirmationTargetWriteResult(
             target.TenantAccountId,

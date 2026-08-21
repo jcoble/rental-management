@@ -53,6 +53,30 @@ public sealed class TenantMoneyWriteExecutorTests
     }
 
     [Fact]
+    public void ScanReceiptComposition_AcquiresTenantAccountLockWithoutRestoringHandlerLock()
+    {
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../.."));
+        var scanSource = File.ReadAllText(Path.Combine(root, "RentalCommand.Data", "Scanning",
+            "ProductionScanConfirmationTargetWriter.cs"));
+        var paymentStart = scanSource.IndexOf("private async Task<ScanConfirmationTargetWriteResult> WritePaymentAsync", StringComparison.Ordinal);
+        var paymentEnd = scanSource.IndexOf("private async Task<ScanConfirmationTargetWriteResult> WriteWorkOrderAsync", paymentStart, StringComparison.Ordinal);
+        var paymentSource = scanSource[paymentStart..paymentEnd];
+        const string lockCall = "await context.AcquireLockAsync(\"TenantAccount\", target.TenantAccountId, ct);";
+
+        paymentSource.Should().Contain(lockCall);
+        paymentSource.IndexOf(lockCall, StringComparison.Ordinal).Should().Be(
+            paymentSource.LastIndexOf(lockCall, StringComparison.Ordinal));
+        paymentSource.IndexOf(lockCall, StringComparison.Ordinal).Should().BeLessThan(
+            paymentSource.IndexOf("new RecordTenantReceiptHandler(_db).ExecuteAsync", StringComparison.Ordinal));
+
+        var handlerSource = File.ReadAllText(Path.Combine(root, "RentalCommand.Data", "Payments",
+            "TenantMoneyCommandHandlers.cs"));
+        var executeStart = handlerSource.IndexOf("public async Task<RecordTenantReceiptResult> ExecuteAsync", StringComparison.Ordinal);
+        var executeEnd = handlerSource.IndexOf("public Task AuthorizeReplayAsync", executeStart, StringComparison.Ordinal);
+        handlerSource[executeStart..executeEnd].Should().NotContain("AcquireLockAsync");
+    }
+
+    [Fact]
     public async Task AllLegacyHandlerArmsThrow()
     {
         var commands = Commands();
