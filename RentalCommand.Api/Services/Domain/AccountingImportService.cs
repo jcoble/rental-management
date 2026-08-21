@@ -9,6 +9,8 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
+using RentalCommand.Api.Writes;
+using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -21,31 +23,34 @@ public sealed class AccountingImportService
 {
     internal const int MaxItemsPerResource = 2_000;
 
+    private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
     private readonly AccountingProviderResolver _providerResolver;
     private readonly AccountingAppSettingsResolver _settingsResolver;
     private readonly AccountingTokenService _tokenService;
     private readonly IAccountingConnectionClaimStore _claims;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingImportService> _logger;
 
     public AccountingImportService(
+        RentalCommandDbContext db,
         IDataProtectionProvider dataProtection,
         AccountingProviderResolver providerResolver,
         AccountingAppSettingsResolver settingsResolver,
         AccountingTokenService tokenService,
         IAccountingConnectionClaimStore claims,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         TimeProvider timeProvider,
         ILogger<AccountingImportService> logger)
     {
+        _db = db;
         _protector = dataProtection.CreateProtector("RentalCommand.Accounting.v1");
         _providerResolver = providerResolver;
         _settingsResolver = settingsResolver;
         _tokenService = tokenService;
         _claims = claims;
-        _atomic = atomic;
+        _writes = writes;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -132,13 +137,12 @@ public sealed class AccountingImportService
             expensePull?.Items ?? [],
             JsonSerializer.Serialize(cursors),
             appliedAt);
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
+        var identity = new AtomicCommandIdentity(
                 "accounting.pull.apply",
-                $"{connection.Id}:{workerFence.ClaimToken:N}:{batchIdentity}"),
-            command,
-            new AtomicJsonResultCodec<ApplyAccountingPullResult>("accounting.pull.apply.v1"),
-            ct);
+                $"{connection.Id}:{workerFence.ClaimToken:N}:{batchIdentity}");
+        var handler = new ApplyAccountingPullResultHandler(_db);
+        var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
+            AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         var value = outcome.Value;
         return new ImportSummary(
             value.CustomersMapped,

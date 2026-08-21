@@ -989,7 +989,6 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
         _context.Db,
         Mock.Of<ILeaseQaService>(),
         new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-        _services.GetRequiredService<IAtomicUnitOfWork>(),
         _services.GetRequiredService<IRequestWriteExecutor>());
 
     private WorkOrderService WorkOrderService() => new(

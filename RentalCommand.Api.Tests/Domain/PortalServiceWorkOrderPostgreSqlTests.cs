@@ -172,7 +172,6 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
             services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
             Mock.Of<ILeaseQaService>(),
             clock,
-            services.GetRequiredService<IAtomicUnitOfWork>(),
             services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         var created = await service.CreateTenantWorkOrderAsync(

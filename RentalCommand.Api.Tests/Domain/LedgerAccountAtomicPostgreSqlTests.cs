@@ -10,6 +10,8 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
@@ -22,9 +24,8 @@ namespace RentalCommand.Api.Tests.Domain;
 public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
-    private static readonly AtomicJsonResultCodec<LedgerAccountMutationResult> Codec =
-        new("accounting.ledger-account.mutation.v1");
-
+    private static readonly DateTime InterceptorNow =
+        new(2099, 8, 21, 12, 0, 0, DateTimeKind.Utc);
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _context = null!;
     private ServiceProvider _services = null!;
@@ -74,12 +75,14 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         _context.Db.ChangeTracker.Clear();
         (await _context.Db.LedgerAccounts.CountAsync(row => row.PortfolioId == PortfolioId))
             .Should().Be(1);
-        (await _context.Db.AtomicAuditLogs.CountAsync(row =>
-                row.PortfolioId == PortfolioId
-                && row.EntityType == nameof(LedgerAccount)
-                && row.EntityId == account.Id
-                && row.Operation == AuditLogOperation.Created))
-            .Should().Be(1);
+        var storedAccount = await _context.Db.LedgerAccounts.SingleAsync(row => row.Id == account.Id);
+        var audit = await _context.Db.AtomicAuditLogs.SingleAsync(row =>
+            row.PortfolioId == PortfolioId
+            && row.EntityType == nameof(LedgerAccount)
+            && row.EntityId == account.Id
+            && row.Operation == AuditLogOperation.Created);
+        audit.Timestamp.Should().Be(storedAccount.CreatedAtUtc);
+        audit.Timestamp.Should().NotBe(InterceptorNow);
         var outbox = await _context.Db.OutboxMessages.SingleAsync(row =>
             row.IdempotencyKey == "ledger-account-create:coa-create-replay");
         outbox.MessageType.Should().Be("data-update");
@@ -362,6 +365,14 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().Be(updated.Value);
 
+        var unchanged = await ExecuteUpdateAsync(UpdateCommand(
+            "coa-update-unchanged",
+            accountId,
+            name: "Updated Expense",
+            accountType: AccountType.Expense,
+            isActive: false));
+        unchanged.Value.Outcome.Should().Be(LedgerAccountMutationOutcome.Applied);
+
         var deletedAccount = await ExecuteCreateAsync(CreateCommand(
             "coa-delete-account",
             code: "4106",
@@ -376,14 +387,17 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         _context.Db.ChangeTracker.Clear();
         (await _context.Db.LedgerAccounts.AnyAsync(row => row.Id == deletedAccount.Value.Account.Id))
             .Should().BeFalse();
+        (await _context.Db.OutboxMessages.CountAsync(row =>
+                row.IdempotencyKey == "ledger-account-update:coa-update-retype"))
+            .Should().Be(1);
         (await _context.Db.AtomicAuditLogs.CountAsync(row =>
                 row.EntityType == nameof(LedgerAccount)
                 && row.EntityId == accountId
                 && row.Operation == AuditLogOperation.Updated))
-            .Should().Be(1);
+            .Should().Be(1, "an unchanged update must not select a database audit clock");
         (await _context.Db.OutboxMessages.CountAsync(row =>
-                row.IdempotencyKey == "ledger-account-update:coa-update-retype"))
-            .Should().Be(1);
+                row.IdempotencyKey == "ledger-account-update:coa-update-unchanged"))
+            .Should().Be(0);
         (await _context.Db.AtomicAuditLogs.CountAsync(row =>
                 row.EntityType == nameof(LedgerAccount)
                 && row.EntityId == deletedAccount.Value.Account.Id
@@ -413,18 +427,26 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
     }
 
     private async Task<AtomicCommandOutcome<LedgerAccountMutationResult>> ExecuteCreateAsync(
-        CreateLedgerAccountCommand command) =>
-        await _services.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
-            new AtomicCommandIdentity("accounting.ledger-account.create", command.DeliveryIdempotencyKey),
-            command,
-            Codec);
+        CreateLedgerAccountCommand command)
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var handler = new CreateLedgerAccountHandler(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(command.DeliveryIdempotencyKey,
+                AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
+    }
 
     private async Task<AtomicCommandOutcome<LedgerAccountMutationResult>> ExecuteUpdateAsync(
-        UpdateLedgerAccountCommand command) =>
-        await _services.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
-            new AtomicCommandIdentity("accounting.ledger-account.update", command.DeliveryIdempotencyKey),
-            command,
-            Codec);
+        UpdateLedgerAccountCommand command)
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var handler = new UpdateLedgerAccountHandler(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(command.DeliveryIdempotencyKey,
+                AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
+    }
 
     private CreateLedgerAccountCommand CreateCommand(
         string key,
@@ -590,8 +612,10 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(InterceptorNow));
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             CreateLedgerAccountCommand,
             LedgerAccountMutationResult,
@@ -603,5 +627,10 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider();
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
     }
 }

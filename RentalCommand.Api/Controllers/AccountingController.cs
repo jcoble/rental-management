@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -11,6 +12,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using Microsoft.EntityFrameworkCore;
 
 namespace RentalCommand.Api.Controllers;
@@ -31,7 +33,7 @@ public class AccountingController : ManagementControllerBase
     private readonly IReportsService _reports;
     private readonly IAccountingLedgerReadModelService _ledgerReadModels;
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
 
     public AccountingController(
@@ -41,7 +43,7 @@ public class AccountingController : ManagementControllerBase
         IOwnerStatementEmailService ownerStatementEmail,
         IReportsService reports,
         IAccountingLedgerReadModelService ledgerReadModels,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         RentalCommandDbContext db,
         TimeProvider timeProvider)
     {
@@ -51,7 +53,7 @@ public class AccountingController : ManagementControllerBase
         _ownerStatementEmail = ownerStatementEmail;
         _reports = reports;
         _ledgerReadModels = ledgerReadModels;
-        _atomic = atomic;
+        _writes = writes;
         _db = db;
         _timeProvider = timeProvider;
     }
@@ -85,14 +87,10 @@ public class AccountingController : ManagementControllerBase
             request.IsActive, operationKey);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "accounting.ledger-account.create",
-                    $"{active.PortfolioId}:{active.AccessContextId}:{operationKey}"),
-                command,
-                new AtomicJsonResultCodec<LedgerAccountMutationResult>(
-                    "accounting.ledger-account.mutation.v1"),
-                ct);
+            var identityKey = $"{active.PortfolioId}:{active.AccessContextId}:{operationKey}";
+            var handler = new CreateLedgerAccountHandler(_db);
+            var outcome = await _writes.ExecuteAsync(identityKey,
+                AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
             var account = outcome.Value.Account;
             if (account is null)
                 return NotFound();
@@ -130,14 +128,10 @@ public class AccountingController : ManagementControllerBase
             request.IsActive, false, operationKey);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "accounting.ledger-account.update",
-                    $"{active.PortfolioId}:{active.AccessContextId}:{operationKey}"),
-                command,
-                new AtomicJsonResultCodec<LedgerAccountMutationResult>(
-                    "accounting.ledger-account.mutation.v1"),
-                ct);
+            var identityKey = $"{active.PortfolioId}:{active.AccessContextId}:{operationKey}";
+            var handler = new UpdateLedgerAccountHandler(_db);
+            var outcome = await _writes.ExecuteAsync(identityKey,
+                AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
             var account = outcome.Value.Account;
             return account is null ? NotFound() : Ok(ToChartOfAccountsRow(account));
         }

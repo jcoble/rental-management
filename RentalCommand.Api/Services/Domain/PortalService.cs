@@ -23,7 +23,6 @@ public class PortalService : IPortalService
     private readonly RentalCommandDbContext _db;
     private readonly ILeaseQaService _leaseQa;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork? _atomic;
     private readonly IRequestWriteExecutor? _writes;
     private static readonly JsonSerializerOptions PortalHistoryJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -31,12 +30,11 @@ public class PortalService : IPortalService
     };
 
     public PortalService(RentalCommandDbContext db, ILeaseQaService leaseQa, TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null, IRequestWriteExecutor? writes = null)
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _leaseQa = leaseQa;
         _timeProvider = timeProvider;
-        _atomic = atomic;
         _writes = writes;
     }
 
@@ -1434,15 +1432,12 @@ public class PortalService : IPortalService
         string operationKey,
         CancellationToken ct = default)
     {
-        var atomic = _atomic
-            ?? throw new InvalidOperationException("Atomic tenant autopay cancellation is not configured.");
         var command = AtomicTenantAutopayCancellation.Command(
             access, tenantId, tenantAccountId, operationKey);
-        var outcome = await atomic.ExecuteAsync(
-            AtomicTenantAutopayCancellation.Identity(command),
-            command,
-            AtomicTenantAutopayCancellation.Codec,
-            ct);
+        var identity = AtomicTenantAutopayCancellation.Identity(command);
+        var handler = new CancelTenantAutopayHandler(_db);
+        var outcome = await RequireWrites().ExecuteAsync(identity.IdempotencyKey,
+            AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         if (!outcome.Value.Found) return null;
 
         return new AutopayStatusResponse

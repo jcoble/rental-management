@@ -14,7 +14,12 @@ public sealed class ApplyAccountingPullResultHandler
 
     public ApplyAccountingPullResultHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ApplyAccountingPullResult> HandleAsync(
+    public Task<ApplyAccountingPullResult> HandleAsync(
+        ApplyAccountingPullResultCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<ApplyAccountingPullResult> ExecuteAsync(
         ApplyAccountingPullResultCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -24,10 +29,6 @@ public sealed class ApplyAccountingPullResultHandler
             || string.IsNullOrWhiteSpace(command.ProviderBatchIdentity))
             throw new ArgumentException("A portfolio, connection, pull claim, and provider batch identity are required.");
 
-        await context.AcquireLockAsync(
-            "AccountingConnection",
-            command.AccountingConnectionId,
-            ct);
         var result = await AtomicAccountingPullPersistence.ApplyPullAsync(_db, context, command, ct);
         context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
@@ -49,7 +50,12 @@ public sealed class ApplyAccountingPullResultHandler
         return result;
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        ApplyAccountingPullResultCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         ApplyAccountingPullResultCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -70,4 +76,7 @@ public sealed class ApplyAccountingPullResultHandler
             throw new UnauthorizedAccessException("The accounting pull connection is unavailable.");
         }
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic accounting-pull writes are retired; use the shared write executor.");
 }

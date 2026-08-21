@@ -13,6 +13,8 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Navigation;
+using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
@@ -25,6 +27,8 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<ConfirmAccountingMappingResult> Codec =
         new("accounting.mapping.confirm.result.v2");
+    private static readonly DateTime InterceptorNow =
+        new(2098, 8, 21, 12, 0, 0, DateTimeKind.Utc);
     private readonly DateTime _now = new(2026, 7, 11, 17, 0, 0, DateTimeKind.Utc);
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
@@ -63,11 +67,12 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         }
 
         var services = new ServiceCollection();
-        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(InterceptorNow));
         services.AddSingleton<CommandRecorder>();
         services.AddSingleton<OutboxFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             ConfirmAccountingMappingCommand,
             ConfirmAccountingMappingResult,
@@ -156,6 +161,13 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         (await db.AtomicAuditLogs.CountAsync(audit =>
             audit.CommandType == identity.CommandType
             && audit.CommandIdempotencyKey == identity.IdempotencyKey)).Should().BeGreaterThanOrEqualTo(5);
+        (await db.AtomicAuditLogs
+                .Where(audit => audit.CommandType == identity.CommandType
+                    && audit.CommandIdempotencyKey == identity.IdempotencyKey)
+                .Select(audit => audit.Timestamp)
+                .Distinct()
+                .ToListAsync())
+            .Should().Equal(InterceptorNow);
         var confirmationNotification = await db.Notifications.SingleAsync(notification =>
             notification.PortfolioId == _portfolioId
             && notification.Type == "AccountingMappingConfirmed");
@@ -515,9 +527,24 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = _services!.CreateAsyncScope();
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        if (command is ConfirmAccountingMappingCommand confirm)
+        {
+            var handler = new ConfirmAccountingMappingHandler(db);
+            var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
+                AccountingWriteSupport.Write(confirm, handler.ExecuteAsync, handler.AuthorizeAsync));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is ContinueAccountingMappingPromotionCommand continuation)
+        {
+            var handler = new ContinueAccountingMappingPromotionHandler(db);
+            var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
+                AccountingWriteSupport.Write(
+                    continuation, handler.ExecuteAsync, handler.AuthorizeAsync));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        throw new ArgumentOutOfRangeException(nameof(command));
     }
 
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();
@@ -948,6 +975,11 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         public int? UserId => 701;
         public string? ActorLabel => "integration:accounting-mapping";
         public string? IpAddress => "127.0.0.1";
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
     }
 
     private sealed class CommandRecorder : DbCommandInterceptor
