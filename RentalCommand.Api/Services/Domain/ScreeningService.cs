@@ -16,26 +16,18 @@ using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Documents;
 using RentalCommand.Data.Screening;
+using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <inheritdoc cref="IScreeningService"/>
 public sealed class ScreeningService : IScreeningService
 {
-    private static readonly AtomicJsonResultCodec<ScreeningMutationResult> MutationCodec =
-        new("screening.mutation.v1");
-    private static readonly AtomicJsonResultCodec<PrepareIntegratedScreeningResult> IntegratedPrepareCodec =
-        new("screening.integrated.prepare.v1");
-    private static readonly AtomicJsonResultCodec<PrepareAdverseActionNoticeResult> AdversePrepareCodec =
-        new("adverse-action.prepare.v1");
-    private static readonly AtomicJsonResultCodec<CreateAdverseActionNoticeResult> AdverseFinalizeCodec =
-        new("adverse-action.finalize.v1");
-
     private readonly RentalCommandDbContext _db;
     private readonly IScreeningProvider _provider;
     private readonly IFileStorage _storage;
     private readonly IAdverseActionNoticePdfGenerator _pdf;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly IPendingFileUploadStore _pendingUploads;
     private readonly TimeProvider _timeProvider;
 
@@ -44,7 +36,7 @@ public sealed class ScreeningService : IScreeningService
         IScreeningProvider provider,
         IFileStorage storage,
         IAdverseActionNoticePdfGenerator pdf,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         IPendingFileUploadStore pendingUploads,
         TimeProvider timeProvider)
     {
@@ -52,7 +44,7 @@ public sealed class ScreeningService : IScreeningService
         _provider = provider;
         _storage = storage;
         _pdf = pdf;
-        _atomic = atomic;
+        _writes = writes;
         _pendingUploads = pendingUploads;
         _timeProvider = timeProvider;
     }
@@ -117,11 +109,10 @@ public sealed class ScreeningService : IScreeningService
             request.CreditReportingAgencyPhone,
             request.Status,
             $"screening-external-create:{digest}");
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("screening.external.create", scope.PortfolioId, applicationId, digest),
-            command,
-            MutationCodec,
-            ct);
+        var handler = new TrackExternalScreeningHandler(_db);
+        var outcome = await _writes.ExecuteAsync(
+            Identity("screening.external.create", scope.PortfolioId, applicationId, digest).IdempotencyKey,
+            ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -136,9 +127,7 @@ public sealed class ScreeningService : IScreeningService
         var operationKey = NormalizeOperationKey(request.OperationKey);
         var digest = Digest(operationKey);
         var descriptor = _provider.Descriptor;
-        var prepare = await _atomic.ExecuteAsync(
-            Identity("screening.integrated.prepare", scope.PortfolioId, applicationId, digest),
-            new PrepareIntegratedScreeningCommand(
+        var prepareCommand = new PrepareIntegratedScreeningCommand(
                 scope.PortfolioId,
                 applicationId,
                 scope.UserId,
@@ -148,9 +137,12 @@ public sealed class ScreeningService : IScreeningService
                 operationKey,
                 descriptor.Key,
                 descriptor.DisplayName,
-                $"screening-integrated-prepare:{digest}"),
-            IntegratedPrepareCodec,
-            ct);
+                $"screening-integrated-prepare:{digest}");
+        var prepareHandler = new PrepareIntegratedScreeningHandler(_db);
+        var prepare = await _writes.ExecuteAsync(
+            Identity("screening.integrated.prepare", scope.PortfolioId, applicationId, digest).IdempotencyKey,
+            ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
+                prepareHandler.AuthorizeAsync), ct);
         if (prepare.Value.Outcome == ScreeningMutationOutcome.NotFound
             || prepare.Value.Screening is null)
             return null;
@@ -170,9 +162,7 @@ public sealed class ScreeningService : IScreeningService
                 prepare.Value.ConsentAtUtc.Value),
             ct);
 
-        var finalize = await _atomic.ExecuteAsync(
-            Identity("screening.integrated.finalize", scope.PortfolioId, applicationId, digest),
-            new FinalizeIntegratedScreeningCommand(
+        var finalizeCommand = new FinalizeIntegratedScreeningCommand(
                 scope.PortfolioId,
                 applicationId,
                 prepare.Value.Screening.Id,
@@ -190,9 +180,12 @@ public sealed class ScreeningService : IScreeningService
                 providerResult.CreditReportingAgencyName,
                 providerResult.CreditReportingAgencyAddress,
                 providerResult.CreditReportingAgencyPhone,
-                $"screening-integrated-finalize:{digest}"),
-            MutationCodec,
-            ct);
+                $"screening-integrated-finalize:{digest}");
+        var finalizeHandler = new FinalizeIntegratedScreeningHandler(_db);
+        var finalize = await _writes.ExecuteAsync(
+            Identity("screening.integrated.finalize", scope.PortfolioId, applicationId, digest).IdempotencyKey,
+            ScreeningWriteSupport.Write(finalizeCommand, finalizeHandler.ExecuteAsync,
+                finalizeHandler.AuthorizeAsync), ct);
         return Response(finalize.Value);
     }
 
@@ -205,9 +198,7 @@ public sealed class ScreeningService : IScreeningService
     {
         var operationKey = NormalizeOperationKey(request.OperationKey);
         var digest = Digest(operationKey);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("screening.external.update", scope.PortfolioId, applicationId, digest),
-            new UpdateExternalScreeningCommand(
+        var command = new UpdateExternalScreeningCommand(
                 scope.PortfolioId,
                 applicationId,
                 screeningId,
@@ -223,9 +214,11 @@ public sealed class ScreeningService : IScreeningService
                 request.CreditReportingAgencyAddress,
                 request.CreditReportingAgencyPhone,
                 request.OccurredAtUtc,
-                $"screening-external-update:{screeningId}:{digest}"),
-            MutationCodec,
-            ct);
+                $"screening-external-update:{screeningId}:{digest}");
+        var handler = new UpdateExternalScreeningHandler(_db);
+        var outcome = await _writes.ExecuteAsync(
+            Identity("screening.external.update", scope.PortfolioId, applicationId, digest).IdempotencyKey,
+            ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -240,9 +233,7 @@ public sealed class ScreeningService : IScreeningService
         if (request.Decision is null)
             throw new ArgumentException("A screening decision is required.");
         var digest = Digest(operationKey);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("screening.decision", scope.PortfolioId, applicationId, digest),
-            new RecordScreeningDecisionCommand(
+        var command = new RecordScreeningDecisionCommand(
                 scope.PortfolioId,
                 applicationId,
                 screeningId,
@@ -254,9 +245,11 @@ public sealed class ScreeningService : IScreeningService
                 request.Decision.Value,
                 request.Reason,
                 request.ConsumerReportUsed,
-                $"screening-decision:{screeningId}:{digest}"),
-            MutationCodec,
-            ct);
+                $"screening-decision:{screeningId}:{digest}");
+        var handler = new RecordScreeningDecisionHandler(_db);
+        var outcome = await _writes.ExecuteAsync(
+            Identity("screening.decision", scope.PortfolioId, applicationId, digest).IdempotencyKey,
+            ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -265,9 +258,7 @@ public sealed class ScreeningService : IScreeningService
         CancellationToken ct = default)
     {
         var digest = Digest($"{delivery.ProviderKey}:{delivery.DeliveryId}");
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("screening.provider-delivery", digest),
-            new ApplyScreeningProviderDeliveryCommand(
+        var command = new ApplyScreeningProviderDeliveryCommand(
                 delivery.ProviderKey,
                 delivery.DeliveryId,
                 delivery.ProviderReference,
@@ -278,9 +269,10 @@ public sealed class ScreeningService : IScreeningService
                 delivery.CreditReportingAgencyName,
                 delivery.CreditReportingAgencyAddress,
                 delivery.CreditReportingAgencyPhone,
-                $"screening-provider:{digest}"),
-            MutationCodec,
-            ct);
+                $"screening-provider:{digest}");
+        var handler = new ApplyScreeningProviderDeliveryHandler(_db);
+        var outcome = await _writes.ExecuteAsync(digest,
+            ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         return Response(outcome.Value);
     }
 
@@ -292,9 +284,7 @@ public sealed class ScreeningService : IScreeningService
     {
         var operationKey = NormalizeOperationKey(request.OperationKey);
         var digest = Digest(operationKey);
-        var prepared = await _atomic.ExecuteAsync(
-            Identity("adverse-action.prepare", scope.PortfolioId, applicationId, digest),
-            new PrepareAdverseActionNoticeCommand(
+        var prepareCommand = new PrepareAdverseActionNoticeCommand(
                 scope.PortfolioId,
                 applicationId,
                 scope.UserId,
@@ -303,9 +293,12 @@ public sealed class ScreeningService : IScreeningService
                 scope.AccessRevision,
                 operationKey,
                 request.Reason,
-                request.SendToApplicant),
-            AdversePrepareCodec,
-            ct);
+                request.SendToApplicant);
+        var prepareHandler = new PrepareAdverseActionNoticeHandler(_db);
+        var prepared = await _writes.ExecuteAsync(
+            Identity("adverse-action.prepare", scope.PortfolioId, applicationId, digest).IdempotencyKey,
+            ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
+                prepareHandler.AuthorizeAsync), ct);
         if (prepared.Value.Outcome == ScreeningMutationOutcome.NotFound)
             return null;
         var value = prepared.Value;
@@ -415,9 +408,7 @@ public sealed class ScreeningService : IScreeningService
                     "The adverse-action notice upload admission has an unknown state.");
         }
 
-        var finalized = await _atomic.ExecuteAsync(
-            Identity("adverse-action.finalize", scope.PortfolioId, applicationId, digest),
-            new CreateAdverseActionNoticeCommand(
+        var finalizeCommand = new CreateAdverseActionNoticeCommand(
                 scope.PortfolioId,
                 applicationId,
                 value.ScreeningId,
@@ -439,9 +430,12 @@ public sealed class ScreeningService : IScreeningService
                 pdfBytes.LongLength,
                 value.SendToApplicant,
                 $"adverse-action:{scope.PortfolioId}:{applicationId}:{digest}",
-                value.GeneratedAtUtc),
-            AdverseFinalizeCodec,
-            ct);
+                value.GeneratedAtUtc);
+        var finalizeHandler = new CreateAdverseActionNoticeHandler(_db);
+        var finalized = await _writes.ExecuteAsync(
+            Identity("adverse-action.finalize", scope.PortfolioId, applicationId, digest).IdempotencyKey,
+            ScreeningWriteSupport.Write(finalizeCommand, finalizeHandler.ExecuteAsync,
+                finalizeHandler.AuthorizeAsync), ct);
         return new AdverseActionNoticeResponse
         {
             Id = finalized.Value.NoticeId,

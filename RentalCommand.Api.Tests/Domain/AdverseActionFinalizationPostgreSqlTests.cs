@@ -5,6 +5,7 @@ using System.Text;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Screening;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -15,6 +16,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Screening;
 using RentalCommand.Data;
 using RentalCommand.Data.Documents;
+using RentalCommand.Data.Screening;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -58,11 +60,8 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
         var application = seeded.Application;
         var screening = seeded.Screening;
 
-        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
-        var prepareCodec = new AtomicJsonResultCodec<PrepareAdverseActionNoticeResult>("adverse-action.prepare.red.v1");
-        var prepared = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity("adverse-action.prepare.red", "prepared-decline"),
-            new PrepareAdverseActionNoticeCommand(
+        var writes = _services.GetRequiredService<IRequestWriteExecutor>();
+        var prepareCommand = new PrepareAdverseActionNoticeCommand(
                 PortfolioId,
                 application.Id,
                 _scope.UserId,
@@ -71,8 +70,12 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
                 _scope.AccessRevision,
                 "prepared-decline",
                 null,
-                true),
-            prepareCodec);
+                true);
+        var prepareHandler = new PrepareAdverseActionNoticeHandler(
+            _services.GetRequiredService<RentalCommandDbContext>());
+        var prepared = await writes.ExecuteAsync("prepared-decline",
+            ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
+                prepareHandler.AuthorizeAsync));
 
         prepared.Value.Outcome.Should().Be(ScreeningMutationOutcome.Applied);
         prepared.Value.ScreeningId.Should().Be(screening.Id);
@@ -128,10 +131,11 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
         screening.UpdatedAt = now;
         await _db.SaveChangesAsync();
 
-        var act = () => atomic.ExecuteAsync(
-            new AtomicCommandIdentity("adverse-action.finalize.red", "prepared-decline"),
-            finalization,
-            new AtomicJsonResultCodec<CreateAdverseActionNoticeResult>("adverse-action.finalize.red.v1"));
+        var finalizeHandler = new CreateAdverseActionNoticeHandler(
+            _services.GetRequiredService<RentalCommandDbContext>());
+        var act = () => writes.ExecuteAsync("prepared-decline",
+            ScreeningWriteSupport.Write(finalization, finalizeHandler.ExecuteAsync,
+                finalizeHandler.AuthorizeAsync));
 
         var error = await act.Should().ThrowAsync<InvalidOperationException>();
         error.Which.Message.Should().Contain("decision");
@@ -166,10 +170,8 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
     {
         var seeded = await SeedDeclinedCaseAsync("retry");
         var application = seeded.Application;
-        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
-        var prepared = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity("adverse-action.prepare.retry", "retry-prepared"),
-            new PrepareAdverseActionNoticeCommand(
+        var writes = _services.GetRequiredService<IRequestWriteExecutor>();
+        var prepareCommand = new PrepareAdverseActionNoticeCommand(
                 PortfolioId,
                 application.Id,
                 _scope.UserId,
@@ -178,8 +180,12 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
                 _scope.AccessRevision,
                 "retry-prepared",
                 null,
-                true),
-            new AtomicJsonResultCodec<PrepareAdverseActionNoticeResult>("adverse-action.prepare.retry.v1"));
+                true);
+        var prepareHandler = new PrepareAdverseActionNoticeHandler(
+            _services.GetRequiredService<RentalCommandDbContext>());
+        var prepared = await writes.ExecuteAsync("retry-prepared",
+            ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
+                prepareHandler.AuthorizeAsync));
 
         const string operationKey = "retry-finalize";
         const string purpose = "adverse-action-pdf";
@@ -220,11 +226,11 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             true,
             "adverse-action-retry-delivery",
             prepared.Value.GeneratedAtUtc);
-        var identity = new AtomicCommandIdentity("adverse-action.finalize.retry", "retry-finalize");
-        var codec = new AtomicJsonResultCodec<CreateAdverseActionNoticeResult>("adverse-action.finalize.retry.v1");
-
-        var first = await atomic.ExecuteAsync(identity, command, codec);
-        var second = await atomic.ExecuteAsync(identity, command, codec);
+        var handler = new CreateAdverseActionNoticeHandler(
+            _services.GetRequiredService<RentalCommandDbContext>());
+        var write = ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
+        var first = await writes.ExecuteAsync("retry-finalize", write);
+        var second = await writes.ExecuteAsync("retry-finalize", write);
 
         second.Value.Should().BeEquivalentTo(first.Value);
         (await _db.Set<AdverseActionNotice>().CountAsync(notice => notice.ApplicationId == application.Id))
@@ -239,15 +245,173 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ScreeningTransitionAndProviderDelivery_ExactRetriesDoNotDuplicateRows()
+    {
+        var application = await SeedReplayApplicationAsync("screening-retry");
+        var db = _services.GetRequiredService<RentalCommandDbContext>();
+        var service = new ScreeningService(
+            db,
+            new DisabledScreeningProvider(),
+            _storage,
+            new DeterministicAdverseActionPdfGenerator(),
+            _services.GetRequiredService<IRequestWriteExecutor>(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
+            TimeProvider.System);
+        var trackRequest = new TrackExternalScreeningRequest
+        {
+            OperationKey = "screening-transition-retry",
+            ProviderDisplayName = "External provider",
+            ProviderReference = "external-retry-42",
+            Status = ApplicantScreeningStatus.Completed,
+        };
+
+        var first = await service.TrackExternalAsync(_scope, application.Id, trackRequest);
+        var retry = await service.TrackExternalAsync(_scope, application.Id, trackRequest);
+
+        retry!.Id.Should().Be(first!.Id);
+        (await _db.ApplicantScreenings.AsNoTracking()
+            .CountAsync(row => row.ApplicationId == application.Id)).Should().Be(1);
+
+        var integrated = new ApplicantScreening
+        {
+            PortfolioId = PortfolioId,
+            ApplicationId = application.Id,
+            Mode = ScreeningMode.Integrated,
+            Status = ApplicantScreeningStatus.AwaitingApplicant,
+            ProviderKey = "provider-retry",
+            ProviderDisplayName = "Provider retry",
+            ProviderReference = "provider-reference-retry",
+            OperationKey = "provider-operation-retry",
+            ConsentConfirmed = true,
+            ConsentAtUtc = application.ConsentAtUtc,
+            InvitedAtUtc = DateTime.UtcNow.AddMinutes(-2),
+            LastStatusAtUtc = DateTime.UtcNow.AddMinutes(-2),
+            CreatedByUserId = _scope.UserId,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-2),
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-2),
+        };
+        _db.Add(integrated);
+        await _db.SaveChangesAsync();
+        var delivery = new ScreeningProviderStatusDelivery(
+            "provider-retry", "delivery-retry-42", "provider-reference-retry",
+            "screening.completed", ApplicantScreeningStatus.Completed, DateTime.UtcNow,
+            null, "Example CRA", "1 Main Street", "555-0100");
+
+        var delivered = await service.ApplyProviderDeliveryAsync(delivery);
+        var deliveryRetry = await service.ApplyProviderDeliveryAsync(delivery);
+
+        deliveryRetry!.Id.Should().Be(delivered!.Id);
+        (await _db.ApplicantScreeningMilestones.AsNoTracking().CountAsync(row =>
+            row.ApplicantScreeningId == integrated.Id && row.DeliveryId == delivery.DeliveryId))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task FourLegacyReceiptContracts_ReplayThroughMigratedExecutorAndAuthorize()
+    {
+        var application = await SeedReplayApplicationAsync("legacy-replay");
+        var db = _services.GetRequiredService<RentalCommandDbContext>();
+        var writes = _services.GetRequiredService<IRequestWriteExecutor>();
+        var now = DateTime.UtcNow;
+
+        var mutationCommand = new TrackExternalScreeningCommand(
+            PortfolioId, application.Id, _scope.UserId, _scope.SessionId,
+            _scope.AccessContextId, _scope.AccessRevision, "legacy-mutation", "Legacy provider",
+            null, null, null, null, null, ApplicantScreeningStatus.Created, "legacy-mutation-delivery");
+        var mutationResult = new ScreeningMutationResult(ScreeningMutationOutcome.NotFound);
+        await SeedLegacyReceiptAsync(db, "screening.external.create", "legacy-mutation",
+            mutationCommand, ScreeningWriteSupport.MutationResultContract, mutationResult, now);
+        var mutationHandler = new TrackExternalScreeningHandler(db);
+        var mutationReplay = await writes.ExecuteAsync("legacy-mutation",
+            ScreeningWriteSupport.Write(mutationCommand, mutationHandler.ExecuteAsync,
+                mutationHandler.AuthorizeAsync));
+
+        var integratedCommand = new PrepareIntegratedScreeningCommand(
+            PortfolioId, application.Id, _scope.UserId, _scope.SessionId,
+            _scope.AccessContextId, _scope.AccessRevision, "legacy-integrated", "legacy-provider",
+            "Legacy provider", "legacy-integrated-delivery");
+        var integratedResult = new PrepareIntegratedScreeningResult(
+            ScreeningMutationOutcome.NotFound, null, application.Id, "legacy-integrated", null, null, null);
+        await SeedLegacyReceiptAsync(db, "screening.integrated.prepare", "legacy-integrated",
+            integratedCommand, ScreeningWriteSupport.IntegratedPrepareResultContract, integratedResult, now);
+        var integratedHandler = new PrepareIntegratedScreeningHandler(db);
+        var integratedReplay = await writes.ExecuteAsync("legacy-integrated",
+            ScreeningWriteSupport.Write(integratedCommand, integratedHandler.ExecuteAsync,
+                integratedHandler.AuthorizeAsync));
+
+        var adversePrepareCommand = new PrepareAdverseActionNoticeCommand(
+            PortfolioId, application.Id, _scope.UserId, _scope.SessionId,
+            _scope.AccessContextId, _scope.AccessRevision, "legacy-adverse-prepare", null, false);
+        var adversePrepareResult = new PrepareAdverseActionNoticeResult(
+            Outcome: ScreeningMutationOutcome.NotFound,
+            ApplicationId: application.Id,
+            ScreeningId: 0,
+            ManagementCompanyName: null,
+            PortfolioName: null,
+            ApplicantName: null,
+            PropertyName: null,
+            PropertyAddressLine1: null,
+            PropertyCity: null,
+            PropertyState: null,
+            PropertyPostalCode: null,
+            Reason: null,
+            CreditReportingAgencyName: null,
+            CreditReportingAgencyAddress: null,
+            CreditReportingAgencyPhone: null,
+            CreditReportingAgencyBlock: null,
+            FileName: null,
+            DecisionRecordedAtUtc: null,
+            DecisionFingerprint: null,
+            SendToApplicant: false,
+            GeneratedAtUtc: now);
+        await SeedLegacyReceiptAsync(db, "adverse-action.prepare", "legacy-adverse-prepare",
+            adversePrepareCommand, ScreeningWriteSupport.AdversePrepareResultContract,
+            adversePrepareResult, now);
+        var adversePrepareHandler = new PrepareAdverseActionNoticeHandler(db);
+        var adversePrepareReplay = await writes.ExecuteAsync("legacy-adverse-prepare",
+            ScreeningWriteSupport.Write(adversePrepareCommand, adversePrepareHandler.ExecuteAsync,
+                adversePrepareHandler.AuthorizeAsync));
+
+        var adverseFinalizeCommand = new CreateAdverseActionNoticeCommand(
+            PortfolioId, application.Id, 1, now, "legacy-decision", _scope.UserId,
+            _scope.SessionId, _scope.AccessContextId, _scope.AccessRevision, "Legacy reason",
+            "Legacy CRA", Guid.NewGuid(), "adverse-action-pdf", "legacy-operation-hash",
+            "legacy-request-fingerprint", "legacy/path.pdf", "legacy.pdf", "application/pdf",
+            8, false, "legacy-adverse-finalize-delivery", now);
+        var adverseFinalizeResult = new CreateAdverseActionNoticeResult(
+            42, application.Id, "Legacy reason", "Legacy CRA", now, 43, null);
+        await SeedLegacyReceiptAsync(db, "adverse-action.finalize", "legacy-adverse-finalize",
+            adverseFinalizeCommand, ScreeningWriteSupport.AdverseFinalizeResultContract,
+            adverseFinalizeResult, now);
+        var adverseFinalizeHandler = new CreateAdverseActionNoticeHandler(db);
+        var adverseFinalizeReplay = await writes.ExecuteAsync("legacy-adverse-finalize",
+            ScreeningWriteSupport.Write(adverseFinalizeCommand, adverseFinalizeHandler.ExecuteAsync,
+                adverseFinalizeHandler.AuthorizeAsync));
+
+        mutationReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        integratedReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        adversePrepareReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        adverseFinalizeReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        mutationReplay.Value.Should().Be(mutationResult);
+        integratedReplay.Value.Should().Be(integratedResult);
+        adversePrepareReplay.Value.Should().Be(adversePrepareResult);
+        adverseFinalizeReplay.Value.Should().Be(adverseFinalizeResult);
+        (await _db.ApplicantScreenings.AsNoTracking()
+            .CountAsync(row => row.ApplicationId == application.Id)).Should().Be(0);
+        (await _db.AdverseActionNotices.AsNoTracking()
+            .CountAsync(row => row.ApplicationId == application.Id)).Should().Be(0);
+    }
+
+    [Fact]
     public async Task GenerateAdverseAction_RetryAfterCleanupReturnsConflictWithoutArtifacts()
     {
         var seeded = await SeedDeclinedCaseAsync("abandoned-retry");
         var service = new ScreeningService(
-            _db,
+            _services.GetRequiredService<RentalCommandDbContext>(),
             new DisabledScreeningProvider(),
             _storage,
             new DeterministicAdverseActionPdfGenerator(),
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            _services.GetRequiredService<IRequestWriteExecutor>(),
             _services.GetRequiredService<IPendingFileUploadStore>(),
             TimeProvider.System);
         _storage.BeforeUploadAsync = async _ =>
@@ -348,6 +512,54 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
         _db.Add(screening);
         await _db.SaveChangesAsync();
         return (application, screening, now);
+    }
+
+    private async Task<RentalApplication> SeedReplayApplicationAsync(string suffix)
+    {
+        var now = DateTime.UtcNow;
+        var application = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Replay",
+            LastName = suffix,
+            Email = $"{suffix}@example.test",
+            ConsentGiven = true,
+            ConsentAtUtc = now.AddMinutes(-5),
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = now.AddMinutes(-5),
+            CreatedAt = now.AddMinutes(-5),
+            UpdatedAt = now.AddMinutes(-5),
+        };
+        _db.Add(application);
+        await _db.SaveChangesAsync();
+        return application;
+    }
+
+    private static async Task SeedLegacyReceiptAsync<TCommand, TResult>(
+        RentalCommandDbContext db,
+        string commandType,
+        string key,
+        TCommand command,
+        string contract,
+        TResult result,
+        DateTime now)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+        {
+            Id = Guid.NewGuid(),
+            AttemptId = Guid.NewGuid(),
+            CommandType = commandType,
+            IdempotencyKey = key,
+            RequestFingerprint = AtomicCommandFingerprint.Create(command),
+            Status = AtomicCommandReceiptStatus.Completed,
+            ResultContract = contract,
+            ResultJson = new AtomicJsonResultCodec<TResult>(contract).Serialize(result),
+            StartedAt = now,
+            CompletedAt = now,
+        });
+        await db.SaveChangesAsync();
     }
 
     private sealed class RedTestStorage : IFileStorage
