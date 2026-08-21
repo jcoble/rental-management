@@ -50,13 +50,12 @@ public sealed class NoticeApprovalAuthorizationException : UnauthorizedAccessExc
 /// tenant-inbox messages, draft transition, and fenced work completion share the kernel-owned transaction.
 /// </summary>
 public sealed class AtomicNoticeDeliveryHandler
-    : IAtomicCommandHandler<AtomicNoticeDeliveryCommand, AtomicNoticeDeliveryResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicNoticeDeliveryHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AtomicNoticeDeliveryResult> HandleAsync(
+    public async Task<AtomicNoticeDeliveryResult> ExecuteAsync(
         AtomicNoticeDeliveryCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -917,7 +916,7 @@ public sealed class AtomicNoticeDeliveryHandler
         return validation;
     }
 
-    public async Task AuthorizeReplayAsync(
+    public async Task AuthorizeAsync(
         AtomicNoticeDeliveryCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -1247,4 +1246,19 @@ public static class AtomicNoticeDelivery
     public static AtomicCommandIdentity Identity(AtomicNoticeDeliveryCommand command) =>
         new("rental.notice-delivery.approve",
             $"{command.PortfolioId}:{command.NoticeDraftId}:{command.DeliveryIdempotencyKey}");
+
+    public static TransactionalWrite<AtomicNoticeDeliveryCommand, AtomicNoticeDeliveryResult> Write(
+        RentalCommandDbContext db,
+        AtomicNoticeDeliveryCommand command)
+    {
+        var handler = new AtomicNoticeDeliveryHandler(db);
+        return new(
+            Identity(command).CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            Codec.ContractName,
+            WriteLockPlan.None,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync);
+    }
 }

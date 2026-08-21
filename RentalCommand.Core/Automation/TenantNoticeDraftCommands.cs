@@ -21,4 +21,20 @@ public static class TenantNoticeDraftAutomation
 
     public static AtomicCommandIdentity Identity(ApplyClaimedTenantNoticeDraftBatchCommand command) =>
         new("tenant-notice-draft.claimed-batch.apply", command.ClaimToken.ToString("N"));
+
+    public static TransactionalWrite<ApplyClaimedTenantNoticeDraftBatchCommand,
+        ApplyClaimedTenantNoticeDraftBatchResult> Write(
+        ApplyClaimedTenantNoticeDraftBatchCommand command,
+        Func<ApplyClaimedTenantNoticeDraftBatchCommand, IAtomicCommandContext, CancellationToken,
+            Task<ApplyClaimedTenantNoticeDraftBatchResult>> executeAsync,
+        Func<ApplyClaimedTenantNoticeDraftBatchCommand, IAtomicCommandContext, CancellationToken,
+            Task> authorizeAsync) =>
+        new(
+            Identity(command).CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            Codec.ContractName,
+            WriteLockPlan.None,
+            executeAsync,
+            authorizeAsync);
 }

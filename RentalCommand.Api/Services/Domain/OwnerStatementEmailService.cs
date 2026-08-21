@@ -9,6 +9,7 @@ using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Api.Services;
+using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -19,20 +20,20 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
     private readonly IOwnerStatementService _statements;
     private readonly ILogger<OwnerStatementEmailService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public OwnerStatementEmailService(
         RentalCommandDbContext db,
         IOwnerStatementService statements,
         ILogger<OwnerStatementEmailService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _statements = statements;
         _logger = logger;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     /// <inheritdoc/>
@@ -73,8 +74,9 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
             $"Your {year} owner statement",
             RenderStatementText(report),
             idempotencyKey);
-        var outcome = await _atomic.ExecuteAsync(
-            QueueOwnerStatementEmail.Identity(command), command, QueueOwnerStatementEmail.Codec, ct);
+        var outcome = await _writes.ExecuteAsync(
+            QueueOwnerStatementEmail.Identity(command).IdempotencyKey,
+            QueueOwnerStatementEmail.Write(_db, command), ct);
         if (outcome.Value.Queued)
         {
             _logger.LogInformation(
@@ -180,13 +182,12 @@ public sealed record QueueOwnerStatementEmailResult(
     string? Reason = null);
 
 public sealed class QueueOwnerStatementEmailHandler
-    : IAtomicCommandHandler<QueueOwnerStatementEmailCommand, QueueOwnerStatementEmailResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public QueueOwnerStatementEmailHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<QueueOwnerStatementEmailResult> HandleAsync(
+    public async Task<QueueOwnerStatementEmailResult> ExecuteAsync(
         QueueOwnerStatementEmailCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -228,7 +229,7 @@ public sealed class QueueOwnerStatementEmailHandler
         return new QueueOwnerStatementEmailResult(true);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public async Task AuthorizeAsync(
         QueueOwnerStatementEmailCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -325,4 +326,19 @@ public static class QueueOwnerStatementEmail
         new("owner-statement.email.queue",
             $"{command.PortfolioId}:{command.AccessContextId}:{command.OwnerEntityId}:" +
             $"{command.Year}:{command.DeliveryIdempotencyKey}");
+
+    public static TransactionalWrite<QueueOwnerStatementEmailCommand, QueueOwnerStatementEmailResult> Write(
+        RentalCommandDbContext db,
+        QueueOwnerStatementEmailCommand command)
+    {
+        var handler = new QueueOwnerStatementEmailHandler(db);
+        return new(
+            Identity(command).CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            Codec.ContractName,
+            WriteLockPlan.None,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync);
+    }
 }

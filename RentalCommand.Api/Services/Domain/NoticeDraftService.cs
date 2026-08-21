@@ -7,6 +7,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -18,16 +19,16 @@ public sealed class NoticeDraftService : INoticeDraftService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public NoticeDraftService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<NoticeDraftResponse>> ListAsync(
@@ -74,8 +75,7 @@ public sealed class NoticeDraftService : INoticeDraftService
             0,
             operationKey,
             request ?? new GenerateNoticeDraftsRequest());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNoticeDraftMutation.Identity(command), command, AtomicNoticeDraftMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return ReadSnapshot<GenerateNoticeDraftsResponse>(outcome.Value);
     }
 
@@ -88,8 +88,7 @@ public sealed class NoticeDraftService : INoticeDraftService
     {
         var command = AtomicNoticeDraftMutation.Command(
             scope, AtomicNoticeDraftOperation.Update, id, operationKey, request);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNoticeDraftMutation.Identity(command), command, AtomicNoticeDraftMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found ? ReadSnapshot<NoticeDraftResponse>(outcome.Value) : null;
     }
 
@@ -101,10 +100,16 @@ public sealed class NoticeDraftService : INoticeDraftService
     {
         var command = AtomicNoticeDraftMutation.Command(
             scope, AtomicNoticeDraftOperation.Dismiss, id, operationKey, new { });
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNoticeDraftMutation.Identity(command), command, AtomicNoticeDraftMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found ? ReadSnapshot<NoticeDraftResponse>(outcome.Value) : null;
     }
+
+    private Task<AtomicCommandOutcome<AtomicNoticeDraftMutationResult>> ExecuteAsync(
+        AtomicNoticeDraftMutationCommand command,
+        CancellationToken ct) =>
+        _writes.ExecuteAsync(
+            AtomicNoticeDraftMutation.Identity(command).IdempotencyKey,
+            AtomicNoticeDraftMutation.Write(_db, command), ct);
 
     private IQueryable<NoticeDraftResponse> ResponseQuery(
         WorkspaceReadScope scope,

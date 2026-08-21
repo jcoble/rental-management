@@ -9,6 +9,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -72,15 +73,8 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddGeneratedInfrastructureStores();
-        services.AddAtomicCommandHandler<
-            AtomicNotificationMutationCommand,
-            AtomicNotificationMutationResult,
-            AtomicNotificationMutationHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicNoticeDeliveryCommand,
-            AtomicNoticeDeliveryResult,
-            AtomicNoticeDeliveryHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
@@ -103,8 +97,9 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         int portfolioId;
         int actorUserId;
         WorkspaceReadScope scope = default;
-        await using (var setup = NewContext())
+        await using (var setupScope = _services!.CreateAsyncScope())
         {
+            var setup = setupScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var now = DateTime.UtcNow;
             var actor = new ApplicationUser
             {
@@ -136,7 +131,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         await Task.WhenAll(Enumerable.Range(0, callers).Select(index => Task.Run(async () =>
         {
             await using var db = NewContext();
-            var service = new NotificationFoundationService(db, TimeProvider.System, Atomic);
+            var service = new NotificationFoundationService(db, TimeProvider.System, Writes);
             await service.SeedSuppliedTemplatesAsync(
                 scope, $"seed-concurrent-{index}", CancellationToken.None);
         })));
@@ -184,8 +179,9 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         int portfolioId;
         int originalTemplateId;
         WorkspaceReadScope scope = default;
-        await using (var setup = NewContext())
+        await using (var setupScope = _services!.CreateAsyncScope())
         {
+            var setup = setupScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var actor = new ApplicationUser
             {
                 UserName = "template-editor@example.test",
@@ -207,7 +203,9 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             setup.AddRange(actor, portfolio);
             await setup.SaveChangesAsync();
             scope = await SeedAdministratorScopeAsync(setup, portfolio, actor, now);
-            var service = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            var service = new NotificationFoundationService(
+                setup, TimeProvider.System,
+                setupScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
             await service.SeedSuppliedTemplatesAsync(
                 scope, "seed-template-binding", CancellationToken.None);
             var original = await setup.TenantNoticePolicies.AsNoTracking().SingleAsync(row =>
@@ -217,9 +215,12 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         }
 
         TenantNoticePolicyResponse saved;
-        await using (var command = NewContext())
+        await using (var commandScope = _services!.CreateAsyncScope())
         {
-            var service = new NotificationFoundationService(command, TimeProvider.System, Atomic);
+            var command = commandScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var service = new NotificationFoundationService(
+                command, TimeProvider.System,
+                commandScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
             saved = await service.CreateTemplateVersionAsync(
                 scope,
                 "rent-reminder",
@@ -260,8 +261,9 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         long overdueRentId;
         long overdueLateFeeId;
         WorkspaceReadScope scope = default;
-        await using (var setup = NewContext())
+        await using (var setupScope = _services!.CreateAsyncScope())
         {
+            var setup = setupScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var actor = new ApplicationUser
             {
                 UserName = "notice-candidates@example.test",
@@ -442,7 +444,9 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             setup.AddRange(upcomingRent, overdueRent, overdueLateFee);
             await setup.SaveChangesAsync();
 
-            var foundation = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(
+                setup, TimeProvider.System,
+                setupScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
             await foundation.SeedSuppliedTemplatesAsync(
                 scope, "seed-candidate-generation", CancellationToken.None);
             portfolioId = portfolio.Id;
@@ -639,7 +643,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             tenantSessionId = tenantSession.Id;
             tenantAccessRevision = tenantContext.AccessRevision;
 
-            var foundation = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(setup, TimeProvider.System, Writes);
             await foundation.SeedSuppliedTemplatesAsync(
                 scope, "seed-notice-delivery", CancellationToken.None);
             var policy = await setup.TenantNoticePolicies
@@ -711,7 +715,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         await using (var unsafeContent = NewContext())
         {
             var foundation = new NotificationFoundationService(
-                unsafeContent, TimeProvider.System, Atomic);
+                unsafeContent, TimeProvider.System, Writes);
             var act = () => foundation.ApproveAndQueueAsync(
                 NoticeApprovalExecutionContext.ForAutomation(portfolioId),
                 draftId,
@@ -755,7 +759,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         await using (var stale = NewContext())
         {
-            var foundation = new NotificationFoundationService(stale, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(stale, TimeProvider.System, Writes);
             var act = () => foundation.ApproveAndQueueAsync(
                 NoticeApprovalExecutionContext.ForAutomation(portfolioId),
                 draftId,
@@ -790,7 +794,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         var approvalAuditStartedAtUtc = DateTime.UtcNow;
         await using (var command = NewContext())
         {
-            var foundation = new NotificationFoundationService(command, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(command, TimeProvider.System, Writes);
             await foundation.ApproveAndQueueAsync(
                 NoticeApprovalExecutionContext.ForAutomation(portfolioId),
                 draftId,
@@ -870,7 +874,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         await using (var mismatch = NewContext())
         {
-            var foundation = new NotificationFoundationService(mismatch, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(mismatch, TimeProvider.System, Writes);
             var act = () => foundation.ApproveAndQueueAsync(
                 NoticeApprovalExecutionContext.ForWorkspace(scope),
                 draftId,
@@ -895,7 +899,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             notification.Message = "Corrupted portal notification";
             await notificationMismatch.SaveChangesAsync();
 
-            var foundation = new NotificationFoundationService(notificationMismatch, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(notificationMismatch, TimeProvider.System, Writes);
             var act = () => foundation.ApproveAndQueueAsync(
                 NoticeApprovalExecutionContext.ForWorkspace(scope),
                 draftId,
@@ -938,7 +942,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             notification.NavigationExpiresAtUtc = notification.NavigationExpiresAtUtc!.Value.AddSeconds(1);
             await notificationExpiryMismatch.SaveChangesAsync();
 
-            var foundation = new NotificationFoundationService(notificationExpiryMismatch, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(notificationExpiryMismatch, TimeProvider.System, Writes);
             var act = () => foundation.ApproveAndQueueAsync(
                 NoticeApprovalExecutionContext.ForWorkspace(scope),
                 draftId,
@@ -984,7 +988,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             notification.NavigationChildResourceId = draftId;
             await notificationParentChildMismatch.SaveChangesAsync();
 
-            var foundation = new NotificationFoundationService(notificationParentChildMismatch, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(notificationParentChildMismatch, TimeProvider.System, Writes);
             var act = () => foundation.ApproveAndQueueAsync(
                 NoticeApprovalExecutionContext.ForWorkspace(scope),
                 draftId,
@@ -1033,7 +1037,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             notification.NavigationChildResourceId = null;
             await recoverable.SaveChangesAsync();
 
-            var foundation = new NotificationFoundationService(recoverable, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(recoverable, TimeProvider.System, Writes);
             var recoveredId = await foundation.ApproveAndQueueAsync(
                 NoticeApprovalExecutionContext.ForWorkspace(scope),
                 draftId,
@@ -1090,7 +1094,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         var chronologyAuditStartedAtUtc = DateTime.UtcNow;
         await using (var chronologyReconcile = NewContext())
         {
-            var foundation = new NotificationFoundationService(chronologyReconcile, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(chronologyReconcile, TimeProvider.System, Writes);
             var reconciledId = await foundation.ApproveAndQueueAsync(
                 NoticeApprovalExecutionContext.ForWorkspace(scope),
                 draftId,
@@ -1196,7 +1200,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         await using (var verify = NewContext())
         {
-            var foundation = new NotificationFoundationService(verify, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(verify, TimeProvider.System, Writes);
             var statuses = await foundation.ListDeliveryStatusesAsync(portfolioId, 50, CancellationToken.None);
             statuses.Should().HaveCount(3);
             statuses.Should().ContainSingle(row =>
@@ -1258,6 +1262,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
     }
 
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private IRequestWriteExecutor Writes => _services!.GetRequiredService<IRequestWriteExecutor>();
 
     private static async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(
         RentalCommandDbContext db,
