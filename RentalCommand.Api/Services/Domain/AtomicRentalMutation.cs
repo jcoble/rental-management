@@ -55,21 +55,17 @@ public sealed class AtomicRentalMutationHandler
 
     private const string ApplicationEntityType = "RentalApplication";
 
-    public async Task<AtomicRentalMutationResult> HandleAsync(
+    public Task<AtomicRentalMutationResult> HandleAsync(
+        AtomicRentalMutationCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<AtomicRentalMutationResult> ExecuteAsync(
         AtomicRentalMutationCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await attempt.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
-        if (command.EntityId > 0)
-        {
-            await attempt.AcquireLockAsync("RentalApplication", command.EntityId, ct);
-        }
-
         var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         return command.Domain switch
         {
@@ -79,7 +75,12 @@ public sealed class AtomicRentalMutationHandler
         };
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        AtomicRentalMutationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         AtomicRentalMutationCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -730,6 +731,9 @@ public sealed class AtomicRentalMutationHandler
         application.UnitId is null
             ? "the selected home"
             : $"unit #{application.UnitId}";
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Atomic rental mutations must use the shared write executor.");
 }
 
 public static class AtomicRentalMutation
@@ -747,6 +751,34 @@ public static class AtomicRentalMutation
             scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
             scope.AccessRevision, domain, operation, entityId,
             JsonSerializer.Serialize(request), operationKey);
+
+    public static TransactionalWrite<AtomicRentalMutationCommand, AtomicRentalMutationResult> Write(
+        AtomicRentalMutationCommand command,
+        RentalCommandDbContext db)
+    {
+        var identity = Identity(command);
+        var handler = new AtomicRentalMutationHandler(db);
+        var lockPlan = command.EntityId > 0
+            ? new WriteLockPlan(
+                WriteLockProtocol.AuthorizationScopeApplication,
+                WriteLock.For("AuthSession", command.AuthSessionId),
+                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
+                WriteLock.For("Portfolio", command.PortfolioId),
+                WriteLock.For("RentalApplication", command.EntityId))
+            : new WriteLockPlan(
+                WriteLockProtocol.AuthorizationScope,
+                WriteLock.For("AuthSession", command.AuthSessionId),
+                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
+                WriteLock.For("Portfolio", command.PortfolioId));
+        return new(
+            identity.CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            Codec.ContractName,
+            lockPlan,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync);
+    }
 
     public static AtomicCommandIdentity Identity(AtomicRentalMutationCommand command) => new(
         $"rental.{command.Domain.ToString().ToLowerInvariant()}.{command.Operation.ToString().ToLowerInvariant()}",

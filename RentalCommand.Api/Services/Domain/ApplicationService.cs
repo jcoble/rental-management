@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -24,6 +25,7 @@ public sealed class ApplicationService : IApplicationService
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public ApplicationService(
         RentalCommandDbContext db,
@@ -31,7 +33,8 @@ public sealed class ApplicationService : IApplicationService
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _files = files;
@@ -39,6 +42,7 @@ public sealed class ApplicationService : IApplicationService
         _ = audit;
         _timeProvider = timeProvider;
         _atomic = atomic;
+        _writes = writes;
     }
 
     // -------------------------------------------------------------------------
@@ -145,9 +149,9 @@ public sealed class ApplicationService : IApplicationService
     {
         var command = new AtomicPublicApplicationSubmissionCommand(
             token, JsonSerializer.Serialize(request), ipAddress, operationKey);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicPublicApplicationSubmission.Identity(command), command,
-            AtomicPublicApplicationSubmission.Codec, ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            AtomicPublicApplicationSubmission.Identity(command).IdempotencyKey,
+            AtomicPublicApplicationSubmission.Write(command, _db), ct);
         return outcome.Value.Found
             ? new SubmitApplicationResult
             {
@@ -170,8 +174,7 @@ public sealed class ApplicationService : IApplicationService
     {
         var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
             AtomicRentalMutationOperation.Create, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        var outcome = await ExecuteApplicationWriteAsync(command, ct);
         return outcome.Value.ResponseJson is { Length: > 0 } json
             ? JsonSerializer.Deserialize<ApplicationResponse>(json)
               ?? throw new InvalidOperationException("The application receipt snapshot is invalid.")
@@ -388,8 +391,7 @@ public sealed class ApplicationService : IApplicationService
     {
         var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
             AtomicRentalMutationOperation.Update, id, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        var outcome = await ExecuteApplicationWriteAsync(command, ct);
         return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
     }
     public async Task<ApproveApplicationResult?> ApproveAuthorizedAsync(
@@ -401,8 +403,7 @@ public sealed class ApplicationService : IApplicationService
     {
         var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
             AtomicRentalMutationOperation.Approve, id, operationKey, new object());
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        var outcome = await ExecuteApplicationWriteAsync(command, ct);
         return outcome.Value.Found
             ? new ApproveApplicationResult
             {
@@ -423,8 +424,7 @@ public sealed class ApplicationService : IApplicationService
     {
         var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
             AtomicRentalMutationOperation.Decline, id, operationKey, reason);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        var outcome = await ExecuteApplicationWriteAsync(command, ct);
         return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
     }
     public async Task<ApplicationResponse?> WithdrawAuthorizedAsync(
@@ -436,8 +436,7 @@ public sealed class ApplicationService : IApplicationService
     {
         var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
             AtomicRentalMutationOperation.Withdraw, id, operationKey, new object());
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        var outcome = await ExecuteApplicationWriteAsync(command, ct);
         return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
     }
 
@@ -450,8 +449,7 @@ public sealed class ApplicationService : IApplicationService
     {
         var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
             AtomicRentalMutationOperation.Delete, id, operationKey, new object());
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        var outcome = await ExecuteApplicationWriteAsync(command, ct);
         return outcome.Value.Found;
     }
     public async Task<ApplicationLinkResult> GenerateLinkAsync(
@@ -541,4 +539,10 @@ public sealed class ApplicationService : IApplicationService
     }
 
     private IAtomicUnitOfWork Atomic => _atomic;
+
+    private Task<AtomicCommandOutcome<AtomicRentalMutationResult>> ExecuteApplicationWriteAsync(
+        AtomicRentalMutationCommand command,
+        CancellationToken ct) => _writes.ExecuteExactAsync(
+            AtomicRentalMutation.Identity(command).IdempotencyKey,
+            AtomicRentalMutation.Write(command, _db), ct);
 }

@@ -244,7 +244,8 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<IAtomicUnitOfWork>());
+            Mock.Of<IAtomicUnitOfWork>(),
+            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         _sqlCapture.Clear();
         var page = await service.ListPageAsync(

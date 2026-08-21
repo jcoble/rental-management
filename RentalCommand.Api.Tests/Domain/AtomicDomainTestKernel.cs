@@ -92,9 +92,15 @@ internal static class AtomicDomainTestKernel
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
     }
 
-    internal static ServiceProvider CreateForApplications(string connectionString)
+    internal static ServiceProvider CreateForApplications(
+        string connectionString,
+        IEnumerable<IInterceptor>? interceptors = null)
     {
-        var services = Core(connectionString);
+        var services = Core(connectionString, interceptors: interceptors);
+        services.AddScoped<RentalCommandDbContext>(provider =>
+            new SqliteCompatibleRentalCommandDbContext(
+                provider.GetRequiredService<DbContextOptions<RentalCommandDbContext>>()));
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             AtomicRentalMutationCommand,
             AtomicRentalMutationResult,

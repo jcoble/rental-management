@@ -8,6 +8,50 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Applications;
 
+public static class ApplicationFinanceWriteSupport
+{
+    public const string ResultContract = "application-finance.mutation.v1";
+
+    public static TransactionalWrite<RecordApplicationFeeCommand, ApplicationFinanceMutationResult> Write(
+        RecordApplicationFeeCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new RecordApplicationFeeHandler(db);
+        return Build("application-finance.record-fee", command, command.ApplicationId,
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public static TransactionalWrite<RefundApplicationFeeCommand, ApplicationFinanceMutationResult> Write(
+        RefundApplicationFeeCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new RefundApplicationFeeHandler(db);
+        return Build("application-finance.refund-fee", command, command.ApplicationId,
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    private static TransactionalWrite<TCommand, ApplicationFinanceMutationResult> Build<TCommand>(
+        string operationName,
+        TCommand command,
+        int applicationId,
+        Func<TCommand, IAtomicCommandContext, CancellationToken,
+            Task<ApplicationFinanceMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData => new(
+            operationName,
+            WriteIdempotencyPolicy.Required,
+            command,
+            ResultContract,
+            new WriteLockPlan(
+                WriteLockProtocol.RentalApplication,
+                WriteLock.For("RentalApplication", applicationId)),
+            executeAsync,
+            authorizeReplayAsync);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Application finance mutations must use the shared write executor.");
+}
+
 public sealed class RecordApplicationFeeHandler
     : IAtomicCommandHandler<RecordApplicationFeeCommand, ApplicationFinanceMutationResult>
 {
@@ -15,14 +59,17 @@ public sealed class RecordApplicationFeeHandler
 
     public RecordApplicationFeeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ApplicationFinanceMutationResult> HandleAsync(
+    public Task<ApplicationFinanceMutationResult> HandleAsync(
+        RecordApplicationFeeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw ApplicationFinanceWriteSupport.RetiredPath();
+
+    public async Task<ApplicationFinanceMutationResult> ExecuteAsync(
         RecordApplicationFeeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         ApplicationFinanceCommandSupport.Validate(command);
-        await context.AcquireLockAsync("RentalApplication", command.ApplicationId, ct);
-
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var application = await ApplicationFinanceCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
@@ -106,6 +153,10 @@ public sealed class RecordApplicationFeeHandler
 
     public Task AuthorizeReplayAsync(
         RecordApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ApplicationFinanceWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(
+        RecordApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ApplicationFinanceCommandSupport.AuthorizeReplayAsync(
             command.PortfolioId, command.ApplicationId, command.ActorUserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
@@ -120,14 +171,17 @@ public sealed class RefundApplicationFeeHandler
 
     public RefundApplicationFeeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ApplicationFinanceMutationResult> HandleAsync(
+    public Task<ApplicationFinanceMutationResult> HandleAsync(
+        RefundApplicationFeeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw ApplicationFinanceWriteSupport.RetiredPath();
+
+    public async Task<ApplicationFinanceMutationResult> ExecuteAsync(
         RefundApplicationFeeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         ApplicationFinanceCommandSupport.Validate(command);
-        await context.AcquireLockAsync("RentalApplication", command.ApplicationId, ct);
-
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var application = await ApplicationFinanceCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
@@ -240,6 +294,10 @@ public sealed class RefundApplicationFeeHandler
     }
 
     public Task AuthorizeReplayAsync(
+        RefundApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ApplicationFinanceWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(
         RefundApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ApplicationFinanceCommandSupport.AuthorizeReplayAsync(
             command.PortfolioId, command.ApplicationId, command.ActorUserId,

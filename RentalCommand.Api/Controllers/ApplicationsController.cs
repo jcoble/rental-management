@@ -3,12 +3,14 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Applications;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Applications;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -21,11 +23,9 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public class ApplicationsController : ManagementControllerBase
 {
-    private static readonly AtomicJsonResultCodec<ApplicationFinanceMutationResult> FeeResultCodec =
-        new("application-finance.mutation.v1");
     private readonly IApplicationService _service;
     private readonly IScreeningService _screening;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly IWorkspaceAuthorizationEvaluator _authorization;
@@ -34,7 +34,7 @@ public class ApplicationsController : ManagementControllerBase
     public ApplicationsController(
         IApplicationService service,
         IScreeningService screening,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         RentalCommandDbContext db,
         IFileStorage files,
         IWorkspaceAuthorizationEvaluator authorization,
@@ -42,7 +42,7 @@ public class ApplicationsController : ManagementControllerBase
     {
         _service = service;
         _screening = screening;
-        _atomic = atomic;
+        _writes = writes;
         _db = db;
         _files = files;
         _authorization = authorization;
@@ -241,7 +241,7 @@ public class ApplicationsController : ManagementControllerBase
                 sessionId,
                 accessContextId,
                 accessRevision),
-            "application-finance.record-fee",
+            command => ApplicationFinanceWriteSupport.Write(command, _db),
             StatusCodes.Status201Created,
             ct);
     }
@@ -280,7 +280,7 @@ public class ApplicationsController : ManagementControllerBase
                 sessionId,
                 accessContextId,
                 accessRevision),
-            "application-finance.refund-fee",
+            command => ApplicationFinanceWriteSupport.Write(command, _db),
             StatusCodes.Status201Created,
             ct);
     }
@@ -289,7 +289,7 @@ public class ApplicationsController : ManagementControllerBase
         int applicationId,
         string? idempotencyKey,
         Func<string, TCommand> createCommand,
-        string commandType,
+        Func<TCommand, TransactionalWrite<TCommand, ApplicationFinanceMutationResult>> createWrite,
         int successStatus,
         CancellationToken ct)
         where TCommand : notnull, IAtomicCommandData
@@ -304,11 +304,9 @@ public class ApplicationsController : ManagementControllerBase
         var commandKey = $"{portfolioId}:{applicationId}:{keyDigest}";
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(commandType, commandKey),
-                createCommand(commandKey),
-                FeeResultCodec,
-                ct);
+            var command = createCommand(commandKey);
+            var write = createWrite(command);
+            var outcome = await _writes.ExecuteAsync(commandKey, write, ct);
             var value = outcome.Value;
             if (value.Outcome == ApplicationFinanceMutationOutcome.ApplicationNotFound)
                 return NotFound(new { error = value.Error });
