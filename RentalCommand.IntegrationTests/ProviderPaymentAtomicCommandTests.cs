@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Payments;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -110,10 +111,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             ScheduleProviderPaymentReconciliationCommand,
             ScheduleProviderPaymentReconciliationResult,
             ScheduleProviderPaymentReconciliationHandler>();
-        services.AddAtomicCommandHandler<
-            RecordTenantReceiptCommand,
-            RecordTenantReceiptResult,
-            RecordTenantReceiptHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             FinalizeProviderPaymentCreateCommand,
             FinalizeProviderPaymentCreateResult,
@@ -2270,6 +2268,17 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = _services!.CreateAsyncScope();
+        if (command is RecordTenantReceiptCommand receipt)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var handler = new RecordTenantReceiptHandler(db);
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey,
+                    TenantMoneyWriteSupport.Write(
+                        receipt, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+
         return await scope.ServiceProvider
             .GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, codec, ct);

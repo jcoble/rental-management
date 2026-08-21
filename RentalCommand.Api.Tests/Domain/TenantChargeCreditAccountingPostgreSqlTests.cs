@@ -11,6 +11,7 @@ using RentalCommand.Core.Payments;
 using RentalCommand.Core.Time;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Accounting;
@@ -37,7 +38,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
     private MigratedPostgreSqlTestContext _ctx = null!;
     private ServiceProvider _services = null!;
     private IServiceScope _serviceScope = null!;
-    private IAtomicUnitOfWork _atomic = null!;
+    private IRequestWriteExecutor _writes = null!;
     private WorkspaceReadScope _scope;
 
     public TenantChargeCreditAccountingPostgreSqlTests(MigratedPostgreSqlFixture fixture) =>
@@ -53,7 +54,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         await FreezeSimulationClockAsync();
         _services = BuildServices(_ctx.ConnectionString, SimulatedEntryAtUtc);
         _serviceScope = _services.CreateScope();
-        _atomic = _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        _writes = _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
     }
 
     public async Task DisposeAsync()
@@ -215,10 +216,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         var command = CreditCommand(
             graph.AccountId, "deposit-target", 40m, graph.ChargeEntryId);
 
-        await FluentActions.Invoking(() => _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("tenant-account.credit.post", command.DeliveryIdempotencyKey),
-                command,
-                CreditCodec))
+        await FluentActions.Invoking(() => ExecuteCreditAsync(command))
             .Should().ThrowAsync<ArgumentException>()
             .WithMessage("*security-deposit*");
 
@@ -234,16 +232,10 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         var graph = SeedTenantAccount("replay", 100m);
         var charge = await ExecuteChargeAsync(ChargeCommand(graph.AccountId, "replay", 100m));
         var command = CreditCommand(graph.AccountId, "replay", 40m, charge.LedgerEntryId);
-        var first = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("tenant-account.credit.post", command.DeliveryIdempotencyKey),
-            command,
-            CreditCodec);
+        var first = await ExecuteCreditOutcomeAsync(command);
 
         var countsBefore = await MutationCountsAsync(command.BusinessKey);
-        var replay = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("tenant-account.credit.post", command.DeliveryIdempotencyKey),
-            command,
-            CreditCodec);
+        var replay = await ExecuteCreditOutcomeAsync(command);
         var countsAfter = await MutationCountsAsync(command.BusinessKey);
 
         replay.Value.Should().BeEquivalentTo(first.Value);
@@ -280,10 +272,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
             graph.AccountId, "over-credit-first", 60m, charge.LedgerEntryId));
         var command = CreditCommand(graph.AccountId, "over-credit-second", 50m, charge.LedgerEntryId);
 
-        await FluentActions.Invoking(() => _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("tenant-account.credit.post", command.DeliveryIdempotencyKey),
-                command,
-                CreditCodec))
+        await FluentActions.Invoking(() => ExecuteCreditAsync(command))
             .Should().ThrowAsync<ArgumentException>()
             .WithMessage("*remaining amount*");
 
@@ -350,29 +339,33 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
 
     private async Task<TenantChargeMutationResult> ExecuteChargeAsync(PostTenantChargeCommand command)
     {
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("tenant-account.charge.post", command.DeliveryIdempotencyKey),
-            command,
-            ChargeCodec);
+        var handler = new PostTenantChargeHandler(
+            _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        var outcome = await _writes.ExecuteAsync(
+            command.DeliveryIdempotencyKey,
+            TenantMoneyWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
         return outcome.Value;
     }
 
     private async Task<TenantLedgerMutationResult> ExecuteCreditAsync(PostTenantCreditCommand command)
     {
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("tenant-account.credit.post", command.DeliveryIdempotencyKey),
-            command,
-            CreditCodec);
-        return outcome.Value;
+        return (await ExecuteCreditOutcomeAsync(command)).Value;
+    }
+
+    private async Task<AtomicCommandOutcome<TenantLedgerMutationResult>> ExecuteCreditOutcomeAsync(
+        PostTenantCreditCommand command)
+    {
+        var handler = new PostTenantCreditHandler(
+            _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        var outcome = await _writes.ExecuteAsync(
+            command.DeliveryIdempotencyKey,
+            TenantMoneyWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
+        return outcome;
     }
 
     private async Task AssertCreditRejectedBeforeWritesAsync(PostTenantCreditCommand command)
     {
-        await FluentActions.Invoking(() => _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "tenant-account.credit.post", command.DeliveryIdempotencyKey),
-                command,
-                CreditCodec))
+        await FluentActions.Invoking(() => ExecuteCreditAsync(command))
             .Should().ThrowAsync<ArgumentException>()
             .WithMessage("*remaining amount*");
 
@@ -386,10 +379,11 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
 
     private async Task<RecordTenantReceiptResult> ExecuteReceiptAsync(RecordTenantReceiptCommand command)
     {
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("tenant-account.receipt.record", command.DeliveryIdempotencyKey),
-            command,
-            ReceiptCodec);
+        var handler = new RecordTenantReceiptHandler(
+            _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        var outcome = await _writes.ExecuteAsync(
+            command.DeliveryIdempotencyKey,
+            TenantMoneyWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
         return outcome.Value;
     }
 
@@ -633,12 +627,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(utcNow));
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            PostTenantChargeCommand, TenantChargeMutationResult, PostTenantChargeHandler>();
-        services.AddAtomicCommandHandler<
-            PostTenantCreditCommand, TenantLedgerMutationResult, PostTenantCreditHandler>();
-        services.AddAtomicCommandHandler<
-            RecordTenantReceiptCommand, RecordTenantReceiptResult, RecordTenantReceiptHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider));
