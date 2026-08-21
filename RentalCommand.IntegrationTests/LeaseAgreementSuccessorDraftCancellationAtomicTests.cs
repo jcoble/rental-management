@@ -2,6 +2,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -56,6 +57,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             CancelLeaseAgreementSuccessorDraftCommand,
             CancelLeaseAgreementSuccessorDraftResult,
@@ -795,17 +797,37 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
                 _scenario.AccessContextId,
                 _scenario.AccessRevision);
             var db = _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var issued = await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            var issued = await _scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
                 .ExecuteAsync(operationKey,
                     NativeEsignWriteSupport.Write<IssueLeaseAgreementCommand,
                         IssueLeaseAgreementResult>(db, command));
-            var replay = await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            var replay = await _scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
                 .ExecuteAsync(operationKey,
                     NativeEsignWriteSupport.Write<IssueLeaseAgreementCommand,
                         IssueLeaseAgreementResult>(db, command));
             issued.Disposition.Should().Be(AtomicCommandDisposition.Executed);
             replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
             replay.Value.Should().BeEquivalentTo(issued.Value);
+            var legacyKey = $"{operationKey}-legacy-receipt";
+            var issueCodec = new AtomicJsonResultCodec<IssueLeaseAgreementResult>("lease-agreement.issue.v1");
+            await using (var receiptDb = NewContext())
+            {
+                receiptDb.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+                {
+                    Id = Guid.NewGuid(), AttemptId = Guid.NewGuid(), CommandType = "lease-agreement.issue",
+                    IdempotencyKey = legacyKey, RequestFingerprint = AtomicCommandFingerprint.Create(command),
+                    Status = AtomicCommandReceiptStatus.Completed, ResultContract = issueCodec.ContractName,
+                    ResultJson = issueCodec.Serialize(issued.Value), StartedAt = DateTime.UtcNow,
+                    CompletedAt = DateTime.UtcNow,
+                });
+                await receiptDb.SaveChangesAsync();
+            }
+            var legacyReplay = await _scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(legacyKey,
+                    NativeEsignWriteSupport.Write<IssueLeaseAgreementCommand,
+                        IssueLeaseAgreementResult>(db, command));
+            legacyReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+            legacyReplay.Value.Should().BeEquivalentTo(issued.Value);
             return issued.Value;
         }
     }

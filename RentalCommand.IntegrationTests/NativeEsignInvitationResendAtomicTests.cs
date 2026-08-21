@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -12,6 +13,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Esign;
@@ -53,6 +55,7 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .AddInterceptors(_locks)
@@ -157,8 +160,11 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
             $"{_scenario.PortfolioId}:{_scenario.LeaseManagementId}:{command.ParentId}:{command.LegalSignerId}:{actionDigest}");
 
         var outcome = await ExecuteAsync(identity, command);
+        var replay = await ExecuteAsync(identity, command with { });
 
         outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(outcome.Value);
         outcome.Value.OutboxIdempotencyKey.Should().Be(
             $"addendum-esign:{_scenario.Addendum.SignatureRequestId}:signer:{_scenario.Addendum.SignatureSignerId}:resend:{actionDigest}");
         await using var db = NewContext();
@@ -171,6 +177,134 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
         payload.RootElement.GetProperty("leaseAddendumId").GetInt32()
             .Should().Be(_scenario.Addendum.ParentId);
         payload.RootElement.GetProperty("to").GetString().Should().Be("addendum@example.test");
+        (await db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey == outcome.Value.OutboxIdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task LegacyAgreementResendReceipt_ReplaysStoredSharedResendShapeThroughRequestExecutor()
+    {
+        SkipIfNoDocker();
+        var command = Command(
+            NativeEsignInvitationParentKind.LeaseAgreement,
+            _scenario.Agreement.ParentId,
+            _scenario.Agreement.LegalSignerId,
+            new string('c', 64));
+        const string key = "legacy-agreement-resend";
+        var stored = new ResendNativeEsignInvitationResult(
+            _scenario.Agreement.SignatureRequestId,
+            _scenario.Agreement.SignatureSignerId,
+            "stored-legacy-resend-key");
+        await using var descriptorDb = NewContext();
+        var write = NativeEsignWriteSupport.Write<ResendNativeEsignInvitationCommand,
+            ResendNativeEsignInvitationResult>(descriptorDb, command);
+        var codec = new AtomicJsonResultCodec<ResendNativeEsignInvitationResult>(write.ResultContract);
+        await using (var db = NewContext())
+        {
+            db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+            {
+                Id = Guid.NewGuid(), AttemptId = Guid.NewGuid(), CommandType = write.OperationName,
+                IdempotencyKey = key, RequestFingerprint = AtomicCommandFingerprint.Create(command),
+                Status = AtomicCommandReceiptStatus.Completed, ResultContract = write.ResultContract,
+                ResultJson = codec.Serialize(stored), StartedAt = DateTime.UtcNow, CompletedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await using var scope = _services!.CreateAsyncScope();
+        var scopedDb = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var replay = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(key, NativeEsignWriteSupport.Write<ResendNativeEsignInvitationCommand,
+                ResendNativeEsignInvitationResult>(scopedDb, command));
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(stored);
+    }
+
+    [SkippableFact]
+    public async Task AddendumIssue_ExecutesThroughRequestExecutor()
+    {
+        SkipIfNoDocker();
+        var now = DateTime.UtcNow;
+        await using var arrange = NewContext();
+        var baseAgreement = await arrange.LeaseAgreements.SingleAsync(row =>
+            row.Id == _scenario.Agreement.ParentId);
+        baseAgreement.ExecutedArtifactId = baseAgreement.IssuedArtifactId;
+        baseAgreement.FullyExecutedAtUtc = now;
+        var addendum = new LeaseAddendum
+        {
+            PublicId = Guid.NewGuid(), SeriesPublicId = Guid.NewGuid(),
+            PortfolioId = _scenario.PortfolioId, LeaseManagementId = _scenario.LeaseManagementId,
+            BaseAgreementId = baseAgreement.Id, VersionNumber = 1,
+            AddendumNumber = "ADD-EXECUTOR-ISSUE", Purpose = LeaseAddendumPurpose.Other,
+            EffectiveFromOn = DateOnly.FromDateTime(now), TermsSchemaVersion = 1,
+            TermsPayload = "{}", DocumentSourceVersionId = baseAgreement.DocumentSourceVersionId,
+            CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = ActorUserId,
+        };
+        var signer = new LeaseAddendumSigner
+        {
+            PortfolioId = _scenario.PortfolioId, LeaseAddendum = addendum,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant, NameSnapshot = "Issue Signer",
+            EmailSnapshot = "issue-addendum@example.test", SigningOrder = 1, IsRequired = true,
+        };
+        arrange.AddRange(addendum, signer);
+        await arrange.SaveChangesAsync();
+
+        const string fileName = "issued-addendum.pdf";
+        const string storageKey = "legal/addenda/issued-addendum.pdf";
+        var contentSha = new string('d', 64);
+        var fingerprint = LegalDocumentIssuanceBinding.CreateAddendum(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, addendum.Id,
+            addendum.DraftRevision, addendum.DocumentSourceVersionId, addendum.TermsSchemaVersion,
+            addendum.TermsPayload, [], contentSha, 8, fileName);
+        var pendingId = Guid.NewGuid();
+        arrange.PendingFileUploads.Add(new PendingFileUpload
+        {
+            Id = pendingId, PortfolioId = _scenario.PortfolioId, ActorScopeId = ActorUserId,
+            Purpose = LegalDocumentIssuanceBinding.AddendumUploadPurpose,
+            OperationKeyHash = new string('e', 64), RequestFingerprint = fingerprint,
+            StoragePath = storageKey, FileName = fileName, ContentType = "application/pdf",
+            SizeBytes = 8, State = PendingFileUploadState.Prepared,
+            CreatedAtUtc = now, UpdatedAtUtc = now,
+        });
+        await arrange.SaveChangesAsync();
+        var command = new IssueLeaseAddendumCommand(
+            pendingId, addendum.DocumentSourceVersionId, fingerprint, _scenario.PortfolioId,
+            _scenario.LeaseManagementId, addendum.Id, addendum.DraftRevision, "issue-delivery",
+            "Executor addendum", storageKey, fileName, 8, contentSha,
+            "https://example.test", [new NativeEsignAddendumSignerCommand(signer.Id)],
+            ActorUserId, _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision);
+
+        await using var scope = _services!.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync("issue-addendum-executor",
+                NativeEsignWriteSupport.Write<IssueLeaseAddendumCommand,
+                    IssueLeaseAddendumResult>(db, command));
+
+        outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        const string legacyKey = "legacy-addendum-issue";
+        var issueCodec = new AtomicJsonResultCodec<IssueLeaseAddendumResult>("lease-addendum.issue.v1");
+        await using (var receiptDb = NewContext())
+        {
+            receiptDb.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+            {
+                Id = Guid.NewGuid(), AttemptId = Guid.NewGuid(), CommandType = "lease-addendum.issue",
+                IdempotencyKey = legacyKey, RequestFingerprint = AtomicCommandFingerprint.Create(command),
+                Status = AtomicCommandReceiptStatus.Completed, ResultContract = issueCodec.ContractName,
+                ResultJson = issueCodec.Serialize(outcome.Value), StartedAt = now, CompletedAt = now,
+            });
+            await receiptDb.SaveChangesAsync();
+        }
+        var legacyReplay = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(legacyKey, NativeEsignWriteSupport.Write<IssueLeaseAddendumCommand,
+                IssueLeaseAddendumResult>(db, command));
+        legacyReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        legacyReplay.Value.Should().BeEquivalentTo(outcome.Value);
+
+        await using var verify = NewContext();
+        (await verify.SignatureRequests.CountAsync(row =>
+            row.LeaseAddendumId == addendum.Id)).Should().Be(1);
     }
 
     [SkippableFact]
@@ -223,7 +357,7 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
     {
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey,
                 NativeEsignWriteSupport.Write<ResendNativeEsignInvitationCommand,
                     ResendNativeEsignInvitationResult>(db, command));

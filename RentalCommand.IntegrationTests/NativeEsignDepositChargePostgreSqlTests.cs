@@ -5,6 +5,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -56,6 +57,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .AddInterceptors(_commandCounter)
@@ -273,6 +275,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("future-token", 500m, signed: false);
 
+        var occurredAtUtc = DateTime.UtcNow;
         var command = new RecordNativeSignatureCommand(
                 scenario.TokenHash,
                 SignatureSignatureType.Typed,
@@ -283,13 +286,16 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
                 null,
                 "127.0.0.1",
                 "integration-test",
-                DateTime.UtcNow);
+                occurredAtUtc);
         var result = await Writes.ExecuteAsync("future-token",
             NativeEsignWriteSupport.Write<RecordNativeSignatureCommand,
                 NativeSignerActionResult>(ScopedDb, command));
+        var replayCommand = new RecordNativeSignatureCommand(
+            scenario.TokenHash, SignatureSignatureType.Typed, "Future Tenant",
+            null, null, null, null, "127.0.0.1", "integration-test", occurredAtUtc);
         var replay = await Writes.ExecuteAsync("future-token",
             NativeEsignWriteSupport.Write<RecordNativeSignatureCommand,
-                NativeSignerActionResult>(ScopedDb, command));
+                NativeSignerActionResult>(ScopedDb, replayCommand));
 
         result.Value.Outcome.Should().Be(NativeSignerActionOutcome.Applied);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -302,6 +308,170 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         (await db.Set<SignatureAuditEvent>().CountAsync(row =>
             row.SignatureSignerId == scenario.SignatureSignerId
             && row.Type == SignatureAuditEventType.Signed)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task SignRetryWithDifferentTimestamp_PreservesRecordedLegacyConflict()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("volatile-sign-retry", 500m, signed: false);
+        var occurredAtUtc = DateTime.UtcNow;
+        var command = new RecordNativeSignatureCommand(
+            scenario.TokenHash, SignatureSignatureType.Typed, "Future Tenant",
+            null, null, null, null, "127.0.0.1", "integration-test", occurredAtUtc);
+        await Writes.ExecuteAsync("volatile-sign-retry",
+            NativeEsignWriteSupport.Write<RecordNativeSignatureCommand,
+                NativeSignerActionResult>(ScopedDb, command));
+
+        // Intentional parity with the recorded latent defect: volatile request facts remain fingerprinted.
+        var retry = command with { OccurredAtUtc = occurredAtUtc.AddTicks(1) };
+        var act = () => Writes.ExecuteAsync("volatile-sign-retry",
+            NativeEsignWriteSupport.Write<RecordNativeSignatureCommand,
+                NativeSignerActionResult>(ScopedDb, retry));
+
+        await act.Should().ThrowAsync<AtomicIdempotencyConflictException>();
+        await using var db = NewContext();
+        (await db.Set<SignatureAuditEvent>().CountAsync(row =>
+            row.SignatureSignerId == scenario.SignatureSignerId
+            && row.Type == SignatureAuditEventType.Signed)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task ViewDeclineAndFinalize_ExecuteThroughRequestExecutorAndReplayWithoutDuplicateTransitions()
+    {
+        SkipIfNoDocker();
+        var viewScenario = await SeedScenarioAsync("executor-view", 0m, signed: false);
+        var viewAt = DateTime.UtcNow;
+        var view = new RecordNativeEsignViewCommand(
+            viewScenario.TokenHash, "127.0.0.1", "integration-test", viewAt);
+        var viewed = await ExecuteAsync("executor-view", view);
+        var viewReplay = await ExecuteAsync("executor-view", view with { });
+        viewed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        viewReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+
+        var declineScenario = await SeedScenarioAsync("executor-decline", 0m, signed: false);
+        var declineAt = DateTime.UtcNow;
+        var decline = new RecordNativeDeclineCommand(
+            declineScenario.TokenHash, "No longer proceeding", "127.0.0.1", "integration-test", declineAt);
+        var declined = await ExecuteAsync("executor-decline", decline);
+        var declineReplay = await ExecuteAsync("executor-decline", decline with { });
+        declined.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        declineReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+
+        var finalScenario = await SeedScenarioAsync("executor-finalize", 0m);
+        var pendingId = Guid.NewGuid();
+        var claimToken = Guid.NewGuid();
+        const string finalFingerprint = "executor-finalize-fingerprint";
+        const string finalStorageKey = "agreements/executor-finalized.pdf";
+        const string finalFileName = "executor-finalized.pdf";
+        var finalSha = new string('e', 64);
+        await using (var arrangeFinal = NewContext())
+        {
+            var request = await arrangeFinal.SignatureRequests.SingleAsync(row =>
+                row.Id == finalScenario.SignatureRequestId);
+            request.ExecutionClaimOwner = "integration-finalize";
+            request.ExecutionClaimToken = claimToken;
+            request.ExecutionClaimExpiresAtUtc = DateTime.UtcNow.AddHours(1);
+            arrangeFinal.PendingFileUploads.Add(new PendingFileUpload
+            {
+                Id = pendingId, PortfolioId = finalScenario.PortfolioId, ActorScopeId = ActorUserId,
+                Purpose = "native-esign-executed", OperationKeyHash = new string('f', 64),
+                RequestFingerprint = finalFingerprint, StoragePath = finalStorageKey,
+                FileName = finalFileName, ContentType = "application/pdf", SizeBytes = 8,
+                State = PendingFileUploadState.Prepared, CreatedAtUtc = DateTime.UtcNow,
+                UpdatedAtUtc = DateTime.UtcNow,
+            });
+            await arrangeFinal.SaveChangesAsync();
+        }
+        var finalize = new FinalizeNativeEsignRequestCommand(
+            pendingId, finalFingerprint, finalScenario.SignatureRequestId,
+            finalScenario.SignatureRequestPublicId, claimToken, finalStorageKey,
+            finalFileName, 8, finalSha);
+        var finalized = await ExecuteAsync("executor-finalize", finalize);
+        var finalizeReplay = await ExecuteAsync("executor-finalize", finalize with { });
+        finalized.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        finalizeReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+
+        await using var verify = NewContext();
+        (await verify.Set<SignatureAuditEvent>().CountAsync(row =>
+            row.SignatureSignerId == viewScenario.SignatureSignerId
+            && row.Type == SignatureAuditEventType.Viewed)).Should().Be(1);
+        (await verify.Set<SignatureAuditEvent>().CountAsync(row =>
+            row.SignatureSignerId == declineScenario.SignatureSignerId
+            && row.Type == SignatureAuditEventType.Declined)).Should().Be(1);
+        (await verify.Set<SignatureAuditEvent>().CountAsync(row =>
+            row.SignatureRequestId == finalScenario.SignatureRequestId
+            && row.Type == SignatureAuditEventType.Completed)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task LegacyKernelReceipts_ReplayThroughMigratedExecutorForEveryResultShape()
+    {
+        SkipIfNoDocker();
+        var signerScenario = await SeedScenarioAsync("legacy-signer-receipts", 0m);
+        var signerAt = DateTime.UtcNow;
+
+        var view = new RecordNativeEsignViewCommand(
+            signerScenario.TokenHash, "127.0.0.1", "legacy-agent", signerAt);
+        var storedView = new RecordNativeEsignViewResult(
+            NativeEsignViewOutcome.Available, null, signerScenario.SignatureRequestId);
+        await AssertLegacyReplayAsync("legacy-view", view, storedView);
+
+        var sign = new RecordNativeSignatureCommand(
+            signerScenario.TokenHash, SignatureSignatureType.Typed, "Future Tenant",
+            null, null, null, null, "127.0.0.1", "legacy-agent", signerAt);
+        var storedSignerAction = new NativeSignerActionResult(
+            NativeSignerActionOutcome.Applied, null, signerScenario.SignatureRequestId,
+            signerScenario.SignatureRequestPublicId, signerScenario.LeaseAgreementId, null,
+            SignatureSignerStatus.Signed, SignatureRequestStatus.ExecutionPending, true);
+        // Sign and decline share NativeSignerActionResult; sign is the representative decode shape.
+        await AssertLegacyReplayAsync("legacy-sign", sign, storedSignerAction);
+
+        var declineScenario = await SeedScenarioAsync("legacy-decline-receipt", 0m, signed: false);
+        await using (var arrange = NewContext())
+        {
+            var signer = await arrange.SignatureSigners.SingleAsync(row =>
+                row.Id == declineScenario.SignatureSignerId);
+            var request = await arrange.SignatureRequests.SingleAsync(row =>
+                row.Id == declineScenario.SignatureRequestId);
+            signer.Status = SignatureSignerStatus.Declined;
+            request.Status = SignatureRequestStatus.Declined;
+            await arrange.SaveChangesAsync();
+        }
+        var decline = new RecordNativeDeclineCommand(
+            declineScenario.TokenHash, "Stored reason", "127.0.0.1", "legacy-agent", signerAt);
+        await AssertLegacyReplayAsync("legacy-decline", decline,
+            storedSignerAction with
+            {
+                SignatureRequestId = declineScenario.SignatureRequestId,
+                PublicId = declineScenario.SignatureRequestPublicId,
+                LeaseAgreementId = declineScenario.LeaseAgreementId,
+                SignerStatus = SignatureSignerStatus.Declined,
+                RequestStatus = SignatureRequestStatus.Declined,
+                ExecutionRequired = false,
+            });
+
+        var completed = await SeedScenarioAsync("legacy-finalize-receipt", 0m, completed: true);
+        await using var artifactDb = NewContext();
+        var artifact = await artifactDb.LegalDocumentArtifacts.AsNoTracking()
+            .SingleAsync(row => row.Id == completed.ExecutedArtifactId);
+        var finalize = new FinalizeNativeEsignRequestCommand(
+            Guid.NewGuid(), "legacy-finalize-fingerprint", completed.SignatureRequestId,
+            completed.SignatureRequestPublicId, Guid.NewGuid(), artifact.StorageKey,
+            artifact.FileName, artifact.ByteLength, artifact.ContentSha256);
+        await AssertLegacyReplayAsync("legacy-finalize", finalize,
+            new FinalizeNativeEsignRequestResult(completed.SignatureRequestPublicId,
+                completed.SignatureRequestId, completed.LeaseAgreementId, null, completed.ExecutedArtifactId));
+
+        var reconcile = new ReconcileNativeEsignAgreementFinancialsCommand(
+            completed.SignatureRequestId, completed.SignatureRequestPublicId);
+        await AssertLegacyReplayAsync("legacy-reconcile", reconcile,
+            new ReconcileNativeEsignAgreementFinancialsResult(completed.SignatureRequestPublicId,
+                completed.SignatureRequestId, completed.LeaseAgreementId, 7));
+
+        var batch = new ReconcileNativeEsignAgreementFinancialsBatchCommand(Guid.NewGuid(), 20);
+        await AssertLegacyReplayAsync("legacy-batch", batch,
+            new ReconcileNativeEsignAgreementFinancialsBatchResult(11));
     }
 
     private async Task<AtomicLegalExecutionTransitionResult> ExecuteTransitionAsync(Scenario scenario)
@@ -627,11 +797,65 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
             .AddInterceptors(_commandCounter)
             .Options);
 
-    private IWriteExecutor Writes =>
-        _serviceScope!.ServiceProvider.GetRequiredService<IWriteExecutor>();
+    private IRequestWriteExecutor Writes =>
+        _serviceScope!.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
 
     private RentalCommandDbContext ScopedDb =>
         _serviceScope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+
+    private Task<AtomicCommandOutcome<RecordNativeEsignViewResult>> ExecuteAsync(
+        string key,
+        RecordNativeEsignViewCommand command) =>
+        Writes.ExecuteAsync(key,
+            NativeEsignWriteSupport.Write<RecordNativeEsignViewCommand,
+                RecordNativeEsignViewResult>(ScopedDb, command));
+
+    private Task<AtomicCommandOutcome<NativeSignerActionResult>> ExecuteAsync(
+        string key,
+        RecordNativeDeclineCommand command) =>
+        Writes.ExecuteAsync(key,
+            NativeEsignWriteSupport.Write<RecordNativeDeclineCommand,
+                NativeSignerActionResult>(ScopedDb, command));
+
+    private Task<AtomicCommandOutcome<FinalizeNativeEsignRequestResult>> ExecuteAsync(
+        string key,
+        FinalizeNativeEsignRequestCommand command) =>
+        Writes.ExecuteAsync(key,
+            NativeEsignWriteSupport.Write<FinalizeNativeEsignRequestCommand,
+                FinalizeNativeEsignRequestResult>(ScopedDb, command));
+
+    private async Task AssertLegacyReplayAsync<TCommand, TResult>(
+        string key,
+        TCommand command,
+        TResult stored)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        var write = NativeEsignWriteSupport.Write<TCommand, TResult>(ScopedDb, command);
+        var codec = new AtomicJsonResultCodec<TResult>(write.ResultContract);
+        await using (var seed = NewContext())
+        {
+            seed.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+            {
+                Id = Guid.NewGuid(),
+                AttemptId = Guid.NewGuid(),
+                CommandType = write.OperationName,
+                IdempotencyKey = key,
+                RequestFingerprint = AtomicCommandFingerprint.Create(command),
+                Status = AtomicCommandReceiptStatus.Completed,
+                ResultContract = write.ResultContract,
+                ResultJson = codec.Serialize(stored),
+                StartedAt = FrozenBusinessNow,
+                CompletedAt = FrozenBusinessNow,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var replay = await Writes.ExecuteAsync(key, write);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(stored);
+    }
 
     private static async Task<int> CountDepositChargeOutboxMessagesAsync(
         RentalCommandDbContext db,
