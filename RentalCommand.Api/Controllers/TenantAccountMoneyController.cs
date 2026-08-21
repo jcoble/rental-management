@@ -12,6 +12,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Operations;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 
@@ -22,22 +23,17 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<RecurringTenantChargeMutationResult> RecurringChargeCodec =
-        new("tenant-account.recurring-charge.configuration.v1");
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor _writes;
     private readonly IAccountingLedgerReadModelService _ledgerReadModels;
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
 
     public TenantAccountMoneyController(
-        IAtomicUnitOfWork atomic,
         IAccountingLedgerReadModelService ledgerReadModels,
         RentalCommandDbContext db,
         TimeProvider timeProvider,
         IRequestWriteExecutor writes)
     {
-        _atomic = atomic;
         _ledgerReadModels = ledgerReadModels;
         _db = db;
         _timeProvider = timeProvider;
@@ -141,10 +137,12 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.NextRunDate,
             _timeProvider.GetUtcNow().UtcDateTime,
             $"recurring-charge-create:{envelope.KeyDigest}");
+        var handler = new CreateRecurringTenantChargeHandler(_db);
         return await ExecuteRecurringCharge(
-            "tenant-account.recurring-charge.create.v1",
             command.DeliveryIdempotencyKey,
             command,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync,
             tenantAccountId,
             created: true,
             ct: ct);
@@ -173,10 +171,12 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.NextRunDate,
             _timeProvider.GetUtcNow().UtcDateTime,
             $"recurring-charge-update:{envelope.KeyDigest}");
+        var handler = new UpdateRecurringTenantChargeHandler(_db);
         return await ExecuteRecurringCharge(
-            "tenant-account.recurring-charge.update.v1",
             command.DeliveryIdempotencyKey,
             command,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync,
             tenantAccountId,
             created: false,
             ct: ct);
@@ -198,10 +198,12 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             id,
             _timeProvider.GetUtcNow().UtcDateTime,
             $"recurring-charge-deactivate:{envelope.KeyDigest}");
+        var handler = new DeactivateRecurringTenantChargeHandler(_db);
         return await ExecuteRecurringCharge(
-            "tenant-account.recurring-charge.deactivate.v1",
             command.DeliveryIdempotencyKey,
             command,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync,
             tenantAccountId,
             created: false,
             ct: ct);
@@ -470,9 +472,11 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         };
 
     private async Task<IActionResult> ExecuteRecurringCharge<TCommand>(
-        string commandType,
         string idempotencyKey,
         TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken,
+            Task<RecurringTenantChargeMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
         int tenantAccountId,
         bool created,
         CancellationToken ct)
@@ -480,10 +484,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(commandType, idempotencyKey),
-                command,
-                RecurringChargeCodec,
+            var outcome = await _writes.ExecuteAsync(
+                idempotencyKey,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
                 ct);
             if (outcome.Value.Outcome == RecurringTenantChargeMutationOutcome.NotFound
                 || outcome.Value.Snapshot is null)

@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Automation;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -54,6 +56,21 @@ public static class TenantMoneyWriteSupport
                 ("refunded-tenant-allocation.recover", "refunded-tenant-allocation.recover.v1"),
             RecoverLateFeeChargesCommand =>
                 ("late-fee-charges.recover", "late-fee-charges.recover.v1"),
+            CreateRecurringTenantChargeCommand =>
+                ("tenant-account.recurring-charge.create.v1",
+                    "tenant-account.recurring-charge.configuration.v1"),
+            UpdateRecurringTenantChargeCommand =>
+                ("tenant-account.recurring-charge.update.v1",
+                    "tenant-account.recurring-charge.configuration.v1"),
+            DeactivateRecurringTenantChargeCommand =>
+                ("tenant-account.recurring-charge.deactivate.v1",
+                    "tenant-account.recurring-charge.configuration.v1"),
+            ApplyScheduledRentChargeBatchCommand =>
+                ("scheduled-tenant-charges.rent.apply",
+                    "scheduled-tenant-charges.rent.apply.v1"),
+            ApplyScheduledLateFeeChargeBatchCommand =>
+                ("scheduled-tenant-charges.late-fee.apply",
+                    "scheduled-tenant-charges.late-fee.apply.v1"),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         var lockPlan = command switch
@@ -64,6 +81,19 @@ public static class TenantMoneyWriteSupport
             RecoverLateFeeChargesCommand lateFees => new WriteLockPlan(
                 WriteLockProtocol.Portfolio,
                 WriteLock.For("Portfolio", lateFees.PortfolioId)),
+            CreateRecurringTenantChargeCommand create => new WriteLockPlan(
+                WriteLockProtocol.TenantAccount,
+                WriteLock.For("TenantAccount", create.TenantAccountId)),
+            UpdateRecurringTenantChargeCommand update => new WriteLockPlan(
+                WriteLockProtocol.TenantAccountRecurringCharge,
+                WriteLock.For("TenantAccount", update.TenantAccountId),
+                WriteLock.For("RecurringTenantCharge", update.RecurringTenantChargeId)),
+            DeactivateRecurringTenantChargeCommand deactivate => new WriteLockPlan(
+                WriteLockProtocol.TenantAccountRecurringCharge,
+                WriteLock.For("TenantAccount", deactivate.TenantAccountId),
+                WriteLock.For("RecurringTenantCharge", deactivate.RecurringTenantChargeId)),
+            ApplyScheduledRentChargeBatchCommand => WriteLockPlan.None,
+            ApplyScheduledLateFeeChargeBatchCommand => WriteLockPlan.None,
             ITenantMoneyCommand tenantMoney => new WriteLockPlan(
                 WriteLockProtocol.TenantAccount,
                 WriteLock.For("TenantAccount", tenantMoney.TenantAccountId)),

@@ -23,7 +23,12 @@ public sealed class ApplyScheduledRentChargeBatchHandler
 
     public ApplyScheduledRentChargeBatchHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ApplyScheduledRentChargeBatchResult> HandleAsync(
+    public Task<ApplyScheduledRentChargeBatchResult> HandleAsync(
+        ApplyScheduledRentChargeBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<ApplyScheduledRentChargeBatchResult> ExecuteAsync(
         ApplyScheduledRentChargeBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -54,7 +59,12 @@ public sealed class ApplyScheduledRentChargeBatchHandler
         return new ApplyScheduledRentChargeBatchResult(rent.Count);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        ApplyScheduledRentChargeBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         ApplyScheduledRentChargeBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -82,7 +92,12 @@ public sealed class ApplyScheduledLateFeeChargeBatchHandler
 
     public ApplyScheduledLateFeeChargeBatchHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ApplyScheduledLateFeeChargeBatchResult> HandleAsync(
+    public Task<ApplyScheduledLateFeeChargeBatchResult> HandleAsync(
+        ApplyScheduledLateFeeChargeBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<ApplyScheduledLateFeeChargeBatchResult> ExecuteAsync(
         ApplyScheduledLateFeeChargeBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -109,7 +124,12 @@ public sealed class ApplyScheduledLateFeeChargeBatchHandler
         return new ApplyScheduledLateFeeChargeBatchResult(lateFees.Count);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        ApplyScheduledLateFeeChargeBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         ApplyScheduledLateFeeChargeBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

@@ -8,6 +8,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Operations;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Data.Operations;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Data.Accounting;
 
@@ -20,13 +21,17 @@ public sealed class CreateRecurringTenantChargeHandler
 
     public CreateRecurringTenantChargeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecurringTenantChargeMutationResult> HandleAsync(
+    public Task<RecurringTenantChargeMutationResult> HandleAsync(
+        CreateRecurringTenantChargeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<RecurringTenantChargeMutationResult> ExecuteAsync(
         CreateRecurringTenantChargeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         RecurringTenantChargeCommandValidation.Validate(command);
-        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var target = await RecurringTenantChargeCommandSupport.LoadTenantTargetAsync(
             _db, command.PortfolioId, command.TenantAccountId, ct);
@@ -86,7 +91,12 @@ public sealed class CreateRecurringTenantChargeHandler
         return new(RecurringTenantChargeMutationOutcome.Created, schedule.Id, snapshot);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        CreateRecurringTenantChargeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         CreateRecurringTenantChargeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -115,15 +125,17 @@ public sealed class UpdateRecurringTenantChargeHandler
 
     public UpdateRecurringTenantChargeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecurringTenantChargeMutationResult> HandleAsync(
+    public Task<RecurringTenantChargeMutationResult> HandleAsync(
+        UpdateRecurringTenantChargeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<RecurringTenantChargeMutationResult> ExecuteAsync(
         UpdateRecurringTenantChargeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         RecurringTenantChargeCommandValidation.Validate(command);
-        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
-        await context.AcquireLockAsync(
-            "RecurringTenantCharge", command.RecurringTenantChargeId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var schedule = await _db.RecurringTenantCharges
             .Include(row => row.TenantAccount!)
@@ -195,7 +207,12 @@ public sealed class UpdateRecurringTenantChargeHandler
         return new(RecurringTenantChargeMutationOutcome.Updated, schedule.Id, snapshot);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        UpdateRecurringTenantChargeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         UpdateRecurringTenantChargeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -229,15 +246,17 @@ public sealed class DeactivateRecurringTenantChargeHandler
 
     public DeactivateRecurringTenantChargeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecurringTenantChargeMutationResult> HandleAsync(
+    public Task<RecurringTenantChargeMutationResult> HandleAsync(
+        DeactivateRecurringTenantChargeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<RecurringTenantChargeMutationResult> ExecuteAsync(
         DeactivateRecurringTenantChargeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         RecurringTenantChargeCommandValidation.Validate(command);
-        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
-        await context.AcquireLockAsync(
-            "RecurringTenantCharge", command.RecurringTenantChargeId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var schedule = await _db.RecurringTenantCharges
             .Include(row => row.TenantAccount!)
@@ -284,7 +303,12 @@ public sealed class DeactivateRecurringTenantChargeHandler
         return new(RecurringTenantChargeMutationOutcome.Deactivated, schedule.Id, snapshot);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        DeactivateRecurringTenantChargeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         DeactivateRecurringTenantChargeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

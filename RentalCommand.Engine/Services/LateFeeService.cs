@@ -1,9 +1,11 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Data;
+using RentalCommand.Data.Payments;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -13,22 +15,23 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class LateFeeService : ILateFeeService
 {
-    private static readonly AtomicJsonResultCodec<ApplyScheduledLateFeeChargeBatchResult> ResultCodec =
-        new("scheduled-tenant-charges.late-fee.apply.v1");
     private const int BatchSize = 200;
 
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IJobStepWriteExecutor _writes;
+    private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly NotificationsConfig _defaults;
     private readonly ILogger<LateFeeService> _logger;
 
     public LateFeeService(
-        IAtomicUnitOfWork atomic,
+        IJobStepWriteExecutor writes,
+        RentalCommandDbContext db,
         TimeProvider timeProvider,
         IOptions<NotificationsConfig> options,
         ILogger<LateFeeService> logger)
     {
-        _atomic = atomic;
+        _writes = writes;
+        _db = db;
         _timeProvider = timeProvider;
         _defaults = options.Value;
         _logger = logger;
@@ -46,16 +49,16 @@ public sealed class LateFeeService : ILateFeeService
 
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "scheduled-tenant-charges.late-fee.apply",
-                    runToken.ToString("N")),
-                new ApplyScheduledLateFeeChargeBatchCommand(
-                    runToken,
-                    _timeProvider.GetUtcNow().UtcDateTime,
-                    BatchSize,
-                    capsJson),
-                ResultCodec,
+            var command = new ApplyScheduledLateFeeChargeBatchCommand(
+                runToken,
+                _timeProvider.GetUtcNow().UtcDateTime,
+                BatchSize,
+                capsJson);
+            var handler = new ApplyScheduledLateFeeChargeBatchHandler(_db);
+            var outcome = await _writes.ExecuteAsync(
+                runToken.ToString("N"),
+                TenantMoneyWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
                 ct);
 
             _logger.LogInformation(
