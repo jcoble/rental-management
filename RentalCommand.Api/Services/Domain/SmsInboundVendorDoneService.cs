@@ -3,11 +3,13 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Operations;
 using RentalCommand.Data;
+using RentalCommand.Data.Operations;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -16,23 +18,20 @@ public sealed class SmsInboundVendorDoneService : ISmsInboundVendorDoneService
 {
     private const string WorkOrderEntityType = "WorkOrder";
     private const string DispatchEntityType = "VendorDispatch";
-    private static readonly AtomicJsonResultCodec<CompleteVendorDispatchFromInboundResult> Codec =
-        new("complete-vendor-dispatch-from-inbound-result.v1");
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly ILogger<SmsInboundVendorDoneService> _logger;
 
     public SmsInboundVendorDoneService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         ILogger<SmsInboundVendorDoneService> logger)
     {
         _db = db;
         _dataUpdate = dataUpdate;
-        _atomic = atomic;
+        _writes = writes;
         _logger = logger;
     }
 
@@ -50,15 +49,14 @@ public sealed class SmsInboundVendorDoneService : ISmsInboundVendorDoneService
         var identity = new AtomicCommandIdentity(
             "sms.vendor-done",
             $"provider-event:{Hash(providerEventId.Trim())}");
-        var outcome = await _atomic.ExecuteAsync(
-            identity,
-            new CompleteVendorDispatchFromInboundCommand(
+        var command = new CompleteVendorDispatchFromInboundCommand(
                 providerEventId.Trim(),
                 normalizedFrom,
                 completionRequest,
-                DateTime.SpecifyKind(receivedAtUtc, DateTimeKind.Utc)),
-            Codec,
-            ct);
+                DateTime.SpecifyKind(receivedAtUtc, DateTimeKind.Utc));
+        var outcome = await _writes.ExecuteAsync(
+            identity.IdempotencyKey,
+            CompleteVendorDispatchFromInboundHandler.Write(command, _db), ct);
 
         if (outcome.Value.Outcome == CompleteVendorDispatchFromInboundOutcome.NoOpenDispatch)
         {

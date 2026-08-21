@@ -13,6 +13,8 @@ namespace RentalCommand.Data.Operations;
 public sealed class DispatchWorkOrderToVendorHandler
     : IAtomicCommandHandler<DispatchWorkOrderToVendorCommand, DispatchWorkOrderToVendorResult>
 {
+    public const string ResultContract = "vendor-dispatch.create.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public DispatchWorkOrderToVendorHandler(RentalCommandDbContext db) => _db = db;
@@ -20,12 +22,28 @@ public sealed class DispatchWorkOrderToVendorHandler
     private static readonly VendorDispatchStatus[] OpenStatuses =
         [VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged];
 
-    public async Task<DispatchWorkOrderToVendorResult> HandleAsync(
+    public static TransactionalWrite<DispatchWorkOrderToVendorCommand, DispatchWorkOrderToVendorResult> Write(
+        DispatchWorkOrderToVendorCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new DispatchWorkOrderToVendorHandler(db);
+        return new TransactionalWrite<DispatchWorkOrderToVendorCommand, DispatchWorkOrderToVendorResult>(
+            "vendor-dispatch.create", WriteIdempotencyPolicy.Required, command, ResultContract,
+            new WriteLockPlan(WriteLockProtocol.WorkOrder,
+                WriteLock.For("WorkOrder", command.WorkOrderId)),
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<DispatchWorkOrderToVendorResult> HandleAsync(
+        DispatchWorkOrderToVendorCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<DispatchWorkOrderToVendorResult> ExecuteAsync(
         DispatchWorkOrderToVendorCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var workOrders = _db.Set<WorkOrder>()
             .Where(candidate => candidate.Id == command.WorkOrderId
                 && candidate.PortfolioId == command.PortfolioId);
@@ -154,7 +172,11 @@ public sealed class DispatchWorkOrderToVendorHandler
             dispatch.Message);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        DispatchWorkOrderToVendorCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         DispatchWorkOrderToVendorCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         if (command.ManagementAccess is null)
@@ -178,6 +200,9 @@ public sealed class DispatchWorkOrderToVendorHandler
                 "The current workspace access no longer authorizes this work-order dispatch.");
         }
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Vendor dispatches must use the shared write executor.");
 
     internal static IQueryable<WorkOrder> WhereManagementAuthorized(
         IQueryable<WorkOrder> workOrders,

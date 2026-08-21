@@ -11,7 +11,8 @@ internal static class CanonicalScopeTestFixture
     internal static WorkspaceReadScope SeedAdministratorScope(
         this RentalCommandDbContext db,
         int portfolioId,
-        string fixtureName)
+        string fixtureName,
+        Guid? sessionId = null)
     {
         db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
 
@@ -61,7 +62,7 @@ internal static class CanonicalScopeTestFixture
         };
         var session = new AuthSession
         {
-            Id = Guid.NewGuid(),
+            Id = sessionId ?? Guid.NewGuid(),
             User = user,
             ActiveAccessContext = accessContext,
             Status = AuthSessionStatus.Active,

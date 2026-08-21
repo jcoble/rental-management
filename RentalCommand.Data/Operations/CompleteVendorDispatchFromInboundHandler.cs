@@ -16,6 +16,8 @@ namespace RentalCommand.Data.Operations;
 public sealed class CompleteVendorDispatchFromInboundHandler
     : IAtomicCommandHandler<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult>
 {
+    public const string ResultContract = "complete-vendor-dispatch-from-inbound-result.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public CompleteVendorDispatchFromInboundHandler(RentalCommandDbContext db) => _db = db;
@@ -23,7 +25,26 @@ public sealed class CompleteVendorDispatchFromInboundHandler
     private static readonly VendorDispatchStatus[] OpenStatuses =
         [VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged];
 
-    public async Task<CompleteVendorDispatchFromInboundResult> HandleAsync(
+    public static TransactionalWrite<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult> Write(
+        CompleteVendorDispatchFromInboundCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new CompleteVendorDispatchFromInboundHandler(db);
+        var locks = command.IsCompletionRequest && !string.IsNullOrWhiteSpace(command.NormalizedFromPhone)
+            ? new WriteLockPlan(WriteLockProtocol.VendorDispatchInbound,
+                WriteLock.For("VendorDispatch", PhoneLockKey(command.NormalizedFromPhone)))
+            : WriteLockPlan.None;
+        return new TransactionalWrite<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult>(
+            "sms.vendor-done", WriteIdempotencyPolicy.Required, command, ResultContract, locks,
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<CompleteVendorDispatchFromInboundResult> HandleAsync(
+        CompleteVendorDispatchFromInboundCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<CompleteVendorDispatchFromInboundResult> ExecuteAsync(
         CompleteVendorDispatchFromInboundCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -39,11 +60,6 @@ public sealed class CompleteVendorDispatchFromInboundHandler
 
         // Different provider event ids from the same number must serialize before deciding which
         // open dispatch is eligible. A hash collision only over-serializes unrelated numbers.
-        await context.AcquireLockAsync(
-            "VendorDispatch",
-            PhoneLockKey(command.NormalizedFromPhone),
-            ct);
-
         // The complete match, portfolio integrity checks, ordering, and limiting stay in one SQL
         // query. No free-form phone rows are materialized for in-memory normalization.
         var matches = await _db.Set<VendorDispatch>()
@@ -226,6 +242,11 @@ public sealed class CompleteVendorDispatchFromInboundHandler
     public Task AuthorizeReplayAsync(
         CompleteVendorDispatchFromInboundCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public Task AuthorizeAsync(
+        CompleteVendorDispatchFromInboundCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command.ProviderEventId);
@@ -239,6 +260,9 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         // exact stored receipt, including NoOpenDispatch, even if phone/dispatch rows later change.
         return Task.CompletedTask;
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Inbound vendor completions must use the shared write executor.");
 
     private async Task<List<Notification>> CreateNotificationsAsync(
         IAtomicCommandContext commandContext,

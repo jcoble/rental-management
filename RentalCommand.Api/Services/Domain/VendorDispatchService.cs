@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Atomic;
@@ -13,37 +14,32 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Operations;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <inheritdoc cref="IVendorDispatchService"/>
 public class VendorDispatchService : IVendorDispatchService
 {
-    private static readonly AtomicJsonResultCodec<VendorRatingMutationResult> RatingMutationCodec =
-        new("vendor-rating.create.v1");
-    private static readonly AtomicJsonResultCodec<CancelVendorDispatchResult> CancelDispatchCodec =
-        new("vendor-dispatch.cancel.v1");
-    private static readonly AtomicJsonResultCodec<RecoverVendorDispatchChronologyResult>
-        ChronologyRecoveryCodec = new("vendor-dispatch.chronology-recovery.v1");
     private const string WorkOrderEntityType = "WorkOrder";
     private const string DispatchEntityType = "VendorDispatch";
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly ILogger<VendorDispatchService> _logger;
     private readonly TimeProvider _timeProvider;
 
     public VendorDispatchService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         ILogger<VendorDispatchService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
-        _atomic = atomic;
+        _writes = writes;
         _logger = logger;
         _timeProvider = timeProvider;
     }
@@ -123,11 +119,8 @@ public class VendorDispatchService : IVendorDispatchService
         var now = _timeProvider.UtcNow();
         var message = BuildJobSms(workOrder, property?.Name, property?.AddressLine1, unitNumber, request.Note);
 
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "vendor-dispatch.create",
-                $"{portfolioId}:{workOrderId}:{request.IdempotencyKey.Trim()}"),
-            new DispatchWorkOrderToVendorCommand(
+        var operationKey = $"{portfolioId}:{workOrderId}:{request.IdempotencyKey.Trim()}";
+        var command = new DispatchWorkOrderToVendorCommand(
                 portfolioId,
                 workOrderId,
                 vendor.Id,
@@ -141,9 +134,9 @@ public class VendorDispatchService : IVendorDispatchService
                         access.UserId,
                         access.AccessContextId,
                         access.AccessRevision)
-                    : null),
-            new AtomicJsonResultCodec<DispatchWorkOrderToVendorResult>("vendor-dispatch.create.v1"),
-            ct);
+                    : null);
+        var outcome = await _writes.ExecuteAsync(
+            operationKey, DispatchWorkOrderToVendorHandler.Write(command, _db), ct);
         if (outcome.Value.Outcome == DispatchWorkOrderToVendorOutcome.NotFound)
         {
             return DispatchResult.NotFound();
@@ -184,9 +177,7 @@ public class VendorDispatchService : IVendorDispatchService
         ArgumentException.ThrowIfNullOrWhiteSpace(request.IdempotencyKey);
         var operationKey = $"{scope.PortfolioId}:{workOrderId}:{dispatchId}:{request.IdempotencyKey.Trim()}";
         var now = _timeProvider.UtcNow();
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("vendor-dispatch.cancel", operationKey),
-            new CancelVendorDispatchCommand(
+        var command = new CancelVendorDispatchCommand(
                 scope.PortfolioId,
                 workOrderId,
                 dispatchId,
@@ -198,9 +189,9 @@ public class VendorDispatchService : IVendorDispatchService
                     scope.SessionId,
                     scope.UserId,
                     scope.AccessContextId,
-                    scope.AccessRevision)),
-            CancelDispatchCodec,
-            ct);
+                    scope.AccessRevision));
+        var outcome = await _writes.ExecuteAsync(
+            operationKey, CancelVendorDispatchHandler.Write(command, _db), ct);
 
         if (outcome.Value.Outcome == CancelVendorDispatchOutcome.NotFound)
         {
@@ -257,11 +248,8 @@ public class VendorDispatchService : IVendorDispatchService
                 scope.AccessContextId,
                 scope.AccessRevision),
             deliveryKey);
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("vendor-dispatch.recover-chronology", deliveryKey),
-            command,
-            ChronologyRecoveryCodec,
-            ct);
+        var outcome = await _writes.ExecuteAsync(
+            deliveryKey, RecoverVendorDispatchChronologyHandler.Write(command, _db), ct);
         return new RecoverVendorDispatchChronologyResponse
         {
             WorkOrderId = outcome.Value.WorkOrderId,
@@ -295,11 +283,9 @@ public class VendorDispatchService : IVendorDispatchService
             request.Comment,
             _timeProvider.UtcNow(),
             idempotencyKey);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("vendor-rating.create", idempotencyKey),
-            command,
-            RatingMutationCodec,
-            ct);
+        var outcome = await _writes.ExecuteAsync(
+            Identity("vendor-rating.create", idempotencyKey).IdempotencyKey,
+            CreateVendorRatingHandler.Write(command, _db), ct);
         return outcome.Value.Outcome == OperationMutationOutcome.NotFound ||
                outcome.Value.ResponseJson is null
             ? null

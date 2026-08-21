@@ -3,11 +3,13 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Operations;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Operations;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -16,22 +18,20 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class WorkOrderResponsibilityController : ManagementControllerBase
 {
-    private static readonly AtomicJsonResultCodec<AssignWorkOrderResponsibilityResult> AssignCodec =
-        new("work-order-responsibility.assign.v1");
-    private static readonly AtomicJsonResultCodec<CloseWorkOrderResponsibilityResult> CloseCodec =
-        new("work-order-responsibility.close.v1");
-
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
+    private readonly WorkOrderResponsibilityAccessRevisionGuard _accessRevisionGuard;
     private readonly TimeProvider _timeProvider;
 
     public WorkOrderResponsibilityController(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
+        WorkOrderResponsibilityAccessRevisionGuard accessRevisionGuard,
         TimeProvider timeProvider)
     {
         _db = db;
-        _atomic = atomic;
+        _writes = writes;
+        _accessRevisionGuard = accessRevisionGuard;
         _timeProvider = timeProvider;
     }
 
@@ -166,13 +166,9 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
 
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "work-order-responsibility.assign",
-                    $"{active.PortfolioId}:{workOrderId}:{digest}"),
-                command,
-                AssignCodec,
-                ct);
+            var operationKey = $"{active.PortfolioId}:{workOrderId}:{digest}";
+            var outcome = await _writes.ExecuteAsync(operationKey,
+                AssignWorkOrderResponsibilityHandler.Write(command, _db, _accessRevisionGuard), ct);
             return Ok(new
             {
                 outcome.Value,
@@ -210,9 +206,9 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
             request.Reason, _timeProvider.GetUtcNow().UtcDateTime, digest);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(
-                "work-order-responsibility.close", $"{active.PortfolioId}:{workOrderId}:{digest}"),
-                command, CloseCodec, ct);
+            var operationKey = $"{active.PortfolioId}:{workOrderId}:{digest}";
+            var outcome = await _writes.ExecuteAsync(operationKey,
+                CloseWorkOrderResponsibilityHandler.Write(command, _db, _accessRevisionGuard), ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
         catch (StaleAccessRevisionException exception)

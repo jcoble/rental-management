@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -42,6 +43,7 @@ public sealed class VendorRequestW9ServiceTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             RequestVendorW9Command,
             RequestVendorW9Result,
@@ -60,10 +62,10 @@ public sealed class VendorRequestW9ServiceTests : IAsyncLifetime
     }
 
     private VendorService CreateSut() => new(
-        _ctx.Db,
+        _services.GetRequiredService<RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
-        _services.GetRequiredService<IAtomicUnitOfWork>(),
-        TimeProvider.System);
+        TimeProvider.System,
+        _services.GetRequiredService<IRequestWriteExecutor>());
 
     private Vendor SeedVendor(string? phone)
     {
