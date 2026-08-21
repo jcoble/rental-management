@@ -10,6 +10,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data;
 using RentalCommand.Data.Payments;
@@ -662,7 +663,24 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             LeaseAgreementId = graph.InitialAgreementId,
             CreatedByUserId = scope.UserId,
         };
-        _ctx.Db.TenantLedgerEntries.AddRange(wrongLateFee, receipt, alreadyReversedLateFee);
+        var noChangeSource = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.LateFeeCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 75m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 08),
+            DueOn = new DateOnly(2027, 01, 08),
+            PostedAtUtc = SeededAtUtc,
+            Description = "No-change recovery source",
+            BusinessKey = $"late-fee:no-change:{Guid.NewGuid():N}",
+            LeaseAgreementId = graph.InitialAgreementId,
+            CreatedByUserId = scope.UserId,
+        };
+        _ctx.Db.TenantLedgerEntries.AddRange(
+            wrongLateFee, receipt, alreadyReversedLateFee, noChangeSource);
         await _ctx.Db.SaveChangesAsync();
         var existingReversal = new TenantLedgerEntry
         {
@@ -680,7 +698,39 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             ReversesEntryId = alreadyReversedLateFee.Id,
             CreatedByUserId = scope.UserId,
         };
-        _ctx.Db.TenantLedgerEntries.Add(existingReversal);
+        const string noChangeReference = "FIN-LATE-FEE-NO-CHANGE";
+        var conflictingReversalKey = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.LateFeeCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 75m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 08),
+            DueOn = new DateOnly(2027, 01, 08),
+            PostedAtUtc = SeededAtUtc,
+            Description = "Existing recovery-key collision",
+            BusinessKey = $"late-fee-recovery:{noChangeReference}:reverse:{noChangeSource.Id}",
+            CreatedByUserId = scope.UserId,
+        };
+        var conflictingReplacement = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.LateFeeCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 50m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 08),
+            DueOn = new DateOnly(2027, 01, 08),
+            PostedAtUtc = SeededAtUtc,
+            Description = "Existing replacement-key collision",
+            BusinessKey = $"late-fee-recovery:{noChangeReference}:replacement:{noChangeSource.Id}",
+            CreatedByUserId = scope.UserId,
+        };
+        _ctx.Db.TenantLedgerEntries.AddRange(
+            existingReversal, conflictingReversalKey, conflictingReplacement);
         var allocation = new TenantLedgerAllocation
         {
             PortfolioId = PortfolioId,
@@ -727,19 +777,52 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             ExpectedAccessRevision: scope.AccessRevision,
             RequiredCapability: CapabilityKeys.MoneyChargesManage,
             DeliveryIdempotencyKey: identity.IdempotencyKey);
+        var noChangeIdentity = new AtomicCommandIdentity(
+            identity.CommandType,
+            "late-fee-recovery-no-change");
+        var noChange = await ExecuteLateFeeRecoveryAsync(command with
+        {
+            Corrections =
+            [
+                new RecoverLateFeeChargeRow(
+                    graph.TenantAccountId,
+                    noChangeSource.Id,
+                    75m,
+                    50m,
+                    AlreadyReversed: false),
+            ],
+            ExpectedReviewedChargeCount = 1,
+            ExpectedReplacementChargeCount = 1,
+            ExpectedReplacementTotal = 50m,
+            FinancialReference = noChangeReference,
+            DeliveryIdempotencyKey = noChangeIdentity.IdempotencyKey,
+        });
         var first = await ExecuteLateFeeRecoveryAsync(command);
         _ctx.Db.ChangeTracker.Clear();
         var auditCountAfterExecution = await _ctx.Db.AtomicAuditLogs.CountAsync(row =>
             row.CommandType == identity.CommandType
             && row.CommandIdempotencyKey == identity.IdempotencyKey);
-        (await _ctx.Db.AtomicAuditLogs
+        var databaseClockAuditTimestamps = await _ctx.Db.AtomicAuditLogs
             .Where(row => row.CommandType == identity.CommandType
                 && row.CommandIdempotencyKey == identity.IdempotencyKey)
             .Select(row => row.Timestamp)
             .Distinct()
-            .ToListAsync()).Should().OnlyContain(timestamp => timestamp == SeededAtUtc);
+            .ToListAsync();
+        databaseClockAuditTimestamps.Should().NotBeEmpty();
+        databaseClockAuditTimestamps.Should().OnlyContain(timestamp => timestamp == SeededAtUtc);
         var replay = await ExecuteLateFeeRecoveryAsync(command);
 
+        noChange.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        noChange.Value.Should().Be(new RecoverLateFeeChargesResult(
+            0, 0, 0, 0, 0m, 0m, 0m, 0m, noChangeReference));
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == noChangeIdentity.CommandType
+            && row.CommandIdempotencyKey == noChangeIdentity.IdempotencyKey)).Should().Be(0,
+            "the executed no-change command must not stage a semantic audit");
+        (await _ctx.Db.OutboxMessages.CountAsync(row =>
+            row.IdempotencyKey == OutboxIdempotency.Create(
+                "late-fee-recovery", $"{PortfolioId}:{noChangeReference}"))).Should().Be(0,
+            "the executed no-change command must not stage an outbox message");
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         first.Value.Should().Be(new RecoverLateFeeChargesResult(
             1, 2, 1, 1, 75m, 100m, 50m, 50m, "FIN-LATE-FEE-TEST"));
