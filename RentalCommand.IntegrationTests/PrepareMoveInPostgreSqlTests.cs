@@ -37,8 +37,6 @@ public sealed class PrepareMoveInPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<PrepareMoveInCommand,
-            PrepareMoveInResult, PrepareMoveInHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString)
                 .UseAtomicPersistenceKernel(provider));
@@ -91,7 +89,7 @@ public sealed class PrepareMoveInPostgreSqlTests : IAsyncLifetime
             "stale-unit");
 
         var before = await CountRelationshipsForUnitAsync(scenario.TargetUnitId);
-        var result = await Atomic.ExecuteAsync(Identity(command), command, Codec);
+        var result = await ExecuteAsync(command);
 
         result.Value.Outcome.Should().Be(PrepareMoveInOutcome.UnitUnavailable);
         result.Value.LeaseManagementId.Should().Be(0);
@@ -145,12 +143,53 @@ public sealed class PrepareMoveInPostgreSqlTests : IAsyncLifetime
             "stale-tenant");
 
         var before = await CountRelationshipsForUnitAsync(scenario.TargetUnitId);
-        var result = await Atomic.ExecuteAsync(Identity(command), command, Codec);
+        var result = await ExecuteAsync(command);
 
         result.Value.Outcome.Should().Be(PrepareMoveInOutcome.InvalidParties);
         result.Value.LeaseManagementId.Should().Be(0);
         _context.Db.ChangeTracker.Clear();
         (await CountRelationshipsForUnitAsync(scenario.TargetUnitId)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task ManualPrepareMoveIn_ExactRetry_ReplaysWithoutDuplicateGraphAuditOrOutbox()
+    {
+        var scenario = await SeedScenarioAsync();
+        var command = ManualCommand(
+            scenario,
+            [
+                new PrepareMoveInParty(
+                    null,
+                    new PrepareMoveInNewTenant(
+                        "Replay",
+                        "Resident",
+                        $"move-in-replay-{Guid.NewGuid():N}@example.test",
+                        null,
+                        null),
+                    LeaseManagementPartyRole.PrimaryTenant,
+                    false,
+                    "Manual lease creation",
+                    true,
+                    1,
+                    true),
+            ],
+            "exact-retry");
+        var before = await ReplayCountsAsync(command);
+
+        var first = await ExecuteAsync(command);
+        var afterFirst = await ReplayCountsAsync(command);
+        var replay = await ExecuteAsync(command);
+        var afterReplay = await ReplayCountsAsync(command);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(first.Value);
+        first.Value.Outcome.Should().Be(PrepareMoveInOutcome.Prepared);
+        afterFirst.Relationships.Should().Be(before.Relationships + 1);
+        afterFirst.Receipts.Should().Be(before.Receipts + 1);
+        afterFirst.Audits.Should().BeGreaterThan(before.Audits);
+        afterFirst.OutboxMessages.Should().BeGreaterThan(before.OutboxMessages);
+        afterReplay.Should().Be(afterFirst);
     }
 
     private async Task<Scenario> SeedScenarioAsync()
@@ -270,12 +309,31 @@ public sealed class PrepareMoveInPostgreSqlTests : IAsyncLifetime
         await _context.Db.LeaseManagements.AsNoTracking()
             .CountAsync(relationship => relationship.UnitId == unitId);
 
-    private IAtomicUnitOfWork Atomic =>
-        _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<ReplayCounts> ReplayCountsAsync(PrepareMoveInCommand command)
+    {
+        _context.Db.ChangeTracker.Clear();
+        var identity = Identity(command);
+        return new(
+            await _context.Db.LeaseManagements.CountAsync(row => row.UnitId == command.UnitId),
+            await _context.Db.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey),
+            await _context.Db.AtomicAuditLogs.CountAsync(row => row.PortfolioId == command.PortfolioId),
+            await _context.Db.OutboxMessages.CountAsync(row => row.PortfolioId == command.PortfolioId));
+    }
+
+    private Task<AtomicCommandOutcome<PrepareMoveInResult>> ExecuteAsync(PrepareMoveInCommand command)
+    {
+        var db = _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            Identity(command).IdempotencyKey,
+            LeasingWriteSupport.Write<PrepareMoveInCommand, PrepareMoveInResult>(db, command));
+    }
 
     private static AtomicCommandIdentity Identity(PrepareMoveInCommand command) => new(
         "lease-management.prepare-move-in",
         $"{command.PortfolioId}:{command.UnitId}:{command.DeliveryIdempotencyKey}");
+
+    private sealed record ReplayCounts(int Relationships, int Receipts, int Audits, int OutboxMessages);
 
     private static Unit Unit(int propertyId, string number, DateTime now) => new()
     {

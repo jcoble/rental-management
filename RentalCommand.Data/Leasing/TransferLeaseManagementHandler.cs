@@ -17,18 +17,14 @@ public sealed class TransferLeaseManagementHandler
     public async Task<TransferLeaseManagementResult> HandleAsync(
         TransferLeaseManagementCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<TransferLeaseManagementResult> ExecuteAsync(
+        TransferLeaseManagementCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-
-        // Every transfer takes Unit locks in numeric order, then the source relationship lock.
-        // Opposing transfers therefore cannot deadlock by taking their Unit locks in reverse order.
-        foreach (var unitId in new[] { command.SourceUnitId, command.DestinationUnitId }.OrderBy(id => id))
-        {
-            await context.AcquireLockAsync("Unit", unitId, ct);
-        }
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.SourceLeaseManagementId, ct);
 
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;

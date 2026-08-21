@@ -13,6 +13,7 @@ using RentalCommand.Core.Leasing;
 using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Esign;
+using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -21,8 +22,6 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class LeaseAddendumController : ManagementControllerBase
 {
-    private static readonly AtomicJsonResultCodec<LeaseAddendumDraftMutationResult> DraftCodec =
-        new("lease-addendum.draft.mutation.v1");
     private static readonly AtomicJsonResultCodec<VoidLegalArtifactResult> VoidCodec =
         new("lease-addendum.void.v1");
     private readonly IAtomicUnitOfWork _atomic;
@@ -159,7 +158,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
             request.TermsPayload.GetRawText(), request.DocumentTemplateId,
             signers!, effects!, envelope.UserId, envelope.SessionId, envelope.AccessContextId,
             envelope.AccessRevision, $"addendum-create:{envelope.PortfolioId}:{leaseManagementId}:{envelope.KeyDigest}");
-        return await ExecuteDraft("lease-addendum.draft.create",
+        return await ExecuteDraft(
             $"{envelope.PortfolioId}:{leaseManagementId}:{envelope.KeyDigest}", command,
             StatusCodes.Status201Created, ct);
     }
@@ -177,7 +176,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
             request.TermsPayload.GetRawText(), request.DocumentTemplateId,
             signers!, effects!, envelope.UserId, envelope.SessionId, envelope.AccessContextId,
             envelope.AccessRevision, $"addendum-edit:{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}");
-        return await ExecuteDraft("lease-addendum.draft.edit",
+        return await ExecuteDraft(
             $"{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}", command,
             StatusCodes.Status200OK, ct);
     }
@@ -192,7 +191,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
             sourceAddendumId, request.SupersessionEffectiveOn, envelope.UserId, envelope.SessionId,
             envelope.AccessContextId, envelope.AccessRevision,
             $"addendum-correct:{envelope.PortfolioId}:{sourceAddendumId}:{envelope.KeyDigest}");
-        return await ExecuteDraft("lease-addendum.draft.correct",
+        return await ExecuteDraft(
             $"{envelope.PortfolioId}:{sourceAddendumId}:{envelope.KeyDigest}", command,
             StatusCodes.Status201Created, ct);
     }
@@ -324,12 +323,13 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
     }
 
-    private async Task<IActionResult> ExecuteDraft<TCommand>(string type, string id, TCommand command,
+    private async Task<IActionResult> ExecuteDraft<TCommand>(string id, TCommand command,
         int successStatus, CancellationToken ct) where TCommand : notnull, IAtomicCommandData
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(type, id), command, DraftCodec, ct);
+            var outcome = await _writes.ExecuteAsync(id,
+                LeasingWriteSupport.Write<TCommand, LeaseAddendumDraftMutationResult>(_db, command), ct);
             return outcome.Value.Outcome == LeaseAddendumDraftMutationOutcome.Applied
                 ? StatusCode(successStatus, LeaseAddendumDraftMutationResponse.From(outcome.Value,
                     outcome.Disposition == AtomicCommandDisposition.Replayed))

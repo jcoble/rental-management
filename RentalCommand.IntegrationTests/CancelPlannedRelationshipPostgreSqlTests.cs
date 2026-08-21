@@ -40,8 +40,6 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<CancelPlannedRelationshipCommand,
-            CancelPlannedRelationshipResult, CancelPlannedRelationshipHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString)
@@ -69,7 +67,7 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
             scenario, TenantLedgerEntryType.OpeningBalance, TenantLedgerDirection.Debit, 250m);
 
         var blockedCommand = CancelCommand(scenario, "before-reversal");
-        var blocked = await Atomic.ExecuteAsync(CancelIdentity(blockedCommand), blockedCommand, CancelCodec);
+        var blocked = await ExecuteCancelAsync(blockedCommand);
 
         blocked.Value.Outcome.Should().Be(CancelPlannedRelationshipOutcome.FinancialResolutionRequired);
 
@@ -84,7 +82,7 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         reversal.Value.ReversesEntryId.Should().Be(openingBalance.Id);
 
         var cancelCommand = CancelCommand(scenario, "after-reversal");
-        var canceled = await Atomic.ExecuteAsync(CancelIdentity(cancelCommand), cancelCommand, CancelCodec);
+        var canceled = await ExecuteCancelAsync(cancelCommand);
 
         canceled.Value.Outcome.Should().Be(CancelPlannedRelationshipOutcome.Canceled);
         canceled.Value.AccountClosedAtUtc.Should().NotBeNull();
@@ -119,7 +117,7 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         await _context.Db.SaveChangesAsync();
 
         var command = CancelCommand(scenario, "unreversed-allocation");
-        var result = await Atomic.ExecuteAsync(CancelIdentity(command), command, CancelCodec);
+        var result = await ExecuteCancelAsync(command);
 
         result.Value.Outcome.Should().Be(CancelPlannedRelationshipOutcome.FinancialResolutionRequired);
     }
@@ -316,8 +314,15 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         $"tenant-ledger-reversal:{suffix}:{Guid.NewGuid():N}",
         $"tenant-ledger-reversal:{scenario.PortfolioId}:{scenario.TenantAccountId}:{entryId}:{suffix}:{Guid.NewGuid():N}");
 
-    private IAtomicUnitOfWork Atomic =>
-        _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+    private Task<AtomicCommandOutcome<CancelPlannedRelationshipResult>> ExecuteCancelAsync(
+        CancelPlannedRelationshipCommand command)
+    {
+        var db = _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            CancelIdentity(command).IdempotencyKey,
+            LeasingWriteSupport.Write<CancelPlannedRelationshipCommand,
+                CancelPlannedRelationshipResult>(db, command));
+    }
 
     private static AtomicCommandIdentity CancelIdentity(CancelPlannedRelationshipCommand command) => new(
         "lease-management.cancel-planned",

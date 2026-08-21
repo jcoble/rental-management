@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
@@ -12,6 +13,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -28,16 +30,16 @@ public sealed class LeaseManagementControllerTests
     {
         CancelPlannedRelationshipCommand? capturedCommand = null;
         var canceledAt = new DateTime(2026, 7, 24, 12, 0, 0, DateTimeKind.Utc);
-        var atomic = new Mock<IAtomicUnitOfWork>(MockBehavior.Strict);
-        atomic.Setup(service => service.ExecuteAsync<
+        var writes = new Mock<IRequestWriteExecutor>(MockBehavior.Strict);
+        writes.Setup(service => service.ExecuteAsync<
                 CancelPlannedRelationshipCommand, CancelPlannedRelationshipResult>(
-                It.IsAny<AtomicCommandIdentity>(),
-                It.IsAny<CancelPlannedRelationshipCommand>(),
-                It.IsAny<AtomicJsonResultCodec<CancelPlannedRelationshipResult>>(),
+                It.IsAny<string>(),
+                It.IsAny<TransactionalWrite<CancelPlannedRelationshipCommand,
+                    CancelPlannedRelationshipResult>>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<AtomicCommandIdentity, CancelPlannedRelationshipCommand,
-                AtomicJsonResultCodec<CancelPlannedRelationshipResult>, CancellationToken>(
-                (_, command, _, _) => capturedCommand = command)
+            .Callback<string, TransactionalWrite<CancelPlannedRelationshipCommand,
+                CancelPlannedRelationshipResult>, CancellationToken>(
+                (_, write, _) => capturedCommand = write.Request)
             .ReturnsAsync(new AtomicCommandOutcome<CancelPlannedRelationshipResult>(
                 new CancelPlannedRelationshipResult(
                     CancelPlannedRelationshipOutcome.Canceled,
@@ -52,7 +54,7 @@ public sealed class LeaseManagementControllerTests
                     null),
                 AtomicCommandDisposition.Executed,
                 Guid.NewGuid()));
-        var controller = CreateLeaseController(atomic.Object);
+        var controller = CreateLeaseController(writes.Object);
 
         var result = await controller.CancelPlannedRelationship(
             41,
@@ -102,29 +104,31 @@ public sealed class LeaseManagementControllerTests
             new CancelPlannedRelationshipAccess(59, CancelPlannedAccessDisposition.RevokeNow),
             new CancelPlannedRelationshipAccess(61, CancelPlannedAccessDisposition.Retain),
         });
-        atomic.VerifyAll();
+        writes.VerifyAll();
     }
 
     [Fact]
     public async Task TransferToUnit_IsAtomic()
     {
-        AtomicCommandIdentity? capturedIdentity = null;
+        string? capturedIdentity = null;
+        string? capturedOperation = null;
         TransferLeaseManagementCommand? capturedCommand = null;
         var returnedAt = new DateTime(2026, 7, 24, 13, 0, 0, DateTimeKind.Utc);
         var transferPublicId = Guid.Parse("84c89a66-9025-4fd7-aa4a-c015897aa7fd");
-        var atomic = new Mock<IAtomicUnitOfWork>(MockBehavior.Strict);
-        atomic.Setup(service => service.ExecuteAsync<
+        var writes = new Mock<IRequestWriteExecutor>(MockBehavior.Strict);
+        writes.Setup(service => service.ExecuteAsync<
                 TransferLeaseManagementCommand, TransferLeaseManagementResult>(
-                It.IsAny<AtomicCommandIdentity>(),
-                It.IsAny<TransferLeaseManagementCommand>(),
-                It.IsAny<AtomicJsonResultCodec<TransferLeaseManagementResult>>(),
+                It.IsAny<string>(),
+                It.IsAny<TransactionalWrite<TransferLeaseManagementCommand,
+                    TransferLeaseManagementResult>>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<AtomicCommandIdentity, TransferLeaseManagementCommand,
-                AtomicJsonResultCodec<TransferLeaseManagementResult>, CancellationToken>(
-                (identity, command, _, _) =>
+            .Callback<string, TransactionalWrite<TransferLeaseManagementCommand,
+                TransferLeaseManagementResult>, CancellationToken>(
+                (identity, write, _) =>
                 {
                     capturedIdentity = identity;
-                    capturedCommand = command;
+                    capturedOperation = write.OperationName;
+                    capturedCommand = write.Request;
                 })
             .ReturnsAsync(new AtomicCommandOutcome<TransferLeaseManagementResult>(
                 new TransferLeaseManagementResult(
@@ -152,7 +156,7 @@ public sealed class LeaseManagementControllerTests
                     null),
                 AtomicCommandDisposition.Replayed,
                 Guid.NewGuid()));
-        var controller = CreateLeaseController(atomic.Object);
+        var controller = CreateLeaseController(writes.Object);
         var effectiveOn = new DateOnly(2026, 8, 1);
 
         var result = await controller.TransferToUnit(
@@ -179,7 +183,8 @@ public sealed class LeaseManagementControllerTests
         response.TurnoverPeriodId.Should().Be(97);
         response.Replayed.Should().BeTrue();
         capturedIdentity.Should().NotBeNull();
-        capturedIdentity!.CommandType.Should().Be("lease-management.transfer-unit");
+        capturedOperation.Should().Be("lease-management.transfer-unit");
+        capturedIdentity.Should().StartWith($"{PortfolioId}:67:");
         capturedCommand.Should().NotBeNull();
         capturedCommand!.PortfolioId.Should().Be(PortfolioId);
         capturedCommand.SourceLeaseManagementId.Should().Be(67);
@@ -192,7 +197,7 @@ public sealed class LeaseManagementControllerTests
         capturedCommand.EffectiveOn.Should().Be(effectiveOn);
         capturedCommand.DestinationDocumentTemplateId.Should().Be(137);
         capturedCommand.TransferReason.Should().Be("Household requested another Unit.");
-        atomic.VerifyAll();
+        writes.VerifyAll();
     }
 
     [Fact]
@@ -274,15 +279,16 @@ public sealed class LeaseManagementControllerTests
             AtomicCommandDisposition.Executed,
             Guid.NewGuid());
 
-    private static LeaseManagementController CreateLeaseController(IAtomicUnitOfWork atomic) =>
+    private static LeaseManagementController CreateLeaseController(IRequestWriteExecutor writes) =>
         WithAccess(new LeaseManagementController(
-            atomic,
+            Mock.Of<IAtomicUnitOfWork>(),
             Mock.Of<ILeaseManagementQueryService>(),
             Mock.Of<ILeaseQaService>(),
             new ConfigurationBuilder().Build(),
             TimeProvider.System,
-            Mock.Of<IRequestWriteExecutor>(),
-            null!));
+            writes,
+            new RentalCommandDbContext(
+                new DbContextOptionsBuilder<RentalCommandDbContext>().Options)));
 
     private static TenantAccountLifecycleController CreateCloseController(
         IAtomicUnitOfWork atomic) =>

@@ -5,8 +5,11 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Leasing;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
@@ -14,6 +17,58 @@ namespace RentalCommand.IntegrationTests;
 [Collection(RoleAuthorityPostgreSqlCollection.Name)]
 public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixture fixture)
 {
+    [Fact]
+    public async Task PrepareMoveInRule_ExecutorRecordsResolvedUnitThenConditionalApplicationLock()
+    {
+        var recorder = new ResolvedLockRecorder(new Dictionary<int, string>
+        {
+            [101] = "Unit",
+            [202] = "RentalApplication",
+        });
+        await using var database = await fixture.CreateContextAsync();
+        await using var services = BuildMigrationServices(database.ConnectionString, recorder);
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var command = new PrepareMoveInCommand(
+            1, 202, 101, 1, Guid.NewGuid(), 1, 1, null, new DateOnly(2026, 8, 21), [], null,
+            LeaseAgreementTermType.FixedTerm, new DateOnly(2026, 9, 1), new DateOnly(2027, 8, 31),
+            1000m, 1, 500m, 25m, 5, 1, "{}", false, null, null, null, "move-in-lock-proof");
+
+        Func<Task> act = async () => await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync("move-in-lock-proof",
+                LeasingWriteSupport.Write<PrepareMoveInCommand, PrepareMoveInResult>(db, command));
+
+        await act.Should().ThrowAsync<Exception>();
+        recorder.Sequence.Should().Equal(("Unit", 101), ("RentalApplication", 202));
+    }
+
+    [Fact]
+    public async Task TransferRule_ExecutorRecordsOrderedResolvedUnitsThenSourceRelationshipLock()
+    {
+        var recorder = new ResolvedLockRecorder(new Dictionary<int, string>
+        {
+            [303] = "Unit",
+            [404] = "Unit",
+            [505] = "LeaseManagement",
+        });
+        await using var database = await fixture.CreateContextAsync();
+        await using var services = BuildMigrationServices(database.ConnectionString, recorder);
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var command = new TransferLeaseManagementCommand(
+            1, 505, 404, 303, 1, Guid.NewGuid(), 1, 1, DateTime.UtcNow, Guid.NewGuid(),
+            new DateOnly(2026, 9, 1), null, false, null, 606, true, true,
+            "Household requested a transfer.", "transfer-lock-proof");
+
+        Func<Task> act = async () => await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync("transfer-lock-proof",
+                LeasingWriteSupport.Write<TransferLeaseManagementCommand,
+                    TransferLeaseManagementResult>(db, command));
+
+        await act.Should().ThrowAsync<Exception>();
+        recorder.Sequence.Should().Equal(("Unit", 303), ("Unit", 404), ("LeaseManagement", 505));
+    }
+
     [Fact]
     public void ExplicitProtocols_EnforceCommonPrefixAndLegacyMultiAggregateOrder()
     {
@@ -172,6 +227,22 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
 
+    private static ServiceProvider BuildMigrationServices(
+        string connectionString,
+        ResolvedLockRecorder recorder)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, TestActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseNpgsql(connectionString)
+                .UseAtomicPersistenceKernel(provider)
+                .AddInterceptors(recorder));
+        return services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+    }
+
     private sealed record LockCanaryCommand(int UnitId, int LeaseManagementId) : IAtomicCommandData;
 
     private sealed record NoticeDeliveryLockCanaryCommand(
@@ -251,6 +322,28 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             if (command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.Ordinal))
             {
                 coordinator.NewAdvisoryLockAttempted.TrySetResult();
+            }
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class ResolvedLockRecorder(IReadOnlyDictionary<int, string> namespaces)
+        : DbCommandInterceptor
+    {
+        public List<(string Namespace, int Id)> Sequence { get; } = [];
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.Ordinal)
+                && command.Parameters[command.Parameters.Count - 1].Value is int id
+                && namespaces.TryGetValue(id, out var lockNamespace))
+            {
+                Sequence.Add((lockNamespace, id));
             }
 
             return ValueTask.FromResult(result);
