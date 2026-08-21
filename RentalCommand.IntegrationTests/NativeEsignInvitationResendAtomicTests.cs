@@ -1,6 +1,8 @@
+using System.Data.Common;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
@@ -21,13 +23,12 @@ namespace RentalCommand.IntegrationTests;
 public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
 {
     private const int ActorUserId = 81_500;
-    private static readonly AtomicJsonResultCodec<ResendNativeEsignInvitationResult> Codec =
-        new("native-esign.invitation-resend.v1");
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private Scenario _scenario = default!;
+    private readonly AdvisoryLockRecorder _locks = new();
 
     public async Task InitializeAsync()
     {
@@ -52,12 +53,9 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            ResendNativeEsignInvitationCommand,
-            ResendNativeEsignInvitationResult,
-            ResendNativeEsignInvitationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
+                .AddInterceptors(_locks)
                 .UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider(new ServiceProviderOptions
         {
@@ -90,12 +88,14 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
             "lease-agreement.esign-invitation.resend",
             $"{_scenario.PortfolioId}:{_scenario.LeaseManagementId}:{command.ParentId}:{command.LegalSignerId}:{actionDigest}");
 
+        _locks.Reset();
         var first = await ExecuteAsync(identity, command);
         var replay = await ExecuteAsync(identity, command);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().BeEquivalentTo(first.Value);
+        _locks.AggregateIds.Should().Equal(_scenario.LeaseManagementId);
         first.Value.SignatureRequestId.Should().Be(_scenario.Agreement.SignatureRequestId);
         first.Value.SignatureSignerId.Should().Be(_scenario.Agreement.SignatureSignerId);
         first.Value.OutboxIdempotencyKey.Should().Be(
@@ -222,8 +222,11 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
         ResendNativeEsignInvitationCommand command)
     {
         await using var scope = _services!.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, Codec);
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey,
+                NativeEsignWriteSupport.Write<ResendNativeEsignInvitationCommand,
+                    ResendNativeEsignInvitationResult>(db, command));
     }
 
     private ResendNativeEsignInvitationCommand Command(
@@ -748,4 +751,35 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
         InvitationTarget Declined,
         InvitationTarget Voided,
         InvitationTarget AlreadySigned);
+
+    private sealed class AdvisoryLockRecorder : DbCommandInterceptor
+    {
+        public List<int> AggregateIds { get; } = [];
+
+        public void Reset() => AggregateIds.Clear();
+
+        public override InterceptionResult<int> NonQueryExecuting(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result)
+        {
+            Record(command);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            Record(command);
+            return ValueTask.FromResult(result);
+        }
+
+        private void Record(DbCommand command)
+        {
+            if (!command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.Ordinal)
+                || command.Parameters.Count < 2)
+                return;
+            if (command.Parameters[command.Parameters.Count - 1].Value is int aggregateId)
+                AggregateIds.Add(aggregateId);
+        }
+    }
 }

@@ -26,12 +26,6 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
     private const int ActorUserId = 19_300;
     private static readonly DateTime FrozenBusinessNow =
         new(2027, 1, 25, 5, 0, 0, DateTimeKind.Utc);
-    private static readonly AtomicJsonResultCodec<ReconcileNativeEsignAgreementFinancialsResult>
-        ReconcileCodec = new("native-esign.agreement-financials.reconcile.v1");
-    private static readonly AtomicJsonResultCodec<ReconcileNativeEsignAgreementFinancialsBatchResult>
-        ReconcileBatchCodec = new("native-esign.agreement-financials.batch-reconcile.v1");
-    private static readonly AtomicJsonResultCodec<NativeSignerActionResult>
-        SignCodec = new("native-esign.sign.v1");
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
@@ -62,18 +56,6 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            ReconcileNativeEsignAgreementFinancialsCommand,
-            ReconcileNativeEsignAgreementFinancialsResult,
-            ReconcileNativeEsignAgreementFinancialsHandler>();
-        services.AddAtomicCommandHandler<
-            ReconcileNativeEsignAgreementFinancialsBatchCommand,
-            ReconcileNativeEsignAgreementFinancialsBatchResult,
-            ReconcileNativeEsignAgreementFinancialsBatchHandler>();
-        services.AddAtomicCommandHandler<
-            RecordNativeSignatureCommand,
-            NativeSignerActionResult,
-            RecordNativeSignatureHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .AddInterceptors(_commandCounter)
@@ -156,19 +138,18 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("completed-reconcile", 1_200m, completed: true);
 
-        var first = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity("native-esign.agreement-financials.reconcile", "first"),
-            new ReconcileNativeEsignAgreementFinancialsCommand(
-                scenario.SignatureRequestId, scenario.SignatureRequestPublicId),
-            ReconcileCodec);
-        var second = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity("native-esign.agreement-financials.reconcile", "second"),
-            new ReconcileNativeEsignAgreementFinancialsCommand(
-                scenario.SignatureRequestId, scenario.SignatureRequestPublicId),
-            ReconcileCodec);
+        var command = new ReconcileNativeEsignAgreementFinancialsCommand(
+            scenario.SignatureRequestId, scenario.SignatureRequestPublicId);
+        var first = await Writes.ExecuteAsync("first",
+            NativeEsignWriteSupport.Write<ReconcileNativeEsignAgreementFinancialsCommand,
+                ReconcileNativeEsignAgreementFinancialsResult>(ScopedDb, command));
+        var second = await Writes.ExecuteAsync("first",
+            NativeEsignWriteSupport.Write<ReconcileNativeEsignAgreementFinancialsCommand,
+                ReconcileNativeEsignAgreementFinancialsResult>(ScopedDb, command));
 
         first.Value.DepositChargeCount.Should().Be(1);
-        second.Value.DepositChargeCount.Should().Be(0);
+        second.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        second.Value.Should().BeEquivalentTo(first.Value);
 
         await using var db = NewContext();
         (await db.TenantLedgerEntries.CountAsync(entry =>
@@ -190,7 +171,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task CompletedAgreementBatchReconciliation_IsSetBasedAuditedAndReplayInsertsZero()
+    public async Task CompletedAgreementBatchReconciliation_IsSetBasedAuditedAndExactReplayInsertsNothing()
     {
         SkipIfNoDocker();
         var firstScenario = await SeedScenarioAsync("completed-batch-a", 1_100m, completed: true);
@@ -198,23 +179,19 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         _ = await SeedScenarioAsync("completed-batch-zero", 0m, completed: true);
 
         _commandCounter.Reset();
-        var first = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "native-esign.agreement-financials.batch-reconcile",
-                "batch-first"),
-            new ReconcileNativeEsignAgreementFinancialsBatchCommand(Guid.NewGuid(), 10),
-            ReconcileBatchCodec);
+        var firstCommand = new ReconcileNativeEsignAgreementFinancialsBatchCommand(Guid.NewGuid(), 10);
+        var first = await Writes.ExecuteAsync("batch-first",
+            NativeEsignWriteSupport.Write<ReconcileNativeEsignAgreementFinancialsBatchCommand,
+                ReconcileNativeEsignAgreementFinancialsBatchResult>(ScopedDb, firstCommand));
         var mutationCommandCount = _commandCounter.DepositBatchMutationCommandCount;
-        var second = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "native-esign.agreement-financials.batch-reconcile",
-                "batch-second"),
-            new ReconcileNativeEsignAgreementFinancialsBatchCommand(Guid.NewGuid(), 10),
-            ReconcileBatchCodec);
+        var second = await Writes.ExecuteAsync("batch-first",
+            NativeEsignWriteSupport.Write<ReconcileNativeEsignAgreementFinancialsBatchCommand,
+                ReconcileNativeEsignAgreementFinancialsBatchResult>(ScopedDb, firstCommand));
 
         first.Value.DepositChargeCount.Should().Be(2);
         mutationCommandCount.Should().Be(1);
-        second.Value.DepositChargeCount.Should().Be(0);
+        second.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        second.Value.Should().BeEquivalentTo(first.Value);
 
         await using var db = NewContext();
         var accountIds = new[] { firstScenario.TenantAccountId, secondScenario.TenantAccountId };
@@ -296,9 +273,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("future-token", 500m, signed: false);
 
-        var result = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity("native-esign.sign", "future-token"),
-            new RecordNativeSignatureCommand(
+        var command = new RecordNativeSignatureCommand(
                 scenario.TokenHash,
                 SignatureSignatureType.Typed,
                 "Future Tenant",
@@ -308,15 +283,25 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
                 null,
                 "127.0.0.1",
                 "integration-test",
-                DateTime.UtcNow),
-            SignCodec);
+                DateTime.UtcNow);
+        var result = await Writes.ExecuteAsync("future-token",
+            NativeEsignWriteSupport.Write<RecordNativeSignatureCommand,
+                NativeSignerActionResult>(ScopedDb, command));
+        var replay = await Writes.ExecuteAsync("future-token",
+            NativeEsignWriteSupport.Write<RecordNativeSignatureCommand,
+                NativeSignerActionResult>(ScopedDb, command));
 
         result.Value.Outcome.Should().Be(NativeSignerActionOutcome.Applied);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(result.Value);
         await using var db = NewContext();
         var signer = await db.SignatureSigners.AsNoTracking()
             .SingleAsync(row => row.Id == scenario.SignatureSignerId);
         signer.SignedAtUtc.Should().Be(FrozenBusinessNow);
         signer.TokenExpiresAtUtc.Should().BeAfter(DateTime.UtcNow);
+        (await db.Set<SignatureAuditEvent>().CountAsync(row =>
+            row.SignatureSignerId == scenario.SignatureSignerId
+            && row.Type == SignatureAuditEventType.Signed)).Should().Be(1);
     }
 
     private async Task<AtomicLegalExecutionTransitionResult> ExecuteTransitionAsync(Scenario scenario)
@@ -642,8 +627,11 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
             .AddInterceptors(_commandCounter)
             .Options);
 
-    private IAtomicUnitOfWork Atomic =>
-        _serviceScope!.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+    private IWriteExecutor Writes =>
+        _serviceScope!.ServiceProvider.GetRequiredService<IWriteExecutor>();
+
+    private RentalCommandDbContext ScopedDb =>
+        _serviceScope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
 
     private static async Task<int> CountDepositChargeOutboxMessagesAsync(
         RentalCommandDbContext db,

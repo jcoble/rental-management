@@ -26,8 +26,6 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         new("lease-agreement.successor-draft.cancel.v1");
     private static readonly AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> RecoveryCodec =
         new("lease-agreement.issued-replacement.v1");
-    private static readonly AtomicJsonResultCodec<IssueLeaseAgreementResult> IssueCodec =
-        new("lease-agreement.issue.v1");
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
@@ -66,10 +64,6 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             ReplaceIssuedAgreementWithDraftCommand,
             LeaseAgreementDraftMutationResult,
             ReplaceIssuedAgreementWithDraftHandler>();
-        services.AddAtomicCommandHandler<
-            IssueLeaseAgreementCommand,
-            IssueLeaseAgreementResult,
-            IssueLeaseAgreementHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider));
@@ -800,11 +794,18 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
                 _scenario.SessionId,
                 _scenario.AccessContextId,
                 _scenario.AccessRevision);
-            var issued = await Atomic.ExecuteAsync(
-                new AtomicCommandIdentity("lease-agreement.issue", operationKey),
-                command,
-                IssueCodec);
+            var db = _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var issued = await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+                .ExecuteAsync(operationKey,
+                    NativeEsignWriteSupport.Write<IssueLeaseAgreementCommand,
+                        IssueLeaseAgreementResult>(db, command));
+            var replay = await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+                .ExecuteAsync(operationKey,
+                    NativeEsignWriteSupport.Write<IssueLeaseAgreementCommand,
+                        IssueLeaseAgreementResult>(db, command));
             issued.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+            replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+            replay.Value.Should().BeEquivalentTo(issued.Value);
             return issued.Value;
         }
     }

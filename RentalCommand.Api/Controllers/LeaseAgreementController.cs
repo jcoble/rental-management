@@ -10,6 +10,9 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Esign;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
+using RentalCommand.Data;
+using RentalCommand.Data.Esign;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -24,13 +27,11 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         new("lease-agreement.successor-draft.create.v2");
     private static readonly AtomicJsonResultCodec<CancelLeaseAgreementSuccessorDraftResult> CancelDraftCodec =
         new("lease-agreement.successor-draft.cancel.v1");
-    private static readonly AtomicJsonResultCodec<IssueLeaseAgreementResult> IssueCodec =
-        new("lease-agreement.issue.v1");
-    private static readonly AtomicJsonResultCodec<ResendNativeEsignInvitationResult> ResendInvitationCodec =
-        new("native-esign.invitation-resend.v1");
     private static readonly AtomicJsonResultCodec<VoidLegalArtifactResult> VoidCodec =
         new("lease-agreement.void.v1");
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
     private readonly ILeaseManagementQueryService _queryService;
     private readonly IFileStorage _files;
     private readonly ILegalDocumentIssuancePreparationService _issuancePreparations;
@@ -38,12 +39,16 @@ public sealed class LeaseAgreementController : ManagementControllerBase
 
     public LeaseAgreementController(
         IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes,
         ILeaseManagementQueryService queryService,
         IFileStorage files,
         ILegalDocumentIssuancePreparationService issuancePreparations,
         IConfiguration configuration)
     {
         _atomic = atomic;
+        _db = db;
+        _writes = writes;
         _queryService = queryService;
         _files = files;
         _issuancePreparations = issuancePreparations;
@@ -430,10 +435,9 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("lease-agreement.issue",
-                    $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}"),
-                command, IssueCodec, ct);
+            var outcome = await _writes.ExecuteAsync(
+                $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}",
+                NativeEsignWriteSupport.Write<IssueLeaseAgreementCommand, IssueLeaseAgreementResult>(_db, command), ct);
             return StatusCode(StatusCodes.Status201Created, new IssueLeaseAgreementResponse(
                 outcome.Value.PublicId, outcome.Value.LeaseManagementId, outcome.Value.LeaseAgreementId,
                 outcome.Value.SignatureRequestId, outcome.Value.IssuedArtifactId,
@@ -469,12 +473,9 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             envelope.KeyDigest);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "lease-agreement.esign-invitation.resend",
-                    $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{leaseAgreementSignerId}:{envelope.KeyDigest}"),
-                command,
-                ResendInvitationCodec,
+            var outcome = await _writes.ExecuteAsync(
+                $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{leaseAgreementSignerId}:{envelope.KeyDigest}",
+                NativeEsignWriteSupport.Write<ResendNativeEsignInvitationCommand, ResendNativeEsignInvitationResult>(_db, command),
                 ct);
             return Ok(new ResendNativeEsignInvitationResponse(
                 outcome.Value.SignatureRequestId,

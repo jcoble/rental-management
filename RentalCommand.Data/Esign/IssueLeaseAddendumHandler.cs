@@ -22,10 +22,13 @@ public sealed class IssueLeaseAddendumHandler
     public IssueLeaseAddendumHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<IssueLeaseAddendumResult> HandleAsync(
+        IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task<IssueLeaseAddendumResult> ExecuteAsync(
         IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var businessNowUtc = times.EffectiveNowUtc;
         var candidate = await LeaseAddendumCommandSupport.AuthorizedRelationships(
@@ -224,6 +227,9 @@ public sealed class IssueLeaseAddendumHandler
     }
 
     public async Task AuthorizeReplayAsync(IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
+        => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
