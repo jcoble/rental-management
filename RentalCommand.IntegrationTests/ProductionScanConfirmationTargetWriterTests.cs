@@ -98,10 +98,6 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             AtomicMoneyMutationCommand,
             AtomicMoneyMutationResult,
             AtomicMoneyMutationHandler>();
-        services.AddAtomicCommandHandler<
-            RefundTenantPaymentCommand,
-            TenantPaymentRefundResult,
-            RefundTenantPaymentHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider));
@@ -3663,6 +3659,16 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                             db, writer, request, context, token),
                         (request, context, token) => CreateManualLeaseHandler.AuthorizeAsync(
                             db, request, context, token)), ct);
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is RefundTenantPaymentCommand refund)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var handler = new RefundTenantPaymentHandler(db);
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey,
+                    TenantMoneyWriteSupport.Write(
+                        refund, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         return await scope.ServiceProvider

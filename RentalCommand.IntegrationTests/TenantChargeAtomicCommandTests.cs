@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -28,6 +29,8 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
 {
+    private static readonly DateTime InterceptorNow =
+        new(2099, 8, 20, 12, 0, 0, DateTimeKind.Utc);
     private static readonly AtomicJsonResultCodec<TenantChargeMutationResult> ChargeCodec =
         new("tenant-account.charge.mutation.v1");
     private static readonly AtomicJsonResultCodec<RecordTenantReceiptResult> ReceiptCodec =
@@ -62,50 +65,11 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         }
 
         var services = new ServiceCollection();
-        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(InterceptorNow));
         services.AddSingleton<CompanionFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            PostTenantChargeCommand,
-            TenantChargeMutationResult,
-            PostTenantChargeHandler>();
-        services.AddAtomicCommandHandler<
-            ReverseTenantChargeCommand,
-            TenantChargeMutationResult,
-            ReverseTenantChargeHandler>();
-        services.AddAtomicCommandHandler<
-            RecordTenantReceiptCommand,
-            RecordTenantReceiptResult,
-            RecordTenantReceiptHandler>();
-        services.AddAtomicCommandHandler<
-            PostTenantCreditCommand,
-            TenantLedgerMutationResult,
-            PostTenantCreditHandler>();
-        services.AddAtomicCommandHandler<
-            PostTenantAdjustmentCommand,
-            TenantLedgerMutationResult,
-            PostTenantAdjustmentHandler>();
-        services.AddAtomicCommandHandler<
-            ReverseTenantLedgerEntryCommand,
-            TenantLedgerMutationResult,
-            ReverseTenantLedgerEntryHandler>();
-        services.AddAtomicCommandHandler<
-            RefundTenantPaymentCommand,
-            TenantPaymentRefundResult,
-            RefundTenantPaymentHandler>();
-        services.AddAtomicCommandHandler<
-            FundSecurityDepositCommand,
-            SecurityDepositMutationResult,
-            FundSecurityDepositHandler>();
-        services.AddAtomicCommandHandler<
-            DeductSecurityDepositCommand,
-            SecurityDepositMutationResult,
-            DeductSecurityDepositHandler>();
-        services.AddAtomicCommandHandler<
-            ReverseSecurityDepositEntryCommand,
-            SecurityDepositMutationResult,
-            ReverseSecurityDepositEntryHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -138,9 +102,8 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         }
 
         await using var scope = _services!.CreateAsyncScope();
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
         var command = Receipt(scenario, "preexisting-chart", 125m);
-        var outcome = await atomic.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("tenant-account.receipt.record", command.DeliveryIdempotencyKey),
             command,
             ReceiptCodec);
@@ -213,6 +176,20 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             row.CommandType == identity.CommandType
             && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(2,
             "the business mutation and its journal entry are audited together");
+        var trackedAuditTimestamps = await db.AtomicAuditLogs
+            .Where(row => row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey
+                && row.EntityType == nameof(JournalEntry))
+            .Select(row => row.Timestamp)
+            .Distinct()
+            .ToListAsync();
+        trackedAuditTimestamps.Should().NotBeEmpty();
+        trackedAuditTimestamps.Should().OnlyContain(timestamp => timestamp == InterceptorNow);
+        (await db.AtomicAuditLogs.SingleAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey
+            && row.EntityType == nameof(TenantAccount))).Timestamp.Should().NotBe(InterceptorNow,
+            "the unchanged tenant-money semantic event retains the command wall clock");
         var outboxKey = OutboxIdempotency.Create("tenant-money", command.DeliveryIdempotencyKey);
         (await db.OutboxMessages.CountAsync(row =>
             row.PortfolioId == scenario.PortfolioId
@@ -1172,6 +1149,39 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task DepositCycle_FundDeductAndRefund_PreservesExactHeldBalanceParity()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("deposit-cycle");
+        await SeedLedgerEntryAsync(
+            scenario, scenario.AccountId, TenantLedgerEntryType.DepositCharge,
+            TenantLedgerDirection.Debit, "deposit-cycle:charge", 100m,
+            DateOnly.FromDateTime(DateTime.UtcNow));
+
+        var fund = FundDeposit(scenario, "deposit-cycle", 100m);
+        var deduct = DeductDeposit(scenario, "deposit-cycle", 40m);
+        var refund = RefundDeposit(scenario, "deposit-cycle", 60m);
+        var funded = await ExecuteAtomicAsync(
+            new("tenant-account.deposit.fund", fund.DeliveryIdempotencyKey), fund, DepositCodec);
+        var deducted = await ExecuteAtomicAsync(
+            new("tenant-account.deposit.deduct", deduct.DeliveryIdempotencyKey), deduct, DepositCodec);
+        var refunded = await ExecuteAtomicAsync(
+            new("tenant-account.deposit.refund", refund.DeliveryIdempotencyKey), refund, DepositCodec);
+
+        funded.Value.Amount.Should().Be(100m);
+        deducted.Value.Amount.Should().Be(40m);
+        refunded.Value.Amount.Should().Be(60m);
+        await using var db = NewContext();
+        (await db.SecurityDepositBalanceProjections.SingleAsync(row =>
+            row.SecurityDepositAccountId == scenario.DepositAccountId)).HeldBalance.Should().Be(0m);
+        (await db.SecurityDepositEntries.CountAsync(row =>
+            row.SecurityDepositAccountId == scenario.DepositAccountId
+            && (row.BusinessKey == fund.BusinessKey
+                || row.BusinessKey == deduct.BusinessKey
+                || row.BusinessKey == refund.BusinessKey))).Should().Be(3);
+    }
+
+    [SkippableFact]
     public async Task DepositReceiptReversal_AppendsExactSubledgerAndLedgerCompensationAtomically()
     {
         SkipIfNoDocker();
@@ -1547,6 +1557,15 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             $"deposit-deduction:{suffix}",
             $"deposit-deduction:{scenario.PortfolioId}:{scenario.AccountId}:{suffix}");
 
+    private static RefundSecurityDepositCommand RefundDeposit(
+        Scenario scenario, string suffix, decimal amount) =>
+        new(scenario.PortfolioId, scenario.AccountId, scenario.DepositAccountId, amount,
+            DateOnly.FromDateTime(DateTime.UtcNow), $"Deposit refund {suffix}", $"refund-{suffix}",
+            scenario.UserId, scenario.SessionId, scenario.AccessContextId,
+            scenario.AccessRevision, CapabilityKeys.MoneyDepositsManage,
+            $"deposit-refund:{suffix}",
+            $"deposit-refund:{scenario.PortfolioId}:{scenario.AccountId}:{suffix}");
+
     private static ReverseSecurityDepositEntryCommand ReverseDeposit(
         Scenario scenario, long entryId, string suffix) =>
         new(scenario.PortfolioId, scenario.AccountId, scenario.DepositAccountId, entryId,
@@ -1734,16 +1753,80 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         AtomicCommandIdentity identity,
         TCommand command,
         AtomicJsonResultCodec<TResult> codec)
-        where TCommand : notnull, IAtomicCommandData
+        where TCommand : notnull, ITenantMoneyCommand
         where TResult : notnull
     {
         await using var scope = _services!.CreateAsyncScope();
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-        return await atomic.ExecuteAsync(identity, command, codec);
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        object outcome = command switch
+        {
+            PostTenantChargeCommand value => await RunPostCharge(value, new PostTenantChargeHandler(db)),
+            ReverseTenantChargeCommand value => await RunReverseCharge(value, new ReverseTenantChargeHandler(db)),
+            RecordTenantReceiptCommand value => await RunReceipt(value, new RecordTenantReceiptHandler(db)),
+            PostTenantCreditCommand value => await RunCredit(value, new PostTenantCreditHandler(db)),
+            PostTenantAdjustmentCommand value => await RunAdjustment(value, new PostTenantAdjustmentHandler(db)),
+            ReverseTenantLedgerEntryCommand value => await RunReverseLedger(value, new ReverseTenantLedgerEntryHandler(db)),
+            RefundTenantPaymentCommand value => await RunRefundPayment(value, new RefundTenantPaymentHandler(db)),
+            FundSecurityDepositCommand value => await RunFundDeposit(value, new FundSecurityDepositHandler(db)),
+            DeductSecurityDepositCommand value => await RunDeductDeposit(value, new DeductSecurityDepositHandler(db)),
+            RefundSecurityDepositCommand value => await RunRefundDeposit(value, new RefundSecurityDepositHandler(db)),
+            ReverseSecurityDepositEntryCommand value => await RunReverseDeposit(value, new ReverseSecurityDepositEntryHandler(db)),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return (AtomicCommandOutcome<TResult>)outcome;
+
+        async Task<AtomicCommandOutcome<TSpecificResult>> Execute<TSpecificCommand, TSpecificResult>(
+            TSpecificCommand request,
+            Func<TSpecificCommand, IAtomicCommandContext, CancellationToken, Task<TSpecificResult>> executeAsync,
+            Func<TSpecificCommand, IAtomicCommandContext, CancellationToken, Task> authorizeAsync)
+            where TSpecificCommand : notnull, ITenantMoneyCommand
+            where TSpecificResult : notnull => await writes.ExecuteAsync(
+                identity.IdempotencyKey,
+                TenantMoneyWriteSupport.Write(request, executeAsync, authorizeAsync));
+
+        Task<AtomicCommandOutcome<TenantChargeMutationResult>> RunPostCharge(
+            PostTenantChargeCommand request, PostTenantChargeHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<TenantChargeMutationResult>> RunReverseCharge(
+            ReverseTenantChargeCommand request, ReverseTenantChargeHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<RecordTenantReceiptResult>> RunReceipt(
+            RecordTenantReceiptCommand request, RecordTenantReceiptHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<TenantLedgerMutationResult>> RunCredit(
+            PostTenantCreditCommand request, PostTenantCreditHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<TenantLedgerMutationResult>> RunAdjustment(
+            PostTenantAdjustmentCommand request, PostTenantAdjustmentHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<TenantLedgerMutationResult>> RunReverseLedger(
+            ReverseTenantLedgerEntryCommand request, ReverseTenantLedgerEntryHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<TenantPaymentRefundResult>> RunRefundPayment(
+            RefundTenantPaymentCommand request, RefundTenantPaymentHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<SecurityDepositMutationResult>> RunFundDeposit(
+            FundSecurityDepositCommand request, FundSecurityDepositHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<SecurityDepositMutationResult>> RunDeductDeposit(
+            DeductSecurityDepositCommand request, DeductSecurityDepositHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<SecurityDepositMutationResult>> RunRefundDeposit(
+            RefundSecurityDepositCommand request, RefundSecurityDepositHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
+        Task<AtomicCommandOutcome<SecurityDepositMutationResult>> RunReverseDeposit(
+            ReverseSecurityDepositEntryCommand request, ReverseSecurityDepositEntryHandler handler) =>
+            Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
     private CompanionFailureInterceptor Failures =>
         _services!.GetRequiredService<CompanionFailureInterceptor>();
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
+    }
 
     private RentalCommandDbContext NewContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()

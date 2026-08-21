@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -22,9 +23,6 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<CancelPlannedRelationshipResult> CancelCodec =
         new("lease-management.cancel-planned.v1");
-    private static readonly AtomicJsonResultCodec<TenantLedgerMutationResult> LedgerCodec =
-        new("tenant-account.ledger.mutation.v1");
-
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _context = null!;
     private ServiceProvider _services = null!;
@@ -44,8 +42,7 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<CancelPlannedRelationshipCommand,
             CancelPlannedRelationshipResult, CancelPlannedRelationshipHandler>();
-        services.AddAtomicCommandHandler<ReverseTenantLedgerEntryCommand,
-            TenantLedgerMutationResult, ReverseTenantLedgerEntryHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString)
                 .UseAtomicPersistenceKernel(provider));
@@ -77,10 +74,12 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         blocked.Value.Outcome.Should().Be(CancelPlannedRelationshipOutcome.FinancialResolutionRequired);
 
         var reversalCommand = ReverseLedger(scenario, openingBalance.Id, "opening-balance");
-        var reversal = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity("tenant-account.ledger.reverse", reversalCommand.DeliveryIdempotencyKey),
-            reversalCommand,
-            LedgerCodec);
+        var handler = new ReverseTenantLedgerEntryHandler(
+            _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        var reversal = await _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(reversalCommand.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    reversalCommand, handler.ExecuteAsync, handler.AuthorizeAsync));
         reversal.Value.Applied.Should().BeTrue();
         reversal.Value.ReversesEntryId.Should().Be(openingBalance.Id);
 

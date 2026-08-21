@@ -74,7 +74,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         var command = ReceiptCommand(
             graph.AccountId, graph.ChargeEntryId, 1_200m, "manual-sim-clock", SimulatedEntryAtUtc);
 
-        var outcome = await _atomic.ExecuteAsync(
+        var outcome = await ExecuteReceiptAsync(
             new AtomicCommandIdentity("tenant-account.receipt.record", command.DeliveryIdempotencyKey),
             command,
             ReceiptCodec);
@@ -152,8 +152,8 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             "tenant-account.receipt.record", command.DeliveryIdempotencyKey);
         Recorder.Clear();
 
-        var outcome = await _atomic.ExecuteAsync(identity, command, ReceiptCodec);
-        var replay = await _atomic.ExecuteAsync(identity, command, ReceiptCodec);
+        var outcome = await ExecuteReceiptAsync(identity, command, ReceiptCodec);
+        var replay = await ExecuteReceiptAsync(identity, command, ReceiptCodec);
 
         outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -259,7 +259,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         var identity = new AtomicCommandIdentity(
             "tenant-account.receipt.record", command.DeliveryIdempotencyKey);
 
-        var outcome = await _atomic.ExecuteAsync(identity, command, ReceiptCodec);
+        var outcome = await ExecuteReceiptAsync(identity, command, ReceiptCodec);
 
         outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         _ctx.Db.ChangeTracker.Clear();
@@ -323,7 +323,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
 
         try
         {
-            await FluentActions.Invoking(() => _atomic.ExecuteAsync(identity, command, ReceiptCodec))
+            await FluentActions.Invoking(() => ExecuteReceiptAsync(identity, command, ReceiptCodec))
                 .Should().ThrowAsync<InvalidOperationException>()
                 .WithMessage("injected tenant receipt notification failure");
         }
@@ -404,7 +404,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             repeatedCheckNumber,
             repeatedCheckNumber);
 
-        await _atomic.ExecuteAsync(
+        await ExecuteReceiptAsync(
             new AtomicCommandIdentity("tenant-account.receipt.record", existingCommand.DeliveryIdempotencyKey),
             existingCommand,
             ReceiptCodec);
@@ -465,7 +465,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
                 graph.AccountId, graph.ChargeEntryId, 1_200m, "receipt-rollback", SimulatedEntryAtUtc)
             with { BusinessKey = duplicateBusinessKey };
 
-        Func<Task> act = async () => await _atomic.ExecuteAsync(
+        Func<Task> act = async () => await ExecuteReceiptAsync(
             new AtomicCommandIdentity("tenant-account.receipt.record", command.DeliveryIdempotencyKey),
             command,
             ReceiptCodec);
@@ -488,7 +488,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         var command = FundDepositCommand(graph, 1_675m, "deposit-sim-clock");
 
         var beforeWallClock = DateTime.UtcNow.AddSeconds(-5);
-        var outcome = await _atomic.ExecuteAsync(
+        var outcome = await ExecuteFundAsync(
             new AtomicCommandIdentity("tenant-account.deposit.fund", command.DeliveryIdempotencyKey),
             command,
             DepositCodec);
@@ -589,7 +589,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
                 SimulatedEntryAtUtc)
             with { AllocateOldestCharges = true };
 
-        Func<Task> act = () => _atomic.ExecuteAsync(
+        Func<Task> act = () => ExecuteReceiptAsync(
             new AtomicCommandIdentity("tenant-account.receipt.record", command.DeliveryIdempotencyKey),
             command,
             ReceiptCodec);
@@ -616,17 +616,9 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
         services.AddAtomicCommandHandler<
-            RecordTenantReceiptCommand,
-            RecordTenantReceiptResult,
-            RecordTenantReceiptHandler>();
-        services.AddAtomicCommandHandler<
             ConfirmScanDraftCommand,
             ConfirmScanDraftResult,
             ConfirmScanDraftHandler>();
-        services.AddAtomicCommandHandler<
-            FundSecurityDepositCommand,
-            SecurityDepositMutationResult,
-            FundSecurityDepositHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -652,6 +644,32 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
                         db, writer, request, context, token),
                     (request, context, token) => ConfirmScanDraftHandler.AuthorizeAsync(
                         writer, request, context, token)));
+    }
+
+    private async Task<AtomicCommandOutcome<RecordTenantReceiptResult>> ExecuteReceiptAsync(
+        AtomicCommandIdentity identity,
+        RecordTenantReceiptCommand command,
+        AtomicJsonResultCodec<RecordTenantReceiptResult> codec)
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var handler = new RecordTenantReceiptHandler(db);
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, TenantMoneyWriteSupport.Write(
+                command, handler.ExecuteAsync, handler.AuthorizeAsync));
+    }
+
+    private async Task<AtomicCommandOutcome<SecurityDepositMutationResult>> ExecuteFundAsync(
+        AtomicCommandIdentity identity,
+        FundSecurityDepositCommand command,
+        AtomicJsonResultCodec<SecurityDepositMutationResult> codec)
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var handler = new FundSecurityDepositHandler(db);
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, TenantMoneyWriteSupport.Write(
+                command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }
 
     private async Task FreezeSimulationClockAsync()
