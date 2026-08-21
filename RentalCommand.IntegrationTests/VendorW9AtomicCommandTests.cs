@@ -5,7 +5,10 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -58,6 +61,7 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         services.AddSingleton<AuditFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             RequestVendorW9Command,
             RequestVendorW9Result,
@@ -229,7 +233,10 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
     public async Task FrozenLegacyReceipt_ReplaysLiteralW9ResultWithCurrentAuthorization()
     {
         SkipIfNoDocker();
-        var identity = Identity("frozen-legacy-receipt");
+        const string clientOperationId = "frozen-legacy-receipt";
+        // Frozen base-caller digest calculated once from clientOperationId; never regenerate.
+        const string operationDigest = "24a10f20d7b0d3c3b6c5b3e333d6e715c1cb5ad00b3061051187321b025190cc";
+        var operationKey = $"{_portfolioId}:{_vendorId}:{operationDigest}";
         var command = Command(_portfolioId, _vendorId, "frozen-legacy-receipt");
         AtomicCommandFingerprint.Create(command).Should().Be(
             "03ccbddd48e634f56c476322cd53f0ed519659aeeddedbbd361317e9c065268b");
@@ -240,7 +247,7 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
                 Id = Guid.NewGuid(),
                 AttemptId = Guid.NewGuid(),
                 CommandType = "vendor-w9.request",
-                IdempotencyKey = identity.IdempotencyKey,
+                IdempotencyKey = operationKey,
                 RequestFingerprint = "03ccbddd48e634f56c476322cd53f0ed519659aeeddedbbd361317e9c065268b",
                 Status = AtomicCommandReceiptStatus.Completed,
                 ResultContract = "vendor-w9.request.result.v1",
@@ -251,14 +258,28 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
             await seed.SaveChangesAsync();
         }
 
-        var replay = await ExecuteAtomicAsync(identity, command, Codec);
+        await using var scope = _services!.CreateAsyncScope();
+        var service = new VendorService(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            null!,
+            TimeProvider.System,
+            scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+        var replay = await service.RequestW9Async(
+            new WorkspaceReadScope(
+                _portfolioId, 73, _authSessionId, _accessContextId, _accessRevision),
+            _vendorId,
+            $" {clientOperationId} ",
+            73);
 
-        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        replay.Value.Should().Be(new RequestVendorW9Result(
-            RequestVendorW9Outcome.Queued, "+15550102020"));
+        replay.Should().BeEquivalentTo(RequestW9Result.Queued("+15550102020"));
         await using var verify = NewContext();
         (await verify.OutboxMessages.CountAsync(row => row.PortfolioId == _portfolioId))
             .Should().Be(0);
+        (await verify.AtomicAuditLogs.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == "vendor-w9.request" && row.IdempotencyKey == operationKey))
+            .Should().Be(1);
     }
 
     [SkippableFact]

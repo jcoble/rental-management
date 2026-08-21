@@ -2,10 +2,17 @@ using System.Buffers.Binary;
 using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Auth;
+using RentalCommand.Api.Controllers;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -40,6 +47,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult,
             UpdateAssignedWorkOrderHandler>();
         services.AddAtomicCommandHandler<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult,
@@ -211,9 +219,28 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     [Fact]
     public async Task SixResponsibilityAndTechnicianContracts_ReplayFrozenLegacyReceipts()
     {
+        const string updateHeader = "frozen-update";
+        const string entryHeader = "frozen-entry";
+        const string messageHeader = "frozen-message";
+        const string readHeader = "frozen-read";
+        const string assignHeader = "frozen-assign";
+        const string closeHeader = "frozen-close";
+        // Frozen base-caller digests calculated once from the normalized headers; never regenerate.
+        const string updateDigest = "91b9e3a544e0882574b44c966da585955eb8afe265a6a3833ec4cfd263cdce7d";
+        const string entryDigest = "fce3b6dccd983e26059659a59e133988295737574eeb743ccd79829161dc8576";
+        const string messageDigest = "c938057c287ea26a3ee6f3e8a7c91b03e471f6c8f8723a6019bfb8c35436e18e";
+        const string readDigest = "122e87537461871c2ab5446425d52ef067f668e600d2c43e107fba0efe9e1515";
+        const string assignDigest = "b92e85222f2ab7f39d4701165318dd360ee930f58e8d19d51594d430eab882d5";
+        const string closeDigest = "26d1c15ff85e945d8ac80eb1ce354be594d6170894b68332048df826f0c034ff";
         var technician = await SeedScenarioAsync(
             sessionId: Guid.Parse("55555555-5555-5555-5555-555555555555"));
         var management = await SeedResponsibilityAssignmentScenarioAsync("frozen-replay");
+        var updateKey = $"{technician.PortfolioId}:{technician.AssignedWorkOrderId}:{updateDigest}";
+        var entryKey = $"{technician.PortfolioId}:{technician.AssignedWorkOrderId}:{entryDigest}";
+        var messageKey = $"{technician.PortfolioId}:{technician.AssignedWorkOrderId}:{messageDigest}";
+        var readKey = $"{technician.PortfolioId}:{technician.AssignedWorkOrderId}:{readDigest}";
+        var assignKey = $"{management.PortfolioId}:{management.WorkOrderId}:{assignDigest}";
+        var closeKey = $"{management.PortfolioId}:{management.WorkOrderId}:{closeDigest}";
         var update = new UpdateAssignedWorkOrderCommand(
             technician.PortfolioId, technician.UserId, technician.SessionId,
             technician.AccessContextId, technician.AccessRevision, technician.AssignedWorkOrderId,
@@ -251,54 +278,104 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
                 "c4989830c246677e3a6ca51198f42d43ee70a5c438b6278d74ec9953ec3b77ee",
                 "5ba51b11d61a784d98f2d6cc32629638d477a36db1ae9503c0c8c32d4a508b10");
 
-        var updated = await SeedAndReplayAsync(
-            _serviceScope.ServiceProvider, "frozen-update", UpdateAssignedWorkOrderHandler.Write(update,
-                _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()),
+        await SeedFrozenReceiptAsync(
+            updateKey,
             "assigned-work-order.update", "6e9afb75e2d8559ff80824780f2347ad8c8eb06215783049341dabd6109093d0", "assigned-work-order.update.v1",
             $$"""{"Outcome":0,"WorkOrderId":{{technician.AssignedWorkOrderId}},"Status":1,"ScheduledForUtc":null,"ScheduledWindowEndUtc":null,"CompletedAtUtc":null,"UpdatedAtUtc":"2099-08-21T12:34:56Z"}""");
-        var recorded = await SeedAndReplayAsync(
-            _serviceScope.ServiceProvider, "frozen-entry", RecordTechnicianWorkEntryHandler.Write(entry,
-                _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()),
+        await SeedFrozenReceiptAsync(
+            entryKey,
             "technician-work-entry.record", "767b8f05917dee7e29811b5eefadadd80659649e482021a8d5eefd182ad3e626", "technician-work-entry.v1",
             $$"""{"EntryId":42,"WorkOrderId":{{technician.AssignedWorkOrderId}},"Kind":0,"CreatedAtUtc":"2099-08-21T12:34:56Z"}""");
-        var sent = await SeedAndReplayAsync(
-            _serviceScope.ServiceProvider, "frozen-message", SendTechnicianAssignmentMessageHandler.Write(message,
-                _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()),
+        await SeedFrozenReceiptAsync(
+            messageKey,
             "technician-assignment-message.send", "939245342ed9615b99d5d7e73f90a691e5ff4e2c2e4e5f456d66d59d252e6c6d", "technician-assignment-message.v1",
             """{"ConversationId":43,"MessageId":44,"CreatedAtUtc":"2099-08-21T12:34:56Z"}""");
-        var marked = await SeedAndReplayAsync(
-            _serviceScope.ServiceProvider, "frozen-read", MarkTechnicianAssignmentConversationReadHandler.Write(read,
-                _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()),
+        await SeedFrozenReceiptAsync(
+            readKey,
             "technician-assignment-conversation.read", "b90a96514b3ceb79a090d195124e61602b65e373b89051503ee440a7f1f49bf2", "technician-assignment-conversation-read.v1",
             """{"ConversationId":43,"Found":true}""");
 
         await using var managementServices = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc));
         using var managementScope = managementServices.CreateScope();
-        var guard = managementScope.ServiceProvider
-            .GetRequiredService<WorkOrderResponsibilityAccessRevisionGuard>();
-        var assigned = await SeedAndReplayAsync(
-            managementScope.ServiceProvider,
-            $"{management.PortfolioId}:{management.WorkOrderId}:frozen-assign",
-            AssignWorkOrderResponsibilityHandler.Write(assign,
-                managementScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(), guard),
+        await SeedFrozenReceiptAsync(
+            assignKey,
             "work-order-responsibility.assign", "c4989830c246677e3a6ca51198f42d43ee70a5c438b6278d74ec9953ec3b77ee", "work-order-responsibility.assign.v1",
             $$"""{"ResponsibilityId":"33333333-3333-3333-3333-333333333333","WorkOrderId":{{management.WorkOrderId}},"WorkspaceMembershipId":{{management.TechnicianMembershipId}},"MembershipRoleAssignmentId":{{management.TechnicianRoleAssignmentId}},"Kind":0,"EffectiveFromUtc":"2099-08-21T12:34:56Z","AccessRevisions":[{"AccessContextId":{{management.TechnicianAccessContextId}},"ExpectedRevision":{{management.TechnicianAccessRevision + 1}}}]}""");
-        var closed = await SeedAndReplayAsync(
-            managementScope.ServiceProvider,
-            $"{management.PortfolioId}:{management.WorkOrderId}:frozen-close",
-            CloseWorkOrderResponsibilityHandler.Write(close,
-                managementScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(), guard),
+        await SeedFrozenReceiptAsync(
+            closeKey,
             "work-order-responsibility.close", "5ba51b11d61a784d98f2d6cc32629638d477a36db1ae9503c0c8c32d4a508b10", "work-order-responsibility.close.v1",
             $$"""{"ResponsibilityId":"33333333-3333-3333-3333-333333333333","WorkOrderId":{{management.WorkOrderId}},"EffectiveToUtc":"2099-08-21T12:34:56Z","AccessRevisions":[{"AccessContextId":{{management.TechnicianAccessContextId}},"ExpectedRevision":{{management.TechnicianAccessRevision + 1}}}]}""");
 
-        updated.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        recorded.Value.EntryId.Should().Be(42);
-        sent.Value.MessageId.Should().Be(44);
-        marked.Value.Should().Be(new MarkTechnicianAssignmentConversationReadResult(43, true));
-        assigned.Value.ResponsibilityId.Should().Be(responsibilityId);
-        closed.Value.ResponsibilityId.Should().Be(responsibilityId);
+        var technicianController = TechnicianControllerFor(
+            _serviceScope.ServiceProvider, technician, new FixedTimeProvider(BusinessNowUtc));
+        var updated = OkPayload(await technicianController.UpdateAssignment(
+            technician.AssignedWorkOrderId, $" {updateHeader} ", new UpdateAssignedWorkOrderRequest
+            {
+                ExpectedUpdatedAtUtc = BusinessNowUtc,
+                Status = WorkOrderStatus.InProgress,
+                TechnicianNote = "Frozen replay",
+            }, default));
+        var recorded = OkPayload(await technicianController.RecordEntry(
+            technician.AssignedWorkOrderId, entryHeader, new RecordTechnicianWorkEntryRequest
+            {
+                Kind = TechnicianWorkEntryKind.Note,
+                Note = "Frozen replay",
+                OccurredAt = BusinessNowUtc,
+            }, default));
+        var sent = OkPayload(await technicianController.SendMessage(
+            technician.AssignedWorkOrderId, messageHeader,
+            new TechnicianConversationMessageRequest { Body = "Frozen replay" }, default));
+        var marked = OkPayload(await technicianController.MarkConversationRead(
+            technician.AssignedWorkOrderId, readHeader, default));
+
+        var managementController = ResponsibilityControllerFor(managementScope.ServiceProvider, management);
+        var assigned = OkPayload(await managementController.Assign(
+            management.WorkOrderId, assignHeader, new AssignWorkOrderResponsibilityRequest
+            {
+                WorkspaceMembershipId = management.TechnicianMembershipId,
+                MembershipRoleAssignmentId = management.TechnicianRoleAssignmentId,
+                Kind = WorkOrderResponsibilityKind.Primary,
+                AccessRevisionExpectations =
+                [new(management.TechnicianAccessContextId, management.TechnicianAccessRevision)],
+                Reason = "Assign primary technician.",
+            }, default));
+        var closed = OkPayload(await managementController.Close(
+            management.WorkOrderId, responsibilityId, closeHeader,
+            new CloseWorkOrderResponsibilityRequest
+            {
+                AccessRevisionExpectations =
+                [new(management.TechnicianAccessContextId, management.TechnicianAccessRevision)],
+                Reason = "Frozen close",
+            }, default));
+
+        updated.GetProperty("replayed").GetBoolean().Should().BeTrue();
+        updated.GetProperty("Value").GetProperty("UpdatedAtUtc").GetDateTime()
+            .Should().Be(new DateTime(2099, 8, 21, 12, 34, 56, DateTimeKind.Utc));
+        recorded.GetProperty("Value").GetProperty("EntryId").GetInt32().Should().Be(42);
+        sent.GetProperty("Value").GetProperty("MessageId").GetInt32().Should().Be(44);
+        marked.GetProperty("Value").GetProperty("ConversationId").GetInt32().Should().Be(43);
+        marked.GetProperty("Value").GetProperty("Found").GetBoolean().Should().BeTrue();
+        assigned.GetProperty("Value").GetProperty("ResponsibilityId").GetGuid().Should().Be(responsibilityId);
+        closed.GetProperty("Value").GetProperty("ResponsibilityId").GetGuid().Should().Be(responsibilityId);
+        new[] { updated, recorded, sent, marked, assigned, closed }
+            .Should().OnlyContain(payload => payload.GetProperty("replayed").GetBoolean());
+
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.WorkOrderStatusEvents.AsNoTracking().CountAsync(row =>
+            row.WorkOrderId == technician.AssignedWorkOrderId)).Should().Be(0);
+        (await _context.Db.TechnicianWorkEntries.AsNoTracking().CountAsync(row =>
+            row.WorkOrderId == technician.AssignedWorkOrderId)).Should().Be(0);
+        (await _context.Db.ConversationMessages.AsNoTracking().CountAsync(row =>
+            row.ConversationId == technician.ConversationId)).Should().Be(1);
+        (await _context.Db.Conversations.AsNoTracking().CountAsync(row =>
+            row.Id == technician.ConversationId && row.TechnicianUnreadCount == 0)).Should().Be(0);
+        (await _context.Db.WorkOrderResponsibilities.AsNoTracking().CountAsync(row =>
+            row.WorkOrderId == management.WorkOrderId)).Should().Be(0);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking().CountAsync()).Should().Be(0);
+        (await _context.Db.OutboxMessages.AsNoTracking().CountAsync()).Should().Be(0);
+        var frozenKeys = new[] { updateKey, entryKey, messageKey, readKey, assignKey, closeKey };
         (await _context.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
-            row.IdempotencyKey.Contains("frozen-"))).Should().Be(6);
+            frozenKeys.Contains(row.IdempotencyKey))).Should().Be(6);
     }
 
     [Fact]
@@ -748,16 +825,12 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
-    private async Task<AtomicCommandOutcome<TResult>> SeedAndReplayAsync<TCommand, TResult>(
-        IServiceProvider services,
+    private async Task SeedFrozenReceiptAsync(
         string key,
-        TransactionalWrite<TCommand, TResult> write,
         string operation,
         string frozenFingerprint,
         string resultContract,
         string literalResultJson)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
     {
         _context.Db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
         {
@@ -774,8 +847,51 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         });
         await _context.Db.SaveChangesAsync();
         _context.Db.ChangeTracker.Clear();
+    }
 
-        return await services.GetRequiredService<IWriteExecutor>().ExecuteAsync(key, write);
+    private static TechnicianController TechnicianControllerFor(
+        IServiceProvider services,
+        Scenario scenario,
+        TimeProvider timeProvider)
+    {
+        var controller = new TechnicianController(
+            null!,
+            services.GetRequiredService<RentalCommandDbContext>(),
+            services.GetRequiredService<IRequestWriteExecutor>(),
+            timeProvider);
+        controller.ControllerContext = ControllerContextFor(new ActiveAccessContext(
+            scenario.SessionId, scenario.UserId, scenario.AccessContextId, scenario.PortfolioId,
+            scenario.AccessRevision, WorkspaceExperience.Maintenance, null, WorkspaceExperience.Maintenance));
+        return controller;
+    }
+
+    private static WorkOrderResponsibilityController ResponsibilityControllerFor(
+        IServiceProvider services,
+        ResponsibilityAssignmentScenario scenario)
+    {
+        var controller = new WorkOrderResponsibilityController(
+            services.GetRequiredService<RentalCommandDbContext>(),
+            services.GetRequiredService<IRequestWriteExecutor>(),
+            services.GetRequiredService<WorkOrderResponsibilityAccessRevisionGuard>(),
+            services.GetRequiredService<TimeProvider>());
+        controller.ControllerContext = ControllerContextFor(new ActiveAccessContext(
+            scenario.ManagerSessionId, scenario.ManagerUserId, scenario.ManagerAccessContextId,
+            scenario.PortfolioId, scenario.ManagerAccessRevision, WorkspaceExperience.Management,
+            null, WorkspaceExperience.Management));
+        return controller;
+    }
+
+    private static ControllerContext ControllerContextFor(ActiveAccessContext active)
+    {
+        var http = new DefaultHttpContext();
+        http.Items[CanonicalAccessContextHttpItem.Key] = active;
+        return new ControllerContext { HttpContext = http };
+    }
+
+    private static JsonElement OkPayload(IActionResult result)
+    {
+        var value = result.Should().BeOfType<OkObjectResult>().Which.Value;
+        return JsonSerializer.SerializeToElement(value);
     }
 
     private static Task<AtomicCommandOutcome<AssignWorkOrderResponsibilityResult>> ExecuteAsync(
@@ -848,6 +964,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(timeProvider);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult,
             AssignWorkOrderResponsibilityHandler>();
         services.AddAtomicCommandHandler<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult,
