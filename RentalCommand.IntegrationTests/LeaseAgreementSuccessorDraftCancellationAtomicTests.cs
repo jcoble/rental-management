@@ -41,6 +41,15 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
     private const string SuccessorCreateFingerprint = "ff9a143ce4614df69d3840c638397a4a408639acff80648c1b0758d74b6e5933";
     private const string IssuedReplacementFingerprint = "afa9ea1de82c6016b1253292e244212ad826fd4bc7bd70ac96e5bd8dd58c5406";
     private const string DispositionFingerprint = "9ef6c74aebe2c042ecf1164e25af49f59a0b47cd1ee36fb55acf3fdf6dcd599d";
+    // Frozen fingerprints computed once from the family (c) command DTO shapes at base f5593364.
+    private const string GivePossessionFingerprint = "6c5a3dbd60fb3229f91b767ecbcf0ea99954fdbaa2a7b16dec4385ea9e860cf7";
+    private const string ReconcilePossessionFingerprint = "1b710e57b3df467b2329ae1b0d604a91aabfed8dbfca4811a4733afc5eafe22e";
+    private const string ConfirmMoveInFingerprint = "d611f7dff89a80f92235be9f02907236c95ae4d39783e690511bc503087a81c6";
+    private const string ReturnPossessionFingerprint = "ab2800045a5d483d5ab094a0e4a3e231c79ec054dbef9037fb707788ee10d229";
+    private const string CompleteTurnoverFingerprint = "f58e67d7892ec1d10f3987605c330d7a4b2df47c98b16837aa889f25106243f9";
+    private const string VoidAgreementFingerprint = "a0d6b224a5568814403599775e682e882477e96b61901669d9aea6307cd0c98c";
+    private const string VoidAddendumFingerprint = "8e7bbba69864244b5dfad7c9431c8f7da2b5e967f7ea2b07bfda2a6efb3cdf01";
+    private const string CloseAccountFingerprint = "5f286fb2dd323bf80323f302dc09e588d9e5088898ebdca5a9fe9ed8736f31d4";
     private static readonly AtomicJsonResultCodec<CancelLeaseAgreementSuccessorDraftResult> Codec =
         new("lease-agreement.successor-draft.cancel.v1");
     private PostgreSqlContainer? _postgres;
@@ -250,7 +259,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
     }
 
     [SkippableFact]
-    public async Task MigratedExecutor_ReplaysFrozenLegacyReceiptsForAllTwelveOperations()
+    public async Task MigratedExecutor_ReplaysFrozenLegacyReceiptsIncludingPossessionFamily()
     {
         SkipIfNoDocker();
         _scenario.PortfolioId.Should().Be(70_001);
@@ -422,6 +431,119 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             """{"Outcome":0,"DispositionId":51,"LeaseManagementCount":3,"TenantAccountCount":1}""",
             new CreatePropertyDispositionResult(CreatePropertyDispositionOutcome.Created, 51, 3, 1),
             "property-disposition.create.v1");
+
+        var givePossession = new GivePossessionCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId, ActorUserId,
+            _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision, businessNow,
+            $"give-possession:70001:10000:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-management.give-possession",
+            $"70001:10000:{FrozenKeyDigest}", givePossession, GivePossessionFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10000,"UnitId":70003,"PossessionGivenAtUtc":"2026-08-22T12:00:00Z","Error":null}""",
+            new GivePossessionResult(GivePossessionOutcome.Given, 10_000, sourceUnitId,
+                businessNow, null), "lease-management.give-possession.v1");
+
+        var reconcilePossession = new ReconcileHistoricalPossessionCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId, businessDate,
+            ActorUserId, _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision,
+            businessNow, $"reconcile-historical-possession:70001:10000:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-management.reconcile-historical-possession",
+            $"70001:10000:{FrozenKeyDigest}", reconcilePossession,
+            ReconcilePossessionFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10000,"UnitId":70003,"PossessionGivenAtUtc":"2026-08-22T00:00:00Z","Error":null}""",
+            new ReconcileHistoricalPossessionResult(ReconcileHistoricalPossessionOutcome.Reconciled,
+                10_000, sourceUnitId, businessDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), null),
+            "lease-management.reconcile-historical-possession.v1");
+
+        var confirmMoveIn = new ConfirmMoveInCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId,
+            null, null, null, null, ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
+            _scenario.AccessRevision, businessNow,
+            $"confirm-move-in:70001:10000:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-management.confirm-move-in",
+            $"70001:10000:{FrozenKeyDigest}", confirmMoveIn, ConfirmMoveInFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10000,"UnitId":70003,"PossessionGivenAtUtc":"2026-08-22T12:00:00Z","SecurityDepositEntryId":61,"TenantLedgerEntryId":62,"CompletedAppointmentId":63,"Error":null}""",
+            new ConfirmMoveInResult(ConfirmMoveInOutcome.Confirmed, 10_000, sourceUnitId,
+                businessNow, 61, 62, 63, null), "lease-management.confirm-move-in.v1");
+
+        var returnPossession = new ReturnPossessionCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId, ActorUserId,
+            _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision, businessNow,
+            [new ReturnPossessionParty(1, ReturnPartyDisposition.EndMembership)], [],
+            "Frozen replay", $"return-possession:70001:10000:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-management.return-possession",
+            $"70001:10000:{FrozenKeyDigest}", returnPossession, ReturnPossessionFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10000,"UnitId":70003,"TurnoverPeriodId":51,"PossessionReturnedAtUtc":"2026-08-22T12:00:00Z","Error":null}""",
+            new ReturnPossessionResult(ReturnPossessionOutcome.Returned, 10_000, sourceUnitId,
+                51, businessNow, null), "lease-management.return-possession.v1");
+
+        var completeTurnover = new CompleteTurnoverCommand(
+            _scenario.PortfolioId, sourceUnitId, 51, ActorUserId, _scenario.SessionId,
+            _scenario.AccessContextId, _scenario.AccessRevision, businessNow,
+            $"complete-turnover:70001:70003:51:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("unit.complete-turnover",
+            $"70001:70003:51:{FrozenKeyDigest}", completeTurnover, CompleteTurnoverFingerprint,
+            """{"Outcome":0,"UnitId":70003,"TurnoverPeriodId":51,"CompletedAtUtc":"2026-08-22T12:00:00Z","Error":null}""",
+            new CompleteTurnoverResult(CompleteTurnoverOutcome.Completed, sourceUnitId, 51,
+                businessNow, null), "unit.complete-turnover.v1");
+
+        var voidAgreement = new VoidLeaseAgreementCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SourceAgreementId,
+            "FROZEN", "Frozen replay", ActorUserId, _scenario.SessionId,
+            _scenario.AccessContextId, _scenario.AccessRevision,
+            $"agreement-void:70001:20000:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-agreement.void",
+            $"70001:20000:{FrozenKeyDigest}", voidAgreement, VoidAgreementFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10000,"LeaseAgreementId":20000,"LeaseAddendumId":null,"VoidedAtUtc":"2026-08-22T12:00:00Z","Error":null}""",
+            new VoidLegalArtifactResult(VoidLegalArtifactOutcome.Voided, 10_000, 20_000,
+                null, businessNow, null), "lease-agreement.void.v1");
+
+        var voidAddendum = new VoidLeaseAddendumCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, 31, "FROZEN", "Frozen replay",
+            ActorUserId, _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision,
+            $"addendum-void:70001:31:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-addendum.void",
+            $"70001:31:{FrozenKeyDigest}", voidAddendum, VoidAddendumFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10000,"LeaseAgreementId":null,"LeaseAddendumId":31,"VoidedAtUtc":"2026-08-22T12:00:00Z","Error":null}""",
+            new VoidLegalArtifactResult(VoidLegalArtifactOutcome.Voided, 10_000, null,
+                31, businessNow, null), "lease-addendum.void.v1");
+
+        var closeAccount = new CloseTenantAccountCommand(
+            _scenario.PortfolioId, 10_001, 40_001, "FROZEN", "Frozen replay", ActorUserId,
+            _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision,
+            $"tenant-account-close:70001:40001:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("tenant-account.close",
+            $"70001:40001:{FrozenKeyDigest}", closeAccount, CloseAccountFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10001,"TenantAccountId":40001,"ClosedAtUtc":"2026-08-22T12:00:00Z","Error":null}""",
+            new CloseTenantAccountResult(CloseTenantAccountOutcome.Closed, 10_001, 40_001,
+                businessNow, null), "tenant-account.close.v1");
+    }
+
+    [SkippableFact]
+    public async Task PossessionFrozenLegacyReceiptReplay_RefusesRevokedSession()
+    {
+        SkipIfNoDocker();
+        var command = new GivePossessionCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, 70_003, ActorUserId,
+            _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision, FrozenNow,
+            $"give-possession:70001:10000:{FrozenKeyDigest}");
+        var key = $"70001:10000:{FrozenKeyDigest}";
+        await SeedFrozenReceiptAsync("lease-management.give-possession", key,
+            GivePossessionFingerprint, "lease-management.give-possession.v1",
+            """{"Outcome":0,"LeaseManagementId":10000,"UnitId":70003,"PossessionGivenAtUtc":"2026-08-22T12:00:00Z","Error":null}""");
+        await using (var revoke = NewContext())
+        {
+            var session = await revoke.AuthSessions.SingleAsync(row => row.Id == _scenario.SessionId);
+            session.Status = AuthSessionStatus.Revoked;
+            session.RevokedAtUtc = DateTime.UtcNow;
+            await revoke.SaveChangesAsync();
+        }
+
+        var write = LeasingWriteSupport.Write<GivePossessionCommand, GivePossessionResult>(
+            _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>(), command);
+        Func<Task> act = async () => await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(key, write);
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
     [SkippableFact]

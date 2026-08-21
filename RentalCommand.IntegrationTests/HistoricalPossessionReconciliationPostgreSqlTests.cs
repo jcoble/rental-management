@@ -21,9 +21,6 @@ namespace RentalCommand.IntegrationTests;
 [Collection(RoleAuthorityPostgreSqlCollection.Name)]
 public sealed class HistoricalPossessionReconciliationPostgreSqlTests : IAsyncLifetime
 {
-    private static readonly AtomicJsonResultCodec<ReconcileHistoricalPossessionResult> Codec =
-        new("lease-management.reconcile-historical-possession.v1");
-
     private readonly MigratedPostgreSqlFixture _fixture;
     private readonly OutboxFailureInterceptor _outboxFailure = new();
     private readonly QueryCaptureInterceptor _queries = new();
@@ -44,8 +41,6 @@ public sealed class HistoricalPossessionReconciliationPostgreSqlTests : IAsyncLi
         services.AddSingleton(_outboxFailure);
         services.AddSingleton(_queries);
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<ReconcileHistoricalPossessionCommand,
-            ReconcileHistoricalPossessionResult, ReconcileHistoricalPossessionHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString)
                 .AddInterceptors(provider.GetRequiredService<OutboxFailureInterceptor>())
@@ -73,33 +68,33 @@ public sealed class HistoricalPossessionReconciliationPostgreSqlTests : IAsyncLi
         var validDate = scenario.TermStartOn;
 
         var future = Command(scenario, scenario.BusinessDate.AddDays(1), "future-date");
-        var futureResult = await Atomic.ExecuteAsync(Identity(future), future, Codec);
+        var futureResult = await ExecuteAsync(future);
         futureResult.Value.Outcome.Should().Be(ReconcileHistoricalPossessionOutcome.DateAfterBusinessDate);
         await AssertNoMutationAsync(scenario.LeaseManagementId, future.DeliveryIdempotencyKey);
 
         var beforeTerm = Command(scenario, scenario.TermStartOn.AddDays(-1), "before-term");
-        var beforeTermResult = await Atomic.ExecuteAsync(Identity(beforeTerm), beforeTerm, Codec);
+        var beforeTermResult = await ExecuteAsync(beforeTerm);
         beforeTermResult.Value.Outcome.Should()
             .Be(ReconcileHistoricalPossessionOutcome.DateOutsideAgreementTerm);
         await AssertNoMutationAsync(scenario.LeaseManagementId, beforeTerm.DeliveryIdempotencyKey);
 
         var denied = Command(scenario with { AccessRevision = scenario.AccessRevision + 1 }, validDate,
             "stale-access");
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(Identity(denied), denied, Codec))
+        await FluentActions.Invoking(() => ExecuteAsync(denied))
             .Should().ThrowAsync<UnauthorizedAccessException>();
         await AssertNoMutationAsync(scenario.LeaseManagementId, denied.DeliveryIdempotencyKey);
 
         var rollback = Command(scenario, validDate, "rollback");
         _outboxFailure.FailNextOutboxInsert = true;
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(Identity(rollback), rollback, Codec))
+        await FluentActions.Invoking(() => ExecuteAsync(rollback))
             .Should().ThrowAsync<DbUpdateException>()
             .Where(exception => exception.InnerException is InjectedOutboxFailure);
         await AssertNoMutationAsync(scenario.LeaseManagementId, rollback.DeliveryIdempotencyKey);
 
         var reconcile = Command(scenario, validDate, "success");
         var identity = Identity(reconcile);
-        var first = await Atomic.ExecuteAsync(identity, reconcile, Codec);
-        var replay = await Atomic.ExecuteAsync(identity, reconcile, Codec);
+        var first = await ExecuteAsync(reconcile);
+        var replay = await ExecuteAsync(reconcile);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -164,8 +159,15 @@ public sealed class HistoricalPossessionReconciliationPostgreSqlTests : IAsyncLi
         sql.Should().NotContain("Enumerable");
     }
 
-    private IAtomicUnitOfWork Atomic =>
-        _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+    private Task<AtomicCommandOutcome<ReconcileHistoricalPossessionResult>> ExecuteAsync(
+        ReconcileHistoricalPossessionCommand command)
+    {
+        var db = _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            Identity(command).IdempotencyKey,
+            LeasingWriteSupport.Write<ReconcileHistoricalPossessionCommand,
+                ReconcileHistoricalPossessionResult>(db, command));
+    }
 
     private static AtomicCommandIdentity Identity(ReconcileHistoricalPossessionCommand command) =>
         new("lease-management.reconcile-historical-possession",

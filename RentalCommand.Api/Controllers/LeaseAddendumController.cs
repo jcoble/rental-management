@@ -22,9 +22,6 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class LeaseAddendumController : ManagementControllerBase
 {
-    private static readonly AtomicJsonResultCodec<VoidLegalArtifactResult> VoidCodec =
-        new("lease-addendum.void.v1");
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
     private readonly IRequestWriteExecutor _writes;
     private readonly ILeaseManagementQueryService _queryService;
@@ -33,7 +30,6 @@ public sealed class LeaseAddendumController : ManagementControllerBase
     private readonly string _webBaseUrl;
 
     public LeaseAddendumController(
-        IAtomicUnitOfWork atomic,
         RentalCommandDbContext db,
         IRequestWriteExecutor writes,
         ILeaseManagementQueryService queryService,
@@ -41,7 +37,6 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         ILegalDocumentIssuancePreparationService issuancePreparations,
         IConfiguration configuration)
     {
-        _atomic = atomic;
         _db = db;
         _writes = writes;
         _queryService = queryService;
@@ -313,8 +308,9 @@ public sealed class LeaseAddendumController : ManagementControllerBase
             $"addendum-void:{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}");
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity("lease-addendum.void",
-                $"{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}"), command, VoidCodec, ct);
+            var outcome = await _writes.ExecuteAsync(
+                $"{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}",
+                LeasingWriteSupport.Write<VoidLeaseAddendumCommand, VoidLegalArtifactResult>(_db, command), ct);
             return outcome.Value.Outcome == VoidLegalArtifactOutcome.Voided
                 ? Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed })
                 : Conflict(new { error = outcome.Value.Error });

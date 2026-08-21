@@ -14,6 +14,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Leasing;
 using RentalCommand.TestCommon;
@@ -26,9 +27,6 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<TransferLeaseManagementResult> TransferCodec =
         new("lease-management.transfer-unit.v1");
-    private static readonly AtomicJsonResultCodec<CloseTenantAccountResult> CloseCodec =
-        new("tenant-account.close.v1");
-
     private readonly MigratedPostgreSqlFixture _fixture;
     private readonly ITestOutputHelper _output;
     private readonly SqlCaptureInterceptor _sqlCapture = new();
@@ -54,8 +52,6 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(_sqlCapture);
         services.AddSingleton(_failure);
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<CloseTenantAccountCommand,
-            CloseTenantAccountResult, CloseTenantAccountHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString)
                 .AddInterceptors(provider.GetRequiredService<SqlCaptureInterceptor>())
@@ -92,12 +88,8 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             scenario.AccessContextId,
             scenario.AccessRevision,
             "tenant-account-close:before-possession-return");
-        var blockedCloseOutcome = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "tenant-account.close",
-                $"{scenario.PortfolioId}:{scenario.Primary.SourceTenantAccountId}:blocked"),
-            blockedClose,
-            CloseCodec);
+        var blockedCloseOutcome = await ExecuteCloseAsync(
+            $"{scenario.PortfolioId}:{scenario.Primary.SourceTenantAccountId}:blocked", blockedClose);
         blockedCloseOutcome.Value.Outcome.Should()
             .Be(CloseTenantAccountOutcome.PossessionNotReturned);
         _context.Db.ChangeTracker.Clear();
@@ -205,6 +197,29 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         (await _context.Db.OutboxMessages.AsNoTracking()
             .CountAsync(row => row.IdempotencyKey == transfer.DeliveryIdempotencyKey)).Should().Be(1);
 
+        var voidAgreement = new VoidLeaseAgreementCommand(
+            scenario.PortfolioId,
+            scenario.Primary.SourceLeaseManagementId,
+            scenario.Primary.SourceAgreementId,
+            "TRANSFERRED",
+            "Voided after the transferred relationship returned possession.",
+            scenario.ActorUserId,
+            scenario.SessionId,
+            scenario.AccessContextId,
+            scenario.AccessRevision,
+            "agreement-void:after-transfer");
+        var beforeVoid = await LifecycleGraphCountsAsync();
+        var voided = await ExecuteVoidAgreementAsync("agreement-void:after-transfer", voidAgreement);
+        var afterVoid = await LifecycleGraphCountsAsync();
+        var voidReplay = await ExecuteVoidAgreementAsync("agreement-void:after-transfer", voidAgreement);
+        var afterVoidReplay = await LifecycleGraphCountsAsync();
+        voided.Value.Outcome.Should().Be(VoidLegalArtifactOutcome.Voided);
+        voidReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        voidReplay.Value.Should().BeEquivalentTo(voided.Value);
+        afterVoid.Receipts.Should().Be(beforeVoid.Receipts + 1);
+        afterVoidReplay.Should().Be(afterVoid,
+            "an exact void retry must not append a second void, audit, or outbox transition");
+
         var close = new CloseTenantAccountCommand(
             scenario.PortfolioId,
             scenario.Primary.SourceLeaseManagementId,
@@ -219,9 +234,19 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         var closeIdentity = new AtomicCommandIdentity(
             "tenant-account.close",
             $"{scenario.PortfolioId}:{scenario.Primary.SourceTenantAccountId}:after-transfer");
-        var closed = await Atomic.ExecuteAsync(closeIdentity, close, CloseCodec);
+        var beforeClose = await LifecycleGraphCountsAsync();
+        var closed = await ExecuteCloseAsync(closeIdentity.IdempotencyKey, close);
+        var afterClose = await LifecycleGraphCountsAsync();
+        var closeReplay = await ExecuteCloseAsync(closeIdentity.IdempotencyKey, close);
+        var afterCloseReplay = await LifecycleGraphCountsAsync();
 
         closed.Value.Outcome.Should().Be(CloseTenantAccountOutcome.Closed);
+        closed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        closeReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        closeReplay.Value.Should().BeEquivalentTo(closed.Value);
+        afterClose.Receipts.Should().Be(beforeClose.Receipts + 1);
+        afterCloseReplay.Should().Be(afterClose,
+            "an exact close retry must not append a second close, audit, or outbox transition");
         _context.Db.ChangeTracker.Clear();
         var closedState = await _context.Db.LeaseManagements.AsNoTracking()
             .Where(row => row.Id == scenario.Primary.SourceLeaseManagementId)
@@ -238,6 +263,43 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         closedState.TenantAccountClosedAtUtc.Should()
             .Be(closedState.RelationshipClosedAtUtc);
         closedState.CloseReasonCode.Should().Be("TRANSFERRED");
+    }
+
+    [Fact]
+    public async Task ConfirmMoveIn_ExactRetryDoesNotRepeatPossessionOrDepositPosting()
+    {
+        var scenario = await SeedLifecycleScenarioAsync();
+        var command = new ConfirmMoveInCommand(
+            scenario.PortfolioId,
+            scenario.MoveIn.SourceLeaseManagementId,
+            scenario.MoveIn.SourceUnitId,
+            scenario.BusinessDate,
+            "Cashier check ending 4242",
+            "deposit-frozen",
+            null,
+            scenario.ActorUserId,
+            scenario.SessionId,
+            scenario.AccessContextId,
+            scenario.AccessRevision,
+            DateTime.UtcNow,
+            "confirm-move-in:exact-retry");
+
+        var first = await ExecuteConfirmMoveInAsync("confirm-move-in:exact-retry", command);
+        first.Value.Outcome.Should().Be(ConfirmMoveInOutcome.Confirmed);
+        first.Value.SecurityDepositEntryId.Should().NotBeNull();
+        first.Value.TenantLedgerEntryId.Should().NotBeNull();
+        var afterFirst = await PossessionMoneyCountsAsync(scenario.MoveIn);
+
+        var replay = await ExecuteConfirmMoveInAsync("confirm-move-in:exact-retry", command);
+        var afterReplay = await PossessionMoneyCountsAsync(scenario.MoveIn);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(first.Value);
+        afterReplay.Should().Be(afterFirst,
+            "an exact move-in retry must not repeat possession, deposit, ledger, audit, or outbox writes");
+        afterReplay.PossessionGiven.Should().BeTrue();
+        afterReplay.DepositEntries.Should().Be(1);
+        afterReplay.Receipts.Should().Be(1);
     }
 
     [Fact]
@@ -304,9 +366,6 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         pageSql.Should().NotContain("\"UpdatedAt\" AS");
     }
 
-    private IAtomicUnitOfWork Atomic =>
-        _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-
     private Task<AtomicCommandOutcome<TransferLeaseManagementResult>> ExecuteTransferAsync(
         string key,
         TransferLeaseManagementCommand command)
@@ -315,6 +374,35 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         return _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             key, LeasingWriteSupport.Write<TransferLeaseManagementCommand,
                 TransferLeaseManagementResult>(db, command));
+    }
+
+    private Task<AtomicCommandOutcome<CloseTenantAccountResult>> ExecuteCloseAsync(
+        string key,
+        CloseTenantAccountCommand command)
+    {
+        var db = _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            key, LeasingWriteSupport.Write<CloseTenantAccountCommand,
+                CloseTenantAccountResult>(db, command));
+    }
+
+    private Task<AtomicCommandOutcome<VoidLegalArtifactResult>> ExecuteVoidAgreementAsync(
+        string key,
+        VoidLeaseAgreementCommand command)
+    {
+        var db = _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            key, LeasingWriteSupport.Write<VoidLeaseAgreementCommand,
+                VoidLegalArtifactResult>(db, command));
+    }
+
+    private Task<AtomicCommandOutcome<ConfirmMoveInResult>> ExecuteConfirmMoveInAsync(
+        string key,
+        ConfirmMoveInCommand command)
+    {
+        var db = _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            key, LeasingWriteSupport.Write<ConfirmMoveInCommand, ConfirmMoveInResult>(db, command));
     }
 
     private IReadOnlyList<string> CaptureSql() => _sqlCapture.Commands;
@@ -375,6 +463,8 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         };
         db.AddRange(property, otherPortfolio);
         await db.SaveChangesAsync();
+        await new ChartOfAccountsSeedService(db).SeedAsync(1);
+        await db.SaveChangesAsync();
 
         var context = new WorkspaceAccessContext
         {
@@ -434,6 +524,9 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
 
         var primary = await SeedTransferAsync(property, actor, businessDate, now, "primary");
         var rollback = await SeedTransferAsync(property, actor, businessDate, now, "rollback");
+        var moveIn = await SeedTransferAsync(
+            property, actor, businessDate, now, "move-in", possessionGiven: false,
+            securityDepositObligation: 500m);
         var crossScopeDestination = new Unit
         {
             PortfolioId = otherPortfolio.Id,
@@ -465,7 +558,8 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             template.Id,
             crossScopeDestination.Id,
             primary,
-            rollback);
+            rollback,
+            moveIn);
     }
 
     private async Task<TransferSeed> SeedTransferAsync(
@@ -473,7 +567,9 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         ApplicationUser actor,
         DateOnly businessDate,
         DateTime now,
-        string suffix)
+        string suffix,
+        bool possessionGiven = true,
+        decimal securityDepositObligation = 0m)
     {
         var db = _context.Db;
         var sourceUnit = Unit(property, $"{suffix}-source", now);
@@ -497,7 +593,7 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             PropertyId = property.Id,
             UnitId = sourceUnit.Id,
             RelationshipNumber = $"LM-{suffix}",
-            PossessionGivenAtUtc = now.AddDays(-30),
+            PossessionGivenAtUtc = possessionGiven ? now.AddDays(-30) : null,
             CreatedAtUtc = now.AddDays(-60),
             UpdatedAtUtc = now,
             CreatedByUserId = actor.Id,
@@ -565,7 +661,7 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             GoverningFromOn = businessDate.AddDays(-60),
             BaseRentAmount = 1000,
             RentDueDay = 1,
-            SecurityDepositObligation = 0,
+            SecurityDepositObligation = securityDepositObligation,
             LateFeeAmount = 0,
             GracePeriodDays = 5,
             Currency = "USD",
@@ -597,11 +693,68 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         agreement.FullyExecutedAtUtc = now.AddDays(-58);
         await db.SaveChangesAsync();
 
+        int? depositAccountId = null;
+        if (securityDepositObligation > 0m)
+        {
+            var depositAccount = new SecurityDepositAccount
+            {
+                PortfolioId = 1,
+                TenantAccountId = account.Id,
+                OriginatingAgreementId = agreement.Id,
+                Currency = "USD",
+                CreatedAtUtc = now,
+                CreatedByUserId = actor.Id,
+            };
+            var depositCharge = new TenantLedgerEntry
+            {
+                PortfolioId = 1,
+                TenantAccountId = account.Id,
+                LeaseAgreementId = agreement.Id,
+                EntryType = TenantLedgerEntryType.DepositCharge,
+                Direction = TenantLedgerDirection.Debit,
+                Amount = securityDepositObligation,
+                Currency = "USD",
+                DueOn = businessDate,
+                EffectiveOn = businessDate,
+                PostedAtUtc = now,
+                Description = "Security deposit charge",
+                BusinessKey = $"deposit-charge:{suffix}",
+                CreatedByUserId = actor.Id,
+            };
+            db.AddRange(depositAccount, depositCharge);
+            await db.SaveChangesAsync();
+            depositAccountId = depositAccount.Id;
+        }
+
         return new(
             relationship.Id,
             sourceUnit.Id,
             destinationUnit.Id,
-            account.Id);
+            account.Id,
+            agreement.Id,
+            party.Id,
+            depositAccountId);
+    }
+
+    private async Task<PossessionMoneyCounts> PossessionMoneyCountsAsync(TransferSeed seed)
+    {
+        _context.Db.ChangeTracker.Clear();
+        return new(
+            await _context.Db.LeaseManagements.AsNoTracking()
+                .Where(row => row.Id == seed.SourceLeaseManagementId)
+                .Select(row => row.PossessionGivenAtUtc != null)
+                .SingleAsync(),
+            await _context.Db.SecurityDepositEntries.CountAsync(row =>
+                row.SecurityDepositAccountId == seed.SecurityDepositAccountId),
+            await _context.Db.TenantLedgerEntries.CountAsync(row =>
+                row.TenantAccountId == seed.SourceTenantAccountId),
+            await _context.Db.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == "lease-management.confirm-move-in"
+                && row.IdempotencyKey == "confirm-move-in:exact-retry"),
+            await _context.Db.AtomicAuditLogs.CountAsync(row =>
+                row.CommandType == "lease-management.confirm-move-in"),
+            await _context.Db.OutboxMessages.CountAsync(row =>
+                row.IdempotencyKey.Contains("confirm-move-in:exact-retry")));
     }
 
     private async Task<ApplicationSeed> SeedApplicationsAsync()
@@ -812,13 +965,17 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         int DocumentTemplateId,
         int CrossScopeDestinationUnitId,
         TransferSeed Primary,
-        TransferSeed Rollback);
+        TransferSeed Rollback,
+        TransferSeed MoveIn);
 
     private sealed record TransferSeed(
         int SourceLeaseManagementId,
         int SourceUnitId,
         int DestinationUnitId,
-        int SourceTenantAccountId);
+        int SourceTenantAccountId,
+        int SourceAgreementId,
+        int SourcePartyId,
+        int? SecurityDepositAccountId);
 
     private sealed record ApplicationSeed(int PortfolioId, int UnitId);
 
@@ -828,6 +985,14 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         int LeaseAgreements,
         int Parties,
         int TurnoverPeriods,
+        int Receipts,
+        int Audits,
+        int OutboxMessages);
+
+    private sealed record PossessionMoneyCounts(
+        bool PossessionGiven,
+        int DepositEntries,
+        int LedgerEntries,
         int Receipts,
         int Audits,
         int OutboxMessages);
