@@ -1,9 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Time;
+using RentalCommand.Data;
 using RentalCommand.Data.Automation;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -13,8 +14,6 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
 {
-    private static readonly AtomicJsonResultCodec<ApplyScheduledFinanceBatchResult> ResultCodec =
-        new("scheduled-automation.recurring-maintenance.apply.v1");
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly TimeProvider _timeProvider;
     private readonly IAppTimeZoneProvider _tz;
@@ -74,18 +73,18 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
         try
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
-            var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-            var outcome = await atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "scheduled-automation.recurring-maintenance.apply",
-                    $"{claim.ClaimToken:N}:{claim.Id}"),
-                new ApplyClaimedRecurringMaintenanceBatchCommand(
+            var command = new ApplyClaimedRecurringMaintenanceBatchCommand(
                     [claim.Id],
                     claim.ClaimToken,
                     today,
                     appliedAtUtc,
-                    businessTimeZoneId),
-                ResultCodec,
+                    businessTimeZoneId);
+            var handler = new ApplyClaimedRecurringMaintenanceBatchHandler(
+                scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+            var outcome = await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>().ExecuteAsync(
+                $"{claim.ClaimToken:N}:{claim.Id}",
+                ScheduledFinanceWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
                 ct);
             return outcome.Value.GeneratedRowCount;
         }
