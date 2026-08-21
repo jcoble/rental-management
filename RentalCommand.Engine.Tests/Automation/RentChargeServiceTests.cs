@@ -14,19 +14,23 @@ public sealed class RentChargeServiceTests
     [Fact]
     public async Task Generate_DelegatesToCanonicalAtomicRentBatch()
     {
-        var atomic = new CapturingAtomicUnitOfWork(
+        var writes = new CapturingJobStepWriteExecutor(
             new ApplyScheduledRentChargeBatchResult(3));
         var service = new RentChargeService(
-            atomic,
+            writes,
+            null!,
             new FixedTimeProvider(BusinessNowUtc),
             NullLogger<RentChargeService>.Instance);
 
         var count = await service.GenerateAsync();
 
         count.Should().Be(3);
-        var command = atomic.Command.Should().BeOfType<ApplyScheduledRentChargeBatchCommand>().Subject;
+        var command = writes.Command.Should().BeOfType<ApplyScheduledRentChargeBatchCommand>().Subject;
         command.BusinessNowUtc.Should().Be(BusinessNowUtc);
         command.BatchSize.Should().BeGreaterThan(0);
+        writes.OperationName.Should().Be("scheduled-tenant-charges.rent.apply");
+        writes.ResultContract.Should().Be("scheduled-tenant-charges.rent.apply.v1");
+        writes.StepKey.Should().Be(command.RunToken.ToString("N"));
     }
 
     [Fact]
@@ -34,7 +38,8 @@ public sealed class RentChargeServiceTests
     {
         var failure = new InvalidOperationException("permission denied for table TenantLedgerEntries");
         var service = new RentChargeService(
-            new CapturingAtomicUnitOfWork(failure),
+            new CapturingJobStepWriteExecutor(failure),
+            null!,
             new FixedTimeProvider(BusinessNowUtc),
             NullLogger<RentChargeService>.Instance);
 

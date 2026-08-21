@@ -16,7 +16,7 @@ public sealed class LateFeeServiceTests
     [Fact]
     public async Task Assess_DelegatesToCanonicalAtomicLateFeeBatch_WithCaps()
     {
-        var atomic = new CapturingAtomicUnitOfWork(
+        var writes = new CapturingJobStepWriteExecutor(
             new ApplyScheduledLateFeeChargeBatchResult(2));
         var config = new NotificationsConfig
         {
@@ -26,7 +26,8 @@ public sealed class LateFeeServiceTests
             },
         };
         var service = new LateFeeService(
-            atomic,
+            writes,
+            null!,
             new FixedTimeProvider(BusinessNowUtc),
             Options.Create(config),
             NullLogger<LateFeeService>.Instance);
@@ -34,9 +35,12 @@ public sealed class LateFeeServiceTests
         var count = await service.AssessAsync();
 
         count.Should().Be(2);
-        var command = atomic.Command.Should().BeOfType<ApplyScheduledLateFeeChargeBatchCommand>().Subject;
+        var command = writes.Command.Should().BeOfType<ApplyScheduledLateFeeChargeBatchCommand>().Subject;
         command.BusinessNowUtc.Should().Be(BusinessNowUtc);
         command.StateLateFeeCapsJson.Should().Contain("CA").And.Contain("75");
+        writes.OperationName.Should().Be("scheduled-tenant-charges.late-fee.apply");
+        writes.ResultContract.Should().Be("scheduled-tenant-charges.late-fee.apply.v1");
+        writes.StepKey.Should().Be(command.RunToken.ToString("N"));
     }
 
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider

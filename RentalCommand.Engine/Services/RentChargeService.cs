@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
-using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
+using RentalCommand.Data;
+using RentalCommand.Data.Payments;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -10,20 +12,21 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class RentChargeService : IRentChargeService
 {
-    private static readonly AtomicJsonResultCodec<ApplyScheduledRentChargeBatchResult> ResultCodec =
-        new("scheduled-tenant-charges.rent.apply.v1");
     private const int BatchSize = 200;
 
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IJobStepWriteExecutor _writes;
+    private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<RentChargeService> _logger;
 
     public RentChargeService(
-        IAtomicUnitOfWork atomic,
+        IJobStepWriteExecutor writes,
+        RentalCommandDbContext db,
         TimeProvider timeProvider,
         ILogger<RentChargeService> logger)
     {
-        _atomic = atomic;
+        _writes = writes;
+        _db = db;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -33,15 +36,15 @@ public sealed class RentChargeService : IRentChargeService
         var runToken = Guid.NewGuid();
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "scheduled-tenant-charges.rent.apply",
-                    runToken.ToString("N")),
-                new ApplyScheduledRentChargeBatchCommand(
-                    runToken,
-                    _timeProvider.GetUtcNow().UtcDateTime,
-                    BatchSize),
-                ResultCodec,
+            var command = new ApplyScheduledRentChargeBatchCommand(
+                runToken,
+                _timeProvider.GetUtcNow().UtcDateTime,
+                BatchSize);
+            var handler = new ApplyScheduledRentChargeBatchHandler(_db);
+            var outcome = await _writes.ExecuteAsync(
+                runToken.ToString("N"),
+                TenantMoneyWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
                 ct);
 
             _logger.LogInformation(

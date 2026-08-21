@@ -30,15 +30,9 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         new(2027, 01, 08, 14, 30, 00, DateTimeKind.Utc);
     private static readonly DateTime InterceptorNow =
         new(2099, 08, 20, 12, 00, 00, DateTimeKind.Utc);
-    private static readonly AtomicJsonResultCodec<ApplyScheduledRentChargeBatchResult> Codec =
-        new("scheduled-tenant-charges.rent.apply.v1");
-    private static readonly AtomicJsonResultCodec<ApplyScheduledLateFeeChargeBatchResult> LateFeeCodec =
-        new("scheduled-tenant-charges.late-fee.apply.v1");
-
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private ServiceProvider _services = null!;
-    private IAtomicUnitOfWork _atomic = null!;
 
     public ScheduledTenantChargePostgreSqlTests(MigratedPostgreSqlFixture fixture)
     {
@@ -53,7 +47,6 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         _services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
             _ctx.ConnectionString,
             timeProvider: new FixedTimeProvider(InterceptorNow));
-        _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
     }
 
     public async Task DisposeAsync()
@@ -67,13 +60,12 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
     {
         var graph = SeedCorrectedAgreementWithExistingJanuaryRent();
 
-        var result = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("scheduled-tenant-charges.rent.apply", Guid.NewGuid().ToString("N")),
+        var result = await ExecuteScheduledAsync(
+            _services, Guid.NewGuid().ToString("N"),
             new ApplyScheduledRentChargeBatchCommand(
                 Guid.NewGuid(),
                 SeededAtUtc,
-                200),
-            Codec);
+                200));
 
         result.Value.RentChargeCount.Should().Be(0);
         _ctx.Db.ChangeTracker.Clear();
@@ -109,7 +101,6 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
             RuntimeConnectionString(DatabaseRuntimeIdentity.EngineRole, EnginePassword),
             [role]);
-        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
         var identity = new AtomicCommandIdentity(
             "scheduled-tenant-charges.rent.apply",
             "engine-role-scheduled-rent");
@@ -118,8 +109,8 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             SeededAtUtc,
             200);
 
-        var first = await atomic.ExecuteAsync(identity, command, Codec);
-        var replay = await atomic.ExecuteAsync(identity, command, Codec);
+        var first = await ExecuteScheduledAsync(services, identity.IdempotencyKey, command);
+        var replay = await ExecuteScheduledAsync(services, identity.IdempotencyKey, command);
 
         role.OpenCount.Should().BeGreaterThan(0);
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -128,6 +119,15 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         replay.Value.Should().Be(first.Value);
 
         _ctx.Db.ChangeTracker.Clear();
+        var auditTimestamps = await _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .Where(row => row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .Distinct()
+            .ToListAsync();
+        auditTimestamps.Should().NotBeEmpty();
+        auditTimestamps.Should().OnlyContain(timestamp => timestamp == SeededAtUtc);
+        auditTimestamps.Should().NotContain(InterceptorNow);
         var rows = await _ctx.Db.TenantLedgerEntries
             .AsNoTracking()
             .Where(entry => entry.TenantAccountId == graph.TenantAccountId
@@ -154,15 +154,12 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         var marchBusinessDate = new DateTime(2027, 03, 08, 12, 00, 00, DateTimeKind.Utc);
         SetFrozenBusinessDate(marchBusinessDate);
 
-        var result = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.rent.apply",
-                "h4-backfill-from-lease-start"),
+        var result = await ExecuteScheduledAsync(
+            _services, "h4-backfill-from-lease-start",
             new ApplyScheduledRentChargeBatchCommand(
                 Guid.Parse("a2c0d5c8-4ba6-4e59-a348-2e13a7f5f601"),
                 marchBusinessDate,
-                200),
-            Codec);
+                200));
 
         result.Value.RentChargeCount.Should().Be(3);
         _ctx.Db.ChangeTracker.Clear();
@@ -194,17 +191,13 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
             _ctx.ConnectionString,
             [capture]);
-        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
 
-        var result = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.rent.apply",
-                "h4-generated-sql"),
+        var result = await ExecuteScheduledAsync(
+            services, "h4-generated-sql",
             new ApplyScheduledRentChargeBatchCommand(
                 Guid.Parse("c4bb4ba8-03d1-4523-bd5d-0eabf0d96110"),
                 marchBusinessDate,
-                200),
-            Codec);
+                200));
 
         result.Value.RentChargeCount.Should().Be(3);
         var sql = capture.Commands.Single(command => command.Contains("generate_series", StringComparison.Ordinal));
@@ -230,15 +223,12 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await SetRentTrackingStartOnAsync(graph.TenantAccountId, DateOnly.FromDateTime(marchBusinessDate));
         SetFrozenBusinessDate(marchBusinessDate);
 
-        var result = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.rent.apply",
-                "h4-forward-only-retroactive"),
+        var result = await ExecuteScheduledAsync(
+            _services, "h4-forward-only-retroactive",
             new ApplyScheduledRentChargeBatchCommand(
                 Guid.Parse("bd9c58ae-66cd-4f79-8e1b-25d2cdb3fd02"),
                 marchBusinessDate,
-                200),
-            Codec);
+                200));
 
         result.Value.RentChargeCount.Should().Be(1);
         _ctx.Db.ChangeTracker.Clear();
@@ -262,15 +252,12 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await SetRentTrackingStartOnAsync(graph.TenantAccountId, new DateOnly(2027, 02, 01));
         SetFrozenBusinessDate(marchBusinessDate);
 
-        var result = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.rent.apply",
-                "h4-custom-cutoff"),
+        var result = await ExecuteScheduledAsync(
+            _services, "h4-custom-cutoff",
             new ApplyScheduledRentChargeBatchCommand(
                 Guid.Parse("dbd7b9c0-dc02-40df-98f1-67982d9ec703"),
                 marchBusinessDate,
-                200),
-            Codec);
+                200));
 
         result.Value.RentChargeCount.Should().Be(2);
         _ctx.Db.ChangeTracker.Clear();
@@ -298,28 +285,22 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await SetRentTrackingStartOnAsync(graph.TenantAccountId, new DateOnly(2027, 01, 08));
         SetFrozenBusinessDate(januaryBusinessDate);
 
-        var first = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.rent.apply",
-                "h4-outage-before-boundary"),
+        var first = await ExecuteScheduledAsync(
+            _services, "h4-outage-before-boundary",
             new ApplyScheduledRentChargeBatchCommand(
                 Guid.Parse("3d9a4c2d-c3f4-4dd1-b684-7edc53a05704"),
                 januaryBusinessDate,
-                200),
-            Codec);
+                200));
 
         first.Value.RentChargeCount.Should().Be(1);
         var marchBusinessDate = new DateTime(2027, 03, 08, 12, 00, 00, DateTimeKind.Utc);
         SetFrozenBusinessDate(marchBusinessDate);
-        var recovery = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.rent.apply",
-                "h4-outage-after-boundary"),
+        var recovery = await ExecuteScheduledAsync(
+            _services, "h4-outage-after-boundary",
             new ApplyScheduledRentChargeBatchCommand(
                 Guid.Parse("e2b70213-8d4a-4c4f-957b-8fac44a3f605"),
                 marchBusinessDate,
-                200),
-            Codec);
+                200));
 
         recovery.Value.RentChargeCount.Should().Be(2);
         _ctx.Db.ChangeTracker.Clear();
@@ -348,18 +329,10 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             marchBusinessDate,
             200);
 
-        var first = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.rent.apply",
-                "h4-rerun-first"),
-            command,
-            Codec);
-        var rerun = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.rent.apply",
-                "h4-rerun-second"),
-            command with { RunToken = Guid.Parse("f3e0bc0e-a7b0-4ee9-9f12-91d684a4d607") },
-            Codec);
+        var first = await ExecuteScheduledAsync(_services, "h4-rerun-first", command);
+        var rerun = await ExecuteScheduledAsync(
+            _services, "h4-rerun-second",
+            command with { RunToken = Guid.Parse("f3e0bc0e-a7b0-4ee9-9f12-91d684a4d607") });
 
         first.Value.RentChargeCount.Should().Be(3);
         rerun.Value.RentChargeCount.Should().Be(0);
@@ -386,16 +359,13 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             BackfilledRent(new DateOnly(2027, 03, 01), graph, marchBusinessDate));
         await _ctx.Db.SaveChangesAsync();
 
-        var sameDayLateFees = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.late-fee.apply",
-                "h4-late-fee-backfill-same-day"),
+        var sameDayLateFees = await ExecuteScheduledAsync(
+            _services, "h4-late-fee-backfill-same-day",
             new ApplyScheduledLateFeeChargeBatchCommand(
                 Guid.Parse("f91537a3-54d6-4d0b-9f12-43af5e7bd609"),
                 marchBusinessDate,
                 200,
-                StateLateFeeCapsJson: "[]"),
-            LateFeeCodec);
+                StateLateFeeCapsJson: "[]"));
 
         sameDayLateFees.Value.LateFeeChargeCount.Should().Be(0);
         (await _ctx.Db.TenantLedgerEntries.CountAsync(entry =>
@@ -404,16 +374,13 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
 
         var afterGrace = new DateTime(2027, 03, 14, 12, 00, 00, DateTimeKind.Utc);
         SetFrozenBusinessDate(afterGrace);
-        var afterGraceLateFees = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.late-fee.apply",
-                "h4-late-fee-backfill-after-grace"),
+        var afterGraceLateFees = await ExecuteScheduledAsync(
+            _services, "h4-late-fee-backfill-after-grace",
             new ApplyScheduledLateFeeChargeBatchCommand(
                 Guid.Parse("e0e6b9de-f270-4d64-94dc-eaa8bb2f760a"),
                 afterGrace,
                 200,
-                StateLateFeeCapsJson: "[]"),
-            LateFeeCodec);
+                StateLateFeeCapsJson: "[]"));
 
         afterGraceLateFees.Value.LateFeeChargeCount.Should().Be(3);
 
@@ -446,7 +413,6 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
             _ctx.ConnectionString,
             [failure]);
-        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
         var identity = new AtomicCommandIdentity(
             "scheduled-tenant-charges.late-fee.apply",
             "corrected-january-late-fee");
@@ -456,7 +422,8 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             200,
             StateLateFeeCapsJson: "[]");
 
-        await FluentActions.Invoking(() => atomic.ExecuteAsync(identity, command, LateFeeCodec))
+        await FluentActions.Invoking(() => ExecuteScheduledAsync(
+                services, identity.IdempotencyKey, command))
             .Should().ThrowAsync<Exception>();
 
         _ctx.Db.ChangeTracker.Clear();
@@ -468,14 +435,11 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
 
         failure.FailAtomicAudit = false;
-        var first = await atomic.ExecuteAsync(identity, command, LateFeeCodec);
-        var replay = await atomic.ExecuteAsync(identity, command, LateFeeCodec);
-        var laterSweep = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.late-fee.apply",
-                "corrected-january-late-fee-later-sweep"),
-            command with { RunToken = Guid.Parse("16dd515f-fc1e-4467-9c4d-90c203ccbd4b") },
-            LateFeeCodec);
+        var first = await ExecuteScheduledAsync(services, identity.IdempotencyKey, command);
+        var replay = await ExecuteScheduledAsync(services, identity.IdempotencyKey, command);
+        var laterSweep = await ExecuteScheduledAsync(
+            services, "corrected-january-late-fee-later-sweep",
+            command with { RunToken = Guid.Parse("16dd515f-fc1e-4467-9c4d-90c203ccbd4b") });
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         first.Value.LateFeeChargeCount.Should().Be(1);
@@ -520,16 +484,13 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
 
         var caps = "[]";
         SetFrozenBusinessDate(new DateTime(2027, 02, 05, 09, 15, 00, DateTimeKind.Utc));
-        var beforeBoundary = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.late-fee.apply",
-                "february-late-fee-before-grace-boundary"),
+        var beforeBoundary = await ExecuteScheduledAsync(
+            _services, "february-late-fee-before-grace-boundary",
             new ApplyScheduledLateFeeChargeBatchCommand(
                 Guid.Parse("526524dc-afd8-46ae-ad93-c8cd1c696476"),
                 new DateTime(2027, 02, 05, 09, 15, 00, DateTimeKind.Utc),
                 200,
-                caps),
-            LateFeeCodec);
+                caps));
 
         beforeBoundary.Value.LateFeeChargeCount.Should().Be(0);
 
@@ -543,23 +504,16 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             caps);
         SetFrozenBusinessDate(boundaryCommand.BusinessNowUtc);
 
-        var boundary = await _atomic.ExecuteAsync(
-            boundaryIdentity,
-            boundaryCommand,
-            LateFeeCodec);
-        var replay = await _atomic.ExecuteAsync(
-            boundaryIdentity,
-            boundaryCommand,
-            LateFeeCodec);
-        var laterSweep = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.late-fee.apply",
-                "february-late-fee-after-grace-boundary"),
+        var boundary = await ExecuteScheduledAsync(
+            _services, boundaryIdentity.IdempotencyKey, boundaryCommand);
+        var replay = await ExecuteScheduledAsync(
+            _services, boundaryIdentity.IdempotencyKey, boundaryCommand);
+        var laterSweep = await ExecuteScheduledAsync(
+            _services, "february-late-fee-after-grace-boundary",
             boundaryCommand with
             {
                 RunToken = Guid.Parse("fce14d0d-3109-4372-b2f0-048340beab54"),
-            },
-            LateFeeCodec);
+            });
 
         boundary.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         boundary.Value.LateFeeChargeCount.Should().Be(1);
@@ -591,18 +545,14 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
             _ctx.ConnectionString,
             [counter]);
-        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
         counter.Reset();
 
-        var result = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-tenant-charges.rent.apply",
-                "twenty-occurrence-journal-read-bound"),
+        var result = await ExecuteScheduledAsync(
+            services, "twenty-occurrence-journal-read-bound",
             new ApplyScheduledRentChargeBatchCommand(
                 Guid.Parse("b20da7dc-5023-4dc2-a667-d1d1a82c41bf"),
                 SeededAtUtc,
-                20),
-            Codec);
+                20));
 
         result.Value.RentChargeCount.Should().Be(20);
         counter.ReadCount.Should().BeLessThanOrEqualTo(3,
@@ -1424,6 +1374,34 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         return await writes.ExecuteAsync(
             command.DeliveryIdempotencyKey,
             TenantMoneyWriteSupport.Write(
+                command, handler.ExecuteAsync, handler.AuthorizeAsync));
+    }
+
+    private static async Task<AtomicCommandOutcome<ApplyScheduledRentChargeBatchResult>>
+        ExecuteScheduledAsync(
+            IServiceProvider services,
+            string key,
+            ApplyScheduledRentChargeBatchCommand command)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var handler = new ApplyScheduledRentChargeBatchHandler(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(key, TenantMoneyWriteSupport.Write(
+                command, handler.ExecuteAsync, handler.AuthorizeAsync));
+    }
+
+    private static async Task<AtomicCommandOutcome<ApplyScheduledLateFeeChargeBatchResult>>
+        ExecuteScheduledAsync(
+            IServiceProvider services,
+            string key,
+            ApplyScheduledLateFeeChargeBatchCommand command)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var handler = new ApplyScheduledLateFeeChargeBatchHandler(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(key, TenantMoneyWriteSupport.Write(
                 command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }
 
