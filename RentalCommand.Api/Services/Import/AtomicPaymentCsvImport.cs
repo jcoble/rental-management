@@ -38,6 +38,26 @@ public static class AtomicPaymentCsvImport
     public static AtomicCommandIdentity Identity(AtomicPaymentCsvImportCommand command) => new(
         "payment.csv-import",
         $"{command.PortfolioId}:{command.AccessContextId}:{command.ImportOperationDigest}");
+
+    public static TransactionalWrite<AtomicPaymentCsvImportCommand, AtomicPaymentCsvImportResult> Write(
+        AtomicPaymentCsvImportCommand command,
+        Func<AtomicPaymentCsvImportCommand, IAtomicCommandContext, CancellationToken,
+            Task<AtomicPaymentCsvImportResult>> executeAsync,
+        Func<AtomicPaymentCsvImportCommand, IAtomicCommandContext, CancellationToken, Task>
+            authorizeReplayAsync)
+    {
+        var identity = Identity(command);
+        return new(identity.CommandType, WriteIdempotencyPolicy.Required, command,
+            Codec.ContractName,
+            new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
+                WriteLock.For("AuthSession", command.AuthSessionId),
+                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
+                WriteLock.For("Portfolio", command.PortfolioId)),
+            executeAsync, authorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Payment CSV imports must use the shared request write executor.");
 }
 
 /// <summary>One receipt-backed payment CSV command; PostgreSQL owns the entire row set.</summary>
@@ -48,17 +68,18 @@ public sealed class AtomicPaymentCsvImportHandler
 
     public AtomicPaymentCsvImportHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AtomicPaymentCsvImportResult> HandleAsync(
+    public Task<AtomicPaymentCsvImportResult> HandleAsync(
+        AtomicPaymentCsvImportCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) =>
+        throw AtomicPaymentCsvImport.RetiredPath();
+
+    internal async Task<AtomicPaymentCsvImportResult> ExecuteAsync(
         AtomicPaymentCsvImportCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await attempt.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
-
         var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         var batch = await AtomicPaymentCsvImportPersistence.ImportAsync(
             _db, attempt, Scope(command), command.RowsJson, now, ct);
@@ -116,7 +137,13 @@ public sealed class AtomicPaymentCsvImportHandler
         }
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        AtomicPaymentCsvImportCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw AtomicPaymentCsvImport.RetiredPath();
+
+    internal async Task AuthorizeAsync(
         AtomicPaymentCsvImportCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
