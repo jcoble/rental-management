@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
-using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
+using RentalCommand.Data;
+using RentalCommand.Data.Payments;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -11,20 +13,21 @@ namespace RentalCommand.Engine.Services;
 public sealed class RecurringTenantChargeGenerationService
     : IRecurringTenantChargeGenerationService
 {
-    private static readonly AtomicJsonResultCodec<ApplyRecurringTenantChargeBatchResult> ResultCodec =
-        new("scheduled-finance.recurring-tenant-charge.apply.v1");
     private const int BatchSize = 200;
 
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IJobStepWriteExecutor _writes;
+    private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<RecurringTenantChargeGenerationService> _logger;
 
     public RecurringTenantChargeGenerationService(
-        IAtomicUnitOfWork atomic,
+        IJobStepWriteExecutor writes,
+        RentalCommandDbContext db,
         TimeProvider timeProvider,
         ILogger<RecurringTenantChargeGenerationService> logger)
     {
-        _atomic = atomic;
+        _writes = writes;
+        _db = db;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -34,15 +37,15 @@ public sealed class RecurringTenantChargeGenerationService
         var runToken = Guid.NewGuid();
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "scheduled-finance.recurring-tenant-charge.apply",
-                    runToken.ToString("N")),
-                new ApplyRecurringTenantChargeBatchCommand(
+            var command = new ApplyRecurringTenantChargeBatchCommand(
                     runToken,
                     _timeProvider.GetUtcNow().UtcDateTime,
-                    BatchSize),
-                ResultCodec,
+                    BatchSize);
+            var handler = new ApplyRecurringTenantChargeBatchHandler(_db);
+            var outcome = await _writes.ExecuteAsync(
+                runToken.ToString("N"),
+                TenantMoneyWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
                 ct);
 
             _logger.LogInformation(
