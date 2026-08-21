@@ -32,6 +32,16 @@ public sealed class SimulationWriteExecutorReceiptTests(MigratedPostgreSqlFixtur
     private const string SandboxChoiceFingerprint = "29e8f4240f0b10f29e953187190b82b76030a7a9d40801fcd023bf684142dcee";
     private const string SandboxLiveFingerprint = "0589506427b01cbcd644e20d45cb38c8d71c12125ab2cf80cf8d31596593544c";
 
+    // Frozen legacy operation names hand-reproduced from the handlers at d24b5c95.
+    private const string SetOperation = "simulation.clock.set";
+    private const string AdvanceOperation = "simulation.clock.advance";
+    private const string FreezeOperation = "simulation.clock.freeze";
+    private const string UnfreezeOperation = "simulation.clock.unfreeze";
+    private const string ResetOperation = "simulation.clock.reset";
+    private const string EnqueueOperation = "simulation.worker.enqueue";
+    private const string SandboxChoiceOperation = "sandbox.onboarding-choice";
+    private const string SandboxLiveOperation = "sandbox.go-live";
+
     [Fact]
     public async Task LegacyReceiptFixtures_ReplayEverySimulationAndSandboxOperation()
     {
@@ -44,20 +54,20 @@ public sealed class SimulationWriteExecutorReceiptTests(MigratedPostgreSqlFixtur
         var clockResult = new SimulationClockMutationResult(
             new DateTime(2027, 1, 29, 5, 0, 0, DateTimeKind.Utc),
             "Frozen", "America/New_York", 123.5);
-        await ReplayAsync(services, "8:7:set-replay", Set(), SetFingerprint,
+        await ReplayAsync(services, "8:7:set-replay", Set(), SetOperation, SetFingerprint,
             clockJson, clockResult, "simulation.clock.mutation.v1");
-        await ReplayAsync(services, "8:7:advance-replay", Advance(), AdvanceFingerprint,
+        await ReplayAsync(services, "8:7:advance-replay", Advance(), AdvanceOperation, AdvanceFingerprint,
             clockJson, clockResult, "simulation.clock.mutation.v1");
-        await ReplayAsync(services, "8:7:freeze-replay", Freeze(), EnvelopeFingerprint,
+        await ReplayAsync(services, "8:7:freeze-replay", Freeze(), FreezeOperation, EnvelopeFingerprint,
             clockJson, clockResult, "simulation.clock.mutation.v1");
-        await ReplayAsync(services, "8:7:unfreeze-replay", Unfreeze(), EnvelopeFingerprint,
+        await ReplayAsync(services, "8:7:unfreeze-replay", Unfreeze(), UnfreezeOperation, EnvelopeFingerprint,
             clockJson, clockResult, "simulation.clock.mutation.v1");
-        await ReplayAsync(services, "8:7:reset-replay", Reset(), EnvelopeFingerprint,
+        await ReplayAsync(services, "8:7:reset-replay", Reset(), ResetOperation, EnvelopeFingerprint,
             clockJson, clockResult, "simulation.clock.mutation.v1");
 
         const string enqueueJson =
             "{\"CommandId\":\"33333333-3333-3333-3333-333333333333\",\"WorkerKey\":\"rent-charge\",\"Status\":\"Pending\",\"RequestedSimUtc\":\"2027-01-29T05:00:00Z\",\"CreatedRealUtc\":\"2026-08-21T12:00:00Z\"}";
-        await ReplayAsync(services, "8:7:enqueue-replay", Enqueue(), EnqueueFingerprint,
+        await ReplayAsync(services, "8:7:enqueue-replay", Enqueue(), EnqueueOperation, EnqueueFingerprint,
             enqueueJson,
             new EnqueueSimulationWorkerResult(
                 Guid.Parse("33333333-3333-3333-3333-333333333333"),
@@ -70,11 +80,11 @@ public sealed class SimulationWriteExecutorReceiptTests(MigratedPostgreSqlFixtur
         var sandboxResult = new SandboxLifecycleResult(true, 8, false, null, false);
         await ReplayAsync(services,
             "8:6a9be48f7341ecf93f39f5b4c50e834b91089ec9a1437d6ea1b58cae557dbb0d",
-            SandboxChoice(), SandboxChoiceFingerprint, sandboxJson, sandboxResult,
+            SandboxChoice(), SandboxChoiceOperation, SandboxChoiceFingerprint, sandboxJson, sandboxResult,
             "sandbox-lifecycle-result:v1");
         await ReplayAsync(services,
             "8:d02fdcd03e9ebb006ad94dcc58b5f74c870b1e75142a74444c8117a53962b689",
-            SandboxLive(), SandboxLiveFingerprint, sandboxJson, sandboxResult,
+            SandboxLive(), SandboxLiveOperation, SandboxLiveFingerprint, sandboxJson, sandboxResult,
             "sandbox-lifecycle-result:v1");
     }
 
@@ -89,7 +99,7 @@ public sealed class SimulationWriteExecutorReceiptTests(MigratedPostgreSqlFixtur
                 .SetProperty(session => session.RevokedAtUtc, Now));
         await using var services = Services(database.ConnectionString);
 
-        var action = () => ReplayAsync(services, "8:7:set-denied-replay", Set(), SetFingerprint,
+        var action = () => ReplayAsync(services, "8:7:set-denied-replay", Set(), SetOperation, SetFingerprint,
             "{\"SimNowUtc\":\"2027-01-29T05:00:00Z\",\"Mode\":\"Frozen\",\"TimeZoneId\":\"America/New_York\",\"OffsetSeconds\":123.5}",
             new SimulationClockMutationResult(
                 new DateTime(2027, 1, 29, 5, 0, 0, DateTimeKind.Utc),
@@ -126,6 +136,7 @@ public sealed class SimulationWriteExecutorReceiptTests(MigratedPostgreSqlFixtur
         ServiceProvider services,
         string key,
         TCommand command,
+        string legacyOperation,
         string legacyFingerprint,
         string legacyResultJson,
         TResult expected,
@@ -138,6 +149,7 @@ public sealed class SimulationWriteExecutorReceiptTests(MigratedPostgreSqlFixtur
         var write = command is SandboxLifecycleCommand sandbox
             ? (TransactionalWrite<TCommand, TResult>)(object)SandboxLifecycleWriteSupport.Write(db, sandbox)
             : SimulationWriteSupport.Write<TCommand, TResult>(db, command);
+        write.OperationName.Should().Be(legacyOperation);
         write.ResultContract.Should().Be(contract);
 
         await using (var fixtureDb = new RentalCommandDbContext(
@@ -148,7 +160,7 @@ public sealed class SimulationWriteExecutorReceiptTests(MigratedPostgreSqlFixtur
             {
                 Id = Guid.NewGuid(),
                 AttemptId = Guid.NewGuid(),
-                CommandType = write.OperationName,
+                CommandType = legacyOperation,
                 IdempotencyKey = key,
                 RequestFingerprint = legacyFingerprint,
                 Status = AtomicCommandReceiptStatus.Completed,
