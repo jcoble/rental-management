@@ -13,6 +13,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Esign;
+using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -21,12 +22,6 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class LeaseAgreementController : ManagementControllerBase
 {
-    private static readonly AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> EditCodec =
-        new("lease-agreement.draft.edit.v1");
-    private static readonly AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> SuccessorCodec =
-        new("lease-agreement.successor-draft.create.v2");
-    private static readonly AtomicJsonResultCodec<CancelLeaseAgreementSuccessorDraftResult> CancelDraftCodec =
-        new("lease-agreement.successor-draft.cancel.v1");
     private static readonly AtomicJsonResultCodec<VoidLegalArtifactResult> VoidCodec =
         new("lease-agreement.void.v1");
     private readonly IAtomicUnitOfWork _atomic;
@@ -215,9 +210,9 @@ public sealed class LeaseAgreementController : ManagementControllerBase
                     signer.SigningOrder, signer.IsRequired)).ToArray(), envelope.UserId,
             envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision,
             $"agreement-draft-edit:{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}");
-        return await Execute("lease-agreement.draft.edit",
+        return await Execute(
             $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}",
-            command, EditCodec, StatusCodes.Status200OK, ct);
+            command, StatusCodes.Status200OK, ct);
     }
 
     [HttpPost("{sourceAgreementId:int}/successor-drafts")]
@@ -266,9 +261,9 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             envelope.UserId, envelope.SessionId,
             envelope.AccessContextId, envelope.AccessRevision,
             $"agreement-successor:{envelope.PortfolioId}:{leaseManagementId}:{sourceAgreementId}:{envelope.KeyDigest}");
-        return await Execute("lease-agreement.successor-draft.create",
+        return await Execute(
             $"{envelope.PortfolioId}:{leaseManagementId}:{sourceAgreementId}:{envelope.KeyDigest}",
-            command, SuccessorCodec, StatusCodes.Status201Created, ct);
+            command, StatusCodes.Status201Created, ct);
     }
 
     [HttpPost("{sourceAgreementId:int}/issued-replacement-draft")]
@@ -306,12 +301,8 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             envelope.AccessRevision,
             $"agreement-issued-replacement:{envelope.PortfolioId}:{leaseManagementId}:{sourceAgreementId}:{envelope.KeyDigest}");
         return await Execute(
-            "lease-agreement.issued-replacement-draft.create",
             $"{envelope.PortfolioId}:{leaseManagementId}:{sourceAgreementId}:{envelope.KeyDigest}",
-            command,
-            SuccessorCodec,
-            StatusCodes.Status201Created,
-            ct);
+            command, StatusCodes.Status201Created, ct);
     }
 
     [HttpPost("{leaseAgreementId:int}/cancel-draft")]
@@ -346,13 +337,10 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             $"agreement-successor-cancel:{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}");
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "lease-agreement.successor-draft.cancel",
-                    $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}"),
-                command,
-                CancelDraftCodec,
-                ct);
+            var outcome = await _writes.ExecuteAsync(
+                $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}",
+                LeasingWriteSupport.Write<CancelLeaseAgreementSuccessorDraftCommand,
+                    CancelLeaseAgreementSuccessorDraftResult>(_db, command), ct);
             return outcome.Value.Outcome switch
             {
                 CancelLeaseAgreementSuccessorDraftOutcome.Canceled
@@ -513,18 +501,16 @@ public sealed class LeaseAgreementController : ManagementControllerBase
     }
 
     private async Task<IActionResult> Execute<TCommand>(
-        string commandType,
         string identity,
         TCommand command,
-        AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> codec,
         int successStatus,
         CancellationToken ct)
         where TCommand : notnull, IAtomicCommandData
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(commandType, identity), command, codec, ct);
+            var outcome = await _writes.ExecuteAsync(identity,
+                LeasingWriteSupport.Write<TCommand, LeaseAgreementDraftMutationResult>(_db, command), ct);
             if (outcome.Value.Outcome == LeaseAgreementDraftMutationOutcome.Applied)
             {
                 return StatusCode(successStatus, LeaseAgreementDraftMutationResponse.FromResult(

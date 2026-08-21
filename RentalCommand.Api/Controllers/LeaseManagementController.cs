@@ -17,8 +17,6 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class LeaseManagementController : ManagementControllerBase
 {
-    private static readonly AtomicJsonResultCodec<PrepareMoveInResult> ResultCodec =
-        new("lease-management.prepare-move-in.v2");
     private static readonly AtomicJsonResultCodec<GivePossessionResult> GivePossessionCodec =
         new("lease-management.give-possession.v1");
     private static readonly AtomicJsonResultCodec<ReconcileHistoricalPossessionResult>
@@ -28,12 +26,6 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.confirm-move-in.v1");
     private static readonly AtomicJsonResultCodec<ReturnPossessionResult> ReturnPossessionCodec =
         new("lease-management.return-possession.v1");
-    private static readonly AtomicJsonResultCodec<RecordLeaseEndingDispositionResult>
-        EndingDispositionCodec = new("lease-management.ending-disposition.v1");
-    private static readonly AtomicJsonResultCodec<CancelPlannedRelationshipResult> CancelCodec =
-        new("lease-management.cancel-planned.v1");
-    private static readonly AtomicJsonResultCodec<TransferLeaseManagementResult> TransferCodec =
-        new("lease-management.transfer-unit.v1");
 
     private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor _writes;
@@ -270,13 +262,9 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 request.RentTrackingStartMode,
                 request.RentTrackingStartOn);
 
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "lease-management.prepare-move-in",
-                    $"{portfolioId}:{(request.ApplicationId.HasValue ? $"application:{request.ApplicationId}" : $"unit:{request.UnitId}")}:{keyDigest}"),
-                command,
-                ResultCodec,
-                ct);
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{(request.ApplicationId.HasValue ? $"application:{request.ApplicationId}" : $"unit:{request.UnitId}")}:{keyDigest}",
+                LeasingWriteSupport.Write<PrepareMoveInCommand, PrepareMoveInResult>(_db, command), ct);
 
             return outcome.Value.Outcome switch
             {
@@ -939,11 +927,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var digest = Digest(normalizedKey!);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "lease-management.ending-disposition",
-                    $"{portfolioId}:{leaseManagementId}:{digest}"),
-                new RecordLeaseEndingDispositionCommand(
+            var command = new RecordLeaseEndingDispositionCommand(
                     portfolioId,
                     leaseManagementId,
                     request.UnitId,
@@ -955,9 +939,11 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     sessionId,
                     accessContextId,
                     accessRevision,
-                    $"ending-disposition:{portfolioId}:{leaseManagementId}:{digest}"),
-                EndingDispositionCodec,
-                ct);
+                    $"ending-disposition:{portfolioId}:{leaseManagementId}:{digest}");
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{leaseManagementId}:{digest}",
+                LeasingWriteSupport.Write<RecordLeaseEndingDispositionCommand,
+                    RecordLeaseEndingDispositionResult>(_db, command), ct);
 
             return outcome.Value.Outcome switch
             {
@@ -1016,11 +1002,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var digest = Digest(normalizedKey!);
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "lease-management.cancel-planned",
-                    $"{portfolioId}:{leaseManagementId}:{digest}"),
-                new CancelPlannedRelationshipCommand(
+            var command = new CancelPlannedRelationshipCommand(
                     portfolioId,
                     leaseManagementId,
                     request.UnitId,
@@ -1034,9 +1016,11 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     request.DraftCancellationReason,
                     request.Accesses.Select(item => new CancelPlannedRelationshipAccess(
                         item.TenantUserAccessId, item.Disposition!.Value)).ToArray(),
-                    $"cancel-planned:{portfolioId}:{leaseManagementId}:{digest}"),
-                CancelCodec,
-                ct);
+                    $"cancel-planned:{portfolioId}:{leaseManagementId}:{digest}");
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{leaseManagementId}:{digest}",
+                LeasingWriteSupport.Write<CancelPlannedRelationshipCommand,
+                    CancelPlannedRelationshipResult>(_db, command), ct);
 
             return outcome.Value.Outcome switch
             {
@@ -1107,11 +1091,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var transferPublicId = new Guid(Convert.FromHexString(digest[..32]));
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "lease-management.transfer-unit",
-                    $"{portfolioId}:{leaseManagementId}:{digest}"),
-                new TransferLeaseManagementCommand(
+            var command = new TransferLeaseManagementCommand(
                     portfolioId,
                     leaseManagementId,
                     request.SourceUnitId,
@@ -1130,9 +1110,11 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     request.CarryTenantBalance,
                     request.CarrySecurityDeposit,
                     request.TransferReason,
-                    $"unit-transfer:{portfolioId}:{leaseManagementId}:{digest}"),
-                TransferCodec,
-                ct);
+                    $"unit-transfer:{portfolioId}:{leaseManagementId}:{digest}");
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{leaseManagementId}:{digest}",
+                LeasingWriteSupport.Write<TransferLeaseManagementCommand,
+                    TransferLeaseManagementResult>(_db, command), ct);
 
             return outcome.Value.Outcome switch
             {

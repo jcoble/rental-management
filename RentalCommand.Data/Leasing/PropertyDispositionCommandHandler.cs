@@ -17,10 +17,13 @@ public sealed class CreatePropertyDispositionHandler
     public CreatePropertyDispositionHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<CreatePropertyDispositionResult> HandleAsync(
+        CreatePropertyDispositionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<CreatePropertyDispositionResult> ExecuteAsync(
         CreatePropertyDispositionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("Property", command.PropertyId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var now = times.WallClockUtc;
         await AuthorizeAsync(command, _db, now, ct);
