@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -10,6 +11,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
@@ -21,8 +23,10 @@ namespace RentalCommand.Api.Tests.Domain;
 [Collection(MigratedPostgreSqlCollection.Name)]
 public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
 {
-    private static readonly AtomicJsonResultCodec<RecoverOpeningSecurityDepositsResult> Codec =
-        new("opening-security-deposits.recover.v1");
+    private static readonly DateTime DatabaseAuditNow =
+        new(2027, 1, 8, 14, 30, 0, DateTimeKind.Utc);
+    private static readonly DateTime InterceptorNow =
+        new(2099, 8, 20, 12, 0, 0, DateTimeKind.Utc);
     private static readonly DateOnly OpeningDate = new(2027, 1, 1);
 
     private readonly MigratedPostgreSqlFixture _fixture;
@@ -44,17 +48,26 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
             nameof(Recovery_ValidatesControl_Authorizes_RollsBack_Replays_AndNeverInventsTenantPayments));
         await SeedOpeningAgreementAsync(setup.Db, scope.UserId, 1_000m, "one");
         await SeedOpeningAgreementAsync(setup.Db, scope.UserId, 1_500m, "two");
+        SetFrozenBusinessDate(setup.Db, DatabaseAuditNow);
         setup.Db.ChangeTracker.Clear();
 
         await using var services = Services(setup.ConnectionString, failure, commands);
         await using var atomicScope = services.CreateAsyncScope();
-        var atomic = atomicScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var db = atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = atomicScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+
+        Task<AtomicCommandOutcome<RecoverOpeningSecurityDepositsResult>> Execute(
+            RecoverOpeningSecurityDepositsCommand value)
+        {
+            var handler = new RecoverOpeningSecurityDepositsHandler(db);
+            return writes.ExecuteAsync(
+                value.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    value, handler.ExecuteAsync, handler.AuthorizeAsync));
+        }
 
         var wrongControl = Command(scope, "wrong-control", expectedCount: 2, expectedTotal: 2_499m);
-        await FluentActions.Invoking(() => atomic.ExecuteAsync(
-                Identity(wrongControl),
-                wrongControl,
-                Codec))
+        await FluentActions.Invoking(() => Execute(wrongControl))
             .Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*total does not match*");
         await AssertNoOpeningMutationAsync(setup.Db);
@@ -64,28 +77,36 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
             "denied",
             expectedCount: 2,
             expectedTotal: 2_500m);
-        await FluentActions.Invoking(() => atomic.ExecuteAsync(
-                Identity(denied),
-                denied,
-                Codec))
+        await FluentActions.Invoking(() => Execute(denied))
             .Should().ThrowAsync<UnauthorizedAccessException>();
         await AssertNoOpeningMutationAsync(setup.Db);
 
         var rollback = Command(scope, "rollback", expectedCount: 2, expectedTotal: 2_500m);
         failure.FailNextOutboxInsert = true;
-        await FluentActions.Invoking(() => atomic.ExecuteAsync(
-                Identity(rollback),
-                rollback,
-                Codec))
+        await FluentActions.Invoking(() => Execute(rollback))
             .Should().ThrowAsync<Exception>();
         await AssertNoOpeningMutationAsync(setup.Db);
 
         commands.Commands.Clear();
         var command = Command(scope, "success", expectedCount: 2, expectedTotal: 2_500m);
-        var first = await atomic.ExecuteAsync(Identity(command), command, Codec);
-        var replay = await atomic.ExecuteAsync(Identity(command), command, Codec);
+        var first = await Execute(command);
+        await setup.Db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE "WorkspaceAccessContexts"
+            SET "AccessRevision" = {scope.AccessRevision + 1}
+            WHERE "Id" = {scope.AccessContextId}
+            """);
+        setup.Db.ChangeTracker.Clear();
+        await FluentActions.Invoking(() => Execute(command))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+        await setup.Db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE "WorkspaceAccessContexts"
+            SET "AccessRevision" = {scope.AccessRevision}
+            WHERE "Id" = {scope.AccessContextId}
+            """);
+        setup.Db.ChangeTracker.Clear();
+        var replay = await Execute(command);
         var laterSweep = Command(scope, "later-sweep", expectedCount: 2, expectedTotal: 2_500m);
-        var sweep = await atomic.ExecuteAsync(Identity(laterSweep), laterSweep, Codec);
+        var sweep = await Execute(laterSweep);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         first.Value.Should().Be(new RecoverOpeningSecurityDepositsResult(
@@ -166,6 +187,19 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
             && row.CommandIdempotencyKey == Identity(command).IdempotencyKey
             && row.EntityType == nameof(Portfolio)
             && row.EntityId == 1)).Should().Be(1);
+        (await setup.Db.AtomicAuditLogs
+            .Where(row => row.CommandType == Identity(command).CommandType
+                && row.CommandIdempotencyKey == Identity(command).IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .Distinct()
+            .ToListAsync()).Should().OnlyContain(timestamp => timestamp == DatabaseAuditNow);
+        (await setup.Db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == Identity(laterSweep).CommandType
+            && row.CommandIdempotencyKey == Identity(laterSweep).IdempotencyKey)).Should().Be(0,
+            "a no-change opening sweep must not stage a mutation audit clock");
+        (await setup.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == Identity(command).CommandType
+            && row.IdempotencyKey == Identity(command).IdempotencyKey)).Should().Be(1);
         (await setup.Db.OutboxMessages.CountAsync(row =>
             row.IdempotencyKey == OutboxIdempotency.Create(
                 "opening-security-deposits",
@@ -191,15 +225,12 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(InterceptorNow));
         services.AddSingleton(failure);
         services.AddSingleton(commands);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            RecoverOpeningSecurityDepositsCommand,
-            RecoverOpeningSecurityDepositsResult,
-            RecoverOpeningSecurityDepositsHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .AddInterceptors(provider.GetRequiredService<OutboxFailureInterceptor>())
@@ -233,6 +264,28 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
             scope.AccessRevision,
             CapabilityKeys.MoneyDepositsManage,
             $"opening-security-deposits:{scope.PortfolioId}:{key}");
+
+    private static void SetFrozenBusinessDate(RentalCommandDbContext db, DateTime frozenAtUtc)
+    {
+        var clock = db.SimulationClocks.SingleOrDefault(value => value.Id == 1);
+        if (clock is null)
+        {
+            db.SimulationClocks.Add(new SimulationClock { Id = 1 });
+            clock = db.SimulationClocks.Local.Single(value => value.Id == 1);
+        }
+
+        clock.Mode = ClockMode.Frozen;
+        clock.SimAnchorUtc = frozenAtUtc;
+        clock.RealAnchorUtc = frozenAtUtc;
+        clock.TimeZoneId = "UTC";
+        clock.UpdatedAtRealUtc = frozenAtUtc;
+        db.SaveChanges();
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
+    }
 
     private static async Task AssertNoOpeningMutationAsync(RentalCommandDbContext db)
     {

@@ -2,9 +2,12 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Payments;
+using RentalCommand.Data;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -13,14 +16,16 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class HistoricalRentRecoveryController : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<RecoverHistoricalRentChargeResult> Codec =
-        new("historical-rent-charge.recover.v1");
-    private static readonly AtomicJsonResultCodec<RecoverLateFeeChargesResult> LateFeeCodec =
-        new("late-fee-charges.recover.v1");
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
 
-    public HistoricalRentRecoveryController(IAtomicUnitOfWork atomic) =>
-        _atomic = atomic;
+    public HistoricalRentRecoveryController(
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes)
+    {
+        _db = db;
+        _writes = writes;
+    }
 
     [HttpPost("recover")]
     public async Task<IActionResult> Recover(
@@ -62,12 +67,11 @@ public sealed class HistoricalRentRecoveryController : AuthenticatedPortfolioCon
             $"historical-rent:{access.PortfolioId}:{request.TenantAccountId}:{digest}");
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "historical-rent-charge.recover",
-                    command.DeliveryIdempotencyKey),
-                command,
-                Codec,
+            var handler = new RecoverHistoricalRentChargeHandler(_db);
+            var outcome = await _writes.ExecuteAsync(
+                command.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
                 ct);
             return Ok(new
             {
@@ -128,12 +132,11 @@ public sealed class HistoricalRentRecoveryController : AuthenticatedPortfolioCon
             $"late-fee-recovery:{access.PortfolioId}:{digest}");
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "late-fee-charges.recover",
-                    command.DeliveryIdempotencyKey),
-                command,
-                LateFeeCodec,
+            var handler = new RecoverLateFeeChargesHandler(_db);
+            var outcome = await _writes.ExecuteAsync(
+                command.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
                 ct);
             return Ok(new
             {
