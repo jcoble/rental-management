@@ -8,6 +8,7 @@ using RentalCommand.Core.Notifications;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Notifications;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -21,16 +22,19 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
     private static readonly AtomicJsonResultCodec<EnqueueMorningBriefingsResult> ResultCodec =
         new("notifications.morning-briefing.enqueue.v1");
 
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IJobStepWriteExecutor _writes;
+    private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DailyBriefingDeliveryService> _logger;
 
     public DailyBriefingDeliveryService(
-        IAtomicUnitOfWork atomic,
+        IJobStepWriteExecutor writes,
+        RentalCommandDbContext db,
         TimeProvider timeProvider,
         ILogger<DailyBriefingDeliveryService> logger)
     {
-        _atomic = atomic;
+        _writes = writes;
+        _db = db;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -48,12 +52,10 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
             0,
             0,
             DateTimeKind.Utc);
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "notifications.morning-briefing.enqueue",
-                $"utc-hour:{evaluationUtc:yyyyMMddHH}"),
-            new EnqueueMorningBriefingsCommand(evaluationUtc),
-            ResultCodec,
+        var command = new EnqueueMorningBriefingsCommand(evaluationUtc);
+        var outcome = await _writes.ExecuteAsync(
+            Identity(command).IdempotencyKey,
+            Write(_db, command),
             ct);
 
         if (outcome.Value.QueuedCount > 0)
@@ -70,6 +72,25 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
     internal static string DestinationHash(string destination) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(destination.Trim())))
             .ToLowerInvariant()[..24];
+
+    public static AtomicCommandIdentity Identity(EnqueueMorningBriefingsCommand command) =>
+        new("notifications.morning-briefing.enqueue",
+            $"utc-hour:{command.EvaluationUtc:yyyyMMddHH}");
+
+    public static TransactionalWrite<EnqueueMorningBriefingsCommand, EnqueueMorningBriefingsResult> Write(
+        RentalCommandDbContext db,
+        EnqueueMorningBriefingsCommand command)
+    {
+        var handler = new EnqueueMorningBriefingsHandler(db);
+        return new(
+            Identity(command).CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            ResultCodec.ContractName,
+            WriteLockPlan.None,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync);
+    }
 
     internal static string ComposeBody(
         string portfolioName,
@@ -137,7 +158,6 @@ public sealed record EnqueueMorningBriefingsCommand(DateTime EvaluationUtc) : IA
 public sealed record EnqueueMorningBriefingsResult(int QueuedCount);
 
 public sealed class EnqueueMorningBriefingsHandler
-    : IAtomicCommandHandler<EnqueueMorningBriefingsCommand, EnqueueMorningBriefingsResult>
 {
     private const string Purpose = "morning-briefing";
     private readonly RentalCommandDbContext _db;
@@ -147,7 +167,7 @@ public sealed class EnqueueMorningBriefingsHandler
         _db = db;
     }
 
-    public async Task<EnqueueMorningBriefingsResult> HandleAsync(
+    public async Task<EnqueueMorningBriefingsResult> ExecuteAsync(
         EnqueueMorningBriefingsCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -210,7 +230,7 @@ public sealed class EnqueueMorningBriefingsHandler
         return new EnqueueMorningBriefingsResult(queued);
     }
 
-    public Task AuthorizeReplayAsync(
+    public Task AuthorizeAsync(
         EnqueueMorningBriefingsCommand command,
         IAtomicCommandContext context,
         CancellationToken ct) => Task.CompletedTask;

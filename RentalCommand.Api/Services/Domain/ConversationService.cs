@@ -13,6 +13,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -30,6 +31,7 @@ public class ConversationService : IConversationService
     private readonly ILogger<ConversationService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private static readonly AtomicJsonResultCodec<SendConversationMessageResult> SendCodec =
         new("conversation-message-result.v1");
 
@@ -39,7 +41,8 @@ public class ConversationService : IConversationService
         IFairHousingReviewService fairHousing,
         ILogger<ConversationService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _realtimeQueue = realtimeQueue;
@@ -47,6 +50,7 @@ public class ConversationService : IConversationService
         _logger = logger;
         _timeProvider = timeProvider;
         _atomic = atomic;
+        _writes = writes;
     }
 
     // ===========================================================================================
@@ -200,8 +204,7 @@ public class ConversationService : IConversationService
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.LandlordConversationRead, id, string.Empty,
             operationKey, new AtomicConversationReadRequest(0));
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var outcome = await ExecuteNotificationAsync(command, ct);
         return outcome.Value.Found;
     }
 
@@ -600,10 +603,16 @@ public class ConversationService : IConversationService
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.TenantConversationRead, id, string.Empty,
             operationKey, new AtomicConversationReadRequest(tenantId));
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var outcome = await ExecuteNotificationAsync(command, ct);
         return outcome.Value.Found;
     }
+
+    private Task<AtomicCommandOutcome<AtomicNotificationMutationResult>> ExecuteNotificationAsync(
+        AtomicNotificationMutationCommand command,
+        CancellationToken ct) =>
+        _writes.ExecuteExactAsync(
+            AtomicNotificationMutation.Identity(command).IdempotencyKey,
+            AtomicNotificationMutation.Write(_db, command), ct);
 
     public async Task<ConversationDetail?> TenantStartAsync(
         int portfolioId, int tenantId, string subject, string body, string operationKey,

@@ -19,18 +19,15 @@ public class NotificationService : INotificationService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IRequestWriteExecutor _writes;
 
     public NotificationService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic,
-        IRequestWriteExecutor? writes = null)
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
         _writes = writes;
     }
 
@@ -256,9 +253,7 @@ public class NotificationService : INotificationService
         CancellationToken ct) =>
         NotificationCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
 
-    private IRequestWriteExecutor RequireWrites() =>
-        _writes ?? throw new InvalidOperationException(
-            "The shared request write executor is required for notification read-state mutations.");
+    private IRequestWriteExecutor RequireWrites() => _writes;
 
     public async Task<NotificationResponse> CreateBroadcastAsync(
         WorkspaceReadScope scope,
@@ -268,8 +263,9 @@ public class NotificationService : INotificationService
     {
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.Broadcast, 0, string.Empty, operationKey, request);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            AtomicNotificationMutation.Identity(command).IdempotencyKey,
+            AtomicNotificationMutation.Write(_db, command), ct);
         return outcome.Value.ResponseJson is not null
             ? JsonSerializer.Deserialize<NotificationResponse>(outcome.Value.ResponseJson)
                 ?? throw new InvalidOperationException("Atomic broadcast result snapshot is invalid.")

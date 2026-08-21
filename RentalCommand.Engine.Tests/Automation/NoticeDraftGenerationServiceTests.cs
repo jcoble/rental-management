@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
@@ -7,8 +9,10 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Notifications;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Tests.Automation;
 
@@ -20,26 +24,7 @@ public sealed class NoticeDraftGenerationServiceTests
         var token = Guid.Empty;
         var work = Work(isAuto: true);
         var claims = Claims(work, claimedToken => token = claimedToken);
-        var atomic = new Mock<IAtomicUnitOfWork>(MockBehavior.Strict);
-        atomic.Setup(unit => unit.ExecuteAsync(
-                It.IsAny<AtomicCommandIdentity>(),
-                It.Is<ApplyClaimedTenantNoticeDraftBatchCommand>(command =>
-                    command.ClaimToken == token && command.ClaimToken != Guid.Empty),
-                TenantNoticeDraftAutomation.Codec,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => AtomicOutcome(token, [
-                new AtomicGeneratedTenantNoticeDraft
-                {
-                    WorkItemId = work.Id,
-                    DraftId = 56,
-                    WasCreated = true,
-                    CreatedCount = 1,
-                    LeaseManagementId = work.LeaseManagementId,
-                    TenantLedgerEntryId = work.TenantLedgerEntryId,
-                    NoticeType = work.AutomationKey,
-                    Status = "Draft",
-                },
-            ]));
+        await using var harness = new NoticeDraftHarness(work);
         var foundation = new Mock<INotificationFoundationService>(MockBehavior.Strict);
         foundation.Setup(service => service.ApproveAndQueueAsync(
                 It.Is<NoticeApprovalExecutionContext>(context =>
@@ -59,13 +44,15 @@ public sealed class NoticeDraftGenerationServiceTests
 
         var service = new NoticeDraftGenerationService(
             claims.Object,
-            atomic.Object,
+            harness.Writes,
+            harness.Db,
             foundation.Object,
             NullLogger<NoticeDraftGenerationService>.Instance,
             TimeProvider.System);
 
         (await service.GenerateAllAsync()).Should().Be(1);
         foundation.VerifyAll();
+        harness.Writes.ExecutedToken.Should().Be(token);
         claims.Verify(store => store.CompleteAsync(
             It.IsAny<long>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -81,49 +68,80 @@ public sealed class NoticeDraftGenerationServiceTests
                 It.Is<Guid>(claimedToken => claimedToken == token),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        var atomic = new Mock<IAtomicUnitOfWork>(MockBehavior.Strict);
-        atomic.Setup(unit => unit.ExecuteAsync(
-                It.IsAny<AtomicCommandIdentity>(),
-                It.Is<ApplyClaimedTenantNoticeDraftBatchCommand>(command =>
-                    command.ClaimToken == token && command.ClaimToken != Guid.Empty),
-                TenantNoticeDraftAutomation.Codec,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => AtomicOutcome(token, [
-                new AtomicGeneratedTenantNoticeDraft
-                {
-                    WorkItemId = work.Id,
-                    DraftId = 56,
-                    WasCreated = true,
-                    CreatedCount = 1,
-                    LeaseManagementId = work.LeaseManagementId,
-                    TenantLedgerEntryId = work.TenantLedgerEntryId,
-                    NoticeType = work.AutomationKey,
-                    Status = "Draft",
-                },
-            ]));
+        await using var harness = new NoticeDraftHarness(work);
 
         var service = new NoticeDraftGenerationService(
             claims.Object,
-            atomic.Object,
+            harness.Writes,
+            harness.Db,
             Mock.Of<INotificationFoundationService>(),
             NullLogger<NoticeDraftGenerationService>.Instance,
             TimeProvider.System);
 
         (await service.GenerateAllAsync()).Should().Be(1);
         claims.VerifyAll();
+        harness.Writes.ExecutedToken.Should().Be(token);
     }
 
-    private static AtomicCommandOutcome<ApplyClaimedTenantNoticeDraftBatchResult> AtomicOutcome(
-        Guid expectedToken,
-        AtomicGeneratedTenantNoticeDraft[] drafts)
+    /// <summary>
+    /// SQLite harness for the Engine orchestration. The service still creates the production command,
+    /// operation, result contract, and step key; only the PostgreSQL set command is substituted.
+    /// </summary>
+    private sealed class NoticeDraftHarness : IAsyncDisposable
     {
-        expectedToken.Should().NotBeEmpty();
-        return new AtomicCommandOutcome<ApplyClaimedTenantNoticeDraftBatchResult>(
-            new ApplyClaimedTenantNoticeDraftBatchResult(
-                drafts.FirstOrDefault()?.CreatedCount ?? 0,
-                drafts),
-            AtomicCommandDisposition.Executed,
-            Guid.NewGuid());
+        private readonly SqliteConnection _connection = new("DataSource=:memory:");
+
+        public NoticeDraftHarness(ClaimedTenantNoticeWorkItem work)
+        {
+            _connection.Open();
+            Db = new RentalCommandDbContext(
+                new DbContextOptionsBuilder<RentalCommandDbContext>().UseSqlite(_connection).Options);
+            Writes = new TestJobStepWriteExecutor(work);
+        }
+
+        public RentalCommandDbContext Db { get; }
+        public TestJobStepWriteExecutor Writes { get; }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Db.DisposeAsync();
+            await _connection.DisposeAsync();
+        }
+    }
+
+    private sealed class TestJobStepWriteExecutor(ClaimedTenantNoticeWorkItem work)
+        : IJobStepWriteExecutor
+    {
+        public Guid ExecutedToken { get; private set; }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string stepKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            var command = write.Request.Should()
+                .BeOfType<ApplyClaimedTenantNoticeDraftBatchCommand>().Subject;
+            stepKey.Should().Be(command.ClaimToken.ToString("N"));
+            write.OperationName.Should().Be("tenant-notice-draft.claimed-batch.apply");
+            write.ResultContract.Should().Be("tenant-notice-draft.claimed-batch.apply.v1");
+            ExecutedToken = command.ClaimToken;
+            var draft = new AtomicGeneratedTenantNoticeDraft
+            {
+                WorkItemId = work.Id,
+                DraftId = 56,
+                WasCreated = true,
+                CreatedCount = 1,
+                LeaseManagementId = work.LeaseManagementId,
+                TenantLedgerEntryId = work.TenantLedgerEntryId,
+                NoticeType = work.AutomationKey,
+                Status = "Draft",
+            };
+            var result = new ApplyClaimedTenantNoticeDraftBatchResult(1, [draft]);
+            return Task.FromResult(new AtomicCommandOutcome<TResult>(
+                (TResult)(object)result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+        }
     }
 
     private static Mock<ITenantNoticeWorkClaimStore> Claims(
