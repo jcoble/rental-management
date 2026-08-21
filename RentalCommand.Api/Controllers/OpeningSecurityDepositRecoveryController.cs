@@ -2,9 +2,12 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Payments;
+using RentalCommand.Data;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -14,12 +17,16 @@ namespace RentalCommand.Api.Controllers;
 public sealed class OpeningSecurityDepositRecoveryController
     : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<RecoverOpeningSecurityDepositsResult> Codec =
-        new("opening-security-deposits.recover.v1");
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
 
-    public OpeningSecurityDepositRecoveryController(IAtomicUnitOfWork atomic) =>
-        _atomic = atomic;
+    public OpeningSecurityDepositRecoveryController(
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes)
+    {
+        _db = db;
+        _writes = writes;
+    }
 
     [HttpPost("recover")]
     public async Task<IActionResult> Recover(
@@ -54,12 +61,11 @@ public sealed class OpeningSecurityDepositRecoveryController
             $"opening-security-deposits:{access.PortfolioId}:{digest}");
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "opening-security-deposits.recover",
-                    command.DeliveryIdempotencyKey),
-                command,
-                Codec,
+            var handler = new RecoverOpeningSecurityDepositsHandler(_db);
+            var outcome = await _writes.ExecuteAsync(
+                command.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
                 ct);
             return Ok(new
             {

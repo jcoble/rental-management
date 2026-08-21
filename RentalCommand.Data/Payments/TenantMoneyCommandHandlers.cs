@@ -19,7 +19,7 @@ public static class TenantMoneyWriteSupport
         TCommand command,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
-        where TCommand : notnull, ITenantMoneyCommand
+        where TCommand : notnull, IAtomicCommandData
         where TResult : notnull
     {
         var (operationName, resultContract) = command switch
@@ -46,6 +46,27 @@ public static class TenantMoneyWriteSupport
                 ("tenant-account.deposit.refund", "tenant-account.deposit.mutation.v1"),
             ReverseSecurityDepositEntryCommand =>
                 ("tenant-account.deposit.reverse", "tenant-account.deposit.mutation.v1"),
+            RecoverOpeningSecurityDepositsCommand =>
+                ("opening-security-deposits.recover", "opening-security-deposits.recover.v1"),
+            RecoverHistoricalRentChargeCommand =>
+                ("historical-rent-charge.recover", "historical-rent-charge.recover.v1"),
+            RecoverRefundedTenantAllocationCommand =>
+                ("refunded-tenant-allocation.recover", "refunded-tenant-allocation.recover.v1"),
+            RecoverLateFeeChargesCommand =>
+                ("late-fee-charges.recover", "late-fee-charges.recover.v1"),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        var lockPlan = command switch
+        {
+            RecoverOpeningSecurityDepositsCommand opening => new WriteLockPlan(
+                WriteLockProtocol.Portfolio,
+                WriteLock.For("Portfolio", opening.PortfolioId)),
+            RecoverLateFeeChargesCommand lateFees => new WriteLockPlan(
+                WriteLockProtocol.Portfolio,
+                WriteLock.For("Portfolio", lateFees.PortfolioId)),
+            ITenantMoneyCommand tenantMoney => new WriteLockPlan(
+                WriteLockProtocol.TenantAccount,
+                WriteLock.For("TenantAccount", tenantMoney.TenantAccountId)),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return new(
@@ -53,9 +74,7 @@ public static class TenantMoneyWriteSupport
             WriteIdempotencyPolicy.Required,
             command,
             resultContract,
-            new WriteLockPlan(
-                WriteLockProtocol.TenantAccount,
-                WriteLock.For("TenantAccount", command.TenantAccountId)),
+            lockPlan,
             executeAsync,
             authorizeReplayAsync);
     }
@@ -1321,15 +1340,19 @@ public sealed class RecoverHistoricalRentChargeHandler
 
     public RecoverHistoricalRentChargeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecoverHistoricalRentChargeResult> HandleAsync(
+    public Task<RecoverHistoricalRentChargeResult> HandleAsync(
+        RecoverHistoricalRentChargeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<RecoverHistoricalRentChargeResult> ExecuteAsync(
         RecoverHistoricalRentChargeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
         Validate(command);
-        await context.AcquireLockAsync(
-            "TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         if (!await TenantMoneyCommandSupport
                 .AuthorizedAccounts(command, _db, times.WallClockUtc)
@@ -1460,7 +1483,11 @@ public sealed class RecoverHistoricalRentChargeHandler
             reference);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        RecoverHistoricalRentChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         RecoverHistoricalRentChargeCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
@@ -1497,13 +1524,18 @@ public sealed class RecoverLateFeeChargesHandler
 
     public RecoverLateFeeChargesHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecoverLateFeeChargesResult> HandleAsync(
+    public Task<RecoverLateFeeChargesResult> HandleAsync(
+        RecoverLateFeeChargesCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<RecoverLateFeeChargesResult> ExecuteAsync(
         RecoverLateFeeChargesCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         await AuthorizeAsync(command, _db, times.WallClockUtc, ct);
 
@@ -1639,7 +1671,11 @@ public sealed class RecoverLateFeeChargesHandler
             reference);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        RecoverLateFeeChargesCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         RecoverLateFeeChargesCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);

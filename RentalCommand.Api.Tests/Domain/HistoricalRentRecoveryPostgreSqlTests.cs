@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -24,10 +25,10 @@ namespace RentalCommand.Api.Tests.Domain;
 public sealed class HistoricalRentRecoveryPostgreSqlTests
 {
     private const string ApiPassword = "historical-rent-api-role-test-password";
-    private static readonly AtomicJsonResultCodec<RecoverHistoricalRentChargeResult> Codec =
-        new("historical-rent-charge.recover.v1");
     private static readonly DateTime SeededAtUtc =
         new(2027, 01, 08, 14, 30, 00, DateTimeKind.Utc);
+    private static readonly DateTime InterceptorNow =
+        new(2099, 08, 20, 12, 00, 00, DateTimeKind.Utc);
 
     private readonly MigratedPostgreSqlFixture _fixture;
 
@@ -51,17 +52,28 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
         var requestScope = new RequestGucConnectionInterceptor(scope);
         await using var services = Services(apiConnectionString, failure, requestScope);
         await using var atomicScope = services.CreateAsyncScope();
-        var atomic = atomicScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var db = atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = atomicScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+
+        Task<AtomicCommandOutcome<RecoverHistoricalRentChargeResult>> Execute(
+            RecoverHistoricalRentChargeCommand value)
+        {
+            var handler = new RecoverHistoricalRentChargeHandler(db);
+            return writes.ExecuteAsync(
+                value.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    value, handler.ExecuteAsync, handler.AuthorizeAsync));
+        }
 
         var conflict = Command(scope, graph, "conflict") with { ExpectedExistingChargeAmount = 1_377.41m };
-        await FluentActions.Invoking(() => atomic.ExecuteAsync(Identity(conflict), conflict, Codec))
+        await FluentActions.Invoking(() => Execute(conflict))
             .Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*prorated charge*");
         await AssertOriginalStateAsync(setup.Db, graph);
 
         var rollback = Command(scope, graph, "rollback");
         failure.FailNextOutboxInsert = true;
-        await FluentActions.Invoking(() => atomic.ExecuteAsync(Identity(rollback), rollback, Codec))
+        await FluentActions.Invoking(() => Execute(rollback))
             .Should().ThrowAsync<Exception>();
         await AssertOriginalStateAsync(setup.Db, graph);
         (await setup.Db.OutboxMessages.CountAsync(row =>
@@ -75,8 +87,8 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
             && row.IdempotencyKey == Identity(rollback).IdempotencyKey)).Should().Be(0);
 
         var command = Command(scope, graph, "success");
-        var first = await atomic.ExecuteAsync(Identity(command), command, Codec);
-        var replay = await atomic.ExecuteAsync(Identity(command), command, Codec);
+        var first = await Execute(command);
+        var replay = await Execute(command);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         first.Value.Applied.Should().BeTrue();
@@ -194,6 +206,12 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
             && row.CommandIdempotencyKey == Identity(command).IdempotencyKey
             && row.EntityType == nameof(TenantAccount)
             && row.EntityId == graph.TenantAccountId)).Should().Be(1);
+        (await setup.Db.AtomicAuditLogs
+            .Where(row => row.CommandType == Identity(command).CommandType
+                && row.CommandIdempotencyKey == Identity(command).IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .Distinct()
+            .ToListAsync()).Should().OnlyContain(timestamp => timestamp == SeededAtUtc);
         (await setup.Db.OutboxMessages.CountAsync(row =>
             row.IdempotencyKey == OutboxIdempotency.Create(
                 "tenant-money",
@@ -236,41 +254,40 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
             failure,
             requestScope);
         await using var atomicScope = services.CreateAsyncScope();
-        var atomic = atomicScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var db = atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = atomicScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+
+        Task<AtomicCommandOutcome<RecoverRefundedTenantAllocationResult>> Execute(
+            RecoverRefundedTenantAllocationCommand value)
+        {
+            var handler = new RecoverRefundedTenantAllocationHandler(db);
+            return writes.ExecuteAsync(
+                value.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    value, handler.ExecuteAsync, handler.AuthorizeAsync));
+        }
 
         var mismatch = RefundedAllocationCommand(scope, graph, "mismatch") with
         {
             ExpectedRefundAmount = 1_524m,
         };
         await FluentActions
-            .Invoking(() => atomic.ExecuteAsync(
-                RefundedAllocationIdentity(mismatch),
-                mismatch,
-                RefundedAllocationCodec))
+            .Invoking(() => Execute(mismatch))
             .Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*no longer matches*");
 
         var rollback = RefundedAllocationCommand(scope, graph, "rollback");
         failure.FailNextOutboxInsert = true;
         await FluentActions
-            .Invoking(() => atomic.ExecuteAsync(
-                RefundedAllocationIdentity(rollback),
-                rollback,
-                RefundedAllocationCodec))
+            .Invoking(() => Execute(rollback))
             .Should().ThrowAsync<Exception>();
         setup.Db.ChangeTracker.Clear();
         (await setup.Db.TenantLedgerAllocations.CountAsync(row =>
             row.ReversesAllocationId == graph.AllocationId)).Should().Be(0);
 
         var command = RefundedAllocationCommand(scope, graph, "success");
-        var first = await atomic.ExecuteAsync(
-            RefundedAllocationIdentity(command),
-            command,
-            RefundedAllocationCodec);
-        var replay = await atomic.ExecuteAsync(
-            RefundedAllocationIdentity(command),
-            command,
-            RefundedAllocationCodec);
+        var first = await Execute(command);
+        var replay = await Execute(command);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         first.Value.Applied.Should().BeTrue();
@@ -315,14 +332,17 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
             row.CommandType == RefundedAllocationIdentity(command).CommandType
             && row.CommandIdempotencyKey == RefundedAllocationIdentity(command).IdempotencyKey))
             .Should().Be(1);
+        (await setup.Db.AtomicAuditLogs
+            .Where(row => row.CommandType == RefundedAllocationIdentity(command).CommandType
+                && row.CommandIdempotencyKey == RefundedAllocationIdentity(command).IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .Distinct()
+            .ToListAsync()).Should().OnlyContain(timestamp => timestamp == SeededAtUtc);
         (await setup.Db.OutboxMessages.CountAsync(row =>
             row.IdempotencyKey == OutboxIdempotency.Create(
                 "tenant-money",
                 command.DeliveryIdempotencyKey))).Should().Be(1);
     }
-
-    private static readonly AtomicJsonResultCodec<RecoverRefundedTenantAllocationResult>
-        RefundedAllocationCodec = new("refunded-tenant-allocation.recover.v1");
 
     private static ServiceProvider Services(
         string connectionString,
@@ -331,19 +351,12 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(InterceptorNow));
         services.AddSingleton(failure);
         services.AddSingleton(requestScope);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            RecoverHistoricalRentChargeCommand,
-            RecoverHistoricalRentChargeResult,
-            RecoverHistoricalRentChargeHandler>();
-        services.AddAtomicCommandHandler<
-            RecoverRefundedTenantAllocationCommand,
-            RecoverRefundedTenantAllocationResult,
-            RecoverRefundedTenantAllocationHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .AddInterceptors(
@@ -812,6 +825,11 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
         long ReceiptEntryId,
         long AllocationId,
         long? RefundPaymentAttemptId);
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
+    }
 
     private sealed class OutboxFailureInterceptor : DbCommandInterceptor
     {

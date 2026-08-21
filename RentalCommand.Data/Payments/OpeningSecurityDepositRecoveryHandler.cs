@@ -19,13 +19,18 @@ public sealed class RecoverOpeningSecurityDepositsHandler
 
     public RecoverOpeningSecurityDepositsHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecoverOpeningSecurityDepositsResult> HandleAsync(
+    public Task<RecoverOpeningSecurityDepositsResult> HandleAsync(
+        RecoverOpeningSecurityDepositsCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<RecoverOpeningSecurityDepositsResult> ExecuteAsync(
         RecoverOpeningSecurityDepositsCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         await AuthorizeAsync(command, _db, times.WallClockUtc, ct);
 
@@ -109,7 +114,11 @@ public sealed class RecoverOpeningSecurityDepositsHandler
             reference);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        RecoverOpeningSecurityDepositsCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         RecoverOpeningSecurityDepositsCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
