@@ -22,14 +22,16 @@ public sealed class GivePossessionHandler
     public async Task<GivePossessionResult> HandleAsync(
         GivePossessionCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<GivePossessionResult> ExecuteAsync(
+        GivePossessionCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         PossessionCommandAuthorization.ValidateShape(command.PortfolioId, command.LeaseManagementId,
             command.UnitId, command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
             command.ExpectedAccessRevision, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
-
-        await context.AcquireLockAsync("Unit", command.UnitId, ct);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
 
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
@@ -153,12 +155,14 @@ public sealed class ReconcileHistoricalPossessionHandler
     public async Task<ReconcileHistoricalPossessionResult> HandleAsync(
         ReconcileHistoricalPossessionCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<ReconcileHistoricalPossessionResult> ExecuteAsync(
+        ReconcileHistoricalPossessionCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("Unit", command.UnitId, ct);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
-
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         context.UseDatabaseWallClockForAudit(businessNowUtc);
@@ -399,6 +403,11 @@ public sealed class ConfirmMoveInHandler
     public ConfirmMoveInHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<ConfirmMoveInResult> HandleAsync(
+        ConfirmMoveInCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<ConfirmMoveInResult> ExecuteAsync(
         ConfirmMoveInCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -754,12 +763,14 @@ public sealed class ReturnPossessionHandler
     public async Task<ReturnPossessionResult> HandleAsync(
         ReturnPossessionCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<ReturnPossessionResult> ExecuteAsync(
+        ReturnPossessionCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("Unit", command.UnitId, ct);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
-
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         context.UseDatabaseWallClockForAudit(businessNowUtc);
@@ -880,6 +891,9 @@ public sealed class CompleteTurnoverHandler
     public CompleteTurnoverHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<CompleteTurnoverResult> HandleAsync(CompleteTurnoverCommand command,
+        IAtomicCommandContext context, CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<CompleteTurnoverResult> ExecuteAsync(CompleteTurnoverCommand command,
         IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);

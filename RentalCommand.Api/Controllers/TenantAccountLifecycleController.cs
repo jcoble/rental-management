@@ -2,8 +2,11 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Data;
+using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -12,11 +15,14 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class TenantAccountLifecycleController : ManagementControllerBase
 {
-    private static readonly AtomicJsonResultCodec<CloseTenantAccountResult> Codec =
-        new("tenant-account.close.v1");
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
+    private readonly RentalCommandDbContext _db;
 
-    public TenantAccountLifecycleController(IAtomicUnitOfWork atomic) => _atomic = atomic;
+    public TenantAccountLifecycleController(IRequestWriteExecutor writes, RentalCommandDbContext db)
+    {
+        _writes = writes;
+        _db = db;
+    }
 
     [HttpPost("close-account")]
     public async Task<IActionResult> Close(int leaseManagementId,
@@ -36,8 +42,9 @@ public sealed class TenantAccountLifecycleController : ManagementControllerBase
             $"tenant-account-close:{portfolioId}:{request.TenantAccountId}:{digest}");
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity("tenant-account.close",
-                $"{portfolioId}:{request.TenantAccountId}:{digest}"), command, Codec, ct);
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{request.TenantAccountId}:{digest}",
+                LeasingWriteSupport.Write<CloseTenantAccountCommand, CloseTenantAccountResult>(_db, command), ct);
             return outcome.Value.Outcome == CloseTenantAccountOutcome.Closed
                 ? Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed })
                 : Conflict(new { error = outcome.Value.Error });

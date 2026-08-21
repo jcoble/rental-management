@@ -70,6 +70,43 @@ public static class LeasingWriteSupport
                     WriteLock.For("Property", value.PropertyId)),
                 value, new CreatePropertyDispositionHandler(db).ExecuteAsync,
                 new CreatePropertyDispositionHandler(db).AuthorizeReplayAsync),
+            GivePossessionCommand value => Build(
+                "lease-management.give-possession", "lease-management.give-possession.v1",
+                Possession(value.UnitId, value.LeaseManagementId), value,
+                new GivePossessionHandler(db).ExecuteAsync, new GivePossessionHandler(db).AuthorizeReplayAsync),
+            ReconcileHistoricalPossessionCommand value => Build(
+                "lease-management.reconcile-historical-possession",
+                "lease-management.reconcile-historical-possession.v1",
+                Possession(value.UnitId, value.LeaseManagementId), value,
+                new ReconcileHistoricalPossessionHandler(db).ExecuteAsync,
+                new ReconcileHistoricalPossessionHandler(db).AuthorizeReplayAsync),
+            ConfirmMoveInCommand value => Build(
+                "lease-management.confirm-move-in", "lease-management.confirm-move-in.v1",
+                WriteLockPlan.None, value, new ConfirmMoveInHandler(db).ExecuteAsync,
+                new ConfirmMoveInHandler(db).AuthorizeReplayAsync),
+            ReturnPossessionCommand value => Build(
+                "lease-management.return-possession", "lease-management.return-possession.v1",
+                Possession(value.UnitId, value.LeaseManagementId), value,
+                new ReturnPossessionHandler(db).ExecuteAsync,
+                new ReturnPossessionHandler(db).AuthorizeReplayAsync),
+            CompleteTurnoverCommand value => Build(
+                "unit.complete-turnover", "unit.complete-turnover.v1",
+                WriteLockPlan.None, value, new CompleteTurnoverHandler(db).ExecuteAsync,
+                new CompleteTurnoverHandler(db).AuthorizeReplayAsync),
+            VoidLeaseAgreementCommand value => Build(
+                "lease-agreement.void", "lease-agreement.void.v1",
+                LeaseManagement(value.LeaseManagementId), value,
+                new VoidLeaseAgreementHandler(db).ExecuteAsync,
+                new VoidLeaseAgreementHandler(db).AuthorizeReplayAsync),
+            VoidLeaseAddendumCommand value => Build(
+                "lease-addendum.void", "lease-addendum.void.v1",
+                LeaseManagement(value.LeaseManagementId), value,
+                new VoidLeaseAddendumHandler(db).ExecuteAsync,
+                new VoidLeaseAddendumHandler(db).AuthorizeReplayAsync),
+            CloseTenantAccountCommand value => Build(
+                "tenant-account.close", "tenant-account.close.v1",
+                WriteLockPlan.None, value, new CloseTenantAccountHandler(db).ExecuteAsync,
+                new CloseTenantAccountHandler(db).AuthorizeReplayAsync),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return (TransactionalWrite<TCommand, TResult>)write;
@@ -77,6 +114,11 @@ public static class LeasingWriteSupport
 
     private static WriteLockPlan LeaseManagement(int id) => new(
         WriteLockProtocol.LeaseManagement, WriteLock.For("LeaseManagement", id));
+
+    private static WriteLockPlan Possession(int unitId, int leaseManagementId) => new(
+        WriteLockProtocol.Possession,
+        WriteLock.For("Unit", unitId),
+        WriteLock.For("LeaseManagement", leaseManagementId));
 
     private static WriteLockPlan Agreement(ILeaseAgreementDraftCommand command) => new(
         WriteLockProtocol.LeaseAgreementDraft,
