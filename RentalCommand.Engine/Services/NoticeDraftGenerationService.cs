@@ -5,6 +5,8 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Notifications;
+using RentalCommand.Data;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -12,20 +14,23 @@ namespace RentalCommand.Engine.Services;
 public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
 {
     private readonly ITenantNoticeWorkClaimStore _claims;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IJobStepWriteExecutor _writes;
+    private readonly RentalCommandDbContext _db;
     private readonly INotificationFoundationService _foundation;
     private readonly ILogger<NoticeDraftGenerationService> _logger;
     private readonly TimeProvider _clock;
 
     public NoticeDraftGenerationService(
         ITenantNoticeWorkClaimStore claims,
-        IAtomicUnitOfWork atomic,
+        IJobStepWriteExecutor writes,
+        RentalCommandDbContext db,
         INotificationFoundationService foundation,
         ILogger<NoticeDraftGenerationService> logger,
         TimeProvider clock)
     {
         _claims = claims;
-        _atomic = atomic;
+        _writes = writes;
+        _db = db;
         _foundation = foundation;
         _logger = logger;
         _clock = clock;
@@ -40,10 +45,11 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
         if (work.Count == 0) return 0;
 
         var command = new ApplyClaimedTenantNoticeDraftBatchCommand(token);
-        var outcome = await _atomic.ExecuteAsync(
-            TenantNoticeDraftAutomation.Identity(command),
-            command,
-            TenantNoticeDraftAutomation.Codec,
+        var handler = new ApplyClaimedTenantNoticeDraftBatchHandler(_db);
+        var outcome = await _writes.ExecuteAsync(
+            TenantNoticeDraftAutomation.Identity(command).IdempotencyKey,
+            TenantNoticeDraftAutomation.Write(
+                command, handler.ExecuteAsync, handler.AuthorizeAsync),
             ct);
         var generated = outcome.Value.Drafts;
         var byWorkItem = generated

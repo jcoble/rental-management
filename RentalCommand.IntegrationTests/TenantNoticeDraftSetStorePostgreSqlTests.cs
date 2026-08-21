@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Authorization;
@@ -17,6 +18,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Notifications;
+using RentalCommand.Engine.Writes;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -62,18 +64,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         services.AddSingleton<CommandRecorder>();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            ApplyClaimedTenantNoticeDraftBatchCommand,
-            ApplyClaimedTenantNoticeDraftBatchResult,
-            ApplyClaimedTenantNoticeDraftBatchHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicNotificationMutationCommand,
-            AtomicNotificationMutationResult,
-            AtomicNotificationMutationHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicNoticeDraftMutationCommand,
-            AtomicNoticeDraftMutationResult,
-            AtomicNoticeDraftMutationHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -99,8 +91,9 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         int leaseManagementId;
         long ledgerEntryId;
 
-        await using (var setup = NewContext())
+        await using (var setupScope = _services!.CreateAsyncScope())
         {
+            var setup = setupScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var actor = new ApplicationUser
             {
                 UserName = "notice-clock-owner@example.test",
@@ -137,7 +130,9 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             await setup.SaveChangesAsync();
 
             var relationship = await SeedRelationshipAsync(setup, portfolio, actor, "Frozen", setupNow);
-            var foundation = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(
+                setup, TimeProvider.System,
+                setupScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
             await foundation.SeedSuppliedTemplatesAsync(
                 scope, "seed-frozen-notice-draft-templates", CancellationToken.None);
             var policy = await setup.TenantNoticePolicies.SingleAsync(row =>
@@ -163,7 +158,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
 
         var command = new ApplyClaimedTenantNoticeDraftBatchCommand(token);
         var identity = TenantNoticeDraftAutomation.Identity(command);
-        var outcome = await Atomic.ExecuteAsync(identity, command, TenantNoticeDraftAutomation.Codec);
+        var outcome = await ExecuteClaimedBatchAsync(command);
 
         outcome.Value.CreatedCount.Should().Be(1);
         outcome.Value.Drafts.Should().ContainSingle();
@@ -192,6 +187,44 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             row.IdempotencyKey.StartsWith("tenant-notice-draft-worker:"));
         outbox.CreatedAtUtc.Should().Be(effectiveNow);
         outbox.NextAttemptAtUtc.Should().Be(effectiveNow);
+
+        await using (var seed = NewContext())
+        {
+            var current = await seed.AtomicCommandReceipts.SingleAsync(row =>
+                row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey);
+            seed.Remove(current);
+            await seed.SaveChangesAsync();
+            seed.AtomicCommandReceipts.Add(LegacyReceipt(
+                identity, command, TenantNoticeDraftAutomation.Codec, outcome.Value, effectiveNow));
+            await seed.SaveChangesAsync();
+        }
+
+        var legacyReplay = await ExecuteClaimedBatchAsync(command);
+        legacyReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        legacyReplay.Value.Should().BeEquivalentTo(outcome.Value);
+        await using var afterReplay = NewContext();
+        (await afterReplay.NoticeDrafts.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(1);
+        (await afterReplay.OutboxMessages.CountAsync(row =>
+            row.PortfolioId == portfolioId &&
+            row.IdempotencyKey.StartsWith("tenant-notice-draft-worker:"))).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task ClaimedBatch_StaleTokenCreatesNoDraftOrOutbox()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable; PostgreSQL stale-claim proof skipped.");
+        var command = new ApplyClaimedTenantNoticeDraftBatchCommand(Guid.NewGuid());
+        await using var before = NewContext();
+        var draftCount = await before.NoticeDrafts.CountAsync();
+        var outboxCount = await before.OutboxMessages.CountAsync();
+
+        var outcome = await ExecuteClaimedBatchAsync(command);
+
+        outcome.Value.CreatedCount.Should().Be(0);
+        outcome.Value.Drafts.Should().BeEmpty();
+        await using var verify = NewContext();
+        (await verify.NoticeDrafts.CountAsync()).Should().Be(draftCount);
+        (await verify.OutboxMessages.CountAsync()).Should().Be(outboxCount);
     }
 
     [SkippableFact(Skip = "RS-B07 stale notice test: current atomic and error contracts differ from the legacy fixture; receipt #rs-b07-notice-contract")]
@@ -212,8 +245,9 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         WorkspaceReadScope manualScope = default;
         WorkspaceReadScope selectedPropertyScope = default;
 
-        await using (var setup = NewContext())
+        await using (var setupScope = _services!.CreateAsyncScope())
         {
+            var setup = setupScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var actor = new ApplicationUser
             {
                 UserName = "notice-set-owner@example.test",
@@ -253,7 +287,9 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             var second = await SeedRelationshipAsync(setup, portfolio, actor, "B", now);
             selectedPropertyScope = await SeedPropertyManagerScopeAsync(
                 setup, portfolio.Id, first.PropertyId, now);
-            var foundation = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            var foundation = new NotificationFoundationService(
+                setup, TimeProvider.System,
+                setupScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
             await foundation.SeedSuppliedTemplatesAsync(
                 manualScope, "seed-notice-draft-templates", CancellationToken.None);
             var policy = await setup.TenantNoticePolicies.SingleAsync(row =>
@@ -284,8 +320,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         var command = new ApplyClaimedTenantNoticeDraftBatchCommand(token);
         var identity = TenantNoticeDraftAutomation.Identity(command);
         var concurrent = await Task.WhenAll(
-            Atomic.ExecuteAsync(identity, command, TenantNoticeDraftAutomation.Codec),
-            Atomic.ExecuteAsync(identity, command, TenantNoticeDraftAutomation.Codec));
+            ExecuteClaimedBatchAsync(command),
+            ExecuteClaimedBatchAsync(command));
 
         concurrent.Select(outcome => outcome.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -346,8 +382,12 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
                 "rent-reminder", now);
             otherPropertyDraft.Should().ContainSingle();
 
+            await using var executionScope = _services!.CreateAsyncScope();
+            var executionDb = executionScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var selectedService = new NoticeDraftService(
-                replay, new FixedTimeProvider(new DateTimeOffset(now)), Atomic);
+                executionDb,
+                new FixedTimeProvider(new DateTimeOffset(now)),
+                executionScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
             var selectedDrafts = await selectedService.ListAsync(
                 selectedPropertyScope, null, new ListQuery { Take = 20 });
             selectedDrafts.Should().ContainSingle();
@@ -388,10 +428,10 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             deniedGeneration.CreatedCount.Should().Be(0);
             deniedGeneration.Drafts.Should().BeEmpty();
 
-            var selectedContext = await replay.WorkspaceAccessContexts.SingleAsync(row =>
+            var selectedContext = await executionDb.WorkspaceAccessContexts.SingleAsync(row =>
                 row.Id == selectedPropertyScope.AccessContextId);
             selectedContext.AdvanceRevision(selectedPropertyScope.AccessRevision);
-            await replay.SaveChangesAsync();
+            await executionDb.SaveChangesAsync();
 
             var staleDismiss = () => selectedService.DismissAsync(
                 selectedPropertyScope,
@@ -800,6 +840,39 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
     }
 
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private IRequestWriteExecutor Writes => _services!.GetRequiredService<IRequestWriteExecutor>();
+
+    private async Task<AtomicCommandOutcome<ApplyClaimedTenantNoticeDraftBatchResult>>
+        ExecuteClaimedBatchAsync(ApplyClaimedTenantNoticeDraftBatchCommand command)
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var handler = new ApplyClaimedTenantNoticeDraftBatchHandler(db);
+        return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>().ExecuteAsync(
+            TenantNoticeDraftAutomation.Identity(command).IdempotencyKey,
+            TenantNoticeDraftAutomation.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
+    }
+
+    private static AtomicCommandReceipt LegacyReceipt<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec,
+        TResult result,
+        DateTime now)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => new()
+        {
+            Id = Guid.NewGuid(),
+            AttemptId = Guid.NewGuid(),
+            CommandType = identity.CommandType,
+            IdempotencyKey = identity.IdempotencyKey,
+            RequestFingerprint = AtomicCommandFingerprint.Create(command),
+            Status = AtomicCommandReceiptStatus.Completed,
+            ResultContract = codec.ContractName,
+            ResultJson = codec.Serialize(result),
+            StartedAt = now,
+            CompletedAt = now,
+        };
 
     private static StoredFile StoredFile(int portfolioId, string fileName, DateTime now) => new()
     {

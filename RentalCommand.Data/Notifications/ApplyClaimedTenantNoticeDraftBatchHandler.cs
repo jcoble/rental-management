@@ -14,13 +14,12 @@ namespace RentalCommand.Data.Notifications;
 /// outbox companions around that one set command.
 /// </summary>
 public sealed class ApplyClaimedTenantNoticeDraftBatchHandler
-    : IAtomicCommandHandler<ApplyClaimedTenantNoticeDraftBatchCommand, ApplyClaimedTenantNoticeDraftBatchResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ApplyClaimedTenantNoticeDraftBatchHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ApplyClaimedTenantNoticeDraftBatchResult> HandleAsync(
+    public async Task<ApplyClaimedTenantNoticeDraftBatchResult> ExecuteAsync(
         ApplyClaimedTenantNoticeDraftBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -90,7 +89,7 @@ public sealed class ApplyClaimedTenantNoticeDraftBatchHandler
         return new ApplyClaimedTenantNoticeDraftBatchResult(createdCount, generated.ToArray());
     }
 
-    public async Task AuthorizeReplayAsync(
+    public async Task AuthorizeAsync(
         ApplyClaimedTenantNoticeDraftBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

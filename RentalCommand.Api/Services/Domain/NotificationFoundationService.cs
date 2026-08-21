@@ -20,20 +20,17 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _clock;
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly IServiceProvider? _services;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IRequestWriteExecutor _writes;
 
     public NotificationFoundationService(
         RentalCommandDbContext db,
         TimeProvider clock,
-        IAtomicUnitOfWork atomic,
-        IServiceProvider? services = null,
-        IRequestWriteExecutor? writes = null)
+        IRequestWriteExecutor writes,
+        IServiceProvider? services = null)
     {
         _db = db;
         _clock = clock;
-        _atomic = atomic;
         _services = services;
         _writes = writes;
     }
@@ -115,9 +112,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         CancellationToken ct) =>
         NotificationCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
 
-    private IRequestWriteExecutor RequireWrites() =>
-        _writes ?? throw new InvalidOperationException(
-            "The shared request write executor is required for notification preference mutations.");
+    private IRequestWriteExecutor RequireWrites() => _writes;
 
     public async Task<MorningBriefingSettingsResponse> GetMorningBriefingSettingsAsync(
         int portfolioId, CancellationToken ct) =>
@@ -132,8 +127,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.MorningBriefingSettings, 0, string.Empty,
             operationKey, request);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return ReadSnapshot<MorningBriefingSettingsResponse>(outcome.Value);
     }
 
@@ -150,8 +144,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.LateFeeSettings, 0, string.Empty,
             operationKey, request);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return ReadSnapshot<LateFeeAutomationSettingsResponse>(outcome.Value);
     }
 
@@ -169,8 +162,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     {
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.TeamRouting, 0, request.Topic.ToString(), operationKey, request);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return ReadSnapshot<TeamRoutingRuleResponse>(outcome.Value);
     }
 
@@ -437,8 +429,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.TenantNoticePolicy, 0, request.AutomationKey,
             operationKey, request);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return ReadSnapshot<TenantNoticePolicyResponse>(outcome.Value);
     }
 
@@ -551,8 +542,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     {
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.SeedTemplates, 0, "supplied-v1", operationKey, new { });
-        await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        await ExecuteAsync(command, ct);
     }
 
     public async Task<TenantNoticePolicyResponse> CreateTemplateVersionAsync(
@@ -564,8 +554,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     {
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.TemplateVersion, 0, systemKey, operationKey, request);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return ReadSnapshot<TenantNoticePolicyResponse>(outcome.Value);
     }
 
@@ -577,8 +566,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     {
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.RestoreTemplate, 0, systemKey, operationKey, new { });
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return ReadSnapshot<TenantNoticePolicyResponse>(outcome.Value);
     }
 
@@ -594,10 +582,18 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             throw new InvalidOperationException("At least one delivery channel is required.");
         var command = AtomicNoticeDelivery.Command(
             context, draftId, request.Channels, workFence, operationKey);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicNoticeDelivery.Identity(command), command, AtomicNoticeDelivery.Codec, ct);
+        var outcome = await _writes.ExecuteAsync(
+            AtomicNoticeDelivery.Identity(command).IdempotencyKey,
+            AtomicNoticeDelivery.Write(_db, command), ct);
         return outcome.Value.RenderedNoticeId;
     }
+
+    private Task<AtomicCommandOutcome<AtomicNotificationMutationResult>> ExecuteAsync(
+        AtomicNotificationMutationCommand command,
+        CancellationToken ct) =>
+        _writes.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command).IdempotencyKey,
+            AtomicNotificationMutation.Write(_db, command), ct);
 
     public async Task<IReadOnlyList<NoticeDeliveryStatusResponse>> ListDeliveryStatusesAsync(
         int portfolioId,

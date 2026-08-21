@@ -17,6 +17,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Conversations;
+using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Conversations;
@@ -31,6 +32,7 @@ public class ConversationNotificationTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private ServiceProvider _services = null!;
+    private RentalCommandDbContext _db = null!;
 
     public ConversationNotificationTests(MigratedPostgreSqlFixture fixture)
     {
@@ -50,18 +52,12 @@ public class ConversationNotificationTests : IAsyncLifetime
             SendConversationMessageCommand,
             SendConversationMessageResult,
             SendConversationMessageHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicNotificationMutationCommand,
-            AtomicNotificationMutationResult,
-            AtomicNotificationMutationHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicNoticeDeliveryCommand,
-            AtomicNoticeDeliveryResult,
-            AtomicNoticeDeliveryHandler>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_ctx.ConnectionString)
+                .AddInterceptors(new RecordingCommandInterceptor(_commands))
                 .UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
+        _db = _services.GetRequiredService<RentalCommandDbContext>();
     }
 
     public async Task DisposeAsync()
@@ -71,12 +67,23 @@ public class ConversationNotificationTests : IAsyncLifetime
     }
 
     private ConversationService CreateSut(RecordingRealtimeInvalidationQueue? realtimeQueue = null) => new(
-        _ctx.Db,
+        _db,
         realtimeQueue ?? new RecordingRealtimeInvalidationQueue(),
         new NoopFairHousingReviewService(),
         NullLogger<ConversationService>.Instance,
         TimeProvider.System,
-        _services.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+        _services.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>(),
+        _services.GetRequiredService<IRequestWriteExecutor>());
+
+    private async Task<AtomicCommandOutcome<AtomicNoticeDeliveryResult>> ExecuteNoticeDeliveryAsync(
+        AtomicNoticeDeliveryCommand command)
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+            AtomicNoticeDelivery.Identity(command).IdempotencyKey,
+            AtomicNoticeDelivery.Write(db, command));
+    }
 
     [Fact]
     public async Task TenantStartAsync_NotifiesOnlyCapabilityAndLeasePropertyScopedStaff()
@@ -103,8 +110,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             UserId = 30,
             Reason = "Out-of-scope staff",
         });
-        _ctx.Db.TeamRoutingRules.Add(routingRule);
-        _ctx.Db.SaveChanges();
+        _db.TeamRoutingRules.Add(routingRule);
+        _db.SaveChanges();
         var realtimeQueue = new RecordingRealtimeInvalidationQueue();
         var sut = CreateSut(realtimeQueue);
 
@@ -112,7 +119,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             1, tenant.Id, "Sink leak", "Water under the cabinet", "tenant-start-sink-leak");
 
         result.Should().NotBeNull();
-        var notification = _ctx.Db.Notifications.Should().ContainSingle().Subject;
+        var notification = _db.Notifications.Should().ContainSingle().Subject;
         notification.Type.Should().Be("TenantMessage");
         notification.UserId.Should().Be(10);
         notification.Title.Should().Be("New message from Emily Chen");
@@ -121,7 +128,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         notification.NavigationResourceId.Should().Be(result!.Id);
         notification.NavigationAccessContextId.Should().BePositive();
         notification.NavigationAccessRevision.Should().BePositive();
-        _ctx.Db.Notifications.Should().NotContain(item => item.UserId == 30);
+        _db.Notifications.Should().NotContain(item => item.UserId == 30);
         realtimeQueue.Batches.Should().ContainSingle();
         realtimeQueue.Batches[0].Should().Contain(update =>
             update.EntityType == "Conversation" && update.EntityId == result!.Id);
@@ -140,18 +147,18 @@ public class ConversationNotificationTests : IAsyncLifetime
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
-        _ctx.Db.Tenants.Add(tenant);
-        _ctx.Db.SaveChanges();
+        _db.Tenants.Add(tenant);
+        _db.SaveChanges();
 
         var result = await CreateSut().TenantStartAsync(
             1, tenant.Id, "Question", "Who is responsible?", "tenant-no-responsibility");
 
         result.Should().NotBeNull();
-        _ctx.Db.ConversationMessages.Should().ContainSingle();
-        _ctx.Db.Notifications.Should().BeEmpty();
-        _ctx.Db.AtomicCommandReceipts.Should().ContainSingle(receipt =>
+        _db.ConversationMessages.Should().ContainSingle();
+        _db.Notifications.Should().BeEmpty();
+        _db.AtomicCommandReceipts.Should().ContainSingle(receipt =>
             receipt.CommandType == "conversation.tenant-start");
-        _ctx.Db.AtomicAuditLogs.Should().Contain(log => log.EntityType == nameof(ConversationMessage));
+        _db.AtomicAuditLogs.Should().Contain(log => log.EntityType == nameof(ConversationMessage));
     }
 
     [Fact]
@@ -169,13 +176,13 @@ public class ConversationNotificationTests : IAsyncLifetime
             Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
-        var notification = _ctx.Db.Notifications.Should().ContainSingle(n => n.Type == "TenantNotice").Subject;
+        var notification = _db.Notifications.Should().ContainSingle(n => n.Type == "TenantNotice").Subject;
         notification.UserId.Should().Be(20);
         notification.NavigationExperience.Should().Be(NavigationExperience.Tenant);
         notification.NavigationDestination.Should().Be(NavigationDestination.Message);
         notification.NavigationResourceKind.Should().Be(nameof(Conversation));
         notification.NavigationResourceId.Should().Be(result!.Id);
-        _ctx.Db.OutboxMessages.Should().NotContain(m => m.MessageType == "push");
+        _db.OutboxMessages.Should().NotContain(m => m.MessageType == "push");
     }
 
     [Fact]
@@ -183,7 +190,7 @@ public class ConversationNotificationTests : IAsyncLifetime
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
         tenant.Phone = "+15551234567";
-        _ctx.Db.SaveChanges();
+        _db.SaveChanges();
         var sut = CreateSut();
         const string operationKey = "conversation-retry-1";
 
@@ -193,11 +200,11 @@ public class ConversationNotificationTests : IAsyncLifetime
             1, tenant.Id, "Inspection", "Can we visit Friday?", ["Portal", "Email", "Sms"], operationKey);
 
         replay!.Id.Should().Be(first!.Id);
-        (await _ctx.Db.Conversations.CountAsync()).Should().Be(1);
-        (await _ctx.Db.ConversationMessages.CountAsync()).Should().Be(1);
-        (await _ctx.Db.Notifications.CountAsync(notification => notification.Type == "TenantNotice")).Should().Be(1);
-        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(2);
-        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+        (await _db.Conversations.CountAsync()).Should().Be(1);
+        (await _db.ConversationMessages.CountAsync()).Should().Be(1);
+        (await _db.Notifications.CountAsync(notification => notification.Type == "TenantNotice")).Should().Be(1);
+        (await _db.OutboxMessages.CountAsync()).Should().Be(2);
+        (await _db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "conversation.start")).Should().Be(1);
     }
 
@@ -216,8 +223,8 @@ public class ConversationNotificationTests : IAsyncLifetime
 
         replay!.Messages.Should().HaveCount(2);
         first!.Messages.Should().HaveCount(2);
-        (await _ctx.Db.ConversationMessages.CountAsync()).Should().Be(2);
-        (await _ctx.Db.Conversations.AsNoTracking()
+        (await _db.ConversationMessages.CountAsync()).Should().Be(2);
+        (await _db.Conversations.AsNoTracking()
             .Where(conversation => conversation.Id == started.Id)
             .Select(conversation => conversation.TenantUnreadCount)
             .SingleAsync()).Should().Be(2);
@@ -233,7 +240,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             "HVAC appointment confirmed",
             now.AddMinutes(-1),
             tenantUnreadCount: 2);
-        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+        var tenantContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
             context.PortfolioId == 1 && context.UserId == 20);
         var session = new AuthSession
         {
@@ -245,10 +252,10 @@ public class ConversationNotificationTests : IAsyncLifetime
             LastSeenAtUtc = now,
             ExpiresAtUtc = now.AddHours(1),
         };
-        _ctx.Db.AuthSessions.Add(session);
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var conversationId = await _ctx.Db.Conversations.AsNoTracking()
+        _db.AuthSessions.Add(session);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        var conversationId = await _db.Conversations.AsNoTracking()
             .Where(conversation => conversation.TenantId == tenant.Id
                 && conversation.Subject == "HVAC appointment confirmed")
             .Select(conversation => conversation.Id)
@@ -262,11 +269,11 @@ public class ConversationNotificationTests : IAsyncLifetime
         (await sut.MarkReadForTenantAsync(scope, tenant.Id, conversationId, "tenant-read-hvac-second"))
             .Should().BeTrue();
 
-        (await _ctx.Db.Conversations.AsNoTracking()
+        (await _db.Conversations.AsNoTracking()
             .Where(conversation => conversation.Id == conversationId)
             .Select(conversation => conversation.TenantUnreadCount)
             .SingleAsync()).Should().Be(0);
-        (await _ctx.Db.AtomicAuditLogs.AsNoTracking().CountAsync(log =>
+        (await _db.AtomicAuditLogs.AsNoTracking().CountAsync(log =>
             log.EntityType == nameof(Conversation)
             && log.EntityId == conversationId
             && log.ChangeReason == "Tenant conversation marked read")).Should().Be(1);
@@ -276,7 +283,7 @@ public class ConversationNotificationTests : IAsyncLifetime
     public async Task ListAsync_HidesTenantMessageNotificationsFromTenantOnlyUsers()
     {
         SeedTenantWithStaffAndTenantUsers();
-        _ctx.Db.Notifications.AddRange(
+        _db.Notifications.AddRange(
             new Notification
             {
                 PortfolioId = 1,
@@ -294,10 +301,10 @@ public class ConversationNotificationTests : IAsyncLifetime
                 Message = "Shared system notice",
                 CreatedAt = DateTime.UtcNow.AddMinutes(1),
             });
-        _ctx.Db.SaveChanges();
+        _db.SaveChanges();
 
         var sut = new NotificationService(
-            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
 
         var tenantItems = await sut.ListAsync(1, userId: 20);
         tenantItems.Select(n => n.Title).Should().Equal("Pool closed");
@@ -310,9 +317,9 @@ public class ConversationNotificationTests : IAsyncLifetime
     {
         SeedTenantWithStaffAndTenantUsers();
         var now = DateTime.UtcNow;
-        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+        var tenantContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
             context.PortfolioId == 1 && context.UserId == 20);
-        var tenantAccountId = await _ctx.Db.TenantAccounts
+        var tenantAccountId = await _db.TenantAccounts
             .Where(account => account.PortfolioId == 1)
             .Select(account => account.Id)
             .SingleAsync();
@@ -321,7 +328,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             "owned-rent-charge",
             now);
         var foreignLedgerEntry = await SeedForeignTenantLedgerEntryAsync(now);
-        _ctx.Db.Notifications.AddRange(
+        _db.Notifications.AddRange(
             TenantLedgerNotification(
                 userId: 20,
                 title: "Pay January rent",
@@ -336,11 +343,11 @@ public class ConversationNotificationTests : IAsyncLifetime
                 foreignLedgerEntry.TenantAccountId,
                 foreignLedgerEntry.Id,
                 now.AddMinutes(1)));
-        await _ctx.Db.SaveChangesAsync();
+        await _db.SaveChangesAsync();
         var scope = new WorkspaceReadScope(
             1, 20, Guid.NewGuid(), tenantContext.Id, tenantContext.AccessRevision);
         var sut = new NotificationService(
-            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
 
         _commands.Clear();
         var items = await sut.ListAsync(scope, NavigationExperience.Tenant);
@@ -371,14 +378,14 @@ public class ConversationNotificationTests : IAsyncLifetime
     {
         SeedTenantWithStaffAndTenantUsers();
         var businessNow = new DateTime(2027, 1, 31, 17, 0, 0, DateTimeKind.Utc);
-        var clock = await _ctx.Db.SimulationClocks.SingleAsync(row => row.Id == 1);
+        var clock = await _db.SimulationClocks.SingleAsync(row => row.Id == 1);
         clock.Mode = RentalCommand.Core.Time.ClockMode.Frozen;
         clock.SimAnchorUtc = businessNow;
         clock.RealAnchorUtc = DateTime.UtcNow;
         clock.TimeZoneId = "America/New_York";
-        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+        var tenantContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
             context.PortfolioId == 1 && context.UserId == 20);
-        var tenantAccountId = await _ctx.Db.TenantAccounts
+        var tenantAccountId = await _db.TenantAccounts
             .Where(account => account.PortfolioId == 1)
             .Select(account => account.Id)
             .SingleAsync();
@@ -431,13 +438,13 @@ public class ConversationNotificationTests : IAsyncLifetime
             RelatedEntityId = checked((int)futureCharge.Id),
             CreatedAt = businessNow.AddMinutes(2),
         };
-        _ctx.Db.Notifications.AddRange(currentNotification, futureNotification, reminderNotification);
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
+        _db.Notifications.AddRange(currentNotification, futureNotification, reminderNotification);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
         var scope = new WorkspaceReadScope(
             1, 20, Guid.NewGuid(), tenantContext.Id, tenantContext.AccessRevision);
         var sut = new NotificationService(
-            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
 
         _commands.Clear();
         var items = await sut.ListAsync(scope, NavigationExperience.Tenant);
@@ -455,11 +462,11 @@ public class ConversationNotificationTests : IAsyncLifetime
     {
         SeedTenantWithStaffAndTenantUsers();
         var now = DateTime.UtcNow;
-        var adminContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+        var adminContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
             context.PortfolioId == 1 && context.UserId == 10);
-        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+        var tenantContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
             context.PortfolioId == 1 && context.UserId == 20);
-        var tenantAccountId = await _ctx.Db.TenantAccounts
+        var tenantAccountId = await _db.TenantAccounts
             .Where(account => account.PortfolioId == 1)
             .Select(account => account.Id)
             .SingleAsync();
@@ -493,15 +500,15 @@ public class ConversationNotificationTests : IAsyncLifetime
             NavigationFallbackDestination = NavigationDestination.Home,
             CreatedAt = now.AddMinutes(1),
         };
-        _ctx.Db.Notifications.AddRange(bankBroadcast, tenantNotice);
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
+        _db.Notifications.AddRange(bankBroadcast, tenantNotice);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
         var tenantScope = new WorkspaceReadScope(
             1, 20, Guid.NewGuid(), tenantContext.Id, tenantContext.AccessRevision);
         var adminScope = new WorkspaceReadScope(
             1, 10, Guid.NewGuid(), adminContext.Id, adminContext.AccessRevision);
         var sut = new NotificationService(
-            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
 
         _commands.Clear();
         var tenantItems = await sut.ListAsync(tenantScope, NavigationExperience.Tenant);
@@ -529,18 +536,10 @@ public class ConversationNotificationTests : IAsyncLifetime
             [NoticeDeliveryChannel.TenantPortal],
             null,
             "approved-payment-reconcile-key");
-        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
-
-        var first = await atomic.ExecuteAsync(
-            AtomicNoticeDelivery.Identity(command),
-            command,
-            AtomicNoticeDelivery.Codec);
+        var first = await ExecuteNoticeDeliveryAsync(command);
         _services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>()
             .ChangeTracker.Clear();
-        var replay = await atomic.ExecuteAsync(
-            AtomicNoticeDelivery.Identity(command),
-            command,
-            AtomicNoticeDelivery.Codec);
+        var replay = await ExecuteNoticeDeliveryAsync(command);
         _services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>()
             .ChangeTracker.Clear();
         var finalReplayCommand = AtomicNoticeDelivery.Command(
@@ -549,16 +548,13 @@ public class ConversationNotificationTests : IAsyncLifetime
             [NoticeDeliveryChannel.TenantPortal],
             null,
             "approved-payment-final-replay-key");
-        var finalReplay = await atomic.ExecuteAsync(
-            AtomicNoticeDelivery.Identity(finalReplayCommand),
-            finalReplayCommand,
-            AtomicNoticeDelivery.Codec);
+        var finalReplay = await ExecuteNoticeDeliveryAsync(finalReplayCommand);
 
         first.Value.RenderedNoticeId.Should().Be(graph.RenderedNoticeId);
         replay.Value.RenderedNoticeId.Should().Be(graph.RenderedNoticeId);
         finalReplay.Value.RenderedNoticeId.Should().Be(graph.RenderedNoticeId);
-        _ctx.Db.ChangeTracker.Clear();
-        var notification = await _ctx.Db.Notifications.AsNoTracking()
+        _db.ChangeTracker.Clear();
+        var notification = await _db.Notifications.AsNoTracking()
             .SingleAsync(item => item.Id == graph.NotificationId);
         notification.NavigationDestination.Should().Be(NavigationDestination.TenantLedgerEntry);
         notification.NavigationResourceKind.Should().Be(nameof(TenantLedgerEntry));
@@ -567,47 +563,42 @@ public class ConversationNotificationTests : IAsyncLifetime
         notification.NavigationParentResourceId.Should().Be(graph.TenantAccountId);
         notification.RelatedEntityType.Should().Be(nameof(TenantLedgerEntry));
         notification.RelatedEntityId.Should().Be(checked((int)graph.TenantLedgerEntryId));
-        (await _ctx.Db.RenderedNotices.CountAsync()).Should().Be(1);
-        (await _ctx.Db.NoticeDeliveryEvidence.CountAsync()).Should().Be(1);
-        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(1);
-        (await _ctx.Db.Notifications.CountAsync()).Should().Be(1);
+        (await _db.RenderedNotices.CountAsync()).Should().Be(1);
+        (await _db.NoticeDeliveryEvidence.CountAsync()).Should().Be(1);
+        (await _db.OutboxMessages.CountAsync()).Should().Be(1);
+        (await _db.Notifications.CountAsync()).Should().Be(1);
     }
 
     [Fact]
     public async Task NoticeDeliveryApprovedReplay_WithWrongStaleNavigationFailsBeforeMutation()
     {
         var graph = await SeedApprovedPaymentNoticeWithStaleMessageNotificationAsync("approved-payment-wrong-stale");
-        var notification = await _ctx.Db.Notifications.SingleAsync(item => item.Id == graph.NotificationId);
+        var notification = await _db.Notifications.SingleAsync(item => item.Id == graph.NotificationId);
         notification.NavigationResourceId = graph.ConversationId + 1000;
         notification.RelatedEntityId = graph.ConversationId + 1000;
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
         var command = AtomicNoticeDelivery.Command(
             graph.ApprovalContext,
             graph.DraftId,
             [NoticeDeliveryChannel.TenantPortal],
             null,
             "approved-payment-wrong-stale-key");
-        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
-
-        Func<Task> act = async () => await atomic.ExecuteAsync(
-            AtomicNoticeDelivery.Identity(command),
-            command,
-            AtomicNoticeDelivery.Codec);
+        Func<Task> act = async () => await ExecuteNoticeDeliveryAsync(command);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Approved tenant notice is not a recoverable delivery graph.");
-        _ctx.Db.ChangeTracker.Clear();
-        notification = await _ctx.Db.Notifications.AsNoTracking()
+        _db.ChangeTracker.Clear();
+        notification = await _db.Notifications.AsNoTracking()
             .SingleAsync(item => item.Id == graph.NotificationId);
         notification.NavigationDestination.Should().Be(NavigationDestination.Message);
         notification.NavigationResourceKind.Should().Be(nameof(Conversation));
         notification.NavigationResourceId.Should().Be(graph.ConversationId + 1000);
         notification.RelatedEntityType.Should().Be(nameof(Conversation));
         notification.RelatedEntityId.Should().Be(graph.ConversationId + 1000);
-        (await _ctx.Db.RenderedNotices.CountAsync()).Should().Be(1);
-        (await _ctx.Db.NoticeDeliveryEvidence.CountAsync()).Should().Be(1);
-        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(1);
+        (await _db.RenderedNotices.CountAsync()).Should().Be(1);
+        (await _db.NoticeDeliveryEvidence.CountAsync()).Should().Be(1);
+        (await _db.OutboxMessages.CountAsync()).Should().Be(1);
     }
 
     [Fact]
@@ -625,7 +616,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
         };
-        _ctx.Db.NoticeDeliveryEvidence.Add(new NoticeDeliveryEvidence
+        _db.NoticeDeliveryEvidence.Add(new NoticeDeliveryEvidence
         {
             PortfolioId = 1,
             RenderedNoticeId = graph.RenderedNoticeId,
@@ -637,31 +628,26 @@ public class ConversationNotificationTests : IAsyncLifetime
             IdempotencyKey = extraKey,
             CreatedAtUtc = now,
         });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
         var command = AtomicNoticeDelivery.Command(
             graph.ApprovalContext,
             graph.DraftId,
             [NoticeDeliveryChannel.TenantPortal],
             null,
             "approved-payment-extra-evidence-key");
-        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
-
-        Func<Task> act = async () => await atomic.ExecuteAsync(
-            AtomicNoticeDelivery.Identity(command),
-            command,
-            AtomicNoticeDelivery.Codec);
+        Func<Task> act = async () => await ExecuteNoticeDeliveryAsync(command);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Approved tenant notice is not a recoverable delivery graph.");
-        _ctx.Db.ChangeTracker.Clear();
-        var notification = await _ctx.Db.Notifications.AsNoTracking()
+        _db.ChangeTracker.Clear();
+        var notification = await _db.Notifications.AsNoTracking()
             .SingleAsync(item => item.Id == graph.NotificationId);
         notification.NavigationDestination.Should().Be(NavigationDestination.Message);
         notification.NavigationResourceKind.Should().Be(nameof(Conversation));
         notification.NavigationResourceId.Should().Be(graph.ConversationId);
-        (await _ctx.Db.NoticeDeliveryEvidence.CountAsync()).Should().Be(2);
-        (await _ctx.Db.Notifications.CountAsync()).Should().Be(1);
+        (await _db.NoticeDeliveryEvidence.CountAsync()).Should().Be(2);
+        (await _db.Notifications.CountAsync()).Should().Be(1);
     }
 
     [Fact]
@@ -674,32 +660,27 @@ public class ConversationNotificationTests : IAsyncLifetime
             [NoticeDeliveryChannel.Email],
             null,
             "approved-payment-wrong-channel-key");
-        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
-
-        Func<Task> act = async () => await atomic.ExecuteAsync(
-            AtomicNoticeDelivery.Identity(command),
-            command,
-            AtomicNoticeDelivery.Codec);
+        Func<Task> act = async () => await ExecuteNoticeDeliveryAsync(command);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Existing approved notice does not match this approval request.");
-        _ctx.Db.ChangeTracker.Clear();
-        var notification = await _ctx.Db.Notifications.AsNoTracking()
+        _db.ChangeTracker.Clear();
+        var notification = await _db.Notifications.AsNoTracking()
             .SingleAsync(item => item.Id == graph.NotificationId);
         notification.NavigationDestination.Should().Be(NavigationDestination.Message);
         notification.NavigationResourceKind.Should().Be(nameof(Conversation));
         notification.NavigationResourceId.Should().Be(graph.ConversationId);
-        (await _ctx.Db.RenderedNotices.CountAsync()).Should().Be(1);
-        (await _ctx.Db.NoticeDeliveryEvidence.CountAsync()).Should().Be(1);
-        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(1);
-        (await _ctx.Db.Notifications.CountAsync()).Should().Be(1);
+        (await _db.RenderedNotices.CountAsync()).Should().Be(1);
+        (await _db.NoticeDeliveryEvidence.CountAsync()).Should().Be(1);
+        (await _db.OutboxMessages.CountAsync()).Should().Be(1);
+        (await _db.Notifications.CountAsync()).Should().Be(1);
     }
 
     [Fact]
     public async Task CreateBroadcastAsync_NormalizesSeverityAndCountsAsUnreadForPortfolioUsers()
     {
         SeedTenantWithStaffAndTenantUsers();
-        var context = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(row =>
+        var context = await _db.WorkspaceAccessContexts.SingleAsync(row =>
             row.PortfolioId == 1 && row.UserId == 10);
         var now = DateTime.UtcNow;
         var session = new AuthSession
@@ -712,11 +693,11 @@ public class ConversationNotificationTests : IAsyncLifetime
             LastSeenAtUtc = now,
             ExpiresAtUtc = now.AddHours(1),
         };
-        _ctx.Db.AuthSessions.Add(session);
-        await _ctx.Db.SaveChangesAsync();
+        _db.AuthSessions.Add(session);
+        await _db.SaveChangesAsync();
         var scope = new WorkspaceReadScope(1, 10, session.Id, context.Id, context.AccessRevision);
         var sut = new NotificationService(
-            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
 
         var created = await sut.CreateBroadcastAsync(
             scope,
@@ -743,7 +724,7 @@ public class ConversationNotificationTests : IAsyncLifetime
     {
         SeedTenantWithStaffAndTenantUsers();
         var now = DateTime.UtcNow;
-        _ctx.Db.Notifications.Add(new Notification
+        _db.Notifications.Add(new Notification
         {
             PortfolioId = 1,
             Type = "System",
@@ -751,7 +732,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             Message = "Water will be off from noon until two.",
             CreatedAt = now,
         });
-        var contexts = await _ctx.Db.WorkspaceAccessContexts
+        var contexts = await _db.WorkspaceAccessContexts
             .Where(context => context.PortfolioId == 1)
             .ToDictionaryAsync(context => context.UserId);
         var sessions = contexts.Values.Select(context => new AuthSession
@@ -764,9 +745,9 @@ public class ConversationNotificationTests : IAsyncLifetime
             LastSeenAtUtc = now,
             ExpiresAtUtc = now.AddHours(1),
         }).ToDictionary(session => session.UserId);
-        _ctx.Db.AuthSessions.AddRange(sessions.Values);
-        await _ctx.Db.SaveChangesAsync();
-        var notificationId = await _ctx.Db.Notifications.Select(notification => notification.Id).SingleAsync();
+        _db.AuthSessions.AddRange(sessions.Values);
+        await _db.SaveChangesAsync();
+        var notificationId = await _db.Notifications.Select(notification => notification.Id).SingleAsync();
         var sut = _services.GetRequiredService<NotificationService>();
 
         var staffContext = contexts[10];
@@ -789,7 +770,7 @@ public class ConversationNotificationTests : IAsyncLifetime
 
         (await sut.GetUnreadCountAsync(1, 30)).Should().Be(0);
         (await sut.GetUnreadCountAsync(1, 20)).Should().Be(0);
-        (await _ctx.Db.NotificationReadStates.AsNoTracking()
+        (await _db.NotificationReadStates.AsNoTracking()
             .OrderBy(readState => readState.UserId)
             .Select(readState => readState.UserId)
             .ToListAsync()).Should().Equal(10, 30);
@@ -828,9 +809,9 @@ public class ConversationNotificationTests : IAsyncLifetime
                 },
             ],
         };
-        _ctx.Db.Conversations.Add(conversation);
-        _ctx.Db.SaveChanges();
-        _ctx.Db.ChangeTracker.Clear();
+        _db.Conversations.Add(conversation);
+        _db.SaveChanges();
+        _db.ChangeTracker.Clear();
 
         var sut = CreateSut();
 
@@ -845,7 +826,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         detail.UnreadCount.Should().Be(2);
         detail.Messages.Select(m => m.Body).Should().Equal("First reply", "Second message");
 
-        _ctx.Db.Conversations.Single(c => c.Id == conversation.Id).LandlordUnreadCount.Should().Be(2);
+        _db.Conversations.Single(c => c.Id == conversation.Id).LandlordUnreadCount.Should().Be(2);
     }
 
     [Fact]
@@ -949,11 +930,11 @@ public class ConversationNotificationTests : IAsyncLifetime
     public async Task ListAndGetAsync_ProjectViewerAwareCounterpartyNames()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
-        var portfolio = await _ctx.Db.Portfolios.SingleAsync(portfolio => portfolio.Id == 1);
+        var portfolio = await _db.Portfolios.SingleAsync(portfolio => portfolio.Id == 1);
         portfolio.ManagementCompanyName = " Jordan QA Admin ";
-        await _ctx.Db.SaveChangesAsync();
+        await _db.SaveChangesAsync();
         SeedConversation(tenant.Id, "Portal question", DateTime.UtcNow.AddMinutes(-1));
-        var conversationId = await _ctx.Db.Conversations
+        var conversationId = await _db.Conversations
             .Where(conversation => conversation.Subject == "Portal question")
             .Select(conversation => conversation.Id)
             .SingleAsync();
@@ -987,9 +968,9 @@ public class ConversationNotificationTests : IAsyncLifetime
     public async Task ListPageForTenantAsync_FallsBackToGenericCounterpartyWhenManagementNameIsBlank()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
-        var portfolio = await _ctx.Db.Portfolios.SingleAsync(portfolio => portfolio.Id == 1);
+        var portfolio = await _db.Portfolios.SingleAsync(portfolio => portfolio.Id == 1);
         portfolio.ManagementCompanyName = "   ";
-        await _ctx.Db.SaveChangesAsync();
+        await _db.SaveChangesAsync();
         SeedConversation(tenant.Id, "Office question", DateTime.UtcNow.AddMinutes(-1));
 
         var page = await CreateSut().ListPageForTenantAsync(
@@ -1004,7 +985,7 @@ public class ConversationNotificationTests : IAsyncLifetime
     public async Task GetUnreadCountAsync_SumsUnreadCountsInSql()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
-        _ctx.Db.Portfolios.Add(new Portfolio
+        _db.Portfolios.Add(new Portfolio
         {
             Id = 2,
             Name = "Other Portfolio",
@@ -1013,7 +994,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         });
-        _ctx.Db.SaveChanges();
+        _db.SaveChanges();
         SeedConversation(tenant.Id, "Alpha", DateTime.UtcNow.AddMinutes(-3), landlordUnreadCount: 2);
         SeedConversation(tenant.Id, "Bravo", DateTime.UtcNow.AddMinutes(-2), landlordUnreadCount: 5);
         SeedConversation(tenant.Id, "Other portfolio", DateTime.UtcNow.AddMinutes(-1), portfolioId: 2, landlordUnreadCount: 11);
@@ -1043,9 +1024,9 @@ public class ConversationNotificationTests : IAsyncLifetime
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
-        _ctx.Db.Tenants.Add(tenant);
+        _db.Tenants.Add(tenant);
 
-        _ctx.Db.Users.AddRange(
+        _db.Users.AddRange(
             new ApplicationUser
             {
                 Id = 10,
@@ -1108,9 +1089,9 @@ public class ConversationNotificationTests : IAsyncLifetime
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _ctx.Db.Properties.AddRange(tenantProperty, decoyProperty);
-        _ctx.Db.Units.Add(unit);
-        _ctx.Db.SaveChanges();
+        _db.Properties.AddRange(tenantProperty, decoyProperty);
+        _db.Units.Add(unit);
+        _db.SaveChanges();
 
         var authorizedContext = NewAccessContext(10, now);
         var decoyContext = NewAccessContext(30, now);
@@ -1123,8 +1104,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
-        _ctx.Db.WorkspaceAccessContexts.AddRange(authorizedContext, decoyContext, tenantContext);
-        _ctx.Db.SaveChanges();
+        _db.WorkspaceAccessContexts.AddRange(authorizedContext, decoyContext, tenantContext);
+        _db.SaveChanges();
 
         var relationship = new LeaseManagement
         {
@@ -1187,10 +1168,10 @@ public class ConversationNotificationTests : IAsyncLifetime
             CreatedByUserId = 10,
             UpdatedAtUtc = now,
         };
-        _ctx.Db.AddRange(relationship, party, account, agreement);
-        _ctx.Db.SaveChanges();
+        _db.AddRange(relationship, party, account, agreement);
+        _db.SaveChanges();
 
-        _ctx.Db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        _db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
         {
             PortfolioId = 1,
             LeaseAgreementId = agreement.Id,
@@ -1202,11 +1183,11 @@ public class ConversationNotificationTests : IAsyncLifetime
             SigningOrder = 1,
             IsRequired = true,
         });
-        _ctx.Db.SaveChanges();
+        _db.SaveChanges();
 
         IssueAgreement(agreement, now);
 
-        _ctx.Db.TenantUserAccesses.Add(new TenantUserAccess
+        _db.TenantUserAccesses.Add(new TenantUserAccess
         {
             PublicId = Guid.NewGuid(),
             PortfolioId = 1,
@@ -1217,12 +1198,12 @@ public class ConversationNotificationTests : IAsyncLifetime
             GrantedByUserId = 10,
             Reason = "Conversation portal test",
         });
-        _ctx.Db.SaveChanges();
+        _db.SaveChanges();
 
         var authorizedMembership = NewMembership(authorizedContext.Id, now);
         var decoyMembership = NewMembership(decoyContext.Id, now);
-        _ctx.Db.WorkspaceMemberships.AddRange(authorizedMembership, decoyMembership);
-        _ctx.Db.SaveChanges();
+        _db.WorkspaceMemberships.AddRange(authorizedMembership, decoyMembership);
+        _db.SaveChanges();
         var authorizedAssignment = NewAssignment(
             authorizedMembership.Id,
             1,
@@ -1233,15 +1214,15 @@ public class ConversationNotificationTests : IAsyncLifetime
             2,
             MembershipRoleAssignmentScopeKind.SelectedProperties,
             now);
-        _ctx.Db.MembershipRoleAssignments.AddRange(authorizedAssignment, decoyAssignment);
-        _ctx.Db.SaveChanges();
-        _ctx.Db.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
+        _db.MembershipRoleAssignments.AddRange(authorizedAssignment, decoyAssignment);
+        _db.SaveChanges();
+        _db.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
         {
             MembershipRoleAssignmentId = decoyAssignment.Id,
             PropertyId = decoyProperty.Id,
             PortfolioId = 1,
         });
-        _ctx.Db.SaveChanges();
+        _db.SaveChanges();
 
         return tenant;
     }
@@ -1250,22 +1231,22 @@ public class ConversationNotificationTests : IAsyncLifetime
     {
         var issuedFile = AgreementFile($"agreement-{agreement.Id}-issued.pdf", now);
         var executedFile = AgreementFile($"agreement-{agreement.Id}-executed.pdf", now);
-        _ctx.Db.StoredFiles.AddRange(issuedFile, executedFile);
-        _ctx.Db.SaveChanges();
+        _db.StoredFiles.AddRange(issuedFile, executedFile);
+        _db.SaveChanges();
 
         var issuedArtifact = AgreementArtifact(
             issuedFile, LegalDocumentArtifactKind.IssuedAgreement, new string('a', 64), now);
         var executedArtifact = AgreementArtifact(
             executedFile, LegalDocumentArtifactKind.ExecutedAgreement, new string('b', 64), now);
         issuedArtifact.LegalIssuanceFingerprint = new string('c', 64);
-        _ctx.Db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
-        _ctx.Db.SaveChanges();
+        _db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        _db.SaveChanges();
 
         agreement.IssuedArtifactId = issuedArtifact.Id;
         agreement.IssuedAtUtc = now;
         agreement.ExecutedArtifactId = executedArtifact.Id;
         agreement.FullyExecutedAtUtc = now;
-        _ctx.Db.SaveChanges();
+        _db.SaveChanges();
     }
 
     private static StoredFile AgreementFile(string fileName, DateTime now) => new()
@@ -1341,7 +1322,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         int landlordUnreadCount = 0,
         int tenantUnreadCount = 0)
     {
-        _ctx.Db.Conversations.Add(new Conversation
+        _db.Conversations.Add(new Conversation
         {
             PortfolioId = portfolioId,
             TenantId = tenantId,
@@ -1353,7 +1334,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             LandlordUnreadCount = landlordUnreadCount,
             TenantUnreadCount = tenantUnreadCount,
         });
-        _ctx.Db.SaveChanges();
+        _db.SaveChanges();
     }
 
     private async Task<ApprovedNoticeGraph> SeedApprovedPaymentNoticeWithStaleMessageNotificationAsync(
@@ -1362,13 +1343,13 @@ public class ConversationNotificationTests : IAsyncLifetime
         var tenant = SeedTenantWithStaffAndTenantUsers();
         var now = DateTime.UtcNow;
         var approvedAt = DateTime.SpecifyKind(now.AddMinutes(-10), DateTimeKind.Utc);
-        var adminContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+        var adminContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
             context.PortfolioId == 1 && context.UserId == 10);
-        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+        var tenantContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
             context.PortfolioId == 1 && context.UserId == 20);
-        var lease = await _ctx.Db.LeaseManagements.SingleAsync(lease => lease.PortfolioId == 1);
-        var party = await _ctx.Db.LeaseManagementParties.SingleAsync(party => party.PortfolioId == 1);
-        var tenantAccount = await _ctx.Db.TenantAccounts.SingleAsync(account => account.PortfolioId == 1);
+        var lease = await _db.LeaseManagements.SingleAsync(lease => lease.PortfolioId == 1);
+        var party = await _db.LeaseManagementParties.SingleAsync(party => party.PortfolioId == 1);
+        var tenantAccount = await _db.TenantAccounts.SingleAsync(account => account.PortfolioId == 1);
         var ledgerEntry = await SeedTenantLedgerEntryAsync(
             tenantAccount.Id,
             $"{businessKey}-charge",
@@ -1383,7 +1364,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             LastSeenAtUtc = now,
             ExpiresAtUtc = now.AddHours(1),
         };
-        _ctx.Db.AuthSessions.Add(session);
+        _db.AuthSessions.Add(session);
 
         var systemTemplate = new SystemNoticeTemplateVersion
         {
@@ -1419,8 +1400,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
-        _ctx.Db.TenantNoticePolicies.Add(policy);
-        await _ctx.Db.SaveChangesAsync();
+        _db.TenantNoticePolicies.Add(policy);
+        await _db.SaveChangesAsync();
         var draft = new NoticeDraft
         {
             PortfolioId = 1,
@@ -1442,8 +1423,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             UpdatedAt = approvedAt,
             ApprovedAt = approvedAt,
         };
-        _ctx.Db.NoticeDrafts.Add(draft);
-        await _ctx.Db.SaveChangesAsync();
+        _db.NoticeDrafts.Add(draft);
+        await _db.SaveChangesAsync();
 
         var contentHash = Convert.ToHexString(
                 SHA256.HashData(Encoding.UTF8.GetBytes(draft.Subject + "\n" + draft.Body)))
@@ -1462,8 +1443,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             ApprovedByUserId = 10,
             ApprovedAtUtc = approvedAt,
         };
-        _ctx.Db.RenderedNotices.Add(rendered);
-        await _ctx.Db.SaveChangesAsync();
+        _db.RenderedNotices.Add(rendered);
+        await _db.SaveChangesAsync();
 
         var conversation = new Conversation
         {
@@ -1485,8 +1466,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             Channels = "Portal",
             CreatedAt = approvedAt,
         };
-        _ctx.Db.ConversationMessages.Add(message);
-        await _ctx.Db.SaveChangesAsync();
+        _db.ConversationMessages.Add(message);
+        await _db.SaveChangesAsync();
 
         var deliveryKey = DeliveryKey(rendered.Id, party.Id, NoticeDeliveryChannel.TenantPortal, "20");
         var outbox = new OutboxMessage
@@ -1534,9 +1515,9 @@ public class ConversationNotificationTests : IAsyncLifetime
         };
         draft.RenderedNoticeId = rendered.Id;
         draft.ConversationId = conversation.Id;
-        _ctx.Db.AddRange(evidence, notification);
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
+        _db.AddRange(evidence, notification);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
 
         return new ApprovedNoticeGraph(
             draft.Id,
@@ -1572,8 +1553,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             BusinessKey = businessKey,
             CreatedByUserId = 10,
         };
-        _ctx.Db.TenantLedgerEntries.Add(entry);
-        await _ctx.Db.SaveChangesAsync();
+        _db.TenantLedgerEntries.Add(entry);
+        await _db.SaveChangesAsync();
         return entry;
     }
 
@@ -1625,8 +1606,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             CreatedAtUtc = now,
             CreatedByUserId = 10,
         };
-        _ctx.Db.AddRange(property, unit, relationship, account);
-        await _ctx.Db.SaveChangesAsync();
+        _db.AddRange(property, unit, relationship, account);
+        await _db.SaveChangesAsync();
         return await SeedTenantLedgerEntryAsync(account.Id, "foreign-rent-charge", now);
     }
 
