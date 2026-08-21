@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Simulation;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
@@ -81,7 +82,8 @@ public sealed class DevClockControllerTests : IAsyncLifetime
             timeProvider,
             clockState,
             new FixedTimeZoneProvider("America/New_York"),
-            requestScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            requestScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            requestScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
         InstallAccessContext(controller, access);
 
         var jan1 = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -132,7 +134,8 @@ public sealed class DevClockControllerTests : IAsyncLifetime
             timeProvider,
             clockState,
             new FixedTimeZoneProvider("America/New_York"),
-            requestScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            requestScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            requestScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
         InstallAccessContext(controller, access);
 
         var set = Body(await controller.Set(
@@ -159,7 +162,8 @@ public sealed class DevClockControllerTests : IAsyncLifetime
             timeProvider,
             clockState,
             new FixedTimeZoneProvider("America/New_York"),
-            requestScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            requestScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            requestScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
         InstallAccessContext(controller, access);
 
         var instant = new DateTime(2027, 1, 29, 5, 0, 0, DateTimeKind.Utc);
@@ -201,40 +205,12 @@ public sealed class DevClockControllerTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        AddSimulationHandlers(services);
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_conn)
                 .UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
-    }
-
-    private static void AddSimulationHandlers(IServiceCollection services)
-    {
-        services.AddAtomicCommandHandler<
-            SetSimulationClockCommand,
-            SimulationClockMutationResult,
-            SetSimulationClockHandler>();
-        services.AddAtomicCommandHandler<
-            AdvanceSimulationClockCommand,
-            SimulationClockMutationResult,
-            AdvanceSimulationClockHandler>();
-        services.AddAtomicCommandHandler<
-            FreezeSimulationClockCommand,
-            SimulationClockMutationResult,
-            FreezeSimulationClockHandler>();
-        services.AddAtomicCommandHandler<
-            UnfreezeSimulationClockCommand,
-            SimulationClockMutationResult,
-            UnfreezeSimulationClockHandler>();
-        services.AddAtomicCommandHandler<
-            ResetSimulationClockCommand,
-            SimulationClockMutationResult,
-            ResetSimulationClockHandler>();
-        services.AddAtomicCommandHandler<
-            EnqueueSimulationWorkerCommand,
-            EnqueueSimulationWorkerResult,
-            EnqueueSimulationWorkerCommandHandler>();
     }
 
     private static async Task<ActiveAccessContext> SeedAdministratorAccessAsync(ServiceProvider provider)

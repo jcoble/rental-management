@@ -12,6 +12,28 @@ using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
 
+public static class SandboxLifecycleWriteSupport
+{
+    public static TransactionalWrite<SandboxLifecycleCommand, SandboxLifecycleResult> Write(
+        RentalCommandDbContext db,
+        SandboxLifecycleCommand command)
+    {
+        var handler = new SandboxLifecycleCommandHandler(db);
+        var operationName = command.Operation switch
+        {
+            SandboxLifecycleOperation.GoLive => "sandbox.go-live",
+            SandboxLifecycleOperation.ApplyOnboardingChoice => "sandbox.onboarding-choice",
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return new TransactionalWrite<SandboxLifecycleCommand, SandboxLifecycleResult>(
+            operationName, WriteIdempotencyPolicy.Required, command, "sandbox-lifecycle-result:v1",
+            WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy sandbox lifecycle writes are retired; use the shared write executor.");
+}
+
 public sealed class SandboxLifecycleCommandHandler
     : IAtomicCommandHandler<SandboxLifecycleCommand, SandboxLifecycleResult>
 {
@@ -20,6 +42,11 @@ public sealed class SandboxLifecycleCommandHandler
     public SandboxLifecycleCommandHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<SandboxLifecycleResult> HandleAsync(
+        SandboxLifecycleCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw SandboxLifecycleWriteSupport.RetiredPath();
+
+    public async Task<SandboxLifecycleResult> ExecuteAsync(
         SandboxLifecycleCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)

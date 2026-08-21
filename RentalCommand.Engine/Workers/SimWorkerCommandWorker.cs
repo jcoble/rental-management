@@ -1,8 +1,11 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
+using RentalCommand.Data;
 using RentalCommand.Data.Simulation;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Workers;
 
@@ -37,6 +40,8 @@ public sealed class SimWorkerCommandWorker : EngineWorkerBase
     internal async Task<int> ProcessOldestPendingAsync(IServiceProvider scopedProvider, CancellationToken cancellationToken)
     {
         var claimStore = scopedProvider.GetRequiredService<ISimWorkerCommandClaimStore>();
+        var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = scopedProvider.GetRequiredService<IJobStepWriteExecutor>();
         var command = await claimStore.ClaimOldestAsync(_claimOwner, ClaimLease, cancellationToken);
         if (command is null)
             return 0;
@@ -52,12 +57,15 @@ public sealed class SimWorkerCommandWorker : EngineWorkerBase
         {
             var created = await registry.RunAsync(command.WorkerKey, scopedProvider, cancellationToken);
             var resultJson = JsonSerializer.Serialize(new { created });
-            var completedRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime; // real stamp, hoisted for ExecuteUpdate
+            var completedRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
 
-            var finalized = await claimStore.MarkDoneAsync(
+            var terminal = new SimWorkerTerminalCommand(
                 command.Id, command.ClaimOwner, command.ClaimToken,
-                resultJson, completedRealUtc, cancellationToken);
-            if (finalized == 0)
+                SimWorkerCommandStatus.Done, completedRealUtc, ResultJson: resultJson);
+            var finalized = await writes.ExecuteAsync(
+                SimWorkerTerminalWrite.StepKey(terminal),
+                SimWorkerTerminalWrite.Write(db, terminal), cancellationToken);
+            if (!finalized.Value.Applied)
             {
                 _logger.LogWarning(
                     "Discarded stale simulation success for command {CommandId}; its claim lease was lost",
@@ -70,10 +78,13 @@ public sealed class SimWorkerCommandWorker : EngineWorkerBase
             var error = ex.Message;
             var completedRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
 
-            var finalized = await claimStore.MarkErrorAsync(
+            var terminal = new SimWorkerTerminalCommand(
                 command.Id, command.ClaimOwner, command.ClaimToken,
-                error, completedRealUtc, cancellationToken);
-            if (finalized == 0)
+                SimWorkerCommandStatus.Error, completedRealUtc, Error: error);
+            var finalized = await writes.ExecuteAsync(
+                SimWorkerTerminalWrite.StepKey(terminal),
+                SimWorkerTerminalWrite.Write(db, terminal), cancellationToken);
+            if (!finalized.Value.Applied)
             {
                 _logger.LogWarning(
                     "Discarded stale simulation failure for command {CommandId}; its claim lease was lost",

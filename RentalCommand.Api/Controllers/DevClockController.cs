@@ -3,9 +3,12 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Api.Auth;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Time;
+using RentalCommand.Data;
+using RentalCommand.Data.Simulation;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -26,24 +29,24 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class DevClockController : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<SimulationClockMutationResult> ClockMutationCodec =
-        new("simulation.clock.mutation.v1");
-
+    private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IClockStateProvider _clockState;
     private readonly IAppTimeZoneProvider _timeZoneProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public DevClockController(
         TimeProvider timeProvider,
         IClockStateProvider clockState,
         IAppTimeZoneProvider timeZoneProvider,
-        IAtomicUnitOfWork atomic)
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes)
     {
         _timeProvider = timeProvider;
         _clockState = clockState;
         _timeZoneProvider = timeZoneProvider;
-        _atomic = atomic;
+        _db = db;
+        _writes = writes;
     }
 
     /// <summary>Current simulated clock — in-memory only, so it works anonymously and pre-login.</summary>
@@ -115,7 +118,7 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
             frozen ? ClockMode.Frozen : ClockMode.Offset,
             request.TimeZoneId is not null,
             request.TimeZoneId);
-        return await ExecuteClockCommandAsync("simulation.clock.set", access, deliveryKey, command, ct);
+        return await ExecuteClockCommandAsync(access, deliveryKey, command, ct);
     }
 
     /// <summary>Shift the simulated clock forward (or back, with negatives) by a delta.</summary>
@@ -139,7 +142,7 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
             request.Hours,
             request.Minutes,
             request.Seconds);
-        return await ExecuteClockCommandAsync("simulation.clock.advance", access, deliveryKey, command, ct);
+        return await ExecuteClockCommandAsync(access, deliveryKey, command, ct);
     }
 
     /// <summary>Freeze the clock at the current simulated instant.</summary>
@@ -158,7 +161,7 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
             access.SessionId,
             access.AccessContextId,
             access.AccessRevision);
-        return await ExecuteClockCommandAsync("simulation.clock.freeze", access, deliveryKey, command, ct);
+        return await ExecuteClockCommandAsync(access, deliveryKey, command, ct);
     }
 
     /// <summary>Resume ticking from the currently-frozen instant (re-anchored Offset).</summary>
@@ -177,7 +180,7 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
             access.SessionId,
             access.AccessContextId,
             access.AccessRevision);
-        return await ExecuteClockCommandAsync("simulation.clock.unfreeze", access, deliveryKey, command, ct);
+        return await ExecuteClockCommandAsync(access, deliveryKey, command, ct);
     }
 
     /// <summary>Return to real time (clears any timezone override).</summary>
@@ -196,11 +199,10 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
             access.SessionId,
             access.AccessContextId,
             access.AccessRevision);
-        return await ExecuteClockCommandAsync("simulation.clock.reset", access, deliveryKey, command, ct);
+        return await ExecuteClockCommandAsync(access, deliveryKey, command, ct);
     }
 
     private async Task<ActionResult<ClockStateResponse>> ExecuteClockCommandAsync<TCommand>(
-        string commandType,
         ActiveAccessContext access,
         string deliveryKey,
         TCommand command,
@@ -209,11 +211,9 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(commandType, BuildIdentityKey(access, deliveryKey)),
-                command,
-                ClockMutationCodec,
-                ct);
+            var outcome = await _writes.ExecuteExactAsync(
+                BuildIdentityKey(access, deliveryKey),
+                SimulationWriteSupport.Write<TCommand, SimulationClockMutationResult>(_db, command), ct);
             await _clockState.RefreshAsync(ct);
             return Ok(ToResponse(outcome.Value));
         }

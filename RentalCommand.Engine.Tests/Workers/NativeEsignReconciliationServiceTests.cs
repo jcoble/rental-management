@@ -1,12 +1,15 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Reflection;
 using RentalCommand.Api.Services.Esign;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Esign;
+using RentalCommand.Data;
 using RentalCommand.Data.Esign;
 using RentalCommand.Engine.Services;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Tests.Workers;
 
@@ -15,14 +18,16 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
     private readonly ServiceProvider _provider;
     private readonly StubExecutionService _execution = new();
     private readonly StubClaimStore _claims = new();
-    private readonly StubAtomicUnitOfWork _atomic = new();
+    private readonly StubJobStepWriteExecutor _writes = new();
 
     public NativeEsignReconciliationServiceTests()
     {
         var services = new ServiceCollection();
+        services.AddDbContext<RentalCommandDbContext>(options =>
+            options.UseSqlite("DataSource=:memory:"));
         services.AddSingleton<INativeEsignExecutionService>(_execution);
         services.AddSingleton<INativeEsignExecutionClaimStore>(_claims);
-        services.AddSingleton<IAtomicUnitOfWork>(_atomic);
+        services.AddSingleton<IJobStepWriteExecutor>(_writes);
         _provider = services.BuildServiceProvider();
     }
 
@@ -41,7 +46,7 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
             Enumerable.Range(1, NativeEsignReconciliationService.BatchSize));
         _claims.LastBatchSize.Should().Be(NativeEsignReconciliationService.BatchSize);
         _claims.LastLeaseDuration.Should().Be(NativeEsignReconciliationService.ClaimLease);
-        _atomic.LastBatchSize.Should().BeNull();
+        _writes.LastBatchSize.Should().BeNull();
     }
 
     [Fact]
@@ -52,16 +57,16 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
             new NativeEsignExecutionClaim(1, Guid.NewGuid(), Guid.NewGuid()),
         ];
         _claims.HasCompletedAgreementFinancialReconciliations = true;
-        _atomic.DepositChargeCount = 2;
+        _writes.DepositChargeCount = 2;
         var service = NewService();
 
         var completed = await service.ReconcileAsync();
 
         completed.Should().Be(3);
         _execution.RequestIds.Should().Equal(1);
-        _atomic.LastBatchSize.Should()
+        _writes.LastBatchSize.Should()
             .Be(NativeEsignReconciliationService.BatchSize - 1);
-        _atomic.CommandType.Should().Be("native-esign.agreement-financials.batch-reconcile");
+        _writes.CommandType.Should().Be("native-esign.agreement-financials.batch-reconcile");
     }
 
     [Fact]
@@ -107,7 +112,7 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         completed.Should().Be(1);
         _execution.RequestIds.Should().Equal(1);
         _claims.CompletedFinancialProbeCount.Should().Be(1);
-        _atomic.LastBatchSize.Should().BeNull();
+        _writes.LastBatchSize.Should().BeNull();
     }
 
     [Fact]
@@ -188,24 +193,24 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         }
     }
 
-    private sealed class StubAtomicUnitOfWork : IAtomicUnitOfWork
+    private sealed class StubJobStepWriteExecutor : IJobStepWriteExecutor
     {
         public int DepositChargeCount { get; set; }
         public int? LastBatchSize { get; private set; }
         public string? CommandType { get; private set; }
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity,
-            TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec,
+            string stepKey,
+            TransactionalWrite<TCommand, TResult> write,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
-            command.Should().BeOfType<ReconcileNativeEsignAgreementFinancialsBatchCommand>();
-            var batch = (ReconcileNativeEsignAgreementFinancialsBatchCommand)(object)command;
+            var batch = write.Request.Should()
+                .BeOfType<ReconcileNativeEsignAgreementFinancialsBatchCommand>().Subject;
+            stepKey.Should().Be(batch.RunToken.ToString("N"));
             LastBatchSize = batch.BatchSize;
-            CommandType = identity.CommandType;
+            CommandType = write.OperationName;
             var result = (TResult)(object)new ReconcileNativeEsignAgreementFinancialsBatchResult(
                 DepositChargeCount);
             return Task.FromResult(new AtomicCommandOutcome<TResult>(
