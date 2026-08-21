@@ -81,33 +81,6 @@ public sealed class TenantAccountMoneyRouteContractTests
     }
 
     [Fact]
-    public void Every_money_handler_reauthorizes_atomic_replay()
-    {
-        typeof(RecordTenantReceiptHandler).Should()
-            .Implement<IAtomicCommandHandler<RecordTenantReceiptCommand, RecordTenantReceiptResult>>();
-        typeof(PostTenantChargeHandler).Should()
-            .Implement<IAtomicCommandHandler<PostTenantChargeCommand, TenantChargeMutationResult>>();
-        typeof(ReverseTenantChargeHandler).Should()
-            .Implement<IAtomicCommandHandler<ReverseTenantChargeCommand, TenantChargeMutationResult>>();
-        typeof(PostTenantCreditHandler).Should()
-            .Implement<IAtomicCommandHandler<PostTenantCreditCommand, TenantLedgerMutationResult>>();
-        typeof(PostTenantAdjustmentHandler).Should()
-            .Implement<IAtomicCommandHandler<PostTenantAdjustmentCommand, TenantLedgerMutationResult>>();
-        typeof(ReverseTenantLedgerEntryHandler).Should()
-            .Implement<IAtomicCommandHandler<ReverseTenantLedgerEntryCommand, TenantLedgerMutationResult>>();
-        typeof(RefundTenantPaymentHandler).Should()
-            .Implement<IAtomicCommandHandler<RefundTenantPaymentCommand, TenantPaymentRefundResult>>();
-        typeof(FundSecurityDepositHandler).Should()
-            .Implement<IAtomicCommandHandler<FundSecurityDepositCommand, SecurityDepositMutationResult>>();
-        typeof(DeductSecurityDepositHandler).Should()
-            .Implement<IAtomicCommandHandler<DeductSecurityDepositCommand, SecurityDepositMutationResult>>();
-        typeof(RefundSecurityDepositHandler).Should()
-            .Implement<IAtomicCommandHandler<RefundSecurityDepositCommand, SecurityDepositMutationResult>>();
-        typeof(ReverseSecurityDepositEntryHandler).Should()
-            .Implement<IAtomicCommandHandler<ReverseSecurityDepositEntryCommand, SecurityDepositMutationResult>>();
-    }
-
-    [Fact]
     public void Canonical_credit_adjustment_and_reversal_contracts_are_typed()
     {
         // The accounting contract keeps oldest-open-charge-first as the receipt allocation default.
@@ -165,8 +138,6 @@ public sealed class TenantAccountMoneyRouteContractTests
             parameter.ParameterType == typeof(RefundTenantPaymentRequest));
         typeof(RefundTenantPaymentCommand).GetProperty(
             nameof(RefundTenantPaymentCommand.RequiredCapability)).Should().NotBeNull();
-        typeof(RefundTenantPaymentHandler).Should()
-            .Implement<IAtomicCommandHandler<RefundTenantPaymentCommand, TenantPaymentRefundResult>>();
         typeof(TenantPaymentRefundResult).GetProperty(
             nameof(TenantPaymentRefundResult.RefundEntryId)).Should().NotBeNull();
         typeof(TenantPaymentRefundResult).GetProperty(

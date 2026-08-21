@@ -109,20 +109,13 @@ public static class TenantMoneyWriteSupport
             authorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Tenant-money writes no longer use the legacy atomic handlers.");
 }
 
 public sealed class RecordTenantReceiptHandler
-    : IAtomicCommandHandler<RecordTenantReceiptCommand, RecordTenantReceiptResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecordTenantReceiptHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RecordTenantReceiptResult> HandleAsync(
-        RecordTenantReceiptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<RecordTenantReceiptResult> ExecuteAsync(
         RecordTenantReceiptCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -266,9 +259,6 @@ public sealed class RecordTenantReceiptHandler
         return new RecordTenantReceiptResult(true, account.Id, receipt.Id, paymentAttempt.Id,
             receipt.Amount, allocations.AllocatedAmount, allocations.AllocationCount);
     }
-
-    public Task AuthorizeReplayAsync(RecordTenantReceiptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public Task AuthorizeAsync(RecordTenantReceiptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
@@ -667,15 +657,10 @@ internal static class TenantReceiptNotificationStaging
 }
 
 public sealed class PostTenantChargeHandler
-    : IAtomicCommandHandler<PostTenantChargeCommand, TenantChargeMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PostTenantChargeHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<TenantChargeMutationResult> HandleAsync(
-        PostTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<TenantChargeMutationResult> ExecuteAsync(
         PostTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -728,23 +713,15 @@ public sealed class PostTenantChargeHandler
             charge.Amount, null);
     }
 
-    public Task AuthorizeReplayAsync(PostTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(PostTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class ReverseTenantChargeHandler
-    : IAtomicCommandHandler<ReverseTenantChargeCommand, TenantChargeMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ReverseTenantChargeHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<TenantChargeMutationResult> HandleAsync(
-        ReverseTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<TenantChargeMutationResult> ExecuteAsync(
         ReverseTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -829,23 +806,15 @@ public sealed class ReverseTenantChargeHandler
             target.EntryId, reversal.Amount, null);
     }
 
-    public Task AuthorizeReplayAsync(ReverseTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(ReverseTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class PostTenantCreditHandler
-    : IAtomicCommandHandler<PostTenantCreditCommand, TenantLedgerMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PostTenantCreditHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<TenantLedgerMutationResult> HandleAsync(
-        PostTenantCreditCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<TenantLedgerMutationResult> ExecuteAsync(
         PostTenantCreditCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -953,23 +922,15 @@ public sealed class PostTenantCreditHandler
             allocations.AllocationCount, null);
     }
 
-    public Task AuthorizeReplayAsync(PostTenantCreditCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(PostTenantCreditCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class PostTenantAdjustmentHandler
-    : IAtomicCommandHandler<PostTenantAdjustmentCommand, TenantLedgerMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PostTenantAdjustmentHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<TenantLedgerMutationResult> HandleAsync(
-        PostTenantAdjustmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<TenantLedgerMutationResult> ExecuteAsync(
         PostTenantAdjustmentCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1016,23 +977,15 @@ public sealed class PostTenantAdjustmentHandler
             adjustment.EntryType, adjustment.Direction, adjustment.Amount, 0m, 0, null);
     }
 
-    public Task AuthorizeReplayAsync(PostTenantAdjustmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(PostTenantAdjustmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class ReverseTenantLedgerEntryHandler
-    : IAtomicCommandHandler<ReverseTenantLedgerEntryCommand, TenantLedgerMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ReverseTenantLedgerEntryHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<TenantLedgerMutationResult> HandleAsync(
-        ReverseTenantLedgerEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<TenantLedgerMutationResult> ExecuteAsync(
         ReverseTenantLedgerEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1161,23 +1114,15 @@ public sealed class ReverseTenantLedgerEntryHandler
             reversedAllocations.AllocatedAmount, reversedAllocations.AllocationCount, null);
     }
 
-    public Task AuthorizeReplayAsync(ReverseTenantLedgerEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(ReverseTenantLedgerEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class RefundTenantPaymentHandler
-    : IAtomicCommandHandler<RefundTenantPaymentCommand, TenantPaymentRefundResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RefundTenantPaymentHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<TenantPaymentRefundResult> HandleAsync(
-        RefundTenantPaymentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<TenantPaymentRefundResult> ExecuteAsync(
         RefundTenantPaymentCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1356,25 +1301,15 @@ public sealed class RefundTenantPaymentHandler
             compensation.AllocationCount, null);
     }
 
-    public Task AuthorizeReplayAsync(RefundTenantPaymentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(RefundTenantPaymentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class RecoverHistoricalRentChargeHandler
-    : IAtomicCommandHandler<RecoverHistoricalRentChargeCommand, RecoverHistoricalRentChargeResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecoverHistoricalRentChargeHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RecoverHistoricalRentChargeResult> HandleAsync(
-        RecoverHistoricalRentChargeCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<RecoverHistoricalRentChargeResult> ExecuteAsync(
         RecoverHistoricalRentChargeCommand command,
@@ -1513,10 +1448,6 @@ public sealed class RecoverHistoricalRentChargeHandler
             reference);
     }
 
-    public Task AuthorizeReplayAsync(
-        RecoverHistoricalRentChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         RecoverHistoricalRentChargeCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -1548,17 +1479,10 @@ public sealed class RecoverHistoricalRentChargeHandler
 }
 
 public sealed class RecoverLateFeeChargesHandler
-    : IAtomicCommandHandler<RecoverLateFeeChargesCommand, RecoverLateFeeChargesResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecoverLateFeeChargesHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RecoverLateFeeChargesResult> HandleAsync(
-        RecoverLateFeeChargesCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<RecoverLateFeeChargesResult> ExecuteAsync(
         RecoverLateFeeChargesCommand command,
@@ -1701,10 +1625,6 @@ public sealed class RecoverLateFeeChargesHandler
             reference);
     }
 
-    public Task AuthorizeReplayAsync(
-        RecoverLateFeeChargesCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         RecoverLateFeeChargesCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -1803,15 +1723,10 @@ public sealed class RecoverLateFeeChargesHandler
 }
 
 public sealed class FundSecurityDepositHandler
-    : IAtomicCommandHandler<FundSecurityDepositCommand, SecurityDepositMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public FundSecurityDepositHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SecurityDepositMutationResult> HandleAsync(
-        FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<SecurityDepositMutationResult> ExecuteAsync(
         FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1888,23 +1803,15 @@ public sealed class FundSecurityDepositHandler
             command.SecurityDepositAccountId, deposit.Id, receipt.Id, deposit.Amount, null);
     }
 
-    public Task AuthorizeReplayAsync(FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 
 public sealed class DeductSecurityDepositHandler
-    : IAtomicCommandHandler<DeductSecurityDepositCommand, SecurityDepositMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public DeductSecurityDepositHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SecurityDepositMutationResult> HandleAsync(
-        DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<SecurityDepositMutationResult> ExecuteAsync(
         DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1968,23 +1875,15 @@ public sealed class DeductSecurityDepositHandler
             command.SecurityDepositAccountId, deposit.Id, credit.Id, deposit.Amount, null);
     }
 
-    public Task AuthorizeReplayAsync(DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 
 public sealed class RefundSecurityDepositHandler
-    : IAtomicCommandHandler<RefundSecurityDepositCommand, SecurityDepositMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RefundSecurityDepositHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SecurityDepositMutationResult> HandleAsync(
-        RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<SecurityDepositMutationResult> ExecuteAsync(
         RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -2025,24 +1924,15 @@ public sealed class RefundSecurityDepositHandler
             command.SecurityDepositAccountId, deposit.Id, null, amount, null);
     }
 
-    public Task AuthorizeReplayAsync(RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 
 public sealed class ReverseSecurityDepositEntryHandler
-    : IAtomicCommandHandler<ReverseSecurityDepositEntryCommand, SecurityDepositMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ReverseSecurityDepositEntryHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SecurityDepositMutationResult> HandleAsync(
-        ReverseSecurityDepositEntryCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<SecurityDepositMutationResult> ExecuteAsync(
         ReverseSecurityDepositEntryCommand command,
@@ -2202,9 +2092,6 @@ public sealed class ReverseSecurityDepositEntryHandler
             command.SecurityDepositAccountId, depositReversal.Id, ledgerReversal?.Id,
             depositReversal.Amount, null);
     }
-
-    public Task AuthorizeReplayAsync(ReverseSecurityDepositEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public Task AuthorizeAsync(ReverseSecurityDepositEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);

@@ -182,14 +182,6 @@ internal static class AtomicDomainTestKernel
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
         services.AddAtomicCommandHandler<
-            ApplyScheduledRentChargeBatchCommand,
-            ApplyScheduledRentChargeBatchResult,
-            ApplyScheduledRentChargeBatchHandler>();
-        services.AddAtomicCommandHandler<
-            ApplyScheduledLateFeeChargeBatchCommand,
-            ApplyScheduledLateFeeChargeBatchResult,
-            ApplyScheduledLateFeeChargeBatchHandler>();
-        services.AddAtomicCommandHandler<
             ApplyRecurringTenantChargeBatchCommand,
             ApplyRecurringTenantChargeBatchResult,
             ApplyRecurringTenantChargeBatchHandler>();

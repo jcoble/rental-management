@@ -11,19 +11,10 @@ using RentalCommand.Data.Accounting;
 namespace RentalCommand.Data.Payments;
 
 public sealed class RecoverOpeningSecurityDepositsHandler
-    : IAtomicCommandHandler<
-        RecoverOpeningSecurityDepositsCommand,
-        RecoverOpeningSecurityDepositsResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecoverOpeningSecurityDepositsHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RecoverOpeningSecurityDepositsResult> HandleAsync(
-        RecoverOpeningSecurityDepositsCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<RecoverOpeningSecurityDepositsResult> ExecuteAsync(
         RecoverOpeningSecurityDepositsCommand command,
@@ -113,10 +104,6 @@ public sealed class RecoverOpeningSecurityDepositsHandler
             recovery.ReconciledTotal,
             reference);
     }
-
-    public Task AuthorizeReplayAsync(
-        RecoverOpeningSecurityDepositsCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         RecoverOpeningSecurityDepositsCommand command, IAtomicCommandContext context, CancellationToken ct)

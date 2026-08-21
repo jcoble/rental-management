@@ -52,32 +52,6 @@ public sealed class TenantMoneyRecoveryWriteExecutorTests
         });
     }
 
-    [Fact]
-    public async Task AllLegacyRecoveryHandlerArmsThrow()
-    {
-        var opening = OpeningDeposits();
-        var historical = HistoricalRent();
-        var refunded = RefundedAllocation();
-        var lateFees = LateFees();
-        var calls = new Func<Task>[]
-        {
-            () => new RecoverOpeningSecurityDepositsHandler(null!).HandleAsync(opening, null!, default),
-            () => new RecoverHistoricalRentChargeHandler(null!).HandleAsync(historical, null!, default),
-            () => new RecoverRefundedTenantAllocationHandler(null!).HandleAsync(refunded, null!, default),
-            () => new RecoverLateFeeChargesHandler(null!).HandleAsync(lateFees, null!, default),
-            () => new RecoverOpeningSecurityDepositsHandler(null!).AuthorizeReplayAsync(opening, null!, default),
-            () => new RecoverHistoricalRentChargeHandler(null!).AuthorizeReplayAsync(historical, null!, default),
-            () => new RecoverRefundedTenantAllocationHandler(null!).AuthorizeReplayAsync(refunded, null!, default),
-            () => new RecoverLateFeeChargesHandler(null!).AuthorizeReplayAsync(lateFees, null!, default),
-        };
-
-        foreach (var call in calls)
-        {
-            await call.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("Tenant-money writes no longer use the legacy atomic handlers.");
-        }
-    }
-
     private static RecoverOpeningSecurityDepositsCommand OpeningDeposits() => new(
         1, new DateOnly(2099, 8, 20), 2, 2_500m, "FIN-OPENING-FROZEN", 7,
         SessionId, 9, 3, "money.deposits.manage",
