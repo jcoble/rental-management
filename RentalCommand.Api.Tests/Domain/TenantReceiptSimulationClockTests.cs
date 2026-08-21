@@ -615,10 +615,6 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
-        services.AddAtomicCommandHandler<
-            ConfirmScanDraftCommand,
-            ConfirmScanDraftResult,
-            ConfirmScanDraftHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider)

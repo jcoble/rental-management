@@ -96,41 +96,6 @@ public sealed class LeasePartyAccessWritePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task LegacyHandlerEntryPoints_AreRetired()
-    {
-        var commands = Commands();
-        var calls = new Func<Task>[]
-        {
-            () => new AddEffectivePartyHandler().HandleAsync(
-                (AddEffectivePartyCommand)commands[0], null!, default),
-            () => new EndEffectivePartyHandler().HandleAsync(
-                (EndEffectivePartyCommand)commands[1], null!, default),
-            () => new ChangeEffectivePartyRoleHandler().HandleAsync(
-                (ChangeEffectivePartyRoleCommand)commands[2], null!, default),
-            () => new GrantTenantUserAccessHandler().HandleAsync(
-                (GrantTenantUserAccessCommand)commands[3], null!, default),
-            () => new RevokeTenantUserAccessHandler().HandleAsync(
-                (RevokeTenantUserAccessCommand)commands[4], null!, default),
-            () => new AddEffectivePartyHandler().AuthorizeReplayAsync(
-                (AddEffectivePartyCommand)commands[0], null!, default),
-            () => new EndEffectivePartyHandler().AuthorizeReplayAsync(
-                (EndEffectivePartyCommand)commands[1], null!, default),
-            () => new ChangeEffectivePartyRoleHandler().AuthorizeReplayAsync(
-                (ChangeEffectivePartyRoleCommand)commands[2], null!, default),
-            () => new GrantTenantUserAccessHandler().AuthorizeReplayAsync(
-                (GrantTenantUserAccessCommand)commands[3], null!, default),
-            () => new RevokeTenantUserAccessHandler().AuthorizeReplayAsync(
-                (RevokeTenantUserAccessCommand)commands[4], null!, default),
-        };
-
-        foreach (var call in calls)
-        {
-            await call.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("*no longer use the legacy atomic handlers*");
-        }
-    }
-
-    [Fact]
     public async Task AddEndChangeRole_ReplayExactly_UseInterceptorAuditClock_AndRejectStaleReplay()
     {
         var scenario = await SeedScenarioAsync();

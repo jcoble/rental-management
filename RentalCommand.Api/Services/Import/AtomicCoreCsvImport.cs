@@ -57,23 +57,14 @@ public static class AtomicCoreCsvImport
             executeAsync, authorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Core CSV imports must use the shared request write executor.");
 }
 
 /// <summary>One receipt-backed Property or Tenant CSV command; PostgreSQL owns the entire row set.</summary>
 public sealed class AtomicCoreCsvImportHandler
-    : IAtomicCommandHandler<AtomicCoreCsvImportCommand, AtomicCoreCsvImportResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicCoreCsvImportHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<AtomicCoreCsvImportResult> HandleAsync(
-        AtomicCoreCsvImportCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) =>
-        throw AtomicCoreCsvImport.RetiredPath();
 
     internal async Task<AtomicCoreCsvImportResult> ExecuteAsync(
         AtomicCoreCsvImportCommand command,
@@ -153,12 +144,6 @@ public sealed class AtomicCoreCsvImportHandler
             });
         }
     }
-
-    public Task AuthorizeReplayAsync(
-        AtomicCoreCsvImportCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw AtomicCoreCsvImport.RetiredPath();
 
     internal async Task AuthorizeAsync(
         AtomicCoreCsvImportCommand command,

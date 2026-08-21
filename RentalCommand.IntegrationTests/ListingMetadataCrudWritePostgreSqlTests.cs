@@ -182,44 +182,6 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
             .WithMessage("The listing is outside the caller's current property scope.");
     }
 
-    [Fact]
-    public async Task SixLegacyHandlers_ThrowRetiredPathMessage()
-    {
-        var scope = new WorkspaceReadScope(1, 7, Guid.NewGuid(), 9, 3);
-        var context = Mock.Of<IAtomicCommandContext>();
-        const string retired = "Local listing writes no longer use the legacy listing handlers.";
-
-        await AssertRetired(() => new GenerateListingWorkspaceHandler().HandleAsync(
-            new GenerateListingWorkspaceCommand(
-                1, 42, 7, scope.SessionId, scope.AccessContextId, scope.AccessRevision), context, default));
-        await AssertRetired(() => new SaveListingWorkspaceHandler().HandleAsync(
-            new SaveListingWorkspaceCommand(
-                1, 42, 7, scope.SessionId, scope.AccessContextId, scope.AccessRevision,
-                null, null, null, null, null, null, null, null, null, null, null, null),
-            context, default));
-        await AssertRetired(() => new FinalizeListingPhotoUploadHandler().HandleAsync(
-            new FinalizeListingPhotoUploadCommand(
-                1, 42, 7, scope.SessionId, scope.AccessContextId, scope.AccessRevision,
-                1, Guid.NewGuid(), "listing-photo", "operation", "fingerprint",
-                "stored/photo.jpg", "photo.jpg", "image/jpeg", 4, "sha256"),
-            context, default));
-        await AssertRetired(() => new UpdateListingPhotoHandler().HandleAsync(
-            new UpdateListingPhotoCommand(
-                1, 42, 7, scope.SessionId, scope.AccessContextId, scope.AccessRevision,
-                1, "Exterior", null), context, default));
-        await AssertRetired(() => new RemoveListingPhotoHandler().HandleAsync(
-            new RemoveListingPhotoCommand(
-                1, 42, 7, scope.SessionId, scope.AccessContextId, scope.AccessRevision, 1),
-            context, default));
-        await AssertRetired(() => new ReorderListingPhotosHandler().HandleAsync(
-            new ReorderListingPhotosCommand(
-                1, 42, 7, scope.SessionId, scope.AccessContextId, scope.AccessRevision, [1]),
-            context, default));
-
-        async Task AssertRetired(Func<Task> action) =>
-            await action.Should().ThrowAsync<InvalidOperationException>().WithMessage(retired);
-    }
-
     private async Task<(WorkspaceReadScope Scope, int UnitId)> SeedScopeAsync(DateTime now)
     {
         var user = await _context.Db.Users.SingleAsync(row => row.Id == 1);

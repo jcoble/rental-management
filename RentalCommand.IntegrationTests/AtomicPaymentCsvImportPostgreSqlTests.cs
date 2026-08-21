@@ -52,10 +52,6 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
         services.AddSingleton<OutboxFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            AtomicPaymentCsvImportCommand,
-            AtomicPaymentCsvImportResult,
-            AtomicPaymentCsvImportHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())

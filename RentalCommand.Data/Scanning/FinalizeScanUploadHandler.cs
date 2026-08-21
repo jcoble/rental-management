@@ -12,18 +12,7 @@ using RentalCommand.Data.Documents;
 namespace RentalCommand.Data.Scanning;
 
 public sealed class FinalizeScanUploadHandler
-    : IAtomicCommandHandler<FinalizeScanUploadCommand, FinalizeScanUploadResult>
 {
-    public Task<FinalizeScanUploadResult> HandleAsync(
-        FinalizeScanUploadCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        FinalizeScanUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
     public static async Task<FinalizeScanUploadResult> ExecuteAsync(
         RentalCommandDbContext db,
         FinalizeScanUploadCommand command,

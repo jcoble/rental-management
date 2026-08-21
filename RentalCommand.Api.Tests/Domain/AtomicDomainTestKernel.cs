@@ -42,18 +42,6 @@ internal static class AtomicDomainTestKernel
     {
         var services = Core(connectionString, timeProvider, interceptors);
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            CreateAppointmentCommand,
-            OperationMutationResult,
-            CreateAppointmentHandler>();
-        services.AddAtomicCommandHandler<
-            UpdateAppointmentCommand,
-            OperationMutationResult,
-            UpdateAppointmentHandler>();
-        services.AddAtomicCommandHandler<
-            DeleteAppointmentCommand,
-            OperationMutationResult,
-            DeleteAppointmentHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -64,18 +52,6 @@ internal static class AtomicDomainTestKernel
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            CreateAppointmentCommand,
-            OperationMutationResult,
-            CreateAppointmentHandler>();
-        services.AddAtomicCommandHandler<
-            UpdateAppointmentCommand,
-            OperationMutationResult,
-            UpdateAppointmentHandler>();
-        services.AddAtomicCommandHandler<
-            DeleteAppointmentCommand,
-            OperationMutationResult,
-            DeleteAppointmentHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -114,38 +90,6 @@ internal static class AtomicDomainTestKernel
     private static void AddWorkOrderHandlers(IServiceCollection services)
     {
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            CreateWorkOrderCommand,
-            WorkOrderMutationResult,
-            CreateWorkOrderHandler>();
-        services.AddAtomicCommandHandler<
-            UpdateWorkOrderCommand,
-            WorkOrderMutationResult,
-            UpdateWorkOrderHandler>();
-        services.AddAtomicCommandHandler<
-            DeleteWorkOrderCommand,
-            WorkOrderMutationResult,
-            DeleteWorkOrderHandler>();
-        services.AddAtomicCommandHandler<
-            CreateTenantWorkOrderCommand,
-            WorkOrderMutationResult,
-            CreateTenantWorkOrderHandler>();
-        services.AddAtomicCommandHandler<
-            AddStaffWorkOrderCommentCommand,
-            WorkOrderMutationResult,
-            AddStaffWorkOrderCommentHandler>();
-        services.AddAtomicCommandHandler<
-            AddTenantWorkOrderCommentCommand,
-            WorkOrderMutationResult,
-            AddTenantWorkOrderCommentHandler>();
-        services.AddAtomicCommandHandler<
-            UpdateTenantWorkOrderCommand,
-            WorkOrderMutationResult,
-            UpdateTenantWorkOrderHandler>();
-        services.AddAtomicCommandHandler<
-            CancelTenantWorkOrderCommand,
-            WorkOrderMutationResult,
-            CancelTenantWorkOrderHandler>();
     }
 
     internal static ServiceProvider CreateForApplications(string connectionString)
@@ -228,10 +172,6 @@ internal static class AtomicDomainTestKernel
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            AtomicMoneyMutationCommand,
-            AtomicMoneyMutationResult,
-            AtomicMoneyMutationHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -275,18 +215,6 @@ internal static class AtomicDomainTestKernel
             CompleteVendorDispatchFromInboundCommand,
             CompleteVendorDispatchFromInboundResult,
             CompleteVendorDispatchFromInboundHandler>();
-        services.AddAtomicCommandHandler<
-            CreateAppointmentCommand,
-            OperationMutationResult,
-            CreateAppointmentHandler>();
-        services.AddAtomicCommandHandler<
-            UpdateAppointmentCommand,
-            OperationMutationResult,
-            UpdateAppointmentHandler>();
-        services.AddAtomicCommandHandler<
-            DeleteAppointmentCommand,
-            OperationMutationResult,
-            DeleteAppointmentHandler>();
         AddWorkOrderHandlers(services);
         return services.BuildServiceProvider();
     }

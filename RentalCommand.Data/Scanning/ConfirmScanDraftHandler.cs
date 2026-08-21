@@ -11,18 +11,7 @@ namespace RentalCommand.Data.Scanning;
 /// dependency so claiming, canonical writes, file linkage, audit, and receipt commit together.
 /// </summary>
 public sealed class ConfirmScanDraftHandler
-    : IAtomicCommandHandler<ConfirmScanDraftCommand, ConfirmScanDraftResult>
 {
-    public Task<ConfirmScanDraftResult> HandleAsync(
-        ConfirmScanDraftCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        ConfirmScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
     public static async Task<ConfirmScanDraftResult> ExecuteAsync(
         RentalCommandDbContext db,
         IScanConfirmationTargetWriter targetWriter,

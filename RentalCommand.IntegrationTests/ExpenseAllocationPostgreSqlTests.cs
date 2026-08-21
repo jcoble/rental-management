@@ -71,10 +71,6 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            AtomicMoneyMutationCommand,
-            AtomicMoneyMutationResult,
-            AtomicMoneyMutationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_connectionString)
                 .UseAtomicPersistenceKernel(provider)
