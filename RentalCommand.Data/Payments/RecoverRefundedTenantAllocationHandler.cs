@@ -10,19 +10,10 @@ namespace RentalCommand.Data.Payments;
 /// fully-refunded payment receipt. This is historical recovery, not another allocation route.
 /// </summary>
 public sealed class RecoverRefundedTenantAllocationHandler
-    : IAtomicCommandHandler<
-        RecoverRefundedTenantAllocationCommand,
-        RecoverRefundedTenantAllocationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecoverRefundedTenantAllocationHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RecoverRefundedTenantAllocationResult> HandleAsync(
-        RecoverRefundedTenantAllocationCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<RecoverRefundedTenantAllocationResult> ExecuteAsync(
         RecoverRefundedTenantAllocationCommand command,
@@ -86,10 +77,6 @@ public sealed class RecoverRefundedTenantAllocationHandler
             recovery.ReversedAmount,
             reference);
     }
-
-    public Task AuthorizeReplayAsync(
-        RecoverRefundedTenantAllocationCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         RecoverRefundedTenantAllocationCommand command, IAtomicCommandContext context, CancellationToken ct)

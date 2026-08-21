@@ -42,35 +42,6 @@ public sealed class ScheduledTenantChargeWriteExecutorTests
             "scheduled-tenant-charges.late-fee.apply.v1", null);
     }
 
-    [Fact]
-    public async Task AllLegacyHandlerArmsThrow()
-    {
-        var create = Create();
-        var update = Update();
-        var deactivate = Deactivate();
-        var rent = Rent();
-        var lateFee = LateFee();
-        var calls = new Func<Task>[]
-        {
-            () => new CreateRecurringTenantChargeHandler(null!).HandleAsync(create, null!, default),
-            () => new CreateRecurringTenantChargeHandler(null!).AuthorizeReplayAsync(create, null!, default),
-            () => new UpdateRecurringTenantChargeHandler(null!).HandleAsync(update, null!, default),
-            () => new UpdateRecurringTenantChargeHandler(null!).AuthorizeReplayAsync(update, null!, default),
-            () => new DeactivateRecurringTenantChargeHandler(null!).HandleAsync(deactivate, null!, default),
-            () => new DeactivateRecurringTenantChargeHandler(null!).AuthorizeReplayAsync(deactivate, null!, default),
-            () => new ApplyScheduledRentChargeBatchHandler(null!).HandleAsync(rent, null!, default),
-            () => new ApplyScheduledRentChargeBatchHandler(null!).AuthorizeReplayAsync(rent, null!, default),
-            () => new ApplyScheduledLateFeeChargeBatchHandler(null!).HandleAsync(lateFee, null!, default),
-            () => new ApplyScheduledLateFeeChargeBatchHandler(null!).AuthorizeReplayAsync(lateFee, null!, default),
-        };
-
-        foreach (var call in calls)
-        {
-            await call.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("Tenant-money writes no longer use the legacy atomic handlers.");
-        }
-    }
-
     private static void AssertWrite<TCommand>(
         TCommand command,
         string operation,

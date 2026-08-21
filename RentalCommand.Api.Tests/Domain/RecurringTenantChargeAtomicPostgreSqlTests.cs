@@ -571,18 +571,6 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            CreateRecurringTenantChargeCommand,
-            RecurringTenantChargeMutationResult,
-            CreateRecurringTenantChargeHandler>();
-        services.AddAtomicCommandHandler<
-            UpdateRecurringTenantChargeCommand,
-            RecurringTenantChargeMutationResult,
-            UpdateRecurringTenantChargeHandler>();
-        services.AddAtomicCommandHandler<
-            DeactivateRecurringTenantChargeCommand,
-            RecurringTenantChargeMutationResult,
-            DeactivateRecurringTenantChargeHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider);
