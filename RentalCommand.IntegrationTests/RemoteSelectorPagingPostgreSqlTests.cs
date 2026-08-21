@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -283,7 +284,7 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
             _context.Db,
             Mock.Of<IFileStorage>(),
             TimeProvider.System,
-            Mock.Of<IAtomicUnitOfWork>());
+            Mock.Of<IRequestWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAsync(

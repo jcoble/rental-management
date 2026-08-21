@@ -3671,6 +3671,13 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                         refund, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
+        if (command is AtomicMoneyMutationCommand money)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey, AtomicMoneyMutation.Write(money, db), ct);
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
         return await scope.ServiceProvider
             .GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, codec, ct);

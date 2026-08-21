@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -26,7 +27,7 @@ public class LoanServiceTests : IDisposable
     public LoanServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new LoanService(_ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
+        _sut = new LoanService(_ctx.Db, TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
     }
 
     public void Dispose() => _ctx.Dispose();

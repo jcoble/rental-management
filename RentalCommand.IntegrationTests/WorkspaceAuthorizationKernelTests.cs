@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -99,6 +100,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, AccessTestActor>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
             AtomicMoneyMutationCommand,
@@ -1363,8 +1365,9 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                 IncurredAt = createdAtUtc,
             },
             createdAtUtc);
+        var createIdentity = AtomicMoneyMutation.Identity(createCommand);
         var created = await ExecuteAtomicAsync(
-            AtomicMoneyMutation.Identity(createCommand), createCommand, AtomicMoneyMutation.Codec);
+            createIdentity, createCommand, AtomicMoneyMutation.Codec);
         created.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         created.Value.EntityId.Should().BePositive(
             "future frozen business time must not expire present-day session authority");
@@ -1399,6 +1402,24 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         (await verify.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
             row.CommandType == updateIdentity.CommandType &&
             row.IdempotencyKey == updateIdentity.IdempotencyKey)).Should().Be(1);
+        var auditTimestamps = await verify.AtomicAuditLogs.AsNoTracking()
+            .Where(row =>
+                (row.CommandType == createIdentity.CommandType &&
+                 row.CommandIdempotencyKey == createIdentity.IdempotencyKey) ||
+                (row.CommandType == updateIdentity.CommandType &&
+                 row.CommandIdempotencyKey == updateIdentity.IdempotencyKey))
+            .Select(row => new { row.CommandType, row.CommandIdempotencyKey, row.Timestamp })
+            .ToListAsync();
+        var createAudits = auditTimestamps.Where(row =>
+            row.CommandType == createIdentity.CommandType &&
+            row.CommandIdempotencyKey == createIdentity.IdempotencyKey).ToArray();
+        createAudits.Should().NotBeEmpty();
+        createAudits.Should().OnlyContain(row => row.Timestamp == createdAtUtc);
+        var updateAudits = auditTimestamps.Where(row =>
+            row.CommandType == updateIdentity.CommandType &&
+            row.CommandIdempotencyKey == updateIdentity.IdempotencyKey).ToArray();
+        updateAudits.Should().NotBeEmpty();
+        updateAudits.Should().OnlyContain(row => row.Timestamp == updatedAtUtc);
     }
 
     [SkippableFact]
@@ -2496,6 +2517,13 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = Services.CreateAsyncScope();
+        if (command is AtomicMoneyMutationCommand money)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey, AtomicMoneyMutation.Write(money, db));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
         return await scope.ServiceProvider
             .GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, codec);

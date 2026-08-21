@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -127,11 +128,11 @@ public sealed class UnitMoneyPostgreSqlTests : IAsyncLifetime
             _context.Db,
             Mock.Of<IFileStorage>(),
             TimeProvider.System,
-            Mock.Of<IAtomicUnitOfWork>());
+            Mock.Of<IRequestWriteExecutor>());
         var loanService = new LoanService(
             _context.Db,
             TimeProvider.System,
-            Mock.Of<IAtomicUnitOfWork>());
+            Mock.Of<IRequestWriteExecutor>());
 
         _commands.Clear();
         var unitExpensePage = await expenseService.ListPageAsync(
