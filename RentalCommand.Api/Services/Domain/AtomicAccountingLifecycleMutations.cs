@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -99,13 +100,17 @@ public sealed class PrepareAccountingDisconnectHandler
 
     public PrepareAccountingDisconnectHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<PrepareAccountingDisconnectResult> HandleAsync(
+    public Task<PrepareAccountingDisconnectResult> HandleAsync(
+        PrepareAccountingDisconnectCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public async Task<PrepareAccountingDisconnectResult> ExecuteAsync(
         PrepareAccountingDisconnectCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         AccountingLifecycleCommandSupport.Validate(command);
-        await AccountingLifecycleCommandSupport.AcquireWorkspaceLocksAsync(command, attempt, ct);
         var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, _db, now, ct);
 
@@ -186,6 +191,11 @@ public sealed class PrepareAccountingDisconnectHandler
     public Task AuthorizeReplayAsync(
         PrepareAccountingDisconnectCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(
+        PrepareAccountingDisconnectCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
         AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, _db, context, ct);
 }
@@ -197,7 +207,12 @@ public sealed class FinalizeAccountingDisconnectHandler
 
     public FinalizeAccountingDisconnectHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<FinalizeAccountingDisconnectResult> HandleAsync(
+    public Task<FinalizeAccountingDisconnectResult> HandleAsync(
+        FinalizeAccountingDisconnectCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public async Task<FinalizeAccountingDisconnectResult> ExecuteAsync(
         FinalizeAccountingDisconnectCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -208,9 +223,6 @@ public sealed class FinalizeAccountingDisconnectHandler
             throw new ArgumentException("A prepared accounting connection and token generation are required.");
         }
 
-        await AccountingLifecycleCommandSupport.AcquireWorkspaceLocksAsync(command, attempt, ct);
-        await attempt.AcquireLockAsync(
-            "AccountingConnection", command.ConnectionId, ct);
         var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, _db, now, ct);
 
@@ -276,6 +288,11 @@ public sealed class FinalizeAccountingDisconnectHandler
     public Task AuthorizeReplayAsync(
         FinalizeAccountingDisconnectCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(
+        FinalizeAccountingDisconnectCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
         AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, _db, context, ct);
 }
@@ -287,7 +304,12 @@ public sealed class SetAccountingDirectionHandler
 
     public SetAccountingDirectionHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SetAccountingDirectionResult> HandleAsync(
+    public Task<SetAccountingDirectionResult> HandleAsync(
+        SetAccountingDirectionCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public async Task<SetAccountingDirectionResult> ExecuteAsync(
         SetAccountingDirectionCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -298,7 +320,6 @@ public sealed class SetAccountingDirectionHandler
             throw new ArgumentException("At least one accounting direction must be specified.");
         }
 
-        await AccountingLifecycleCommandSupport.AcquireWorkspaceLocksAsync(command, attempt, ct);
         var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, _db, now, ct);
 
@@ -363,25 +384,17 @@ public sealed class SetAccountingDirectionHandler
     public Task AuthorizeReplayAsync(
         SetAccountingDirectionCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(
+        SetAccountingDirectionCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
         AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, _db, context, ct);
 }
 
 internal static class AccountingLifecycleCommandSupport
 {
-    public static async Task AcquireWorkspaceLocksAsync(
-        IAccountingLifecycleWorkspaceCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct)
-    {
-        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await attempt.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        // A portfolio owns at most one row per provider. This lock serializes provider-row
-        // resolution with connect/disconnect/direction commands before the exact row lock is known.
-        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
-    }
-
     public static async Task<int?> ResolveAndLockConnectionIdAsync(
         RentalCommandDbContext db,
         IAccountingLifecycleWorkspaceCommand command,
@@ -593,4 +606,101 @@ public static class AtomicAccountingLifecycle
         "accounting.connection.direction.set",
         $"{command.PortfolioId}:{command.AccessContextId}:{command.Provider}:" +
         command.DeliveryIdempotencyKey);
+}
+
+public static class AccountingWriteSupport
+{
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        var (operationName, resultContract) = command switch
+        {
+            CreateLedgerAccountCommand =>
+                ("accounting.ledger-account.create", "accounting.ledger-account.mutation.v1"),
+            UpdateLedgerAccountCommand =>
+                ("accounting.ledger-account.update", "accounting.ledger-account.mutation.v1"),
+            PrepareAccountingConnectCommand =>
+                ("accounting.oauth-state.prepare", "rental.accounting-connect.prepare.v1"),
+            CancelTenantAutopayCommand =>
+                ("tenant-autopay.cancel", "rental.tenant-autopay.cancel.v1"),
+            PrepareAccountingDisconnectCommand =>
+                ("accounting.connection.disconnect.prepare", "rental.accounting-disconnect.prepare.v1"),
+            FinalizeAccountingDisconnectCommand =>
+                ("accounting.connection.disconnect.finalize", "rental.accounting-disconnect.finalize.v1"),
+            SetAccountingDirectionCommand =>
+                ("accounting.connection.direction.set", "rental.accounting-direction.set.v1"),
+            ApplyAccountingPullResultCommand =>
+                ("accounting.pull.apply", "accounting.pull.apply.v1"),
+            ConfirmAccountingMappingCommand =>
+                ("accounting.mapping.confirm", "accounting.mapping.confirm.result.v2"),
+            ContinueAccountingMappingPromotionCommand =>
+                ("accounting.mapping.promote.continue", "accounting.mapping.promote.continue.result.v1"),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+        var lockPlan = command switch
+        {
+            CreateLedgerAccountCommand create => AuthorizationScope(
+                create.ActorAuthSessionId, create.ActorAccessContextId, create.PortfolioId),
+            UpdateLedgerAccountCommand update => new WriteLockPlan(
+                WriteLockProtocol.AuthorizationScopeLedgerAccount,
+                WriteLock.For("AuthSession", update.ActorAuthSessionId),
+                WriteLock.For("WorkspaceAccessContext", update.ActorAccessContextId),
+                WriteLock.For("Portfolio", update.PortfolioId),
+                WriteLock.For("LedgerAccount", update.AccountId)),
+            PrepareAccountingConnectCommand connect => AuthorizationScope(
+                connect.AuthSessionId, connect.AccessContextId, connect.PortfolioId),
+            CancelTenantAutopayCommand autopay => new WriteLockPlan(
+                WriteLockProtocol.AuthorizationScopeTenantAccount,
+                WriteLock.For("AuthSession", autopay.TenantAuthSessionId),
+                WriteLock.For("WorkspaceAccessContext", autopay.TenantAccessContextId),
+                WriteLock.For("TenantAccount", autopay.TenantAccountId)),
+            PrepareAccountingDisconnectCommand prepare => AuthorizationScope(
+                prepare.AuthSessionId, prepare.AccessContextId, prepare.PortfolioId),
+            FinalizeAccountingDisconnectCommand finalize => AuthorizationAccountingConnection(
+                finalize.AuthSessionId, finalize.AccessContextId, finalize.ConnectionId),
+            SetAccountingDirectionCommand direction => AuthorizationScope(
+                direction.AuthSessionId, direction.AccessContextId, direction.PortfolioId),
+            ApplyAccountingPullResultCommand pull => new WriteLockPlan(
+                WriteLockProtocol.AccountingConnection,
+                WriteLock.For("AccountingConnection", pull.AccountingConnectionId)),
+            ConfirmAccountingMappingCommand mapping => AuthorizationAccountingConnection(
+                mapping.AuthSessionId, mapping.AccessContextId, mapping.AccountingConnectionId),
+            ContinueAccountingMappingPromotionCommand continuation => AuthorizationAccountingConnection(
+                continuation.AuthSessionId, continuation.AccessContextId,
+                continuation.AccountingConnectionId),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+        return new TransactionalWrite<TCommand, TResult>(
+            operationName,
+            WriteIdempotencyPolicy.Required,
+            command,
+            resultContract,
+            lockPlan,
+            executeAsync,
+            authorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic accounting writes are retired; use the shared write executor.");
+
+    private static WriteLockPlan AuthorizationScope(Guid sessionId, int accessContextId, int portfolioId) =>
+        new(
+            WriteLockProtocol.AuthorizationScope,
+            WriteLock.For("AuthSession", sessionId),
+            WriteLock.For("WorkspaceAccessContext", accessContextId),
+            WriteLock.For("Portfolio", portfolioId));
+
+    private static WriteLockPlan AuthorizationAccountingConnection(
+        Guid sessionId, int accessContextId, int connectionId) =>
+        new(
+            WriteLockProtocol.AuthorizationScopeAccountingConnection,
+            WriteLock.For("AuthSession", sessionId),
+            WriteLock.For("WorkspaceAccessContext", accessContextId),
+            WriteLock.For("AccountingConnection", connectionId));
 }

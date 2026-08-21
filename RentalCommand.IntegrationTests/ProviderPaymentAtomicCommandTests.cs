@@ -1747,13 +1747,13 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("portal");
-        await using var db = NewContext();
         await using var atomicScope = _services!.CreateAsyncScope();
+        var db = atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var service = new PortalService(
             db,
             new NoopLeaseQaService(),
             TimeProvider.System,
-            atomicScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            atomicScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
 
         var active = await service.GetAutopayStatusAsync(
             scenario.PortfolioId, scenario.TenantId, scenario.AccountId);
