@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -16,6 +17,7 @@ using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auth;
 using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Payments;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -24,13 +26,9 @@ namespace RentalCommand.Api.Tests.Domain;
 public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
-    private static readonly AtomicJsonResultCodec<RecurringTenantChargeMutationResult> Codec =
-        new("tenant-account.recurring-charge.configuration.v1");
-
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _setup = null!;
     private ServiceProvider _services = null!;
-    private IAtomicUnitOfWork _atomic = null!;
 
     public RecurringTenantChargeAtomicPostgreSqlTests(MigratedPostgreSqlFixture fixture) =>
         _fixture = fixture;
@@ -41,7 +39,6 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
         await new ChartOfAccountsSeedService(_setup.Db).SeedAsync(PortfolioId);
         await _setup.Db.SaveChangesAsync();
         _services = CreateServices(_setup.ConnectionString);
-        _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
     }
 
     public async Task DisposeAsync()
@@ -56,7 +53,10 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
         var graph = await SeedGraphAsync("create-derived");
         var scope = _setup.Db.SeedPropertyManagerScope(
             PortfolioId, graph.PropertyId, "create-derived-manager");
-        var command = CreateCommand(graph, scope, "create-derived-key");
+        var command = CreateCommand(graph, scope, "create-derived-key") with
+        {
+            BusinessNowUtc = DateTime.UtcNow.AddHours(1),
+        };
 
         var outcome = await Execute(
             "tenant-account.recurring-charge.create.v1", command.DeliveryIdempotencyKey, command);
@@ -80,6 +80,8 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
                 && row.EntityId == schedule.Id);
         audit.Operation.Should().Be(AuditLogOperation.Created);
         audit.UserId.Should().Be(scope.UserId);
+        audit.Timestamp.Should().Be(command.BusinessNowUtc)
+            .And.NotBeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
         audit.NewValues.Should().Contain($"\"PropertyId\": {graph.PropertyId}");
         audit.NewValues.Should().Contain($"\"UnitId\": {graph.UnitId}");
 
@@ -334,14 +336,8 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
         var command = CreateCommand(graph, scope, "create-rollback-key");
         var failure = new AuditInsertFailureInterceptor { FailAtomicAudit = true };
         await using var services = CreateServices(_setup.ConnectionString, failure);
-        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
 
-        await FluentActions.Invoking(() => atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "tenant-account.recurring-charge.create.v1",
-                    command.DeliveryIdempotencyKey),
-                command,
-                Codec))
+        await FluentActions.Invoking(() => ExecuteCreateAsync(services, command))
             .Should().ThrowAsync<DbUpdateException>();
 
         _setup.Db.ChangeTracker.Clear();
@@ -356,12 +352,7 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
             row.IdempotencyKey.StartsWith("recurring-tenant-charge-config:"))).Should().Be(0);
 
         failure.FailAtomicAudit = false;
-        var retry = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "tenant-account.recurring-charge.create.v1",
-                command.DeliveryIdempotencyKey),
-            command,
-            Codec);
+        var retry = await ExecuteCreateAsync(services, command);
         retry.Disposition.Should().Be(AtomicCommandDisposition.Executed);
     }
 
@@ -530,13 +521,46 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
     private static StaffOperationActor Actor(WorkspaceReadScope scope) =>
         new(scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);
 
-    private Task<AtomicCommandOutcome<RecurringTenantChargeMutationResult>> Execute<TCommand>(
-        string commandType,
+    private async Task<AtomicCommandOutcome<RecurringTenantChargeMutationResult>> Execute<TCommand>(
+        string _,
         string idempotencyKey,
         TCommand command)
-        where TCommand : notnull, IAtomicCommandData =>
-        _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(commandType, idempotencyKey), command, Codec);
+        where TCommand : notnull, IAtomicCommandData
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        if (command is CreateRecurringTenantChargeCommand create)
+        {
+            var handler = new CreateRecurringTenantChargeHandler(db);
+            return await writes.ExecuteAsync(idempotencyKey,
+                TenantMoneyWriteSupport.Write(create, handler.ExecuteAsync, handler.AuthorizeAsync));
+        }
+        if (command is UpdateRecurringTenantChargeCommand update)
+        {
+            var handler = new UpdateRecurringTenantChargeHandler(db);
+            return await writes.ExecuteAsync(idempotencyKey,
+                TenantMoneyWriteSupport.Write(update, handler.ExecuteAsync, handler.AuthorizeAsync));
+        }
+        if (command is DeactivateRecurringTenantChargeCommand deactivate)
+        {
+            var handler = new DeactivateRecurringTenantChargeHandler(db);
+            return await writes.ExecuteAsync(idempotencyKey,
+                TenantMoneyWriteSupport.Write(deactivate, handler.ExecuteAsync, handler.AuthorizeAsync));
+        }
+        throw new ArgumentOutOfRangeException(nameof(command));
+    }
+
+    private static async Task<AtomicCommandOutcome<RecurringTenantChargeMutationResult>>
+        ExecuteCreateAsync(IServiceProvider services, CreateRecurringTenantChargeCommand command)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var handler = new CreateRecurringTenantChargeHandler(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(command.DeliveryIdempotencyKey, TenantMoneyWriteSupport.Write(
+                command, handler.ExecuteAsync, handler.AuthorizeAsync));
+    }
 
     private static ServiceProvider CreateServices(
         string connectionString,
@@ -546,6 +570,7 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             CreateRecurringTenantChargeCommand,
             RecurringTenantChargeMutationResult,
