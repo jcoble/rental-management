@@ -19,13 +19,15 @@ public sealed class ReconcileNativeEsignAgreementFinancialsHandler
     public async Task<ReconcileNativeEsignAgreementFinancialsResult> HandleAsync(
         ReconcileNativeEsignAgreementFinancialsCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task<ReconcileNativeEsignAgreementFinancialsResult> ExecuteAsync(
+        ReconcileNativeEsignAgreementFinancialsCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.SignatureRequestId <= 0 || command.PublicId == Guid.Empty)
             throw new ArgumentException("The native e-sign reconciliation command is incomplete.");
-
-        await context.AcquireLockAsync(
-            "SignatureRequest", command.SignatureRequestId, ct);
 
         var request = await _db.Set<SignatureRequest>()
             .Where(candidate => candidate.Id == command.SignatureRequestId
@@ -62,6 +64,11 @@ public sealed class ReconcileNativeEsignAgreementFinancialsHandler
     public async Task AuthorizeReplayAsync(
         ReconcileNativeEsignAgreementFinancialsCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
+        ReconcileNativeEsignAgreementFinancialsCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.SignatureRequestId <= 0 || command.PublicId == Guid.Empty)
@@ -95,6 +102,11 @@ public sealed class ReconcileNativeEsignAgreementFinancialsBatchHandler
     public async Task<ReconcileNativeEsignAgreementFinancialsBatchResult> HandleAsync(
         ReconcileNativeEsignAgreementFinancialsBatchCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task<ReconcileNativeEsignAgreementFinancialsBatchResult> ExecuteAsync(
+        ReconcileNativeEsignAgreementFinancialsBatchCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.RunToken == Guid.Empty)
@@ -108,6 +120,11 @@ public sealed class ReconcileNativeEsignAgreementFinancialsBatchHandler
     }
 
     public async Task AuthorizeReplayAsync(
+        ReconcileNativeEsignAgreementFinancialsBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         ReconcileNativeEsignAgreementFinancialsBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

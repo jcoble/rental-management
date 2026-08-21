@@ -18,9 +18,12 @@ public sealed class FinalizeNativeEsignRequestHandler
     public FinalizeNativeEsignRequestHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<FinalizeNativeEsignRequestResult> HandleAsync(
+        FinalizeNativeEsignRequestCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task<FinalizeNativeEsignRequestResult> ExecuteAsync(
         FinalizeNativeEsignRequestCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        await context.AcquireLockAsync("SignatureRequest", command.SignatureRequestId, ct);
         var request = await _db.Set<SignatureRequest>()
             .Include(item => item.LeaseAgreement)
             .Include(item => item.LeaseAddendum)
@@ -194,6 +197,11 @@ public sealed class FinalizeNativeEsignRequestHandler
     }
 
     public async Task AuthorizeReplayAsync(
+        FinalizeNativeEsignRequestCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         FinalizeNativeEsignRequestCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

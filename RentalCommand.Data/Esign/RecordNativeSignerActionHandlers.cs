@@ -18,6 +18,11 @@ public sealed class RecordNativeSignatureHandler
     public async Task<NativeSignerActionResult> HandleAsync(
         RecordNativeSignatureCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task<NativeSignerActionResult> ExecuteAsync(
+        RecordNativeSignatureCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var requestId = await _db.Set<SignatureSigner>()
@@ -124,6 +129,11 @@ public sealed class RecordNativeSignatureHandler
     }
 
     public async Task AuthorizeReplayAsync(
+        RecordNativeSignatureCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         RecordNativeSignatureCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -238,6 +248,11 @@ public sealed class RecordNativeDeclineHandler
     public async Task<NativeSignerActionResult> HandleAsync(
         RecordNativeDeclineCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task<NativeSignerActionResult> ExecuteAsync(
+        RecordNativeDeclineCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var target = await _db.Set<SignatureSigner>()
@@ -303,6 +318,11 @@ public sealed class RecordNativeDeclineHandler
     }
 
     public async Task AuthorizeReplayAsync(
+        RecordNativeDeclineCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         RecordNativeDeclineCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

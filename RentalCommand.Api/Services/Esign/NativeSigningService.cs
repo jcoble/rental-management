@@ -9,6 +9,8 @@ using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Documents;
+using RentalCommand.Api.Writes;
+using RentalCommand.Data.Esign;
 
 namespace RentalCommand.Api.Services.Esign;
 
@@ -16,20 +18,20 @@ namespace RentalCommand.Api.Services.Esign;
 public sealed class NativeSigningService : INativeSigningService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly IFileStorage _storage;
     private readonly ILogger<NativeSigningService> _logger;
     private readonly IPendingFileUploadStore _pendingUploads;
 
     public NativeSigningService(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         IFileStorage storage,
         IPendingFileUploadStore pendingUploads,
         ILogger<NativeSigningService> logger)
     {
         _db = db;
-        _atomic = atomic;
+        _writes = writes;
         _storage = storage;
         _pendingUploads = pendingUploads;
         _logger = logger;
@@ -55,11 +57,9 @@ public sealed class NativeSigningService : INativeSigningService
             return SignTokenResult<SignPackageResponse>.NotFound();
         }
 
-        await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("native-esign.view", TokenIdentity(token)),
-            new RecordNativeEsignViewCommand(TokenHash(token), ipAddress, userAgent, now),
-            new AtomicJsonResultCodec<RecordNativeEsignViewResult>("native-esign.view.v1"),
-            ct);
+        var viewCommand = new RecordNativeEsignViewCommand(TokenHash(token), ipAddress, userAgent, now);
+        await _writes.ExecuteAsync(TokenIdentity(token),
+            NativeEsignWriteSupport.Write<RecordNativeEsignViewCommand, RecordNativeEsignViewResult>(_db, viewCommand), ct);
         // The durable receipt proves only that the first-view command ran. Always project current state
         // after commit so later opens never replay stale status or stale expiry decisions.
         var current = await _db.SignatureSigners.AsNoTracking()
@@ -203,9 +203,7 @@ public sealed class NativeSigningService : INativeSigningService
                 await _storage.UploadAtAsync(stream, admission.StoragePath, "drawn-signature.png", "image/png", ct);
             }
         }
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("native-esign.sign", OperationIdentity(token, operationKey)),
-            new RecordNativeSignatureCommand(
+        var command = new RecordNativeSignatureCommand(
                 TokenHash(token),
                 typed ? SignatureSignatureType.Typed : SignatureSignatureType.Drawn,
                 typed ? request.TypedName!.Trim() : null,
@@ -215,9 +213,9 @@ public sealed class NativeSigningService : INativeSigningService
                 drawnFileSize,
                 ipAddress,
                 userAgent,
-                now),
-            new AtomicJsonResultCodec<NativeSignerActionResult>("native-esign.sign.v1"),
-            ct);
+                now);
+        var outcome = await _writes.ExecuteAsync(OperationIdentity(token, operationKey),
+            NativeEsignWriteSupport.Write<RecordNativeSignatureCommand, NativeSignerActionResult>(_db, command), ct);
         if (outcome.Value.Outcome != NativeSignerActionOutcome.Applied)
         {
             return MapSignerActionError(outcome.Value);
@@ -242,11 +240,10 @@ public sealed class NativeSigningService : INativeSigningService
         var operationKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
             ? Guid.NewGuid().ToString("N")
             : request.IdempotencyKey;
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("native-esign.decline", OperationIdentity(token, operationKey)),
-            new RecordNativeDeclineCommand(TokenHash(token), request.Reason?.Trim(), ipAddress, userAgent, now),
-            new AtomicJsonResultCodec<NativeSignerActionResult>("native-esign.decline.v1"),
-            ct);
+        var command = new RecordNativeDeclineCommand(
+            TokenHash(token), request.Reason?.Trim(), ipAddress, userAgent, now);
+        var outcome = await _writes.ExecuteAsync(OperationIdentity(token, operationKey),
+            NativeEsignWriteSupport.Write<RecordNativeDeclineCommand, NativeSignerActionResult>(_db, command), ct);
         if (outcome.Value.Outcome != NativeSignerActionOutcome.Applied)
         {
             return MapSignerActionError(outcome.Value);

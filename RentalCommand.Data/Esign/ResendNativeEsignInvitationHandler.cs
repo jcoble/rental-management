@@ -18,10 +18,14 @@ public sealed class ResendNativeEsignInvitationHandler
     public async Task<ResendNativeEsignInvitationResult> HandleAsync(
         ResendNativeEsignInvitationCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task<ResendNativeEsignInvitationResult> ExecuteAsync(
+        ResendNativeEsignInvitationCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
         var times = await AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var target = await FindAuthorizedTarget(command, times.WallClockUtc).SingleOrDefaultAsync(ct)
             ?? throw Unauthorized();
@@ -55,6 +59,11 @@ public sealed class ResendNativeEsignInvitationHandler
     }
 
     public async Task AuthorizeReplayAsync(
+        ResendNativeEsignInvitationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         ResendNativeEsignInvitationCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

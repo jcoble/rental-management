@@ -9,6 +9,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Esign;
 using RentalCommand.Data.Documents;
+using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Esign;
 
@@ -18,14 +19,12 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     private const int NativeEsignActorScopeId = 0;
     private const string ExecutedUploadPurpose = "native-esign-executed";
     private const string ExecutedPdfContentType = "application/pdf";
-    private static readonly AtomicJsonResultCodec<ReconcileNativeEsignAgreementFinancialsResult>
-        ReconcileAgreementFinancialsCodec = new("native-esign.agreement-financials.reconcile.v1");
     private static readonly TimeSpan ExecutionLease = TimeSpan.FromMinutes(10);
     private readonly string _claimOwner =
         $"{Environment.MachineName}:{Environment.ProcessId}:native-esign-api:{Guid.NewGuid():N}";
 
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly INativeEsignExecutionClaimStore _claims;
     private readonly IFileStorage _storage;
     private readonly IExecutedLeasePdfGenerator _executedPdf;
@@ -34,7 +33,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 
     public NativeEsignExecutionService(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         INativeEsignExecutionClaimStore claims,
         IFileStorage storage,
         IExecutedLeasePdfGenerator executedPdf,
@@ -42,7 +41,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         ILogger<NativeEsignExecutionService> logger)
     {
         _db = db;
-        _atomic = atomic;
+        _writes = writes;
         _claims = claims;
         _storage = storage;
         _executedPdf = executedPdf;
@@ -78,13 +77,10 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         int signatureRequestId,
         Guid publicId,
         CancellationToken ct) =>
-        _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "native-esign.agreement-financials.reconcile",
-                publicId.ToString("N")),
-            new ReconcileNativeEsignAgreementFinancialsCommand(signatureRequestId, publicId),
-            ReconcileAgreementFinancialsCodec,
-            ct);
+        _writes.ExecuteAsync(publicId.ToString("N"),
+            NativeEsignWriteSupport.Write<ReconcileNativeEsignAgreementFinancialsCommand,
+                ReconcileNativeEsignAgreementFinancialsResult>(_db,
+                new ReconcileNativeEsignAgreementFinancialsCommand(signatureRequestId, publicId)), ct);
 
     public async Task<bool> FinalizeClaimedAsync(
         int signatureRequestId, Guid claimToken, CancellationToken ct = default)
@@ -155,9 +151,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
                 await _storage.UploadAtAsync(stream, storageKey, fileName, ExecutedPdfContentType, ct);
             }
 
-            await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("native-esign.finalize", TokenIdentity(sigRequest.PublicId.ToString("N"))),
-                new FinalizeNativeEsignRequestCommand(
+            var command = new FinalizeNativeEsignRequestCommand(
                     admission.Id,
                     admission.RequestFingerprint,
                     sigRequest.Id,
@@ -166,9 +160,10 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
                     storageKey!,
                     fileName,
                     executedBytes.LongLength,
-                    sha256),
-                new AtomicJsonResultCodec<FinalizeNativeEsignRequestResult>("native-esign.finalize.v1"),
-                ct);
+                    sha256);
+            await _writes.ExecuteAsync(TokenIdentity(sigRequest.PublicId.ToString("N")),
+                NativeEsignWriteSupport.Write<FinalizeNativeEsignRequestCommand,
+                    FinalizeNativeEsignRequestResult>(_db, command), ct);
 
             return true;
         }

@@ -13,6 +13,80 @@ using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Data.Esign;
 
+public static class NativeEsignWriteSupport
+{
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        RentalCommandDbContext db,
+        TCommand command)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        object write = command switch
+        {
+            IssueLeaseAgreementCommand value => Build(
+                "lease-agreement.issue", "lease-agreement.issue.v1", LeaseManagement(value.LeaseManagementId),
+                value,
+                new IssueLeaseAgreementHandler(db).ExecuteAsync, new IssueLeaseAgreementHandler(db).AuthorizeAsync),
+            IssueLeaseAddendumCommand value => Build(
+                "lease-addendum.issue", "lease-addendum.issue.v1", LeaseManagement(value.LeaseManagementId),
+                value,
+                new IssueLeaseAddendumHandler(db).ExecuteAsync, new IssueLeaseAddendumHandler(db).AuthorizeAsync),
+            RecordNativeEsignViewCommand value => Build(
+                "native-esign.view", "native-esign.view.v1", WriteLockPlan.None,
+                value, new RecordNativeEsignViewHandler(db).ExecuteAsync, new RecordNativeEsignViewHandler(db).AuthorizeAsync),
+            RecordNativeSignatureCommand value => Build(
+                "native-esign.sign", "native-esign.sign.v1", WriteLockPlan.None,
+                value, new RecordNativeSignatureHandler(db).ExecuteAsync, new RecordNativeSignatureHandler(db).AuthorizeAsync),
+            RecordNativeDeclineCommand value => Build(
+                "native-esign.decline", "native-esign.decline.v1", WriteLockPlan.None,
+                value, new RecordNativeDeclineHandler(db).ExecuteAsync, new RecordNativeDeclineHandler(db).AuthorizeAsync),
+            FinalizeNativeEsignRequestCommand value => Build(
+                "native-esign.finalize", "native-esign.finalize.v1", SignatureRequest(value.SignatureRequestId),
+                value, new FinalizeNativeEsignRequestHandler(db).ExecuteAsync, new FinalizeNativeEsignRequestHandler(db).AuthorizeAsync),
+            ResendNativeEsignInvitationCommand value => Build(
+                value.ParentKind == NativeEsignInvitationParentKind.LeaseAgreement
+                    ? "lease-agreement.esign-invitation.resend"
+                    : "lease-addendum.esign-invitation.resend",
+                "native-esign.invitation-resend.v1", LeaseManagement(value.LeaseManagementId),
+                value, new ResendNativeEsignInvitationHandler(db).ExecuteAsync, new ResendNativeEsignInvitationHandler(db).AuthorizeAsync),
+            ReconcileNativeEsignAgreementFinancialsCommand value => Build(
+                "native-esign.agreement-financials.reconcile", "native-esign.agreement-financials.reconcile.v1",
+                SignatureRequest(value.SignatureRequestId),
+                value,
+                new ReconcileNativeEsignAgreementFinancialsHandler(db).ExecuteAsync,
+                new ReconcileNativeEsignAgreementFinancialsHandler(db).AuthorizeAsync),
+            ReconcileNativeEsignAgreementFinancialsBatchCommand value => Build(
+                "native-esign.agreement-financials.batch-reconcile",
+                "native-esign.agreement-financials.batch-reconcile.v1", WriteLockPlan.None,
+                value,
+                new ReconcileNativeEsignAgreementFinancialsBatchHandler(db).ExecuteAsync,
+                new ReconcileNativeEsignAgreementFinancialsBatchHandler(db).AuthorizeAsync),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return (TransactionalWrite<TCommand, TResult>)write;
+    }
+
+    private static WriteLockPlan LeaseManagement(int id) => new(
+        WriteLockProtocol.NativeEsignLeaseManagement, WriteLock.For("LeaseManagement", id));
+
+    private static WriteLockPlan SignatureRequest(int id) => new(
+        WriteLockProtocol.NativeEsignRequest, WriteLock.For("SignatureRequest", id));
+
+    private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
+        string operationName,
+        string resultContract,
+        WriteLockPlan lockPlan,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => new(operationName, WriteIdempotencyPolicy.Required,
+            command, resultContract, lockPlan, executeAsync, authorizeAsync);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic native e-sign writes are retired; use the shared write executor.");
+}
+
 /// <summary>Canonical Agreement issuance. No legacy Lease row is read or changed.</summary>
 public sealed class IssueLeaseAgreementHandler
     : IAtomicCommandHandler<IssueLeaseAgreementCommand, IssueLeaseAgreementResult>
@@ -22,10 +96,13 @@ public sealed class IssueLeaseAgreementHandler
     public IssueLeaseAgreementHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<IssueLeaseAgreementResult> HandleAsync(
+        IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task<IssueLeaseAgreementResult> ExecuteAsync(
         IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var businessNowUtc = times.EffectiveNowUtc;
         var agreement = await AuthorizedAgreements(command, _db, times.WallClockUtc)
@@ -237,6 +314,9 @@ public sealed class IssueLeaseAgreementHandler
     }
 
     public async Task AuthorizeReplayAsync(IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
+        => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);

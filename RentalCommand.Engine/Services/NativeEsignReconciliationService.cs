@@ -4,6 +4,8 @@ using RentalCommand.Api.Services.Esign;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Esign;
 using RentalCommand.Data.Esign;
+using RentalCommand.Data;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -15,8 +17,6 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class NativeEsignReconciliationService
 {
-    private static readonly AtomicJsonResultCodec<ReconcileNativeEsignAgreementFinancialsBatchResult>
-        FinancialBatchCodec = new("native-esign.agreement-financials.batch-reconcile.v1");
     internal const int BatchSize = 20;
     internal static readonly TimeSpan ClaimLease = TimeSpan.FromMinutes(10);
 
@@ -82,16 +82,13 @@ public sealed class NativeEsignReconciliationService
             try
             {
                 await using var batchScope = _scopeFactory.CreateAsyncScope();
-                var atomic = batchScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-                var outcome = await atomic.ExecuteAsync(
-                    new AtomicCommandIdentity(
-                        "native-esign.agreement-financials.batch-reconcile",
-                        runToken.ToString("N")),
-                    new ReconcileNativeEsignAgreementFinancialsBatchCommand(
-                        runToken,
-                        BatchSize - claims.Count),
-                    FinancialBatchCodec,
-                    ct);
+                var db = batchScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+                var writes = batchScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>();
+                var command = new ReconcileNativeEsignAgreementFinancialsBatchCommand(
+                    runToken, BatchSize - claims.Count);
+                var outcome = await writes.ExecuteAsync(runToken.ToString("N"),
+                    NativeEsignWriteSupport.Write<ReconcileNativeEsignAgreementFinancialsBatchCommand,
+                        ReconcileNativeEsignAgreementFinancialsBatchResult>(db, command), ct);
                 completed += outcome.Value.DepositChargeCount;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
