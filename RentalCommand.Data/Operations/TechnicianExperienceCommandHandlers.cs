@@ -12,15 +12,30 @@ namespace RentalCommand.Data.Operations;
 public sealed class RecordTechnicianWorkEntryHandler
     : IAtomicCommandHandler<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult>
 {
+    public const string ResultContract = "technician-work-entry.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public RecordTechnicianWorkEntryHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecordTechnicianWorkEntryResult> HandleAsync(
+    public static TransactionalWrite<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult> Write(
+        RecordTechnicianWorkEntryCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new RecordTechnicianWorkEntryHandler(db);
+        return new TransactionalWrite<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult>(
+            "technician-work-entry.record", WriteIdempotencyPolicy.Required, command, ResultContract,
+            WorkOrderLock(command.WorkOrderId), handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<RecordTechnicianWorkEntryResult> HandleAsync(
+        RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task<RecordTechnicianWorkEntryResult> ExecuteAsync(
         RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         if (!await _db.Set<WorkOrder>().AsNoTracking().AnyAsync(workOrder =>
                 workOrder.Id == command.WorkOrderId &&
@@ -84,7 +99,10 @@ public sealed class RecordTechnicianWorkEntryHandler
         return new(entry.Id, entry.WorkOrderId, entry.Kind, now);
     }
 
-    public async Task AuthorizeReplayAsync(RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public Task AuthorizeReplayAsync(RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task AuthorizeAsync(RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         _ = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
@@ -92,6 +110,12 @@ public sealed class RecordTechnicianWorkEntryHandler
             command.ActorAccessContextId, command.ActorAccessRevision, command.WorkOrderId,
             CapabilityKeys.AssignedWorkTimeMaterialsManage, now, ct);
     }
+
+    internal static WriteLockPlan WorkOrderLock(int workOrderId) => new(
+        WriteLockProtocol.WorkOrder, WriteLock.For("WorkOrder", workOrderId));
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Technician experience mutations must use the shared write executor.");
 
     private static void Validate(RecordTechnicianWorkEntryCommand command)
     {
@@ -118,11 +142,28 @@ public sealed class RecordTechnicianWorkEntryHandler
 public sealed class SendTechnicianAssignmentMessageHandler
     : IAtomicCommandHandler<SendTechnicianAssignmentMessageCommand, SendTechnicianAssignmentMessageResult>
 {
+    public const string ResultContract = "technician-assignment-message.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public SendTechnicianAssignmentMessageHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SendTechnicianAssignmentMessageResult> HandleAsync(
+    public static TransactionalWrite<SendTechnicianAssignmentMessageCommand, SendTechnicianAssignmentMessageResult> Write(
+        SendTechnicianAssignmentMessageCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new SendTechnicianAssignmentMessageHandler(db);
+        return new TransactionalWrite<SendTechnicianAssignmentMessageCommand, SendTechnicianAssignmentMessageResult>(
+            "technician-assignment-message.send", WriteIdempotencyPolicy.Required, command,
+            ResultContract, RecordTechnicianWorkEntryHandler.WorkOrderLock(command.WorkOrderId),
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<SendTechnicianAssignmentMessageResult> HandleAsync(
+        SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RecordTechnicianWorkEntryHandler.RetiredPath();
+
+    public async Task<SendTechnicianAssignmentMessageResult> ExecuteAsync(
         SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0 || command.ActorSessionId == Guid.Empty ||
@@ -131,7 +172,6 @@ public sealed class SendTechnicianAssignmentMessageHandler
             string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey))
             throw new DomainValidationException("A message is required.");
 
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var responsibility = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
             _db, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
@@ -207,7 +247,10 @@ public sealed class SendTechnicianAssignmentMessageHandler
         return new(conversation.Id, message.Id, now);
     }
 
-    public async Task AuthorizeReplayAsync(SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public Task AuthorizeReplayAsync(SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RecordTechnicianWorkEntryHandler.RetiredPath();
+
+    public async Task AuthorizeAsync(SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         _ = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
@@ -225,17 +268,33 @@ public sealed class MarkTechnicianAssignmentConversationReadHandler
     : IAtomicCommandHandler<MarkTechnicianAssignmentConversationReadCommand,
         MarkTechnicianAssignmentConversationReadResult>
 {
+    public const string ResultContract = "technician-assignment-conversation-read.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public MarkTechnicianAssignmentConversationReadHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<MarkTechnicianAssignmentConversationReadResult> HandleAsync(
+    public static TransactionalWrite<MarkTechnicianAssignmentConversationReadCommand, MarkTechnicianAssignmentConversationReadResult> Write(
+        MarkTechnicianAssignmentConversationReadCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new MarkTechnicianAssignmentConversationReadHandler(db);
+        return new TransactionalWrite<MarkTechnicianAssignmentConversationReadCommand, MarkTechnicianAssignmentConversationReadResult>(
+            "technician-assignment-conversation.read", WriteIdempotencyPolicy.Required, command,
+            ResultContract, RecordTechnicianWorkEntryHandler.WorkOrderLock(command.WorkOrderId),
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<MarkTechnicianAssignmentConversationReadResult> HandleAsync(
+        MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RecordTechnicianWorkEntryHandler.RetiredPath();
+
+    public async Task<MarkTechnicianAssignmentConversationReadResult> ExecuteAsync(
         MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.WorkOrderId <= 0 || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey))
             throw new DomainValidationException("A valid assignment is required.");
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         _ = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
             _db, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
@@ -248,7 +307,10 @@ public sealed class MarkTechnicianAssignmentConversationReadHandler
         return new(conversation.Id, true);
     }
 
-    public async Task AuthorizeReplayAsync(MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public Task AuthorizeReplayAsync(MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RecordTechnicianWorkEntryHandler.RetiredPath();
+
+    public async Task AuthorizeAsync(MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         _ = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(

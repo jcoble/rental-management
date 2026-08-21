@@ -14,6 +14,8 @@ public sealed class RecoverVendorDispatchChronologyHandler
         RecoverVendorDispatchChronologyCommand,
         RecoverVendorDispatchChronologyResult>
 {
+    public const string ResultContract = "vendor-dispatch.chronology-recovery.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public RecoverVendorDispatchChronologyHandler(RentalCommandDbContext db) => _db = db;
@@ -21,7 +23,22 @@ public sealed class RecoverVendorDispatchChronologyHandler
     private const string OriginalCommandType = "vendor-dispatch.create";
     private const string RecoveryCommandType = "vendor-dispatch.recover-chronology";
 
-    public async Task<RecoverVendorDispatchChronologyResult> HandleAsync(
+    public static TransactionalWrite<RecoverVendorDispatchChronologyCommand, RecoverVendorDispatchChronologyResult> Write(
+        RecoverVendorDispatchChronologyCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new RecoverVendorDispatchChronologyHandler(db);
+        return new TransactionalWrite<RecoverVendorDispatchChronologyCommand, RecoverVendorDispatchChronologyResult>(
+            "vendor-dispatch.recover-chronology", WriteIdempotencyPolicy.Required, command,
+            ResultContract, WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<RecoverVendorDispatchChronologyResult> HandleAsync(
+        RecoverVendorDispatchChronologyCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<RecoverVendorDispatchChronologyResult> ExecuteAsync(
         RecoverVendorDispatchChronologyCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -392,7 +409,11 @@ public sealed class RecoverVendorDispatchChronologyHandler
             result.WorkOrderUpdatedAtRepaired);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        RecoverVendorDispatchChronologyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         RecoverVendorDispatchChronologyCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ValidateCommand(command);
@@ -402,6 +423,9 @@ public sealed class RecoverVendorDispatchChronologyHandler
             await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct),
             ct);
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Vendor dispatch chronology recovery must use the shared write executor.");
 
     private static async Task AuthorizeAsync(
         RecoverVendorDispatchChronologyCommand command,

@@ -149,6 +149,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         _probe.Commands.Clear();
+        _probe.AdvisoryLockParameterCounts.Clear();
         var command = VendorDone("SM-provider-stable-1");
         var identity = VendorIdentity(command.ProviderEventId);
 
@@ -211,6 +212,8 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         _probe.Commands.Count(sql => sql.Contains(
             "TSK-668 event-time team routing with direct responsibility and visible administrator fallback",
             StringComparison.Ordinal)).Should().Be(2);
+        _probe.AdvisoryLockParameterCounts.Should().StartWith([1, 2],
+            "the executor must acquire the hashed phone lock before the work-order lock");
         typeof(CompleteVendorDispatchFromInboundHandler).Should()
             .Implement<IAtomicCommandHandler<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult>>();
     }
@@ -499,6 +502,19 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         await using var scope = _services!.CreateAsyncScope();
         var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
         return await atomic.ExecuteAsync(identity, command, resultCodec, ct);
+    }
+
+    private async Task<AtomicCommandOutcome<CompleteVendorDispatchFromInboundResult>> ExecuteAtomicAsync(
+        AtomicCommandIdentity identity,
+        CompleteVendorDispatchFromInboundCommand command,
+        AtomicJsonResultCodec<CompleteVendorDispatchFromInboundResult> resultCodec,
+        CancellationToken ct = default)
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return await writes.ExecuteAsync(
+            identity.IdempotencyKey, CompleteVendorDispatchFromInboundHandler.Write(command, db), ct);
     }
 
     private CompleteVendorDispatchFromInboundCommand VendorDone(string eventId, DateTime? receivedAt = null) =>
@@ -995,6 +1011,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
     private sealed class CommandProbe : DbCommandInterceptor
     {
         public ConcurrentQueue<string> Commands { get; } = new();
+        public ConcurrentQueue<int> AdvisoryLockParameterCounts { get; } = new();
         public bool FailOnAtomicAuditInsert { get; set; }
 
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
@@ -1003,7 +1020,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             InterceptionResult<DbDataReader> result,
             CancellationToken cancellationToken = default)
         {
-            Inspect(command.CommandText);
+            Inspect(command);
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
 
@@ -1013,13 +1030,18 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             InterceptionResult<int> result,
             CancellationToken cancellationToken = default)
         {
-            Inspect(command.CommandText);
+            Inspect(command);
             return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
         }
 
-        private void Inspect(string sql)
+        private void Inspect(DbCommand command)
         {
+            var sql = command.CommandText;
             Commands.Enqueue(sql);
+            if (sql.Contains("pg_advisory_xact_lock", StringComparison.Ordinal))
+            {
+                AdvisoryLockParameterCounts.Enqueue(command.Parameters.Count);
+            }
             if (FailOnAtomicAuditInsert
                 && sql.Contains("INSERT INTO \"AtomicAuditLogs\"", StringComparison.Ordinal))
             {

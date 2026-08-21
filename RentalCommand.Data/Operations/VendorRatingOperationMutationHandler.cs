@@ -12,18 +12,37 @@ namespace RentalCommand.Data.Operations;
 public sealed class CreateVendorRatingHandler
     : IAtomicCommandHandler<CreateVendorRatingCommand, VendorRatingMutationResult>
 {
+    public const string ResultContract = "vendor-rating.create.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public CreateVendorRatingHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<VendorRatingMutationResult> HandleAsync(
+    public static TransactionalWrite<CreateVendorRatingCommand, VendorRatingMutationResult> Write(
+        CreateVendorRatingCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new CreateVendorRatingHandler(db);
+        var locks = command.WorkOrderId is int workOrderId
+            ? new WriteLockPlan(WriteLockProtocol.WorkOrderVendor,
+                WriteLock.For("WorkOrder", workOrderId), WriteLock.For("Vendor", command.VendorId))
+            : new WriteLockPlan(WriteLockProtocol.Vendor,
+                WriteLock.For("Vendor", command.VendorId));
+        return new TransactionalWrite<CreateVendorRatingCommand, VendorRatingMutationResult>(
+            "vendor-rating.create", WriteIdempotencyPolicy.Required, command, ResultContract,
+            locks, handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<VendorRatingMutationResult> HandleAsync(
+        CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task<VendorRatingMutationResult> ExecuteAsync(
         CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         VendorRatingOperationValidation.Validate(command);
-        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
-        await context.AcquireLockAsync("Vendor", command.VendorId, ct);
 
         var vendor = await AuthorizedVendors(
                 command, _db, businessNow, securityNow, tracking: true)
@@ -103,7 +122,11 @@ public sealed class CreateVendorRatingHandler
         return new(OperationMutationOutcome.Applied, rating.Id, vendor.Id, snapshot);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         VendorRatingOperationValidation.Validate(command);
@@ -113,6 +136,9 @@ public sealed class CreateVendorRatingHandler
                 command, _db, command.BusinessNowUtc, securityNow, tracking: false).AnyAsync(ct))
             throw new UnauthorizedAccessException("The active assignment cannot rate this vendor.");
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Vendor ratings must use the shared write executor.");
 
     private static IQueryable<Vendor> AuthorizedVendors(
         CreateVendorRatingCommand command,

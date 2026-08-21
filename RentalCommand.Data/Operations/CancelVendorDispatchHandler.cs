@@ -11,6 +11,8 @@ namespace RentalCommand.Data.Operations;
 public sealed class CancelVendorDispatchHandler
     : IAtomicCommandHandler<CancelVendorDispatchCommand, CancelVendorDispatchResult>
 {
+    public const string ResultContract = "vendor-dispatch.cancel.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public CancelVendorDispatchHandler(RentalCommandDbContext db) => _db = db;
@@ -18,7 +20,24 @@ public sealed class CancelVendorDispatchHandler
     private static readonly VendorDispatchStatus[] OpenStatuses =
         [VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged];
 
-    public async Task<CancelVendorDispatchResult> HandleAsync(
+    public static TransactionalWrite<CancelVendorDispatchCommand, CancelVendorDispatchResult> Write(
+        CancelVendorDispatchCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new CancelVendorDispatchHandler(db);
+        return new TransactionalWrite<CancelVendorDispatchCommand, CancelVendorDispatchResult>(
+            "vendor-dispatch.cancel", WriteIdempotencyPolicy.Required, command, ResultContract,
+            new WriteLockPlan(WriteLockProtocol.WorkOrder,
+                WriteLock.For("WorkOrder", command.WorkOrderId)),
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<CancelVendorDispatchResult> HandleAsync(
+        CancelVendorDispatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<CancelVendorDispatchResult> ExecuteAsync(
         CancelVendorDispatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -32,7 +51,6 @@ public sealed class CancelVendorDispatchHandler
             throw new ArgumentException("Cancellation reason must be at most 500 characters.");
         }
 
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var workOrders = _db.Set<WorkOrder>()
             .Where(candidate => candidate.Id == command.WorkOrderId
                 && candidate.PortfolioId == command.PortfolioId);
@@ -159,7 +177,11 @@ public sealed class CancelVendorDispatchHandler
             reason);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        CancelVendorDispatchCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         CancelVendorDispatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -185,6 +207,9 @@ public sealed class CancelVendorDispatchHandler
                 "The current workspace access no longer authorizes this vendor-dispatch cancellation.");
         }
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Vendor dispatch cancellations must use the shared write executor.");
 
     private static CancelVendorDispatchResult Empty(
         CancelVendorDispatchOutcome outcome,

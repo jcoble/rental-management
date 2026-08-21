@@ -325,8 +325,8 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
         var service = new VendorService(
             _context.Db,
             Mock.Of<IDataUpdateService>(),
-            Mock.Of<IAtomicUnitOfWork>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAsync(scope, SelectorQuery<ListQuery>());

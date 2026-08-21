@@ -101,7 +101,7 @@ public sealed class TechnicianExperienceContractTests
     }
 
     [Fact]
-    public void TechnicianUpdate_UsesCanonicalAssignmentRouteAndAtomicAssignedWorkCommand()
+    public void TechnicianUpdate_UsesCanonicalAssignmentRouteAndTransactionalAssignedWorkCommand()
     {
         var action = typeof(TechnicianController).GetMethod(nameof(TechnicianController.UpdateAssignment));
         action.Should().NotBeNull();
@@ -114,8 +114,8 @@ public sealed class TechnicianExperienceContractTests
         var source = File.ReadAllText(Path.Combine(repositoryRoot, "RentalCommand.Api",
             "Controllers", "TechnicianController.cs"));
         source.Should().Contain("new UpdateAssignedWorkOrderCommand(");
-        source.Should().Contain("new AtomicCommandIdentity(");
-        source.Should().Contain("\"assigned-work-order.update\"");
+        source.Should().Contain("_writes.ExecuteAsync(");
+        source.Should().Contain("UpdateAssignedWorkOrderHandler.Write(command, _db)");
         source.Should().Contain("UpdateAssignedWorkOrderOutcome.Stale");
         source.Should().NotContain("assigned-update");
     }
@@ -145,8 +145,7 @@ public sealed class TechnicianExperienceContractTests
         var statusSource = File.ReadAllText(Path.Combine(repositoryRoot, "RentalCommand.Data",
             "Operations", "WorkOrderResponsibilityMutationHandlers.cs"));
 
-        entrySource.Should().Contain("AuthorizeReplayAsync(");
-        entrySource.Should().Contain("AuthorizeReplayAsync(");
+        entrySource.Should().Contain("AuthorizeAsync(");
         entrySource.Should().Contain("CapabilityKeys.AssignedWorkTimeMaterialsManage");
         entrySource.Should().Contain("CapabilityKeys.AssignedWorkConverse");
         entrySource.Should().Contain("CapabilityAuthorizationTargetKind.WorkOrder");
@@ -158,7 +157,7 @@ public sealed class TechnicianExperienceContractTests
         entrySource.Should().NotContain("Expense");
         entrySource.Should().NotContain("Vendor");
 
-        statusSource.Should().Contain("AuthorizeReplayAsync(");
+        statusSource.Should().Contain("AuthorizeAsync(");
         statusSource.Should().Contain("CapabilityKeys.AssignedWorkUpdate");
         statusSource.Should().Contain(
             "AuthorizeAndLoadAsync(command, _db, securityNowUtc, businessNowUtc, tracking: false, ct)");

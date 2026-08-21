@@ -13,6 +13,8 @@ namespace RentalCommand.Data.Operations;
 public sealed class CloseWorkOrderResponsibilityHandler
     : IAtomicCommandHandler<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult>
 {
+    public const string ResultContract = "work-order-responsibility.close.v1";
+
     private readonly RentalCommandDbContext _db;
     private readonly WorkOrderResponsibilityAccessRevisionGuard _accessRevisionGuard;
 
@@ -24,7 +26,24 @@ public sealed class CloseWorkOrderResponsibilityHandler
         _accessRevisionGuard = accessRevisionGuard;
     }
 
-    public async Task<CloseWorkOrderResponsibilityResult> HandleAsync(
+    public static TransactionalWrite<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult> Write(
+        CloseWorkOrderResponsibilityCommand command,
+        RentalCommandDbContext db,
+        WorkOrderResponsibilityAccessRevisionGuard accessRevisionGuard)
+    {
+        var handler = new CloseWorkOrderResponsibilityHandler(db, accessRevisionGuard);
+        return new TransactionalWrite<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult>(
+            "work-order-responsibility.close", WriteIdempotencyPolicy.Required, command,
+            ResultContract, new WriteLockPlan(WriteLockProtocol.WorkOrderResponsibility),
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<CloseWorkOrderResponsibilityResult> HandleAsync(
+        CloseWorkOrderResponsibilityCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<CloseWorkOrderResponsibilityResult> ExecuteAsync(
         CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
@@ -100,7 +119,10 @@ public sealed class CloseWorkOrderResponsibilityHandler
             [new WorkspaceAccessRevisionExpectation(accessContext.Id, accessContext.AccessRevision)]);
     }
 
-    public async Task AuthorizeReplayAsync(CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public Task AuthorizeReplayAsync(CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task AuthorizeAsync(CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
@@ -108,6 +130,9 @@ public sealed class CloseWorkOrderResponsibilityHandler
             command.ActorUserId, command.ActorAuthSessionId, command.ActorAccessContextId,
             command.ActorAccessRevision, command.WorkOrderId, _db, securityNowUtc, businessNowUtc, ct);
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Work-order responsibility closure must use the shared write executor.");
 
     private static void Validate(CloseWorkOrderResponsibilityCommand command)
     {
@@ -122,17 +147,33 @@ public sealed class CloseWorkOrderResponsibilityHandler
 public sealed class UpdateAssignedWorkOrderHandler
     : IAtomicCommandHandler<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult>
 {
+    public const string ResultContract = "assigned-work-order.update.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public UpdateAssignedWorkOrderHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<UpdateAssignedWorkOrderResult> HandleAsync(
+    public static TransactionalWrite<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult> Write(
+        UpdateAssignedWorkOrderCommand command,
+        RentalCommandDbContext db)
+    {
+        var handler = new UpdateAssignedWorkOrderHandler(db);
+        return new TransactionalWrite<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult>(
+            "assigned-work-order.update", WriteIdempotencyPolicy.Required, command, ResultContract,
+            new WriteLockPlan(WriteLockProtocol.WorkspaceAccessContextWorkOrder,
+                WriteLock.For("WorkspaceAccessContext", command.ActorAccessContextId),
+                WriteLock.For("WorkOrder", command.WorkOrderId)),
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<UpdateAssignedWorkOrderResult> HandleAsync(
+        UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task<UpdateAssignedWorkOrderResult> ExecuteAsync(
         UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync(
-            "WorkspaceAccessContext", command.ActorAccessContextId, ct);
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         var workOrder = await AuthorizeAndLoadAsync(
@@ -209,12 +250,18 @@ public sealed class UpdateAssignedWorkOrderHandler
             workOrder.ScheduledWindowEnd, workOrder.CompletedAt, businessNowUtc);
     }
 
-    public async Task AuthorizeReplayAsync(UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
+    public Task AuthorizeReplayAsync(UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task AuthorizeAsync(UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         _ = await AuthorizeAndLoadAsync(command, _db, securityNowUtc, businessNowUtc, tracking: false, ct);
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Assigned work-order updates must use the shared write executor.");
 
     private static async Task<WorkOrder> AuthorizeAndLoadAsync(UpdateAssignedWorkOrderCommand command,
         RentalCommandDbContext db, DateTime securityNowUtc, DateTime businessNowUtc, bool tracking,

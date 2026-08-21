@@ -13,11 +13,28 @@ namespace RentalCommand.Data.Vendors;
 public sealed class RequestVendorW9Handler
     : IAtomicCommandHandler<RequestVendorW9Command, RequestVendorW9Result>
 {
+    public const string ResultContract = "vendor-w9.request.result.v1";
+
     private readonly RentalCommandDbContext _db;
 
     public RequestVendorW9Handler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RequestVendorW9Result> HandleAsync(
+    public static TransactionalWrite<RequestVendorW9Command, RequestVendorW9Result> Write(
+        RequestVendorW9Command command,
+        RentalCommandDbContext db)
+    {
+        var handler = new RequestVendorW9Handler(db);
+        return new TransactionalWrite<RequestVendorW9Command, RequestVendorW9Result>(
+            "vendor-w9.request", WriteIdempotencyPolicy.Required, command, ResultContract,
+            WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public Task<RequestVendorW9Result> HandleAsync(
+        RequestVendorW9Command command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<RequestVendorW9Result> ExecuteAsync(
         RequestVendorW9Command command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -90,7 +107,11 @@ public sealed class RequestVendorW9Handler
         return new RequestVendorW9Result(RequestVendorW9Outcome.Queued, target.NormalizedPhone);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        RequestVendorW9Command command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         RequestVendorW9Command command, IAtomicCommandContext context, CancellationToken ct)
     {
         var securityAtUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
@@ -103,6 +124,9 @@ public sealed class RequestVendorW9Handler
                 "The active assignment cannot replay this vendor W-9 request.");
         }
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Vendor W-9 requests must use the shared write executor.");
 
     internal static IQueryable<Vendor> AuthorizedVendors(
         RequestVendorW9Command command,
