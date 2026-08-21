@@ -11,8 +11,10 @@ using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
 using RentalCommand.Data.Scanning;
+using RentalCommand.Engine.Writes;
 using RentalCommand.Engine.Workers;
 using RentalCommand.TestCommon;
 
@@ -54,6 +56,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         // DbContext over the one shared in-memory connection — matching production scoping.
         services.AddScoped<RentalCommandDbContext>(_ => new ScanTestDbContext(options));
         services.AddScoped<IScanProcessingClaimStore, TestScanProcessingClaimStore>();
+        services.AddScoped<IJobStepWriteExecutor, TestJobStepWriteExecutor>();
         services.AddSingleton<ILlmProvider>(_llm);
         services.AddSingleton<IWorkspaceLlmExtractionProvider>(_llm);
         services.AddSingleton<IWorkspaceLlmCredentialResolver>(_credentials);
@@ -739,8 +742,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     /// <summary>
     /// SQLite-compatible test boundary for the worker's PostgreSQL claim store. Candidate filtering,
     /// ordering, and paging remain database-side; the fake only substitutes the PostgreSQL-specific
-    /// SKIP LOCKED statement that SQLite cannot execute. Completion remains fenced by owner and token so
-    /// these tests exercise the worker's real ownership contract.
+    /// SKIP LOCKED statement that SQLite cannot execute.
     /// </summary>
     private sealed class TestScanProcessingClaimStore : IScanProcessingClaimStore
     {
@@ -785,54 +787,65 @@ public class ScanProcessingWorkerFailureTests : IDisposable
                 d.ProcessingClaimToken!.Value)).ToList();
         }
 
-        public async Task<int> MarkReviewingAsync(
-            int id,
-            string claimOwner,
-            Guid claimToken,
-            ScanProcessingResult result,
-            CancellationToken ct = default)
-        {
-            var draft = await Owned(id, claimOwner, claimToken).SingleOrDefaultAsync(ct);
-            if (draft is null) return 0;
+    }
 
-            draft.ExtractedFields = result.ExtractedFields;
-            draft.FailureReason = null;
-            draft.ModelId = result.ModelId;
-            draft.TokensUsed = result.TokensUsed;
-            draft.CostUsd = result.CostUsd;
-            draft.TargetEntityType = result.TargetEntityType;
-            draft.Status = "Reviewing";
-            draft.ReviewedAt = result.ReviewedAtUtc;
-            ClearClaim(draft);
-            await _db.SaveChangesAsync(ct);
-            return 1;
+    /// <summary>
+    /// SQLite substitute for the PostgreSQL terminal-write callback. The worker still constructs and
+    /// submits the real command through IJobStepWriteExecutor; only the provider-specific SQL is replaced.
+    /// </summary>
+    private sealed class TestJobStepWriteExecutor(RentalCommandDbContext db) : IJobStepWriteExecutor
+    {
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string stepKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            var command = write.Request.Should().BeOfType<ScanProcessingTerminalCommand>().Subject;
+            stepKey.Should().Be(ScanProcessingTerminalWrite.StepKey(command));
+
+            var draft = await Owned(command).SingleOrDefaultAsync(ct);
+            var applied = draft is not null;
+            if (draft is not null)
+            {
+                if (command.Status == "Reviewing")
+                {
+                    var result = command.ReviewingResult!;
+                    draft.ExtractedFields = result.ExtractedFields;
+                    draft.FailureReason = null;
+                    draft.ModelId = result.ModelId;
+                    draft.TokensUsed = result.TokensUsed;
+                    draft.CostUsd = result.CostUsd;
+                    draft.TargetEntityType = result.TargetEntityType;
+                }
+                else
+                {
+                    draft.FailureReason = command.FailureReason;
+                }
+
+                draft.Status = command.Status;
+                draft.ReviewedAt = command.ReviewedAtUtc;
+                ClearClaim(draft);
+                await db.SaveChangesAsync(ct);
+            }
+
+            var resultValue = new ScanProcessingTerminalResult(
+                applied, command.DraftId, command.Status);
+            return new AtomicCommandOutcome<TResult>(
+                (TResult)(object)resultValue,
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid());
         }
 
-        public async Task<int> MarkFailedAsync(
-            int id,
-            string claimOwner,
-            Guid claimToken,
-            DateTime reviewedAtUtc,
-            string? failureReason,
-            CancellationToken ct = default)
-        {
-            var draft = await Owned(id, claimOwner, claimToken).SingleOrDefaultAsync(ct);
-            if (draft is null) return 0;
-
-            draft.Status = "Failed";
-            draft.FailureReason = failureReason;
-            draft.ReviewedAt = reviewedAtUtc;
-            ClearClaim(draft);
-            await _db.SaveChangesAsync(ct);
-            return 1;
-        }
-
-        private IQueryable<ScanDraft> Owned(int id, string claimOwner, Guid claimToken) =>
-            _db.ScanDrafts.Where(d =>
-                d.Id == id &&
+        private IQueryable<ScanDraft> Owned(ScanProcessingTerminalCommand command) =>
+            db.ScanDrafts.Where(d =>
+                d.Id == command.DraftId &&
+                d.PortfolioId == command.PortfolioId &&
                 d.Status == "Processing" &&
-                d.ProcessingClaimOwner == claimOwner &&
-                d.ProcessingClaimToken == claimToken);
+                d.ProcessingClaimOwner == command.ClaimOwner &&
+                d.ProcessingClaimToken == command.ClaimToken &&
+                d.ProcessingClaimExpiresAtUtc > DateTime.UtcNow);
 
         private static void ClearClaim(ScanDraft draft)
         {
