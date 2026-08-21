@@ -23,6 +23,24 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
 {
     private const int ActorUserId = 790;
     private const string RecoveryCommandType = "lease-agreement.issued-replacement-draft.create";
+    private static readonly DateTime FrozenNow = new(2026, 8, 22, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly Guid FrozenSessionId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    private const string FrozenKeyDigest =
+        "8d0c5f62e9b92e1578c1611afce9191d7b04aad1bb2957f06937dfd0e950c447";
+    // Frozen fingerprints computed once from the command DTO shapes at base 060f7509.
+    // Never regenerate these values from the current command model or serialization helpers.
+    private const string PrepareFingerprint = "9d5af19a5108d56c127d157ab6544234c76b6addd82956a779499b23c7e7814c";
+    private const string EndingFingerprint = "0ebd34bd8f83296a5dcb073daac54046f1b03b53f1ad2738a97d00ee8f71f37a";
+    private const string CancelFingerprint = "fa253e5a70bbe4d57d099bed1c1e28474616b830fdb6954aae58bcf0a57c6d3e";
+    private const string TransferFingerprint = "5cd8ea8da7a734d1d815d119e98766ad02ad31573d05dc3f5ccb48c40904a377";
+    private const string SuccessorCancelFingerprint = "d45adb6abb3d10a5fd9e7bd8220fcb6b374d347b5e66dd3fba69836fe41706e0";
+    private const string AddendumCreateFingerprint = "a7612672b19dc0373df585258223e57a6d3fd8a76d0d2d438efcb1366f478a9f";
+    private const string AddendumEditFingerprint = "357bd4c9f1ef4f6ba24a17f13cbde524bd352609ea413d172fc269121b295364";
+    private const string AddendumCorrectFingerprint = "41ca24d8e608bcc851c988f923e9e45029f663d96cb7c89abce9d03915e62f90";
+    private const string AgreementEditFingerprint = "d433c7f3bc6ed2c2aa6e4f07d0a9d27c3554aa1ea7267939a9c39074f5dd386a";
+    private const string SuccessorCreateFingerprint = "ff9a143ce4614df69d3840c638397a4a408639acff80648c1b0758d74b6e5933";
+    private const string IssuedReplacementFingerprint = "afa9ea1de82c6016b1253292e244212ad826fd4bc7bd70ac96e5bd8dd58c5406";
+    private const string DispositionFingerprint = "9ef6c74aebe2c042ecf1164e25af49f59a0b47cd1ee36fb55acf3fdf6dcd599d";
     private static readonly AtomicJsonResultCodec<CancelLeaseAgreementSuccessorDraftResult> Codec =
         new("lease-agreement.successor-draft.cancel.v1");
     private PostgreSqlContainer? _postgres;
@@ -235,6 +253,11 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
     public async Task MigratedExecutor_ReplaysFrozenLegacyReceiptsForAllTwelveOperations()
     {
         SkipIfNoDocker();
+        _scenario.PortfolioId.Should().Be(70_001);
+        _scenario.LeaseManagementId.Should().Be(10_000);
+        _scenario.SourceAgreementId.Should().Be(20_000);
+        _scenario.SuccessorAgreementId.Should().Be(20_001);
+        _scenario.IssuedAgreementId.Should().Be(20_011);
         int propertyId;
         int sourceUnitId;
         int destinationUnitId;
@@ -246,6 +269,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             sourceUnitId = relationship.UnitId;
             var destination = new Unit
             {
+                Id = 70_007,
                 PortfolioId = _scenario.PortfolioId,
                 PropertyId = propertyId,
                 UnitNumber = $"legacy-replay-{Guid.NewGuid():N}"[..20],
@@ -257,107 +281,177 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             destinationUnitId = destination.Id;
         }
 
-        var businessNow = DateTime.UtcNow;
+        var businessNow = FrozenNow;
         var businessDate = DateOnly.FromDateTime(businessNow);
         var prepare = new PrepareMoveInCommand(
             _scenario.PortfolioId, null, sourceUnitId, ActorUserId, _scenario.SessionId,
             _scenario.AccessContextId, _scenario.AccessRevision, null, businessDate, [], null,
             LeaseAgreementTermType.FixedTerm, businessDate, businessDate.AddYears(1), 1000m, 1,
-            500m, 25m, 5, 1, "{}", false, null, null, null, "legacy-prepare-delivery");
-        await AssertFrozenReplayAsync("legacy-prepare", prepare,
+            500m, 25m, 5, 1, "{}", false, null, null, null,
+            $"prepare-move-in:70001:unit:70003:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-management.prepare-move-in",
+            $"70001:unit:70003:{FrozenKeyDigest}", prepare, PrepareFingerprint,
+            """{"Outcome":0,"ApplicationId":null,"LeaseManagementId":11,"TenantAccountId":12,"LeaseAgreementId":13,"OpeningBalanceLedgerEntryId":null,"SecurityDepositAccountId":null,"TenantIds":[14],"LeaseManagementPartyIds":[15],"LeaseAgreementSignerIds":[16],"Error":null}""",
             new PrepareMoveInResult(PrepareMoveInOutcome.Prepared, null, 11, 12, 13, null, null,
-                [14], [15], [16], null));
+                [14], [15], [16], null), "lease-management.prepare-move-in.v2");
 
         var ending = new RecordLeaseEndingDispositionCommand(
             _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId,
             LeaseManagementEndingDisposition.NonRenewalMoveOut, businessNow, businessNow.AddDays(30),
             "Frozen replay", ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
-            _scenario.AccessRevision, "legacy-ending-delivery");
-        await AssertFrozenReplayAsync("legacy-ending", ending,
+            _scenario.AccessRevision, $"ending-disposition:70001:10000:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-management.ending-disposition",
+            $"70001:10000:{FrozenKeyDigest}", ending, EndingFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10000,"EndingDisposition":3,"EndingDispositionDecidedAtUtc":"2026-08-22T12:00:00Z","EndingDispositionDecidedByUserId":790,"NoticeGivenAtUtc":"2026-08-22T12:00:00Z","PlannedMoveOutAtUtc":"2026-09-21T12:00:00Z","Error":null}""",
             new RecordLeaseEndingDispositionResult(RecordLeaseEndingDispositionOutcome.Recorded,
                 _scenario.LeaseManagementId, LeaseManagementEndingDisposition.NonRenewalMoveOut,
-                businessNow, ActorUserId, businessNow, businessNow.AddDays(30), null));
+                businessNow, ActorUserId, businessNow, businessNow.AddDays(30), null),
+            "lease-management.ending-disposition.v1");
 
         var cancel = new CancelPlannedRelationshipCommand(
             _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId, ActorUserId,
             _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision, businessNow,
-            "USER_REQUEST", "Frozen replay", "Frozen replay", [], "legacy-cancel-delivery");
-        await AssertFrozenReplayAsync("legacy-cancel", cancel,
+            "USER_REQUEST", "Frozen replay", "Frozen replay", [],
+            $"cancel-planned:70001:10000:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-management.cancel-planned",
+            $"70001:10000:{FrozenKeyDigest}", cancel, CancelFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10000,"UnitId":70003,"CanceledAtUtc":"2026-08-22T12:00:00Z","AccountClosedAtUtc":"2026-08-22T12:00:00Z","CanceledAgreementDraftIds":[],"CanceledAddendumDraftIds":[],"RevokedAccessIds":[],"RetainedAccessIds":[],"Error":null}""",
             new CancelPlannedRelationshipResult(CancelPlannedRelationshipOutcome.Canceled,
                 _scenario.LeaseManagementId, sourceUnitId, businessNow, businessNow,
-                [], [], [], [], null));
+                [], [], [], [], null), "lease-management.cancel-planned.v1");
 
         var transfer = new TransferLeaseManagementCommand(
             _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId, destinationUnitId,
             ActorUserId, _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision,
-            businessNow, Guid.NewGuid(), businessDate, null, false, null, 1, true, true,
-            "Frozen replay", "legacy-transfer-delivery");
-        await AssertFrozenReplayAsync("legacy-transfer", transfer,
+            businessNow, Guid.Parse("625f0c8d-b9e9-152e-78c1-611afce9191d"), businessDate,
+            null, false, null, 1, true, true,
+            "Frozen replay", $"unit-transfer:70001:10000:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-management.transfer-unit",
+            $"70001:10000:{FrozenKeyDigest}", transfer, TransferFingerprint,
+            """{"Outcome":0,"TransferPublicId":"625f0c8d-b9e9-152e-78c1-611afce9191d","SourceLeaseManagementId":10000,"SourceUnitId":70003,"DestinationLeaseManagementId":21,"DestinationUnitId":70007,"DestinationTenantAccountId":22,"DestinationAgreementId":23,"DestinationSecurityDepositAccountId":null,"TurnoverPeriodId":24,"SourcePossessionReturnedAtUtc":"2026-08-22T12:00:00Z","DestinationPossessionGivenAtUtc":null,"CarriedTenantBalance":0,"CarriedSecurityDeposit":0,"EndedSourcePartyIds":[],"DestinationPartyIds":[],"DestinationSignerIds":[],"RevokedSourceAccessIds":[],"DestinationAccessIds":[],"TenantLedgerEntryIds":[],"SecurityDepositEntryIds":[],"Error":null}""",
             new TransferLeaseManagementResult(TransferLeaseManagementOutcome.Transferred,
                 transfer.TransferPublicId, _scenario.LeaseManagementId, sourceUnitId, 21,
                 destinationUnitId, 22, 23, null, 24, businessNow, null, 0m, 0m,
-                [], [], [], [], [], [], [], null));
+                [], [], [], [], [], [], [], null), "lease-management.transfer-unit.v1");
 
         var cancelSuccessor = new CancelLeaseAgreementSuccessorDraftCommand(
             _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SuccessorAgreementId,
             "Frozen replay", ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
-            _scenario.AccessRevision, "legacy-successor-cancel-delivery");
-        await AssertFrozenReplayAsync("legacy-successor-cancel", cancelSuccessor,
+            _scenario.AccessRevision,
+            $"agreement-successor-cancel:70001:10000:20001:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("lease-agreement.successor-draft.cancel",
+            $"70001:10000:20001:{FrozenKeyDigest}", cancelSuccessor, SuccessorCancelFingerprint,
+            """{"Outcome":0,"LeaseManagementId":10000,"LeaseAgreementId":20001,"DraftCanceledAtUtc":"2026-08-22T12:00:00Z","DraftCanceledByUserId":790,"DraftCancellationReason":"Frozen replay","Error":null}""",
             new CancelLeaseAgreementSuccessorDraftResult(
                 CancelLeaseAgreementSuccessorDraftOutcome.Canceled, _scenario.LeaseManagementId,
-                _scenario.SuccessorAgreementId, businessNow, ActorUserId, "Frozen replay", null));
+                _scenario.SuccessorAgreementId, businessNow, ActorUserId, "Frozen replay", null),
+            "lease-agreement.successor-draft.cancel.v1");
 
         var addendumResult = new LeaseAddendumDraftMutationResult(
             LeaseAddendumDraftMutationOutcome.Applied, _scenario.LeaseManagementId, 31,
-            Guid.NewGuid(), 1, 1, null, [], [], null);
-        await AssertFrozenReplayAsync("legacy-addendum-create",
+            Guid.Parse("33333333-3333-3333-3333-333333333333"), 1, 1, null, [], [], null);
+        const string addendumJson = """{"Outcome":0,"LeaseManagementId":10000,"LeaseAddendumId":31,"SeriesPublicId":"33333333-3333-3333-3333-333333333333","VersionNumber":1,"DraftRevision":1,"SourceAddendumId":null,"LeaseAddendumSignerIds":[],"FinancialEffectIds":[],"Error":null}""";
+        await AssertFrozenReplayAsync("lease-addendum.draft.create",
+            $"70001:10000:{FrozenKeyDigest}",
             new CreateLeaseAddendumDraftCommand(
                 _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SourceAgreementId,
                 "A-1", LeaseAddendumPurpose.Other, businessDate, null, 1, "{}", 1, [], [],
                 ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
-                _scenario.AccessRevision, "legacy-addendum-create-delivery"), addendumResult);
-        await AssertFrozenReplayAsync("legacy-addendum-edit",
+                _scenario.AccessRevision, $"addendum-create:70001:10000:{FrozenKeyDigest}"),
+            AddendumCreateFingerprint, addendumJson, addendumResult,
+            "lease-addendum.draft.mutation.v1");
+        await AssertFrozenReplayAsync("lease-addendum.draft.edit",
+            $"70001:31:{FrozenKeyDigest}",
             new EditLeaseAddendumDraftCommand(
                 _scenario.PortfolioId, _scenario.LeaseManagementId, 31, 1, "A-1",
                 LeaseAddendumPurpose.Other, businessDate, null, 1, "{}", 1, [], [], ActorUserId,
                 _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision,
-                "legacy-addendum-edit-delivery"), addendumResult);
-        await AssertFrozenReplayAsync("legacy-addendum-correct",
+                $"addendum-edit:70001:31:{FrozenKeyDigest}"), AddendumEditFingerprint,
+            addendumJson, addendumResult, "lease-addendum.draft.mutation.v1");
+        await AssertFrozenReplayAsync("lease-addendum.draft.correct",
+            $"70001:31:{FrozenKeyDigest}",
             new CorrectLeaseAddendumDraftCommand(
                 _scenario.PortfolioId, _scenario.LeaseManagementId, 31, businessDate, ActorUserId,
                 _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision,
-                "legacy-addendum-correct-delivery"), addendumResult);
+                $"addendum-correct:70001:31:{FrozenKeyDigest}"), AddendumCorrectFingerprint,
+            addendumJson, addendumResult, "lease-addendum.draft.mutation.v1");
 
         var agreementResult = new LeaseAgreementDraftMutationResult(
             LeaseAgreementDraftMutationOutcome.Applied, _scenario.LeaseManagementId, 41,
             1, 1, _scenario.SourceAgreementId, [], [], [], null);
-        await AssertFrozenReplayAsync("legacy-agreement-edit",
+        const string agreementJson = """{"Outcome":0,"LeaseManagementId":10000,"LeaseAgreementId":41,"VersionNumber":1,"DraftRevision":1,"SourceAgreementId":20000,"LeaseAgreementSignerIds":[],"AddendumDecisionIds":[],"ReplacementAddendumIds":[],"Error":null}""";
+        await AssertFrozenReplayAsync("lease-agreement.draft.edit",
+            $"70001:10000:20000:{FrozenKeyDigest}",
             new EditLeaseAgreementDraftCommand(
                 _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SourceAgreementId,
                 1, "L-1", LeaseAgreementTermType.FixedTerm, businessDate,
                 businessDate.AddYears(1), businessDate, 1000m, 1, 500m, 25m, 5, 1, "{}", null,
                 [], ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
-                _scenario.AccessRevision, "legacy-agreement-edit-delivery"), agreementResult);
-        await AssertFrozenReplayAsync("legacy-successor-create",
+                _scenario.AccessRevision,
+                $"agreement-draft-edit:70001:10000:20000:{FrozenKeyDigest}"),
+            AgreementEditFingerprint, agreementJson, agreementResult,
+            "lease-agreement.draft.edit.v1");
+        await AssertFrozenReplayAsync("lease-agreement.successor-draft.create",
+            $"70001:10000:20000:{FrozenKeyDigest}",
             new CreateLeaseAgreementSuccessorDraftCommand(
                 _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SourceAgreementId,
                 LeaseAgreementChangeType.Renewal, businessDate, businessDate.AddYears(1),
                 businessDate, null, null, [], ActorUserId, _scenario.SessionId,
                 _scenario.AccessContextId, _scenario.AccessRevision,
-                "legacy-successor-create-delivery"), agreementResult);
-        await AssertFrozenReplayAsync("legacy-issued-replacement",
+                $"agreement-successor:70001:10000:20000:{FrozenKeyDigest}"),
+            SuccessorCreateFingerprint, agreementJson, agreementResult,
+            "lease-agreement.successor-draft.create.v2");
+        await AssertFrozenReplayAsync("lease-agreement.issued-replacement-draft.create",
+            $"70001:10000:20011:{FrozenKeyDigest}",
             new ReplaceIssuedAgreementWithDraftCommand(
                 _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.IssuedAgreementId,
                 null, "Frozen replay", ActorUserId, _scenario.SessionId,
                 _scenario.AccessContextId, _scenario.AccessRevision,
-                "legacy-issued-replacement-delivery"), agreementResult);
+                $"agreement-issued-replacement:70001:10000:20011:{FrozenKeyDigest}"),
+            IssuedReplacementFingerprint, agreementJson, agreementResult,
+            "lease-agreement.successor-draft.create.v2");
 
         var disposition = new CreatePropertyDispositionCommand(
             _scenario.PortfolioId, propertyId, businessNow.Date, 250_000m, 12_500m,
             "Frozen Buyer", "Frozen replay", ActorUserId, _scenario.SessionId,
-            _scenario.AccessContextId, _scenario.AccessRevision, "legacy-disposition-delivery");
-        await AssertFrozenReplayAsync("legacy-disposition", disposition,
-            new CreatePropertyDispositionResult(CreatePropertyDispositionOutcome.Created, 51, 3, 1));
+            _scenario.AccessContextId, _scenario.AccessRevision,
+            $"property-disposition:70001:70002:{FrozenKeyDigest}");
+        await AssertFrozenReplayAsync("property-disposition.create",
+            $"property-disposition:70001:70002:{FrozenKeyDigest}", disposition,
+            DispositionFingerprint,
+            """{"Outcome":0,"DispositionId":51,"LeaseManagementCount":3,"TenantAccountCount":1}""",
+            new CreatePropertyDispositionResult(CreatePropertyDispositionOutcome.Created, 51, 3, 1),
+            "property-disposition.create.v1");
+    }
+
+    [SkippableFact]
+    public async Task FrozenLegacyReceiptReplay_RefusesRevokedSession()
+    {
+        SkipIfNoDocker();
+        var command = new CancelLeaseAgreementSuccessorDraftCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SuccessorAgreementId,
+            "Frozen replay", ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
+            _scenario.AccessRevision,
+            $"agreement-successor-cancel:70001:10000:20001:{FrozenKeyDigest}");
+        var key = $"70001:10000:20001:{FrozenKeyDigest}";
+        await SeedFrozenReceiptAsync("lease-agreement.successor-draft.cancel", key,
+            SuccessorCancelFingerprint, "lease-agreement.successor-draft.cancel.v1",
+            """{"Outcome":0,"LeaseManagementId":10000,"LeaseAgreementId":20001,"DraftCanceledAtUtc":"2026-08-22T12:00:00Z","DraftCanceledByUserId":790,"DraftCancellationReason":"Frozen replay","Error":null}""");
+        await using (var revoke = NewContext())
+        {
+            var session = await revoke.AuthSessions.SingleAsync(row => row.Id == _scenario.SessionId);
+            session.Status = AuthSessionStatus.Revoked;
+            session.RevokedAtUtc = DateTime.UtcNow;
+            await revoke.SaveChangesAsync();
+        }
+
+        var write = LeasingWriteSupport.Write<CancelLeaseAgreementSuccessorDraftCommand,
+            CancelLeaseAgreementSuccessorDraftResult>(
+            _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>(), command);
+        Func<Task> act = async () => await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(key, write);
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
     [SkippableFact]
@@ -967,32 +1061,22 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
     }
 
     private async Task AssertFrozenReplayAsync<TCommand, TResult>(
+        string operation,
         string key,
         TCommand command,
-        TResult storedResult)
+        string legacyFingerprint,
+        string legacyResultJson,
+        TResult storedResult,
+        string resultContract)
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull
     {
         var scopedDb = _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var write = LeasingWriteSupport.Write<TCommand, TResult>(scopedDb, command);
-        var codec = new AtomicJsonResultCodec<TResult>(write.ResultContract);
-        await using (var seed = NewContext())
-        {
-            seed.AtomicCommandReceipts.Add(new AtomicCommandReceipt
-            {
-                Id = Guid.NewGuid(),
-                AttemptId = Guid.NewGuid(),
-                CommandType = write.OperationName,
-                IdempotencyKey = key,
-                RequestFingerprint = AtomicCommandFingerprint.Create(command),
-                Status = AtomicCommandReceiptStatus.Completed,
-                ResultContract = write.ResultContract,
-                ResultJson = codec.Serialize(storedResult),
-                StartedAt = DateTime.UtcNow,
-                CompletedAt = DateTime.UtcNow,
-            });
-            await seed.SaveChangesAsync();
-        }
+        write.OperationName.Should().Be(operation);
+        write.ResultContract.Should().Be(resultContract);
+        await SeedFrozenReceiptAsync(
+            operation, key, legacyFingerprint, resultContract, legacyResultJson);
 
         int auditsBefore;
         int outboxBefore;
@@ -1008,9 +1092,35 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         replay.Value.Should().BeEquivalentTo(storedResult);
         await using var verify = NewContext();
         (await verify.AtomicCommandReceipts.CountAsync(row =>
-            row.CommandType == write.OperationName && row.IdempotencyKey == key)).Should().Be(1);
+            row.CommandType == operation && row.IdempotencyKey == key)).Should().Be(1);
         (await verify.AtomicAuditLogs.CountAsync()).Should().Be(auditsBefore);
         (await verify.OutboxMessages.CountAsync()).Should().Be(outboxBefore);
+    }
+
+    private async Task SeedFrozenReceiptAsync(
+        string operation,
+        string key,
+        string legacyFingerprint,
+        string resultContract,
+        string legacyResultJson)
+    {
+        await using (var seed = NewContext())
+        {
+            seed.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+            {
+                Id = Guid.NewGuid(),
+                AttemptId = Guid.NewGuid(),
+                CommandType = operation,
+                IdempotencyKey = key,
+                RequestFingerprint = legacyFingerprint,
+                Status = AtomicCommandReceiptStatus.Completed,
+                ResultContract = resultContract,
+                ResultJson = legacyResultJson,
+                StartedAt = FrozenNow,
+                CompletedAt = FrozenNow,
+            });
+            await seed.SaveChangesAsync();
+        }
     }
 
     private async Task<PropertyDispositionCounts> PropertyDispositionCountsAsync(
@@ -1240,6 +1350,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         };
         var portfolio = new Portfolio
         {
+            Id = 70_001,
             Name = "Successor Cancel Portfolio",
             ManagementCompanyName = "Successor Cancel Management",
             TimeZone = "UTC",
@@ -1248,6 +1359,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         };
         var property = new Property
         {
+            Id = 70_002,
             Portfolio = portfolio,
             Name = "Successor Cancel Property",
             AddressLine1 = "100 Test Ave",
@@ -1259,6 +1371,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         };
         var unit = new Unit
         {
+            Id = 70_003,
             Property = property,
             UnitNumber = "1",
             CreatedAt = now,
@@ -1358,6 +1471,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
 
         var accessContext = new WorkspaceAccessContext
         {
+            Id = 70_006,
             User = user,
             PortfolioId = portfolio.Id,
             Status = WorkspaceAccessContextStatus.Active,
@@ -1389,7 +1503,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         };
         var session = new AuthSession
         {
-            Id = Guid.NewGuid(),
+            Id = FrozenSessionId,
             User = user,
             ActiveAccessContext = accessContext,
             Status = AuthSessionStatus.Active,
