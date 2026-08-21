@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Auth;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Sandbox;
@@ -13,23 +15,20 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="ISandboxService"/>
 public sealed class SandboxService : ISandboxService
 {
-    private static readonly AtomicJsonResultCodec<SandboxLifecycleResult> ResultCodec =
-        new("sandbox-lifecycle-result:v1");
-
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly Auth.DemoDataSeeder _demoSeeder;
 
     public SandboxService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         Auth.DemoDataSeeder demoSeeder)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
         _demoSeeder = demoSeeder;
     }
 
@@ -57,11 +56,9 @@ public sealed class SandboxService : ISandboxService
             null,
             _timeProvider.GetUtcNow().UtcDateTime,
             idempotencyKey);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("sandbox.go-live", scope, idempotencyKey),
-            command,
-            ResultCodec,
-            ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            Identity(scope, idempotencyKey),
+            SandboxLifecycleWriteSupport.Write(_db, command), ct);
         return ToState(outcome.Value);
     }
 
@@ -86,11 +83,9 @@ public sealed class SandboxService : ISandboxService
             },
             _timeProvider.GetUtcNow().UtcDateTime,
             idempotencyKey);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("sandbox.onboarding-choice", scope, idempotencyKey),
-            command,
-            ResultCodec,
-            ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            Identity(scope, idempotencyKey),
+            SandboxLifecycleWriteSupport.Write(_db, command), ct);
         if (choice == OnboardingChoice.Sandbox
             && outcome.Value.PortfolioFound
             && outcome.Value.IsSandbox)
@@ -105,17 +100,14 @@ public sealed class SandboxService : ISandboxService
     internal static IReadOnlyList<string> SandboxGraduationDeleteOrder =>
         SandboxLifecyclePersistence.SandboxGraduationDeleteOrder;
 
-    private static AtomicCommandIdentity Identity(
-        string commandType,
+    private static string Identity(
         WorkspaceReadScope scope,
         string idempotencyKey)
     {
         var digest = Convert.ToHexString(SHA256.HashData(
                 Encoding.UTF8.GetBytes(idempotencyKey.Trim())))
             .ToLowerInvariant();
-        return new AtomicCommandIdentity(
-            commandType,
-            $"{scope.PortfolioId}:{digest}");
+        return $"{scope.PortfolioId}:{digest}";
     }
 
     private static SandboxStateResponse? ToState(SandboxLifecycleResult result) =>

@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -16,8 +17,6 @@ namespace RentalCommand.Api.Tests.Domain;
 [Collection(MigratedPostgreSqlCollection.Name)]
 public sealed class SandboxLifecyclePostgreSqlTests
 {
-    private static readonly AtomicJsonResultCodec<SandboxLifecycleResult> Codec =
-        new("sandbox-lifecycle-result:v1");
     private readonly MigratedPostgreSqlFixture _fixture;
 
     public SandboxLifecyclePostgreSqlTests(MigratedPostgreSqlFixture fixture) => _fixture = fixture;
@@ -29,7 +28,8 @@ public sealed class SandboxLifecyclePostgreSqlTests
         var scope = setup.Db.SeedAdministratorScope(1, nameof(LiveOnboardingChoice_AuditsPortfolioUsingAggregateId));
         await using var services = BuildServices(setup.ConnectionString);
         await using var serviceScope = services.CreateAsyncScope();
-        var atomic = serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
         var command = new SandboxLifecycleCommand(
             scope.PortfolioId,
             scope.UserId,
@@ -41,10 +41,8 @@ public sealed class SandboxLifecyclePostgreSqlTests
             DateTime.UtcNow,
             $"sandbox-onboarding-live:{Guid.NewGuid():N}");
 
-        var outcome = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity("sandbox.onboarding-choice", command.DeliveryIdempotencyKey),
-            command,
-            Codec);
+        var outcome = await writes.ExecuteExactAsync(
+            command.DeliveryIdempotencyKey, SandboxLifecycleWriteSupport.Write(db, command));
 
         outcome.Value.PortfolioFound.Should().BeTrue();
         outcome.Value.OnboardingChoicePending.Should().BeFalse();
@@ -93,7 +91,8 @@ public sealed class SandboxLifecyclePostgreSqlTests
 
         await using var services = BuildServices(setup.ConnectionString);
         await using var serviceScope = services.CreateAsyncScope();
-        var atomic = serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
         var command = new SandboxLifecycleCommand(
             scope.PortfolioId,
             scope.UserId,
@@ -105,10 +104,8 @@ public sealed class SandboxLifecyclePostgreSqlTests
             now,
             $"sandbox-go-live-bank-statements:{Guid.NewGuid():N}");
 
-        var outcome = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity("sandbox.go-live", command.DeliveryIdempotencyKey),
-            command,
-            Codec);
+        var outcome = await writes.ExecuteExactAsync(
+            command.DeliveryIdempotencyKey, SandboxLifecycleWriteSupport.Write(db, command));
 
         outcome.Value.IsSandbox.Should().BeFalse();
         setup.Db.ChangeTracker.Clear();
@@ -125,10 +122,7 @@ public sealed class SandboxLifecyclePostgreSqlTests
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            SandboxLifecycleCommand,
-            SandboxLifecycleResult,
-            SandboxLifecycleCommandHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider(new ServiceProviderOptions
