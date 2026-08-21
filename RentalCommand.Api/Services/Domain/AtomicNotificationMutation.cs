@@ -52,13 +52,12 @@ public sealed record AtomicNotificationMutationResult(
 public sealed record AtomicConversationReadRequest(int TenantId) : IAtomicCommandData;
 
 public sealed class AtomicNotificationMutationHandler
-    : IAtomicCommandHandler<AtomicNotificationMutationCommand, AtomicNotificationMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicNotificationMutationHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AtomicNotificationMutationResult> HandleAsync(
+    public async Task<AtomicNotificationMutationResult> ExecuteAsync(
         AtomicNotificationMutationCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -100,7 +99,7 @@ public sealed class AtomicNotificationMutationHandler
         };
     }
 
-    public async Task AuthorizeReplayAsync(
+    public async Task AuthorizeAsync(
         AtomicNotificationMutationCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -913,4 +912,19 @@ public static class AtomicNotificationMutation
         new($"rental.notification.{command.Domain.ToString().ToLowerInvariant()}",
             $"{command.PortfolioId}:{command.AccessContextId}:{command.Domain}:" +
             $"{command.EntityId}:{command.ResourceKey}:{command.DeliveryIdempotencyKey}");
+
+    public static TransactionalWrite<AtomicNotificationMutationCommand, AtomicNotificationMutationResult> Write(
+        RentalCommandDbContext db,
+        AtomicNotificationMutationCommand command)
+    {
+        var handler = new AtomicNotificationMutationHandler(db);
+        return new(
+            Identity(command).CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            Codec.ContractName,
+            WriteLockPlan.None,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync);
+    }
 }

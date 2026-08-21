@@ -43,13 +43,12 @@ public sealed record AtomicNoticeDraftMutationResult(
 /// transaction as their semantic audit and durable data-update outbox message.
 /// </summary>
 public sealed class AtomicNoticeDraftMutationHandler
-    : IAtomicCommandHandler<AtomicNoticeDraftMutationCommand, AtomicNoticeDraftMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicNoticeDraftMutationHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AtomicNoticeDraftMutationResult> HandleAsync(
+    public async Task<AtomicNoticeDraftMutationResult> ExecuteAsync(
         AtomicNoticeDraftMutationCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -81,7 +80,7 @@ public sealed class AtomicNoticeDraftMutationHandler
         };
     }
 
-    public async Task AuthorizeReplayAsync(
+    public async Task AuthorizeAsync(
         AtomicNoticeDraftMutationCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -468,4 +467,19 @@ public static class AtomicNoticeDraftMutation
         new($"rental.notice-draft.{command.Operation.ToString().ToLowerInvariant()}",
             $"{command.PortfolioId}:{command.AccessContextId}:{command.Operation}:" +
             $"{command.NoticeDraftId}:{command.DeliveryIdempotencyKey}");
+
+    public static TransactionalWrite<AtomicNoticeDraftMutationCommand, AtomicNoticeDraftMutationResult> Write(
+        RentalCommandDbContext db,
+        AtomicNoticeDraftMutationCommand command)
+    {
+        var handler = new AtomicNoticeDraftMutationHandler(db);
+        return new(
+            Identity(command).CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            Codec.ContractName,
+            WriteLockPlan.None,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync);
+    }
 }
