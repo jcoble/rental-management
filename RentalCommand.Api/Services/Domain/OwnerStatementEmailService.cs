@@ -74,7 +74,7 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
             $"Your {year} owner statement",
             RenderStatementText(report),
             idempotencyKey);
-        var outcome = await _writes.ExecuteAsync(
+        var outcome = await _writes.ExecuteExactAsync(
             QueueOwnerStatementEmail.Identity(command).IdempotencyKey,
             QueueOwnerStatementEmail.Write(_db, command), ct);
         if (outcome.Value.Queued)

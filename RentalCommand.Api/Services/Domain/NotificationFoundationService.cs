@@ -582,7 +582,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             throw new InvalidOperationException("At least one delivery channel is required.");
         var command = AtomicNoticeDelivery.Command(
             context, draftId, request.Channels, workFence, operationKey);
-        var outcome = await _writes.ExecuteAsync(
+        var outcome = await _writes.ExecuteExactAsync(
             AtomicNoticeDelivery.Identity(command).IdempotencyKey,
             AtomicNoticeDelivery.Write(_db, command), ct);
         return outcome.Value.RenderedNoticeId;
@@ -591,7 +591,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     private Task<AtomicCommandOutcome<AtomicNotificationMutationResult>> ExecuteAsync(
         AtomicNotificationMutationCommand command,
         CancellationToken ct) =>
-        _writes.ExecuteAsync(
+        _writes.ExecuteExactAsync(
             AtomicNotificationMutation.Identity(command).IdempotencyKey,
             AtomicNotificationMutation.Write(_db, command), ct);
 

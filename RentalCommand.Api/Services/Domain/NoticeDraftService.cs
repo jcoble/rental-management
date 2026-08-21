@@ -107,7 +107,7 @@ public sealed class NoticeDraftService : INoticeDraftService
     private Task<AtomicCommandOutcome<AtomicNoticeDraftMutationResult>> ExecuteAsync(
         AtomicNoticeDraftMutationCommand command,
         CancellationToken ct) =>
-        _writes.ExecuteAsync(
+        _writes.ExecuteExactAsync(
             AtomicNoticeDraftMutation.Identity(command).IdempotencyKey,
             AtomicNoticeDraftMutation.Write(_db, command), ct);
 

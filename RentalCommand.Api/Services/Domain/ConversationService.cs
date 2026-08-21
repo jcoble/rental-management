@@ -610,7 +610,7 @@ public class ConversationService : IConversationService
     private Task<AtomicCommandOutcome<AtomicNotificationMutationResult>> ExecuteNotificationAsync(
         AtomicNotificationMutationCommand command,
         CancellationToken ct) =>
-        _writes.ExecuteAsync(
+        _writes.ExecuteExactAsync(
             AtomicNotificationMutation.Identity(command).IdempotencyKey,
             AtomicNotificationMutation.Write(_db, command), ct);
 

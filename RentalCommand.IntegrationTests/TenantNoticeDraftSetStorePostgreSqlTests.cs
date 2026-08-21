@@ -86,7 +86,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
 
         var setupNow = new DateTime(2026, 7, 10, 12, 0, 0, DateTimeKind.Utc);
         var effectiveNow = new DateTime(2027, 1, 26, 5, 0, 0, DateTimeKind.Utc);
-        var token = Guid.NewGuid();
+        var token = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
         int portfolioId;
         int leaseManagementId;
         long ledgerEntryId;
@@ -194,14 +194,27 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
                 row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey);
             seed.Remove(current);
             await seed.SaveChangesAsync();
-            seed.AtomicCommandReceipts.Add(LegacyReceipt(
-                identity, command, TenantNoticeDraftAutomation.Codec, outcome.Value, effectiveNow));
+            // Frozen legacy fixture from 461c3a1b. Never regenerate its fingerprint or result JSON
+            // from the current command model or codec.
+            seed.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+            {
+                Id = Guid.NewGuid(),
+                AttemptId = Guid.NewGuid(),
+                CommandType = "tenant-notice-draft.claimed-batch.apply",
+                IdempotencyKey = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                RequestFingerprint = "a665fa6f34715b086cb27446dd300f20205a3ca98b67414b4357111ee5edf9b6",
+                Status = AtomicCommandReceiptStatus.Completed,
+                ResultContract = "tenant-notice-draft.claimed-batch.apply.v1",
+                ResultJson = "{\"CreatedCount\":0,\"Drafts\":[]}",
+                StartedAt = effectiveNow,
+                CompletedAt = effectiveNow,
+            });
             await seed.SaveChangesAsync();
         }
 
         var legacyReplay = await ExecuteClaimedBatchAsync(command);
         legacyReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        legacyReplay.Value.Should().BeEquivalentTo(outcome.Value);
+        legacyReplay.Value.Should().BeEquivalentTo(new ApplyClaimedTenantNoticeDraftBatchResult(0, []));
         await using var afterReplay = NewContext();
         (await afterReplay.NoticeDrafts.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(1);
         (await afterReplay.OutboxMessages.CountAsync(row =>
@@ -852,27 +865,6 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             TenantNoticeDraftAutomation.Identity(command).IdempotencyKey,
             TenantNoticeDraftAutomation.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }
-
-    private static AtomicCommandReceipt LegacyReceipt<TCommand, TResult>(
-        AtomicCommandIdentity identity,
-        TCommand command,
-        AtomicJsonResultCodec<TResult> codec,
-        TResult result,
-        DateTime now)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull => new()
-        {
-            Id = Guid.NewGuid(),
-            AttemptId = Guid.NewGuid(),
-            CommandType = identity.CommandType,
-            IdempotencyKey = identity.IdempotencyKey,
-            RequestFingerprint = AtomicCommandFingerprint.Create(command),
-            Status = AtomicCommandReceiptStatus.Completed,
-            ResultContract = codec.ContractName,
-            ResultJson = codec.Serialize(result),
-            StartedAt = now,
-            CompletedAt = now,
-        };
 
     private static StoredFile StoredFile(int portfolioId, string fileName, DateTime now) => new()
     {
