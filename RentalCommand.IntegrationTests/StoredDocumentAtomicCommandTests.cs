@@ -139,10 +139,6 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             .ToListAsync();
         audits.Should().Contain(audit => audit.EntityType == nameof(StoredFile) && audit.EntityId == first.Id);
         audits.Should().Contain(audit => audit.EntityType == nameof(Unit) && audit.EntityId == _unitId);
-        var retired = new CreateStoredDocumentHandler();
-        await FluentActions.Invoking(() => retired.HandleAsync(null!, null!, default))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Stored document writes no longer use the legacy stored document handlers.");
     }
 
     [SkippableFact]
@@ -490,7 +486,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Authorization_queries_are_server_translated_and_legacy_handlers_are_retired()
+    public async Task Authorization_queries_are_server_translated()
     {
         SkipIfNoDocker();
         Probe.Clear();
@@ -505,17 +501,6 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             && sql.Contains("\"PortfolioId\"", StringComparison.Ordinal)
             && sql.Contains("@", StringComparison.Ordinal))
             .Should().Be(1, "target eligibility is one parameterized DB-side statement even when EF wraps filtered tables");
-        var create = new CreateStoredDocumentHandler();
-        var delete = new DeleteStoredDocumentHandler();
-        await FluentActions.Invoking(() => create.AuthorizeReplayAsync(null!, null!, default))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Stored document writes no longer use the legacy stored document handlers.");
-        await FluentActions.Invoking(() => delete.HandleAsync(null!, null!, default))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Stored document writes no longer use the legacy stored document handlers.");
-        await FluentActions.Invoking(() => delete.AuthorizeReplayAsync(null!, null!, default))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Stored document writes no longer use the legacy stored document handlers.");
     }
 
     private CapturingFileStorage Storage => _services!.GetRequiredService<CapturingFileStorage>();

@@ -224,7 +224,7 @@ public sealed class DocumentTemplateCrudWritePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task WritesUseAuthorizationScopeOnly_AndAllLegacyHandlerArmsThrow()
+    public void WritesUseAuthorizationScopeOnly()
     {
         var actor = Actor(7);
         var create = new CreateDocumentTemplateCommand(
@@ -250,13 +250,6 @@ public sealed class DocumentTemplateCrudWritePostgreSqlTests : IAsyncLifetime
         AssertPlan(DocumentTemplateWriteSupport.Write("document-template.field.update", fieldUpdate, Applied, Authorized));
         AssertPlan(DocumentTemplateWriteSupport.Write("document-template.field.delete", delete, Applied, Authorized));
 
-        await AssertRetiredAsync(new CreateDocumentTemplateHandler(), create);
-        await AssertRetiredAsync(new FinalizeDocumentTemplateUploadHandler(), upload);
-        await AssertRetiredAsync(new UpdateDocumentTemplateHandler(), update);
-        await AssertRetiredAsync(new AddDocumentTemplateFieldHandler(), add);
-        await AssertRetiredAsync(new UpdateDocumentTemplateFieldHandler(), fieldUpdate);
-        await AssertRetiredAsync(new DeleteDocumentTemplateFieldHandler(), delete);
-
         static Task<DocumentTemplateMutationResult> Applied<T>(
             T _, IAtomicCommandContext __, CancellationToken ___) where T : IAtomicCommandData =>
             Task.FromResult(new DocumentTemplateMutationResult(DocumentTemplateMutationOutcome.Applied, 1));
@@ -272,18 +265,6 @@ public sealed class DocumentTemplateCrudWritePostgreSqlTests : IAsyncLifetime
         write.LockPlan.Protocol.Should().Be(WriteLockProtocol.AuthorizationScope);
         write.LockPlan.Locks.Select(row => row.LockNamespace)
             .Should().Equal("AuthSession", "WorkspaceAccessContext", "Portfolio");
-    }
-
-    private static async Task AssertRetiredAsync<TCommand>(
-        IAtomicCommandHandler<TCommand, DocumentTemplateMutationResult> handler, TCommand command)
-        where TCommand : notnull, IAtomicCommandData
-    {
-        await ((Func<Task>)(() => handler.HandleAsync(command, null!, default)))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Document template writes no longer use the legacy document template mutation handlers.");
-        await ((Func<Task>)(() => handler.AuthorizeReplayAsync(command, null!, default)))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Document template writes no longer use the legacy document template mutation handlers.");
     }
 
     private async Task<WorkspaceReadScope> SeedScopeAsync()

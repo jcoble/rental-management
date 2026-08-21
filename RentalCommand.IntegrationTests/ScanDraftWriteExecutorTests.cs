@@ -56,27 +56,6 @@ public sealed class ScanDraftWriteExecutorTests
             "AuthSession", "WorkspaceAccessContext", "Portfolio");
     }
 
-    [Fact]
-    public async Task AllLegacyHandlerArmsThrow()
-    {
-        await AssertRetiredAsync<FinalizeScanUploadCommand, FinalizeScanUploadResult>(
-            new FinalizeScanUploadHandler(), Finalize());
-        await AssertRetiredAsync<RetryScanDraftCommand, ScanDraftMutationResult>(
-            new RetryScanDraftHandler(), Retry());
-        await AssertRetiredAsync<CreateVoiceScanDraftCommand, ScanDraftMutationResult>(
-            new CreateVoiceScanDraftHandler(), VoiceCreate());
-        await AssertRetiredAsync<AnswerVoiceScanDraftCommand, ScanDraftMutationResult>(
-            new AnswerVoiceScanDraftHandler(), VoiceAnswer());
-        await AssertRetiredAsync<SetScanDraftPaymentAccountCommand, ScanDraftMutationResult>(
-            new SetScanDraftPaymentAccountHandler(), PaymentAccount());
-        await AssertRetiredAsync<RejectScanDraftCommand, RejectScanDraftResult>(
-            new RejectScanDraftHandler(), Reject());
-        await AssertRetiredAsync<ConfirmScanDraftCommand, ConfirmScanDraftResult>(
-            new ConfirmScanDraftHandler(), Confirm());
-        await AssertRetiredAsync<CreateManualLeaseCommand, ConfirmScanDraftResult>(
-            new CreateManualLeaseHandler(), ManualLease());
-    }
-
     private static TransactionalWrite<TCommand, bool> Write<TCommand>(
         TCommand command, string resultContract)
         where TCommand : notnull, IAtomicCommandData =>
@@ -94,20 +73,6 @@ public sealed class ScanDraftWriteExecutorTests
         write.ResultContract.Should().NotBeNullOrWhiteSpace();
         write.LockPlan.Protocol.Should().Be(protocol);
         write.LockPlan.Locks.Select(item => item.LockNamespace).Should().Equal(namespaces);
-    }
-
-    private static async Task AssertRetiredAsync<TCommand, TResult>(
-        IAtomicCommandHandler<TCommand, TResult> handler,
-        TCommand command)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
-    {
-        await ((Func<Task>)(() => handler.HandleAsync(command, null!, default)))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Scan upload and draft mutations no longer use the legacy atomic handlers.");
-        await ((Func<Task>)(() => handler.AuthorizeReplayAsync(command, null!, default)))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Scan upload and draft mutations no longer use the legacy atomic handlers.");
     }
 
     private static FinalizeScanUploadCommand Finalize() => new(

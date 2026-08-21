@@ -42,7 +42,7 @@ public sealed record AtomicRentalMutationResult(
     string? ResponseJson = null);
 
 /// <summary>
-/// Receipt-backed rental-application writes plus defensive rejection of the retired Unit path.
+/// Receipt-backed rental-application writes.
 /// Every application authorization predicate is repeated inside the owning transaction and again
 /// before a receipt replay is returned.
 /// </summary>
@@ -67,19 +67,12 @@ public sealed class AtomicRentalMutationHandler
         await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         if (command.EntityId > 0)
         {
-            await attempt.AcquireLockAsync(
-                command.Domain == AtomicRentalMutationDomain.Unit
-                    ? throw RetiredUnitDomain()
-                    : "RentalApplication",
-                command.EntityId,
-                ct);
+            await attempt.AcquireLockAsync("RentalApplication", command.EntityId, ct);
         }
 
         var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         return command.Domain switch
         {
-            AtomicRentalMutationDomain.Unit =>
-                throw RetiredUnitDomain(),
             AtomicRentalMutationDomain.Application =>
                 await MutateApplicationAsync(command, attempt, now, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
@@ -95,8 +88,6 @@ public sealed class AtomicRentalMutationHandler
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var authorized = command.Domain switch
         {
-            AtomicRentalMutationDomain.Unit =>
-                throw RetiredUnitDomain(),
             AtomicRentalMutationDomain.Application when command.Operation == AtomicRentalMutationOperation.Create =>
                 await AuthorizeApplicationCreateAsync(command, _db, now, ct),
             AtomicRentalMutationDomain.Application =>
@@ -715,9 +706,6 @@ public sealed class AtomicRentalMutationHandler
         string? responseJson = null) => new(true, true, id, relatedId, responseJson);
     private UnauthorizedAccessException Denied() => new("The record is not authorized in the current workspace scope.");
     private DomainValidationException Conflict(string message) => new(message, 409);
-    private static InvalidOperationException RetiredUnitDomain() => new(
-        "Unit writes no longer use the legacy rental mutation handler.");
-
     private string? BuildTenantNote(RentalApplication application)
     {
         var parts = new List<string> { $"Created from rental application #{application.Id}." };

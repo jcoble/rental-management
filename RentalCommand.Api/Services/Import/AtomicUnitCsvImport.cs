@@ -56,23 +56,14 @@ public static class AtomicUnitCsvImport
             executeAsync, authorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Unit CSV imports must use the shared request write executor.");
 }
 
 /// <summary>One receipt-backed Unit CSV command; PostgreSQL owns the whole row set.</summary>
 public sealed class AtomicUnitCsvImportHandler
-    : IAtomicCommandHandler<AtomicUnitCsvImportCommand, AtomicUnitCsvImportResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicUnitCsvImportHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<AtomicUnitCsvImportResult> HandleAsync(
-        AtomicUnitCsvImportCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) =>
-        throw AtomicUnitCsvImport.RetiredPath();
 
     internal async Task<AtomicUnitCsvImportResult> ExecuteAsync(
         AtomicUnitCsvImportCommand command,
@@ -145,12 +136,6 @@ public sealed class AtomicUnitCsvImportHandler
             });
         }
     }
-
-    public Task AuthorizeReplayAsync(
-        AtomicUnitCsvImportCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw AtomicUnitCsvImport.RetiredPath();
 
     internal async Task AuthorizeAsync(
         AtomicUnitCsvImportCommand command,

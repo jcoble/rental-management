@@ -154,7 +154,7 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task UnitImport_PreservesAliasPartialBatchFingerprintRetryClockOutboxAndRetiresLegacyPaths()
+    public async Task UnitImport_PreservesAliasPartialBatchFingerprintRetryClockAndOutbox()
     {
         var scope = await SeedScopeAsync(DateTime.UtcNow, "unit");
         var property = await _context.Db.Properties.AsNoTracking().SingleAsync(row =>
@@ -177,27 +177,6 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
             replay = await sut.ImportAsync(scope, "unit", Csv(csv), false,
                 CommandContext(scope, operationKey));
 
-            var oldCore = new AtomicCoreCsvImportCommand(
-                scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
-                scope.AccessRevision, AtomicCoreCsvImportDomain.Tenant,
-                "retired-core", "[{}]");
-            Func<Task> retiredCore = () => requestScope.ServiceProvider
-                .GetRequiredService<IAtomicUnitOfWork>()
-                .ExecuteAsync(AtomicCoreCsvImport.Identity(oldCore), oldCore,
-                    AtomicCoreCsvImport.Codec);
-            await retiredCore.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("Core CSV imports must use the shared request write executor.");
-
-            var oldUnit = new AtomicUnitCsvImportCommand(
-                scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
-                scope.AccessRevision, "retired-unit",
-                [new AtomicUnitImportRow(2, property.Id, null, "retired", 1, 1, 1, [])]);
-            Func<Task> retiredUnit = () => requestScope.ServiceProvider
-                .GetRequiredService<IAtomicUnitOfWork>()
-                .ExecuteAsync(AtomicUnitCsvImport.Identity(oldUnit), oldUnit,
-                    AtomicUnitCsvImport.Codec);
-            await retiredUnit.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("Unit CSV imports must use the shared request write executor.");
         }
         var databaseAfter = DateTime.UtcNow;
 
@@ -263,7 +242,7 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PaymentImport_PreservesFingerprintRetryClockOutboxStaleAuthorizationAndRetiresLegacyPaths()
+    public async Task PaymentImport_PreservesFingerprintRetryClockOutboxAndStaleAuthorization()
     {
         var scope = await SeedScopeAsync(DateTime.UtcNow, "payment");
         const string operationKey = "family-p5-payment-csv";
@@ -284,26 +263,6 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
             replay = await sut.ImportAsync(scope, "payment", Csv(csv), false,
                 CommandContext(scope, operationKey));
 
-            var command = new AtomicPaymentCsvImportCommand(
-                scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
-                scope.AccessRevision, "retired-payment", "[{}]");
-            Func<Task> retiredExecute = () => requestScope.ServiceProvider
-                .GetRequiredService<IAtomicUnitOfWork>()
-                .ExecuteAsync(AtomicPaymentCsvImport.Identity(command), command,
-                    AtomicPaymentCsvImport.Codec);
-            await retiredExecute.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("Payment CSV imports must use the shared request write executor.");
-
-            var replayCommand = new AtomicPaymentCsvImportCommand(
-                scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
-                scope.AccessRevision, operationKey,
-                PaymentRowsJson(scope.PortfolioId, operationKey));
-            Func<Task> retiredReplay = () => requestScope.ServiceProvider
-                .GetRequiredService<IAtomicUnitOfWork>()
-                .ExecuteAsync(AtomicPaymentCsvImport.Identity(replayCommand), replayCommand,
-                    AtomicPaymentCsvImport.Codec);
-            await retiredReplay.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("Payment CSV imports must use the shared request write executor.");
         }
         var databaseAfter = DateTime.UtcNow;
 
@@ -491,15 +450,6 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(SeparatedAuditClock));
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            AtomicCoreCsvImportCommand, AtomicCoreCsvImportResult,
-            AtomicCoreCsvImportHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicUnitCsvImportCommand, AtomicUnitCsvImportResult,
-            AtomicUnitCsvImportHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicPaymentCsvImportCommand, AtomicPaymentCsvImportResult,
-            AtomicPaymentCsvImportHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IUnitCsvImportPreviewQuery, AtomicUnitImportPersistence>();
         services.AddScoped<ICoreCsvImportPreviewQuery, AtomicCoreCsvImportPersistence>();

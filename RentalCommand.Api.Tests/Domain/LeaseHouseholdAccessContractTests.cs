@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Identity;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Leasing;
@@ -31,8 +30,6 @@ public sealed class LeaseHouseholdAccessContractTests
                     .Any(attribute => attribute.Name == "Idempotency-Key"));
         }
 
-        typeof(GrantTenantUserAccessHandler)
-            .Should().Implement<IAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult>>();
         typeof(GrantTenantUserAccessRequest).GetProperty("ApplicationUserId").Should().BeNull();
         typeof(LeaseManagementPartyResponse).GetProperty("CanGrantTenantPortalAccess").Should().NotBeNull();
     }

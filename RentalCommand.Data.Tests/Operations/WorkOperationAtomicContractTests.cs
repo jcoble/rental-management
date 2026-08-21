@@ -10,17 +10,6 @@ namespace RentalCommand.Data.Tests.Operations;
 public sealed class WorkOperationAtomicContractTests
 {
     [Theory]
-    [InlineData(typeof(CreateWorkOrderHandler), typeof(CreateWorkOrderCommand))]
-    [InlineData(typeof(UpdateWorkOrderHandler), typeof(UpdateWorkOrderCommand))]
-    [InlineData(typeof(DeleteWorkOrderHandler), typeof(DeleteWorkOrderCommand))]
-    [InlineData(typeof(CreateTenantWorkOrderHandler), typeof(CreateTenantWorkOrderCommand))]
-    [InlineData(typeof(CreateAppointmentHandler), typeof(CreateAppointmentCommand))]
-    [InlineData(typeof(UpdateAppointmentHandler), typeof(UpdateAppointmentCommand))]
-    [InlineData(typeof(DeleteAppointmentHandler), typeof(DeleteAppointmentCommand))]
-    [InlineData(typeof(CreateEvictionCaseHandler), typeof(CreateEvictionCaseCommand))]
-    [InlineData(typeof(UpdateEvictionCaseHandler), typeof(UpdateEvictionCaseCommand))]
-    [InlineData(typeof(AddEvictionCaseEventHandler), typeof(AddEvictionCaseEventCommand))]
-    [InlineData(typeof(DeleteEvictionCaseHandler), typeof(DeleteEvictionCaseCommand))]
     [InlineData(typeof(CreateVendorRatingHandler), typeof(CreateVendorRatingCommand))]
     public void Every_live_operation_handler_reauthorizes_receipt_replay(
         Type handlerType, Type commandType)

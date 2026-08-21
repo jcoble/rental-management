@@ -210,7 +210,7 @@ public sealed class EvictionCaseCrudWritePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task WritesUseAuthorizationScopeOnly_AndAllLegacyHandlerArmsThrow()
+    public void WritesUseAuthorizationScopeOnly()
     {
         var actor = new StaffOperationActor(1, Guid.NewGuid(), 2, 3);
         var create = new CreateEvictionCaseCommand(
@@ -238,29 +238,12 @@ public sealed class EvictionCaseCrudWritePostgreSqlTests : IAsyncLifetime
                 .Should().Equal("AuthSession", "WorkspaceAccessContext", "Portfolio");
         }
 
-        await AssertRetiredAsync(new CreateEvictionCaseHandler(), create);
-        await AssertRetiredAsync(new UpdateEvictionCaseHandler(), update);
-        await AssertRetiredAsync(new AddEvictionCaseEventHandler(), addEvent);
-        await AssertRetiredAsync(new DeleteEvictionCaseHandler(), delete);
-
         static Task<OperationMutationResult> Applied<T>(
             T _, IAtomicCommandContext __, CancellationToken ___) where T : IAtomicCommandData =>
             Task.FromResult(new OperationMutationResult(OperationMutationOutcome.Applied, 1));
         static Task Authorized<T>(
             T _, IAtomicCommandContext __, CancellationToken ___) where T : IAtomicCommandData =>
             Task.CompletedTask;
-    }
-
-    private static async Task AssertRetiredAsync<TCommand>(
-        IAtomicCommandHandler<TCommand, OperationMutationResult> handler, TCommand command)
-        where TCommand : notnull, IAtomicCommandData
-    {
-        await ((Func<Task>)(() => handler.HandleAsync(command, null!, default)))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Eviction case writes no longer use the legacy eviction mutation handlers.");
-        await ((Func<Task>)(() => handler.AuthorizeReplayAsync(command, null!, default)))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Eviction case writes no longer use the legacy eviction mutation handlers.");
     }
 
     private async Task<WorkspaceReadScope> SeedScopeAsync(DateTime now)
@@ -347,10 +330,6 @@ public sealed class EvictionCaseCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<CreateEvictionCaseCommand, OperationMutationResult, CreateEvictionCaseHandler>();
-        services.AddAtomicCommandHandler<UpdateEvictionCaseCommand, OperationMutationResult, UpdateEvictionCaseHandler>();
-        services.AddAtomicCommandHandler<AddEvictionCaseEventCommand, OperationMutationResult, AddEvictionCaseEventHandler>();
-        services.AddAtomicCommandHandler<DeleteEvictionCaseCommand, OperationMutationResult, DeleteEvictionCaseHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<EvictionCaseService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>

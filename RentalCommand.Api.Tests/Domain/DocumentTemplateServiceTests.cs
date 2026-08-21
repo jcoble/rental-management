@@ -440,26 +440,6 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
         services.AddAtomicPersistenceKernel();
         services.AddScoped<RentalCommand.Api.Writes.IRequestWriteExecutor,
             RentalCommand.Api.Writes.RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            RentalCommand.Core.Documents.CreateDocumentTemplateCommand,
-            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
-            CreateDocumentTemplateHandler>();
-        services.AddAtomicCommandHandler<
-            RentalCommand.Core.Documents.FinalizeDocumentTemplateUploadCommand,
-            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
-            FinalizeDocumentTemplateUploadHandler>();
-        services.AddAtomicCommandHandler<
-            RentalCommand.Core.Documents.AddDocumentTemplateFieldCommand,
-            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
-            AddDocumentTemplateFieldHandler>();
-        services.AddAtomicCommandHandler<
-            RentalCommand.Core.Documents.UpdateDocumentTemplateFieldCommand,
-            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
-            UpdateDocumentTemplateFieldHandler>();
-        services.AddAtomicCommandHandler<
-            RentalCommand.Core.Documents.DeleteDocumentTemplateFieldCommand,
-            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
-            DeleteDocumentTemplateFieldHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             configureDatabase(builder);

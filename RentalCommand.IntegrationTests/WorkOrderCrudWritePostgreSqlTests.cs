@@ -112,7 +112,7 @@ public sealed class WorkOrderCrudWritePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task LockPlansDeclareLegacyProtocols_AndAllLegacyHandlerArmsThrow()
+    public void LockPlansDeclareLegacyProtocols()
     {
         var actor = new StaffOperationActor(1, Guid.NewGuid(), 2, 3);
         var create = CreateCommand(new WorkspaceReadScope(1, 1, actor.AuthSessionId, 2, 3),
@@ -189,14 +189,6 @@ public sealed class WorkOrderCrudWritePostgreSqlTests : IAsyncLifetime
             static (_, _, _) => Task.CompletedTask).LockPlan.Protocol
             .Should().Be(WriteLockProtocol.WorkOrderAppointmentProgression);
 
-        await AssertRetiredAsync(new CreateWorkOrderHandler(_context.Db), create);
-        await AssertRetiredAsync(new UpdateWorkOrderHandler(_context.Db), update);
-        await AssertRetiredAsync(new DeleteWorkOrderHandler(_context.Db), delete);
-        await AssertRetiredAsync(new AddStaffWorkOrderCommentHandler(_context.Db), staffComment);
-        await AssertRetiredAsync(new CreateTenantWorkOrderHandler(_context.Db), tenantCreate);
-        await AssertRetiredAsync(new AddTenantWorkOrderCommentHandler(_context.Db), tenantComment);
-        await AssertRetiredAsync(new UpdateTenantWorkOrderHandler(_context.Db), tenantUpdate);
-        await AssertRetiredAsync(new CancelTenantWorkOrderHandler(_context.Db), tenantCancel);
     }
 
     [Fact]
@@ -295,18 +287,6 @@ public sealed class WorkOrderCrudWritePostgreSqlTests : IAsyncLifetime
         db.ChangeTracker.Clear();
     }
 
-    private static async Task AssertRetiredAsync<TCommand>(
-        IAtomicCommandHandler<TCommand, WorkOrderMutationResult> handler, TCommand command)
-        where TCommand : IAtomicCommandData
-    {
-        await handler.Invoking(item => item.HandleAsync(command, null!, CancellationToken.None))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Work-order CRUD and comments no longer use the legacy mutation handlers.");
-        await handler.Invoking(item => item.AuthorizeReplayAsync(command, null!, CancellationToken.None))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Work-order CRUD and comments no longer use the legacy mutation handlers.");
-    }
-
     private async Task<WorkspaceReadScope> SeedScopeAsync(DateTime now)
     {
         var user = await _context.Db.Users.SingleAsync(row => row.Id == 1);
@@ -394,14 +374,6 @@ public sealed class WorkOrderCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddSingleton(Mock.Of<ILogger<WorkOrderService>>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<CreateWorkOrderCommand, WorkOrderMutationResult, CreateWorkOrderHandler>();
-        services.AddAtomicCommandHandler<UpdateWorkOrderCommand, WorkOrderMutationResult, UpdateWorkOrderHandler>();
-        services.AddAtomicCommandHandler<DeleteWorkOrderCommand, WorkOrderMutationResult, DeleteWorkOrderHandler>();
-        services.AddAtomicCommandHandler<AddStaffWorkOrderCommentCommand, WorkOrderMutationResult, AddStaffWorkOrderCommentHandler>();
-        services.AddAtomicCommandHandler<CreateTenantWorkOrderCommand, WorkOrderMutationResult, CreateTenantWorkOrderHandler>();
-        services.AddAtomicCommandHandler<AddTenantWorkOrderCommentCommand, WorkOrderMutationResult, AddTenantWorkOrderCommentHandler>();
-        services.AddAtomicCommandHandler<UpdateTenantWorkOrderCommand, WorkOrderMutationResult, UpdateTenantWorkOrderHandler>();
-        services.AddAtomicCommandHandler<CancelTenantWorkOrderCommand, WorkOrderMutationResult, CancelTenantWorkOrderHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<WorkOrderService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>

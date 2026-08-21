@@ -86,18 +86,6 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            ConfirmScanDraftCommand,
-            ConfirmScanDraftResult,
-            ConfirmScanDraftHandler>();
-        services.AddAtomicCommandHandler<
-            CreateManualLeaseCommand,
-            ConfirmScanDraftResult,
-            CreateManualLeaseHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicMoneyMutationCommand,
-            AtomicMoneyMutationResult,
-            AtomicMoneyMutationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider));
