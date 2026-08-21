@@ -7,7 +7,7 @@ namespace RentalCommand.Core.Entities;
 /// One immutable application-finance fact. Corrections append a refund or adjustment; a posted
 /// entry is never edited or deleted.
 /// </summary>
-public sealed class ApplicationFinancialEntry : IPortfolioScoped
+public sealed class ApplicationFinancialEntry : IPortfolioScoped, IAuditable
 {
     public int Id { get; set; }
     public Guid PublicId { get; set; }

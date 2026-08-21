@@ -109,6 +109,7 @@ public enum WriteLockProtocol
     AuthorizationScopeVendor,
     AuthorizationScopeProperty,
     AuthorizationScopeUnit,
+    AuthorizationScopeApplication,
     AuthorizationScopeTenant,
     AuthorizationScopeScanDraft,
     Portfolio,
@@ -122,6 +123,7 @@ public enum WriteLockProtocol
     LeasePartyAccessGrant,
     LeasePartyAccessRevoke,
     TenantAccount,
+    RentalApplication,
     TenantAccountRecurringCharge,
     AuthorizationScopeLedgerAccount,
     AuthorizationScopeTenantAccount,
@@ -146,6 +148,8 @@ public sealed class WriteLockPlan
                 ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Property"],
             [WriteLockProtocol.AuthorizationScopeUnit] =
                 ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Unit"],
+            [WriteLockProtocol.AuthorizationScopeApplication] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "RentalApplication"],
             [WriteLockProtocol.AuthorizationScopeTenant] =
                 ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Tenant"],
             [WriteLockProtocol.AuthorizationScopeScanDraft] =
@@ -165,6 +169,7 @@ public sealed class WriteLockPlan
             [WriteLockProtocol.LeasePartyAccessGrant] = ["LeaseManagement"],
             [WriteLockProtocol.LeasePartyAccessRevoke] = ["LeaseManagement"],
             [WriteLockProtocol.TenantAccount] = ["TenantAccount"],
+            [WriteLockProtocol.RentalApplication] = ["RentalApplication"],
             [WriteLockProtocol.TenantAccountRecurringCharge] =
                 ["TenantAccount", "RecurringTenantCharge"],
             [WriteLockProtocol.AuthorizationScopeLedgerAccount] =

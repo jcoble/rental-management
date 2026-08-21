@@ -9,6 +9,7 @@ using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -62,7 +63,8 @@ public class PublicApplicationsControllerTests : IDisposable
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            new PublicSubmissionAtomicUnitOfWork(_db));
+            Mock.Of<IAtomicUnitOfWork>(),
+            new PublicSubmissionWriteExecutor(_db));
         var uploadSettings = Options.Create(new UploadSettings
         {
             MaxFileSizeBytes = 10_000_000,
@@ -170,17 +172,23 @@ public class PublicApplicationsControllerTests : IDisposable
             => Task.FromResult(new LlmToolResult("noop", null, [], 0, 0, "noop"));
     }
 
-    private sealed class PublicSubmissionAtomicUnitOfWork(RentalCommandDbContext db) : IAtomicUnitOfWork
+    private sealed class PublicSubmissionWriteExecutor(RentalCommandDbContext db) : IRequestWriteExecutor
     {
+        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull => ExecuteAsync(idempotencyKey, write, ct);
+
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity,
-            TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec,
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
-            if (command is not AtomicPublicApplicationSubmissionCommand submit
+            if (write.Request is not AtomicPublicApplicationSubmissionCommand submit
                 || typeof(TResult) != typeof(AtomicPublicApplicationSubmissionResult))
                 throw new InvalidOperationException("Unexpected atomic command in public application controller test.");
 
