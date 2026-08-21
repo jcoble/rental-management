@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using System.Security.Cryptography;
 using System.Text;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -25,6 +26,20 @@ namespace RentalCommand.Api.Tests.Domain;
 public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
+    private const int LegacyApplicationId = 1;
+    private const int LegacyActorUserId = 2;
+    private static readonly DateTime LegacyNow = new(2026, 8, 21, 12, 0, 0, DateTimeKind.Utc);
+
+    // Frozen legacy fingerprints computed from the screening command DTO shapes at dee7b39b.
+    // These values must never be regenerated from the current command model or a current helper.
+    private const string TrackFingerprint = "3f05a9c853d39221a262b79e301ba7db8999a66b79a372f215c3166f16dfb01e";
+    private const string PrepareIntegratedFingerprint = "75e9bea9cd8315c9575fc08a63b108cc95d36cb4035a271b07ef56f1e73aece8";
+    private const string FinalizeIntegratedFingerprint = "c705993a8c59fcf3e8ce3b22039a10054feb7925fed5e5a842af2bc4c68a5338";
+    private const string UpdateExternalFingerprint = "6868a0e2b89358a41ae459b66f1b7b72da3f44ba11d21da180208c645736fd29";
+    private const string DecisionFingerprint = "53a1ed9a244f394d144737d0001fa386b7565c9b189275f7239b39f69d1650f3";
+    private const string ProviderDeliveryFingerprint = "376ec0e3f4200fa1a968d36bff535835a38cfd76bf681ceaee0ad8b9d89edff0";
+    private const string AdversePrepareFingerprint = "2b4aabf0f9a2f16a4c4546a2cb4748a51bec9bccbd8e8c5f030dd10b5d95a1ba";
+    private const string AdverseFinalizeFingerprint = "27449a9c672a5fa66d0e5cb5d0fd11457219d4fcf1121d6468ae325d90c33b66";
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private RentalCommandDbContext _db = null!;
@@ -307,44 +322,88 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task FourLegacyReceiptContracts_ReplayThroughMigratedExecutorAndAuthorize()
+    public async Task EightLegacyReceiptContracts_ReplayThroughMigratedExecutorAndAuthorize()
     {
         var application = await SeedReplayApplicationAsync("legacy-replay");
         var db = _services.GetRequiredService<RentalCommandDbContext>();
         var writes = _services.GetRequiredService<IRequestWriteExecutor>();
-        var now = DateTime.UtcNow;
+        application.Id.Should().Be(LegacyApplicationId);
+        _scope.UserId.Should().Be(LegacyActorUserId);
 
-        var mutationCommand = new TrackExternalScreeningCommand(
-            PortfolioId, application.Id, _scope.UserId, _scope.SessionId,
-            _scope.AccessContextId, _scope.AccessRevision, "legacy-mutation", "Legacy provider",
-            null, null, null, null, null, ApplicantScreeningStatus.Created, "legacy-mutation-delivery");
-        var mutationResult = new ScreeningMutationResult(ScreeningMutationOutcome.NotFound);
-        await SeedLegacyReceiptAsync(db, "screening.external.create", "legacy-mutation",
-            mutationCommand, ScreeningWriteSupport.MutationResultContract, mutationResult, now);
-        var mutationHandler = new TrackExternalScreeningHandler(db);
-        var mutationReplay = await writes.ExecuteAsync("legacy-mutation",
-            ScreeningWriteSupport.Write(mutationCommand, mutationHandler.ExecuteAsync,
-                mutationHandler.AuthorizeAsync));
+        var notFound = new ScreeningMutationResult(ScreeningMutationOutcome.NotFound);
+
+        var trackCommand = new TrackExternalScreeningCommand(
+            PortfolioId, LegacyApplicationId, LegacyActorUserId, _scope.SessionId,
+            _scope.AccessContextId, _scope.AccessRevision, "legacy-track", "Legacy provider",
+            null, null, null, null, null, ApplicantScreeningStatus.Created, "legacy-track-delivery");
+        var trackHandler = new TrackExternalScreeningHandler(db);
+        await ReplayLegacyReceiptAsync(db, writes, "screening.external.create",
+            LegacyApplicationKey("legacy-track"), trackCommand, TrackFingerprint,
+            "{\"Outcome\":1,\"Screening\":null}", ScreeningWriteSupport.MutationResultContract,
+            notFound, trackHandler.AuthorizeAsync);
 
         var integratedCommand = new PrepareIntegratedScreeningCommand(
-            PortfolioId, application.Id, _scope.UserId, _scope.SessionId,
+            PortfolioId, LegacyApplicationId, LegacyActorUserId, _scope.SessionId,
             _scope.AccessContextId, _scope.AccessRevision, "legacy-integrated", "legacy-provider",
             "Legacy provider", "legacy-integrated-delivery");
         var integratedResult = new PrepareIntegratedScreeningResult(
-            ScreeningMutationOutcome.NotFound, null, application.Id, "legacy-integrated", null, null, null);
-        await SeedLegacyReceiptAsync(db, "screening.integrated.prepare", "legacy-integrated",
-            integratedCommand, ScreeningWriteSupport.IntegratedPrepareResultContract, integratedResult, now);
+            ScreeningMutationOutcome.NotFound, null, LegacyApplicationId, "legacy-integrated", null, null, null);
         var integratedHandler = new PrepareIntegratedScreeningHandler(db);
-        var integratedReplay = await writes.ExecuteAsync("legacy-integrated",
-            ScreeningWriteSupport.Write(integratedCommand, integratedHandler.ExecuteAsync,
-                integratedHandler.AuthorizeAsync));
+        await ReplayLegacyReceiptAsync(db, writes, "screening.integrated.prepare",
+            LegacyApplicationKey("legacy-integrated"), integratedCommand, PrepareIntegratedFingerprint,
+            "{\"Outcome\":1,\"Screening\":null,\"ApplicationId\":1,\"OperationKey\":\"legacy-integrated\",\"ApplicantName\":null,\"ApplicantEmail\":null,\"ConsentAtUtc\":null}",
+            ScreeningWriteSupport.IntegratedPrepareResultContract, integratedResult,
+            integratedHandler.AuthorizeAsync);
+
+        var finalizeIntegratedCommand = new FinalizeIntegratedScreeningCommand(
+            PortfolioId, LegacyApplicationId, 71, LegacyActorUserId, _scope.SessionId,
+            _scope.AccessContextId, _scope.AccessRevision, "legacy-integrated-finalize", "legacy-provider",
+            true, "legacy-reference", "https://legacy.example.test/report", LegacyNow, null,
+            "Legacy CRA", "1 Legacy Way", "555-0100", "legacy-integrated-finalize-delivery");
+        var finalizeIntegratedHandler = new FinalizeIntegratedScreeningHandler(db);
+        await ReplayLegacyReceiptAsync(db, writes, "screening.integrated.finalize",
+            LegacyApplicationKey("legacy-integrated-finalize"), finalizeIntegratedCommand,
+            FinalizeIntegratedFingerprint, "{\"Outcome\":1,\"Screening\":null}",
+            ScreeningWriteSupport.MutationResultContract, notFound,
+            finalizeIntegratedHandler.AuthorizeAsync);
+
+        var updateCommand = new UpdateExternalScreeningCommand(
+            PortfolioId, LegacyApplicationId, 72, LegacyActorUserId, _scope.SessionId,
+            _scope.AccessContextId, _scope.AccessRevision, "legacy-external-update",
+            ApplicantScreeningStatus.Completed, "legacy-updated-reference", null,
+            "Legacy CRA", "1 Legacy Way", "555-0100", LegacyNow, "legacy-external-update-delivery");
+        var updateHandler = new UpdateExternalScreeningHandler(db);
+        await ReplayLegacyReceiptAsync(db, writes, "screening.external.update",
+            LegacyApplicationKey("legacy-external-update"), updateCommand, UpdateExternalFingerprint,
+            "{\"Outcome\":1,\"Screening\":null}", ScreeningWriteSupport.MutationResultContract,
+            notFound, updateHandler.AuthorizeAsync);
+
+        var decisionCommand = new RecordScreeningDecisionCommand(
+            PortfolioId, LegacyApplicationId, 73, LegacyActorUserId, _scope.SessionId,
+            _scope.AccessContextId, _scope.AccessRevision, "legacy-decision", ScreeningDecision.Decline,
+            "Legacy decline", true, "legacy-decision-delivery");
+        var decisionHandler = new RecordScreeningDecisionHandler(db);
+        await ReplayLegacyReceiptAsync(db, writes, "screening.decision",
+            LegacyApplicationKey("legacy-decision"), decisionCommand, DecisionFingerprint,
+            "{\"Outcome\":1,\"Screening\":null}", ScreeningWriteSupport.MutationResultContract,
+            notFound, decisionHandler.AuthorizeAsync);
+
+        var providerCommand = new ApplyScreeningProviderDeliveryCommand(
+            "legacy-provider", "legacy-delivery", "legacy-provider-reference", "screening.completed",
+            ApplicantScreeningStatus.Completed, LegacyNow, null, "Legacy CRA", "1 Legacy Way", "555-0100",
+            "legacy-provider-delivery");
+        var providerHandler = new ApplyScreeningProviderDeliveryHandler(db);
+        await ReplayLegacyReceiptAsync(db, writes, "screening.provider-delivery",
+            LegacyProviderDeliveryKey("legacy-provider", "legacy-delivery"), providerCommand,
+            ProviderDeliveryFingerprint, "{\"Outcome\":1,\"Screening\":null}",
+            ScreeningWriteSupport.MutationResultContract, notFound, providerHandler.AuthorizeAsync);
 
         var adversePrepareCommand = new PrepareAdverseActionNoticeCommand(
-            PortfolioId, application.Id, _scope.UserId, _scope.SessionId,
+            PortfolioId, LegacyApplicationId, LegacyActorUserId, _scope.SessionId,
             _scope.AccessContextId, _scope.AccessRevision, "legacy-adverse-prepare", null, false);
         var adversePrepareResult = new PrepareAdverseActionNoticeResult(
             Outcome: ScreeningMutationOutcome.NotFound,
-            ApplicationId: application.Id,
+            ApplicationId: LegacyApplicationId,
             ScreeningId: 0,
             ManagementCompanyName: null,
             PortfolioName: null,
@@ -363,43 +422,49 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             DecisionRecordedAtUtc: null,
             DecisionFingerprint: null,
             SendToApplicant: false,
-            GeneratedAtUtc: now);
-        await SeedLegacyReceiptAsync(db, "adverse-action.prepare", "legacy-adverse-prepare",
-            adversePrepareCommand, ScreeningWriteSupport.AdversePrepareResultContract,
-            adversePrepareResult, now);
+            GeneratedAtUtc: LegacyNow);
         var adversePrepareHandler = new PrepareAdverseActionNoticeHandler(db);
-        var adversePrepareReplay = await writes.ExecuteAsync("legacy-adverse-prepare",
-            ScreeningWriteSupport.Write(adversePrepareCommand, adversePrepareHandler.ExecuteAsync,
-                adversePrepareHandler.AuthorizeAsync));
+        await ReplayLegacyReceiptAsync(db, writes, "adverse-action.prepare",
+            LegacyApplicationKey("legacy-adverse-prepare"), adversePrepareCommand,
+            AdversePrepareFingerprint,
+            "{\"Outcome\":1,\"ApplicationId\":1,\"ScreeningId\":0,\"ManagementCompanyName\":null,\"PortfolioName\":null,\"ApplicantName\":null,\"PropertyName\":null,\"PropertyAddressLine1\":null,\"PropertyCity\":null,\"PropertyState\":null,\"PropertyPostalCode\":null,\"Reason\":null,\"CreditReportingAgencyName\":null,\"CreditReportingAgencyAddress\":null,\"CreditReportingAgencyPhone\":null,\"CreditReportingAgencyBlock\":null,\"FileName\":null,\"DecisionRecordedAtUtc\":null,\"DecisionFingerprint\":null,\"SendToApplicant\":false,\"GeneratedAtUtc\":\"2026-08-21T12:00:00Z\"}",
+            ScreeningWriteSupport.AdversePrepareResultContract, adversePrepareResult,
+            adversePrepareHandler.AuthorizeAsync);
 
         var adverseFinalizeCommand = new CreateAdverseActionNoticeCommand(
-            PortfolioId, application.Id, 1, now, "legacy-decision", _scope.UserId,
-            _scope.SessionId, _scope.AccessContextId, _scope.AccessRevision, "Legacy reason",
-            "Legacy CRA", Guid.NewGuid(), "adverse-action-pdf", "legacy-operation-hash",
+            PortfolioId, LegacyApplicationId, 74, LegacyNow, "legacy-decision-fingerprint",
+            LegacyActorUserId, _scope.SessionId, _scope.AccessContextId, _scope.AccessRevision, "Legacy reason",
+            "Legacy CRA", Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            "adverse-action-pdf", "legacy-operation-hash",
             "legacy-request-fingerprint", "legacy/path.pdf", "legacy.pdf", "application/pdf",
-            8, false, "legacy-adverse-finalize-delivery", now);
+            8, false, "legacy-adverse-finalize-delivery", LegacyNow);
         var adverseFinalizeResult = new CreateAdverseActionNoticeResult(
-            42, application.Id, "Legacy reason", "Legacy CRA", now, 43, null);
-        await SeedLegacyReceiptAsync(db, "adverse-action.finalize", "legacy-adverse-finalize",
-            adverseFinalizeCommand, ScreeningWriteSupport.AdverseFinalizeResultContract,
-            adverseFinalizeResult, now);
+            42, LegacyApplicationId, "Legacy reason", "Legacy CRA", LegacyNow, 43, null);
         var adverseFinalizeHandler = new CreateAdverseActionNoticeHandler(db);
-        var adverseFinalizeReplay = await writes.ExecuteAsync("legacy-adverse-finalize",
-            ScreeningWriteSupport.Write(adverseFinalizeCommand, adverseFinalizeHandler.ExecuteAsync,
-                adverseFinalizeHandler.AuthorizeAsync));
+        await ReplayLegacyReceiptAsync(db, writes, "adverse-action.finalize",
+            LegacyApplicationKey("legacy-adverse-finalize"), adverseFinalizeCommand,
+            AdverseFinalizeFingerprint,
+            "{\"NoticeId\":42,\"ApplicationId\":1,\"Reason\":\"Legacy reason\",\"CreditReportingAgency\":\"Legacy CRA\",\"GeneratedAtUtc\":\"2026-08-21T12:00:00Z\",\"StoredFileId\":43,\"SentAtUtc\":null}",
+            ScreeningWriteSupport.AdverseFinalizeResultContract, adverseFinalizeResult,
+            adverseFinalizeHandler.AuthorizeAsync);
 
-        mutationReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        integratedReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        adversePrepareReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        adverseFinalizeReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        mutationReplay.Value.Should().Be(mutationResult);
-        integratedReplay.Value.Should().Be(integratedResult);
-        adversePrepareReplay.Value.Should().Be(adversePrepareResult);
-        adverseFinalizeReplay.Value.Should().Be(adverseFinalizeResult);
         (await _db.ApplicantScreenings.AsNoTracking()
             .CountAsync(row => row.ApplicationId == application.Id)).Should().Be(0);
         (await _db.AdverseActionNotices.AsNoTracking()
             .CountAsync(row => row.ApplicationId == application.Id)).Should().Be(0);
+
+        await db.AuthSessions.Where(session => session.Id == _scope.SessionId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(session => session.Status, AuthSessionStatus.Revoked)
+                .SetProperty(session => session.RevokedAtUtc, LegacyNow));
+        var deniedReplay = () => writes.ExecuteAsync(
+            LegacyApplicationKey("legacy-track"),
+            ScreeningWriteSupport.Write<TrackExternalScreeningCommand, ScreeningMutationResult>(
+                trackCommand,
+                (_, _, _) => throw new InvalidOperationException("A stored receipt must not execute."),
+                trackHandler.AuthorizeAsync));
+
+        await deniedReplay.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
     [Fact]
@@ -535,32 +600,56 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
         return application;
     }
 
-    private static async Task SeedLegacyReceiptAsync<TCommand, TResult>(
+    private static async Task ReplayLegacyReceiptAsync<TCommand, TResult>(
         RentalCommandDbContext db,
-        string commandType,
+        IRequestWriteExecutor writes,
+        string operation,
         string key,
         TCommand command,
+        string legacyFingerprint,
+        string legacyResultJson,
         string contract,
-        TResult result,
-        DateTime now)
+        TResult expected,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeAsync)
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull
     {
+        var write = ScreeningWriteSupport.Write<TCommand, TResult>(
+            command,
+            (_, _, _) => throw new InvalidOperationException("A stored receipt must not execute."),
+            authorizeAsync);
+        write.OperationName.Should().Be(operation);
+        write.ResultContract.Should().Be(contract);
+
         db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
         {
             Id = Guid.NewGuid(),
             AttemptId = Guid.NewGuid(),
-            CommandType = commandType,
+            CommandType = operation,
             IdempotencyKey = key,
-            RequestFingerprint = AtomicCommandFingerprint.Create(command),
+            RequestFingerprint = legacyFingerprint,
             Status = AtomicCommandReceiptStatus.Completed,
             ResultContract = contract,
-            ResultJson = new AtomicJsonResultCodec<TResult>(contract).Serialize(result),
-            StartedAt = now,
-            CompletedAt = now,
+            ResultJson = legacyResultJson,
+            StartedAt = LegacyNow,
+            CompletedAt = LegacyNow,
         });
         await db.SaveChangesAsync();
+
+        var replay = await writes.ExecuteAsync(key, write);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(expected);
     }
+
+    // Independently reproduces the caller formulas frozen at dee7b39b.
+    private static string LegacyApplicationKey(string operationKey) =>
+        $"{PortfolioId}:{LegacyApplicationId}:{LegacyDigest(operationKey)}";
+
+    private static string LegacyProviderDeliveryKey(string providerKey, string deliveryId) =>
+        LegacyDigest($"{providerKey}:{deliveryId}");
+
+    private static string LegacyDigest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private sealed class RedTestStorage : IFileStorage
     {
