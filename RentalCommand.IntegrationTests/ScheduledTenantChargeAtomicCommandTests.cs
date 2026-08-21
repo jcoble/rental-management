@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Authorization;
@@ -81,14 +82,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             ApplyScheduledLateFeeChargeBatchCommand,
             ApplyScheduledLateFeeChargeBatchResult,
             ApplyScheduledLateFeeChargeBatchHandler>();
-        services.AddAtomicCommandHandler<
-            ReverseTenantChargeCommand,
-            TenantChargeMutationResult,
-            ReverseTenantChargeHandler>();
-        services.AddAtomicCommandHandler<
-            PostTenantChargeCommand,
-            TenantChargeMutationResult,
-            PostTenantChargeHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -2522,6 +2516,23 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = _services!.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        if (command is PostTenantChargeCommand post)
+        {
+            var handler = new PostTenantChargeHandler(db);
+            var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
+                TenantMoneyWriteSupport.Write(post, handler.ExecuteAsync, handler.AuthorizeAsync));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is ReverseTenantChargeCommand reverse)
+        {
+            var handler = new ReverseTenantChargeHandler(db);
+            var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
+                TenantMoneyWriteSupport.Write(reverse, handler.ExecuteAsync, handler.AuthorizeAsync));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+
         var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
         return await atomic.ExecuteAsync(identity, command, codec);
     }

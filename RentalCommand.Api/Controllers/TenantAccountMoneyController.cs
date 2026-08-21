@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -12,6 +13,7 @@ using RentalCommand.Core.Payments;
 using RentalCommand.Core.Operations;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -20,19 +22,10 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<RecordTenantReceiptResult> ReceiptCodec =
-        new("tenant-account.receipt.record.v1");
-    private static readonly AtomicJsonResultCodec<TenantChargeMutationResult> ChargeCodec =
-        new("tenant-account.charge.mutation.v1");
-    private static readonly AtomicJsonResultCodec<TenantLedgerMutationResult> LedgerCodec =
-        new("tenant-account.ledger.mutation.v1");
-    private static readonly AtomicJsonResultCodec<TenantPaymentRefundResult> RefundCodec =
-        new("tenant-account.payment.refund.v1");
-    private static readonly AtomicJsonResultCodec<SecurityDepositMutationResult> DepositCodec =
-        new("tenant-account.deposit.mutation.v1");
     private static readonly AtomicJsonResultCodec<RecurringTenantChargeMutationResult> RecurringChargeCodec =
         new("tenant-account.recurring-charge.configuration.v1");
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly IAccountingLedgerReadModelService _ledgerReadModels;
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
@@ -41,12 +34,14 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         IAtomicUnitOfWork atomic,
         IAccountingLedgerReadModelService ledgerReadModels,
         RentalCommandDbContext db,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IRequestWriteExecutor writes)
     {
         _atomic = atomic;
         _ledgerReadModels = ledgerReadModels;
         _db = db;
         _timeProvider = timeProvider;
+        _writes = writes;
     }
 
     [HttpGet("ledger")]
@@ -230,8 +225,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         {
             AllocateOldestCharges = request.AllocateOldestCharges,
         };
-        return await Execute("tenant-account.receipt.record", command.DeliveryIdempotencyKey,
-            command, ReceiptCodec, ct);
+        var handler = new RecordTenantReceiptHandler(_db);
+        return await Execute(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     [HttpPost("charges")]
@@ -249,8 +245,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             $"tenant-charge:{envelope.KeyDigest}",
             $"tenant-charge:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}",
             request.IncomeLedgerAccountId, request.ServicePeriodStartOn, request.ServicePeriodEndOn);
-        return await ExecuteCharge("tenant-account.charge.post", command.DeliveryIdempotencyKey,
-            command, ct);
+        var handler = new PostTenantChargeHandler(_db);
+        return await ExecuteCharge(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     [HttpPost("charges/{chargeEntryId:long}/reversals")]
@@ -267,8 +264,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             envelope.AccessContextId, envelope.AccessRevision, CapabilityKeys.MoneyChargesManage,
             $"tenant-charge-reversal:{envelope.KeyDigest}",
             $"tenant-charge-reversal:{envelope.PortfolioId}:{tenantAccountId}:{chargeEntryId}:{envelope.KeyDigest}");
-        return await ExecuteCharge("tenant-account.charge.reverse", command.DeliveryIdempotencyKey,
-            command, ct);
+        var handler = new ReverseTenantChargeHandler(_db);
+        return await ExecuteCharge(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     [HttpPost("credits")]
@@ -286,8 +284,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             CapabilityKeys.MoneyChargesManage, $"tenant-credit:{e.KeyDigest}",
             $"tenant-credit:{e.PortfolioId}:{tenantAccountId}:{e.KeyDigest}",
             request.TargetChargeEntryId, request.IncomeLedgerAccountId);
-        return await ExecuteLedger("tenant-account.credit.post",
-            command.DeliveryIdempotencyKey, command, ct);
+        var handler = new PostTenantCreditHandler(_db);
+        return await ExecuteLedger(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     [HttpPost("adjustments")]
@@ -304,8 +303,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             e.AccessContextId, e.AccessRevision, CapabilityKeys.MoneyChargesManage,
             $"tenant-adjustment:{e.KeyDigest}",
             $"tenant-adjustment:{e.PortfolioId}:{tenantAccountId}:{e.KeyDigest}");
-        return await ExecuteLedger("tenant-account.adjustment.post",
-            command.DeliveryIdempotencyKey, command, ct);
+        var handler = new PostTenantAdjustmentHandler(_db);
+        return await ExecuteLedger(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     [HttpPost("reversals")]
@@ -322,8 +322,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             e.AccessRevision, CapabilityKeys.MoneyChargesManage,
             $"tenant-ledger-reversal:{e.KeyDigest}",
             $"tenant-ledger-reversal:{e.PortfolioId}:{tenantAccountId}:{request.ReversesEntryId}:{e.KeyDigest}");
-        return await ExecuteLedger("tenant-account.ledger.reverse",
-            command.DeliveryIdempotencyKey, command, ct);
+        var handler = new ReverseTenantLedgerEntryHandler(_db);
+        return await ExecuteLedger(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     [HttpPost("refunds")]
@@ -343,9 +344,12 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             $"tenant-payment-refund:{e.PortfolioId}:{tenantAccountId}:{request.PaymentEntryId}:{e.KeyDigest}");
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("tenant-account.payment.refund",
-                    command.DeliveryIdempotencyKey), command, RefundCodec, ct);
+            var handler = new RefundTenantPaymentHandler(_db);
+            var outcome = await _writes.ExecuteAsync(
+                command.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
+                ct);
             if (outcome.Value.Outcome is TenantPaymentRefundOutcome.AlreadyRefunded
                     or TenantPaymentRefundOutcome.ExternalCorrectionUnavailable)
                 return Conflict(new { error = outcome.Value.Error, outcome.Value.Outcome });
@@ -369,7 +373,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.SourceStoredFileId, e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
             CapabilityKeys.MoneyDepositsManage, $"deposit-fund:{e.KeyDigest}",
             $"deposit-fund:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{e.KeyDigest}");
-        return await ExecuteDeposit("tenant-account.deposit.fund", command, ct);
+        var handler = new FundSecurityDepositHandler(_db);
+        return await ExecuteDeposit(command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     [HttpPost("deposit/deductions")]
@@ -384,7 +390,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.Notes, request.SourceStoredFileId, e.UserId, e.SessionId, e.AccessContextId,
             e.AccessRevision, CapabilityKeys.MoneyDepositsManage, $"deposit-deduction:{e.KeyDigest}",
             $"deposit-deduction:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{e.KeyDigest}");
-        return await ExecuteDeposit("tenant-account.deposit.deduct", command, ct);
+        var handler = new DeductSecurityDepositHandler(_db);
+        return await ExecuteDeposit(command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     [HttpPost("deposit/refunds")]
@@ -400,7 +408,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             e.AccessContextId, e.AccessRevision, CapabilityKeys.MoneyDepositsManage,
             $"deposit-refund:{e.KeyDigest}",
             $"deposit-refund:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{e.KeyDigest}");
-        return await ExecuteDeposit("tenant-account.deposit.refund", command, ct);
+        var handler = new RefundSecurityDepositHandler(_db);
+        return await ExecuteDeposit(command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     [HttpPost("deposit/reversals")]
@@ -421,7 +431,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
             CapabilityKeys.MoneyDepositsManage, $"deposit-reversal:{e.KeyDigest}",
             $"deposit-reversal:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{request.ReversesEntryId}:{e.KeyDigest}");
-        return await ExecuteDeposit("tenant-account.deposit.reverse", command, ct);
+        var handler = new ReverseSecurityDepositEntryHandler(_db);
+        return await ExecuteDeposit(command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
 
     private WorkspaceReadScope GetWorkspaceReadScope()
@@ -491,13 +503,17 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         }
     }
 
-    private async Task<IActionResult> ExecuteDeposit<TCommand>(string commandType,
-        TCommand command, CancellationToken ct) where TCommand : notnull, ISecurityDepositMoneyCommand
+    private async Task<IActionResult> ExecuteDeposit<TCommand>(TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<SecurityDepositMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        CancellationToken ct) where TCommand : notnull, ISecurityDepositMoneyCommand
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(commandType,
-                command.DeliveryIdempotencyKey), command, DepositCodec, ct);
+            var outcome = await _writes.ExecuteAsync(
+                command.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
+                ct);
             if (!outcome.Value.Applied) return Conflict(new { error = outcome.Value.Error });
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
@@ -505,13 +521,17 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    private async Task<IActionResult> ExecuteCharge<TCommand>(string commandType, string key,
-        TCommand command, CancellationToken ct) where TCommand : notnull, ITenantMoneyCommand
+    private async Task<IActionResult> ExecuteCharge<TCommand>(string key, TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TenantChargeMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        CancellationToken ct) where TCommand : notnull, ITenantMoneyCommand
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(commandType, key),
-                command, ChargeCodec, ct);
+            var outcome = await _writes.ExecuteAsync(
+                key,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
+                ct);
             if (!outcome.Value.Applied) return Conflict(new { error = outcome.Value.Error });
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
@@ -519,13 +539,17 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    private async Task<IActionResult> ExecuteLedger<TCommand>(string commandType, string key,
-        TCommand command, CancellationToken ct) where TCommand : notnull, ITenantMoneyCommand
+    private async Task<IActionResult> ExecuteLedger<TCommand>(string key, TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TenantLedgerMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        CancellationToken ct) where TCommand : notnull, ITenantMoneyCommand
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(commandType, key),
-                command, LedgerCodec, ct);
+            var outcome = await _writes.ExecuteAsync(
+                key,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
+                ct);
             if (!outcome.Value.Applied) return Conflict(new { error = outcome.Value.Error });
             return Ok(new { outcome.Value,
                 replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
@@ -534,13 +558,19 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    private async Task<IActionResult> Execute<TCommand, TResult>(string commandType, string key,
-        TCommand command, AtomicJsonResultCodec<TResult> codec, CancellationToken ct)
-        where TCommand : notnull, IAtomicCommandData where TResult : notnull
+    private async Task<IActionResult> Execute<TCommand, TResult>(string key,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        CancellationToken ct)
+        where TCommand : notnull, ITenantMoneyCommand where TResult : notnull
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(commandType, key), command, codec, ct);
+            var outcome = await _writes.ExecuteAsync(
+                key,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
+                ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }

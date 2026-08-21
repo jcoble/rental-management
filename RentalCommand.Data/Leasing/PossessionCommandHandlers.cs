@@ -502,7 +502,7 @@ public sealed class ConfirmMoveInHandler
                 target.GoverningAgreementNumber,
                 depositAmount);
             fundedDeposit = await new FundSecurityDepositHandler(_db)
-                .HandleAsync(depositCommand, context, ct);
+                .ExecuteAsync(depositCommand, context, ct);
             if (!fundedDeposit.Applied)
             {
                 return Empty(ConfirmMoveInOutcome.DepositConflict, command,
