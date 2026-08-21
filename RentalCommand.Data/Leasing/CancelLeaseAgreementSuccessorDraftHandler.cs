@@ -16,16 +16,14 @@ public sealed class CancelLeaseAgreementSuccessorDraftHandler
     public async Task<CancelLeaseAgreementSuccessorDraftResult> HandleAsync(
         CancelLeaseAgreementSuccessorDraftCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<CancelLeaseAgreementSuccessorDraftResult> ExecuteAsync(
+        CancelLeaseAgreementSuccessorDraftCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync(
-            "AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
-
         var nowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var agreement = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(
                 command, _db, nowUtc)

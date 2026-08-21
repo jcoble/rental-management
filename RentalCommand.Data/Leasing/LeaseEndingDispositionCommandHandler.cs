@@ -6,6 +6,107 @@ using RentalCommand.Core.Leasing;
 
 namespace RentalCommand.Data.Leasing;
 
+public static class LeasingWriteSupport
+{
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        RentalCommandDbContext db,
+        TCommand command)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        object write = command switch
+        {
+            PrepareMoveInCommand value => Build(
+                "lease-management.prepare-move-in", "lease-management.prepare-move-in.v2",
+                new WriteLockPlan(WriteLockProtocol.PrepareMoveIn, WriteLock.For("Unit", value.UnitId)),
+                value, new PrepareMoveInHandler(db).ExecuteAsync, new PrepareMoveInHandler(db).AuthorizeReplayAsync),
+            RecordLeaseEndingDispositionCommand value => Build(
+                "lease-management.ending-disposition", "lease-management.ending-disposition.v1",
+                WriteLockPlan.None, value, new RecordLeaseEndingDispositionHandler(db).ExecuteAsync,
+                new RecordLeaseEndingDispositionHandler(db).AuthorizeReplayAsync),
+            CancelPlannedRelationshipCommand value => Build(
+                "lease-management.cancel-planned", "lease-management.cancel-planned.v1",
+                LeaseManagement(value.LeaseManagementId), value,
+                new CancelPlannedRelationshipHandler(db).ExecuteAsync,
+                new CancelPlannedRelationshipHandler(db).AuthorizeReplayAsync),
+            TransferLeaseManagementCommand value => Build(
+                "lease-management.transfer-unit", "lease-management.transfer-unit.v1",
+                Transfer(value), value, new TransferLeaseManagementHandler(db).ExecuteAsync,
+                new TransferLeaseManagementHandler(db).AuthorizeReplayAsync),
+            CancelLeaseAgreementSuccessorDraftCommand value => Build(
+                "lease-agreement.successor-draft.cancel", "lease-agreement.successor-draft.cancel.v1",
+                Agreement(value), value, new CancelLeaseAgreementSuccessorDraftHandler(db).ExecuteAsync,
+                new CancelLeaseAgreementSuccessorDraftHandler(db).AuthorizeReplayAsync),
+            CreateLeaseAddendumDraftCommand value => Build(
+                "lease-addendum.draft.create", "lease-addendum.draft.mutation.v1",
+                LeaseManagement(value.LeaseManagementId), value,
+                new CreateLeaseAddendumDraftHandler(db).ExecuteAsync,
+                new CreateLeaseAddendumDraftHandler(db).AuthorizeReplayAsync),
+            EditLeaseAddendumDraftCommand value => Build(
+                "lease-addendum.draft.edit", "lease-addendum.draft.mutation.v1",
+                LeaseManagement(value.LeaseManagementId), value,
+                new EditLeaseAddendumDraftHandler(db).ExecuteAsync,
+                new EditLeaseAddendumDraftHandler(db).AuthorizeReplayAsync),
+            CorrectLeaseAddendumDraftCommand value => Build(
+                "lease-addendum.draft.correct", "lease-addendum.draft.mutation.v1",
+                LeaseManagement(value.LeaseManagementId), value,
+                new CorrectLeaseAddendumDraftHandler(db).ExecuteAsync,
+                new CorrectLeaseAddendumDraftHandler(db).AuthorizeReplayAsync),
+            EditLeaseAgreementDraftCommand value => Build(
+                "lease-agreement.draft.edit", "lease-agreement.draft.edit.v1",
+                Agreement(value), value, new EditLeaseAgreementDraftHandler(db).ExecuteAsync,
+                new EditLeaseAgreementDraftHandler(db).AuthorizeReplayAsync),
+            CreateLeaseAgreementSuccessorDraftCommand value => Build(
+                "lease-agreement.successor-draft.create", "lease-agreement.successor-draft.create.v2",
+                Agreement(value), value, new CreateLeaseAgreementSuccessorDraftHandler(db).ExecuteAsync,
+                new CreateLeaseAgreementSuccessorDraftHandler(db).AuthorizeReplayAsync),
+            ReplaceIssuedAgreementWithDraftCommand value => Build(
+                "lease-agreement.issued-replacement-draft.create", "lease-agreement.successor-draft.create.v2",
+                Agreement(value), value, new ReplaceIssuedAgreementWithDraftHandler(db).ExecuteAsync,
+                new ReplaceIssuedAgreementWithDraftHandler(db).AuthorizeReplayAsync),
+            CreatePropertyDispositionCommand value => Build(
+                "property-disposition.create", "property-disposition.create.v1",
+                new WriteLockPlan(WriteLockProtocol.PropertyDisposition,
+                    WriteLock.For("Property", value.PropertyId)),
+                value, new CreatePropertyDispositionHandler(db).ExecuteAsync,
+                new CreatePropertyDispositionHandler(db).AuthorizeReplayAsync),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return (TransactionalWrite<TCommand, TResult>)write;
+    }
+
+    private static WriteLockPlan LeaseManagement(int id) => new(
+        WriteLockProtocol.LeaseManagement, WriteLock.For("LeaseManagement", id));
+
+    private static WriteLockPlan Agreement(ILeaseAgreementDraftCommand command) => new(
+        WriteLockProtocol.LeaseAgreementDraft,
+        WriteLock.For("AuthSession", command.AuthSessionId),
+        WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
+        WriteLock.For("LeaseManagement", command.LeaseManagementId));
+
+    private static WriteLockPlan Transfer(TransferLeaseManagementCommand command)
+    {
+        var unitIds = new[] { command.SourceUnitId, command.DestinationUnitId }.OrderBy(id => id).ToArray();
+        return new(WriteLockProtocol.LeaseTransfer,
+            WriteLock.For("Unit", unitIds[0]), WriteLock.For("Unit", unitIds[1]),
+            WriteLock.For("LeaseManagement", command.SourceLeaseManagementId));
+    }
+
+    private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
+        string operationName,
+        string resultContract,
+        WriteLockPlan lockPlan,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => new(operationName, WriteIdempotencyPolicy.Required,
+            command, resultContract, lockPlan, executeAsync, authorizeAsync);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic leasing writes are retired; use the shared write executor.");
+}
+
 public sealed class RecordLeaseEndingDispositionHandler
     : IAtomicCommandHandler<RecordLeaseEndingDispositionCommand, RecordLeaseEndingDispositionResult>
 {
@@ -14,6 +115,11 @@ public sealed class RecordLeaseEndingDispositionHandler
     public RecordLeaseEndingDispositionHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<RecordLeaseEndingDispositionResult> HandleAsync(
+        RecordLeaseEndingDispositionCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<RecordLeaseEndingDispositionResult> ExecuteAsync(
         RecordLeaseEndingDispositionCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

@@ -25,9 +25,6 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
     private const string RecoveryCommandType = "lease-agreement.issued-replacement-draft.create";
     private static readonly AtomicJsonResultCodec<CancelLeaseAgreementSuccessorDraftResult> Codec =
         new("lease-agreement.successor-draft.cancel.v1");
-    private static readonly AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> RecoveryCodec =
-        new("lease-agreement.issued-replacement.v1");
-
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private IServiceScope? _scope;
@@ -58,14 +55,6 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            CancelLeaseAgreementSuccessorDraftCommand,
-            CancelLeaseAgreementSuccessorDraftResult,
-            CancelLeaseAgreementSuccessorDraftHandler>();
-        services.AddAtomicCommandHandler<
-            ReplaceIssuedAgreementWithDraftCommand,
-            LeaseAgreementDraftMutationResult,
-            ReplaceIssuedAgreementWithDraftHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider));
@@ -96,8 +85,8 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         var identity = new AtomicCommandIdentity(
             "lease-agreement.successor-draft.cancel", command.DeliveryIdempotencyKey);
 
-        var first = await Atomic.ExecuteAsync(identity, command, Codec);
-        var replay = await Atomic.ExecuteAsync(identity, command, Codec);
+        var first = await ExecuteCancelAsync(identity.IdempotencyKey, command);
+        var replay = await ExecuteCancelAsync(identity.IdempotencyKey, command);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -123,6 +112,252 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         (await db.LeaseAgreements.CountAsync(agreement =>
             agreement.ReplacesAgreementId == _scenario.SourceAgreementId
             && agreement.DraftCanceledAtUtc == null)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task EndingDisposition_ExactRetry_DoesNotRepeatTransitionAuditOrOutbox()
+    {
+        SkipIfNoDocker();
+        int unitId;
+        await using (var arrange = NewContext())
+        {
+            var relationship = await arrange.LeaseManagements.SingleAsync(row =>
+                row.Id == _scenario.LeaseManagementId);
+            relationship.PossessionGivenAtUtc = DateTime.UtcNow.AddMonths(-2);
+            unitId = relationship.UnitId;
+            await arrange.SaveChangesAsync();
+        }
+
+        var noticeAt = DateTime.SpecifyKind(DateTime.UtcNow.AddDays(-1), DateTimeKind.Utc);
+        var plannedAt = DateTime.SpecifyKind(DateTime.UtcNow.AddDays(30), DateTimeKind.Utc);
+        var command = new RecordLeaseEndingDispositionCommand(
+            _scenario.PortfolioId,
+            _scenario.LeaseManagementId,
+            unitId,
+            LeaseManagementEndingDisposition.NonRenewalMoveOut,
+            noticeAt,
+            plannedAt,
+            "Resident provided notice.",
+            ActorUserId,
+            _scenario.SessionId,
+            _scenario.AccessContextId,
+            _scenario.AccessRevision,
+            $"ending-disposition:retry:{Guid.NewGuid():N}");
+        var key = $"{_scenario.PortfolioId}:{_scenario.LeaseManagementId}:ending-retry";
+        var before = await EndingCountsAsync(key, command.DeliveryIdempotencyKey);
+
+        var first = await ExecuteEndingAsync(key, command);
+        var afterFirst = await EndingCountsAsync(key, command.DeliveryIdempotencyKey);
+        var replay = await ExecuteEndingAsync(key, command);
+        var afterReplay = await EndingCountsAsync(key, command.DeliveryIdempotencyKey);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(first.Value);
+        first.Value.Outcome.Should().Be(RecordLeaseEndingDispositionOutcome.Recorded);
+        afterFirst.Receipts.Should().Be(before.Receipts + 1);
+        afterFirst.Audits.Should().Be(before.Audits + 1);
+        afterFirst.OutboxMessages.Should().Be(before.OutboxMessages + 1);
+        afterReplay.Should().Be(afterFirst);
+    }
+
+    [SkippableFact]
+    public async Task PropertyDisposition_ExactRetry_DoesNotRepeatTransitionAuditOrOutbox()
+    {
+        SkipIfNoDocker();
+        int propertyId;
+        await using (var arrange = NewContext())
+        {
+            propertyId = await arrange.LeaseManagements
+                .Where(row => row.Id == _scenario.LeaseManagementId)
+                .Select(row => row.PropertyId)
+                .SingleAsync();
+        }
+
+        var deliveryKey = $"property-disposition:{_scenario.PortfolioId}:{propertyId}:{Guid.NewGuid():N}";
+        var command = new CreatePropertyDispositionCommand(
+            _scenario.PortfolioId,
+            propertyId,
+            DateTime.UtcNow.Date,
+            250_000m,
+            12_500m,
+            "Replay Buyer",
+            "Exact retry proof",
+            ActorUserId,
+            _scenario.SessionId,
+            _scenario.AccessContextId,
+            _scenario.AccessRevision,
+            deliveryKey);
+        var before = await PropertyDispositionCountsAsync(propertyId, deliveryKey);
+
+        var first = await ExecutePropertyDispositionAsync(deliveryKey, command);
+        var afterFirst = await PropertyDispositionCountsAsync(propertyId, deliveryKey);
+        var replay = await ExecutePropertyDispositionAsync(deliveryKey, command);
+        var afterReplay = await PropertyDispositionCountsAsync(propertyId, deliveryKey);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(first.Value);
+        first.Value.Outcome.Should().Be(CreatePropertyDispositionOutcome.Created);
+        afterFirst.Dispositions.Should().Be(before.Dispositions + 1);
+        afterFirst.Receipts.Should().Be(before.Receipts + 1);
+        afterFirst.Audits.Should().BeGreaterThan(before.Audits);
+        afterFirst.OutboxMessages.Should().BeGreaterThan(before.OutboxMessages);
+        afterReplay.Should().Be(afterFirst);
+
+        await using var assert = NewContext();
+        (await assert.Properties.AsNoTracking()
+            .Where(row => row.Id == propertyId)
+            .Select(row => row.Status)
+            .SingleAsync()).Should().Be(PropertyStatus.Inactive);
+        (await assert.UnitOperationalPeriods.AsNoTracking().CountAsync(row =>
+            row.PropertyId == propertyId
+            && row.Type == UnitOperationalPeriodType.ManagementHold
+            && row.EndedAtUtc == null)).Should().Be(1);
+
+        var closedManagement = await assert.LeaseManagements.AsNoTracking()
+            .SingleAsync(row => row.Id == _scenario.LeaseManagementId);
+        closedManagement.CanceledAtUtc.Should().NotBeNull();
+        closedManagement.CancellationReasonCode.Should().Be("PropertyDisposed");
+
+        var openAccountManagement = await assert.LeaseManagements.AsNoTracking()
+            .SingleAsync(row => row.Id == _scenario.LeaseManagementId + 1);
+        openAccountManagement.PossessionReturnedAtUtc.Should().BeNull();
+        openAccountManagement.CanceledAtUtc.Should().BeNull();
+        openAccountManagement.AccountClosedAtUtc.Should().BeNull();
+        (await assert.TenantAccounts.AsNoTracking()
+            .Where(row => row.LeaseManagementId == openAccountManagement.Id)
+            .Select(row => row.ClosedAtUtc)
+            .SingleAsync()).Should().BeNull();
+    }
+
+    [SkippableFact]
+    public async Task MigratedExecutor_ReplaysFrozenLegacyReceiptsForAllTwelveOperations()
+    {
+        SkipIfNoDocker();
+        int propertyId;
+        int sourceUnitId;
+        int destinationUnitId;
+        await using (var arrange = NewContext())
+        {
+            var relationship = await arrange.LeaseManagements.SingleAsync(row =>
+                row.Id == _scenario.LeaseManagementId);
+            propertyId = relationship.PropertyId;
+            sourceUnitId = relationship.UnitId;
+            var destination = new Unit
+            {
+                PortfolioId = _scenario.PortfolioId,
+                PropertyId = propertyId,
+                UnitNumber = $"legacy-replay-{Guid.NewGuid():N}"[..20],
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            };
+            arrange.Units.Add(destination);
+            await arrange.SaveChangesAsync();
+            destinationUnitId = destination.Id;
+        }
+
+        var businessNow = DateTime.UtcNow;
+        var businessDate = DateOnly.FromDateTime(businessNow);
+        var prepare = new PrepareMoveInCommand(
+            _scenario.PortfolioId, null, sourceUnitId, ActorUserId, _scenario.SessionId,
+            _scenario.AccessContextId, _scenario.AccessRevision, null, businessDate, [], null,
+            LeaseAgreementTermType.FixedTerm, businessDate, businessDate.AddYears(1), 1000m, 1,
+            500m, 25m, 5, 1, "{}", false, null, null, null, "legacy-prepare-delivery");
+        await AssertFrozenReplayAsync("legacy-prepare", prepare,
+            new PrepareMoveInResult(PrepareMoveInOutcome.Prepared, null, 11, 12, 13, null, null,
+                [14], [15], [16], null));
+
+        var ending = new RecordLeaseEndingDispositionCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId,
+            LeaseManagementEndingDisposition.NonRenewalMoveOut, businessNow, businessNow.AddDays(30),
+            "Frozen replay", ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
+            _scenario.AccessRevision, "legacy-ending-delivery");
+        await AssertFrozenReplayAsync("legacy-ending", ending,
+            new RecordLeaseEndingDispositionResult(RecordLeaseEndingDispositionOutcome.Recorded,
+                _scenario.LeaseManagementId, LeaseManagementEndingDisposition.NonRenewalMoveOut,
+                businessNow, ActorUserId, businessNow, businessNow.AddDays(30), null));
+
+        var cancel = new CancelPlannedRelationshipCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId, ActorUserId,
+            _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision, businessNow,
+            "USER_REQUEST", "Frozen replay", "Frozen replay", [], "legacy-cancel-delivery");
+        await AssertFrozenReplayAsync("legacy-cancel", cancel,
+            new CancelPlannedRelationshipResult(CancelPlannedRelationshipOutcome.Canceled,
+                _scenario.LeaseManagementId, sourceUnitId, businessNow, businessNow,
+                [], [], [], [], null));
+
+        var transfer = new TransferLeaseManagementCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, sourceUnitId, destinationUnitId,
+            ActorUserId, _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision,
+            businessNow, Guid.NewGuid(), businessDate, null, false, null, 1, true, true,
+            "Frozen replay", "legacy-transfer-delivery");
+        await AssertFrozenReplayAsync("legacy-transfer", transfer,
+            new TransferLeaseManagementResult(TransferLeaseManagementOutcome.Transferred,
+                transfer.TransferPublicId, _scenario.LeaseManagementId, sourceUnitId, 21,
+                destinationUnitId, 22, 23, null, 24, businessNow, null, 0m, 0m,
+                [], [], [], [], [], [], [], null));
+
+        var cancelSuccessor = new CancelLeaseAgreementSuccessorDraftCommand(
+            _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SuccessorAgreementId,
+            "Frozen replay", ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
+            _scenario.AccessRevision, "legacy-successor-cancel-delivery");
+        await AssertFrozenReplayAsync("legacy-successor-cancel", cancelSuccessor,
+            new CancelLeaseAgreementSuccessorDraftResult(
+                CancelLeaseAgreementSuccessorDraftOutcome.Canceled, _scenario.LeaseManagementId,
+                _scenario.SuccessorAgreementId, businessNow, ActorUserId, "Frozen replay", null));
+
+        var addendumResult = new LeaseAddendumDraftMutationResult(
+            LeaseAddendumDraftMutationOutcome.Applied, _scenario.LeaseManagementId, 31,
+            Guid.NewGuid(), 1, 1, null, [], [], null);
+        await AssertFrozenReplayAsync("legacy-addendum-create",
+            new CreateLeaseAddendumDraftCommand(
+                _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SourceAgreementId,
+                "A-1", LeaseAddendumPurpose.Other, businessDate, null, 1, "{}", 1, [], [],
+                ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
+                _scenario.AccessRevision, "legacy-addendum-create-delivery"), addendumResult);
+        await AssertFrozenReplayAsync("legacy-addendum-edit",
+            new EditLeaseAddendumDraftCommand(
+                _scenario.PortfolioId, _scenario.LeaseManagementId, 31, 1, "A-1",
+                LeaseAddendumPurpose.Other, businessDate, null, 1, "{}", 1, [], [], ActorUserId,
+                _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision,
+                "legacy-addendum-edit-delivery"), addendumResult);
+        await AssertFrozenReplayAsync("legacy-addendum-correct",
+            new CorrectLeaseAddendumDraftCommand(
+                _scenario.PortfolioId, _scenario.LeaseManagementId, 31, businessDate, ActorUserId,
+                _scenario.SessionId, _scenario.AccessContextId, _scenario.AccessRevision,
+                "legacy-addendum-correct-delivery"), addendumResult);
+
+        var agreementResult = new LeaseAgreementDraftMutationResult(
+            LeaseAgreementDraftMutationOutcome.Applied, _scenario.LeaseManagementId, 41,
+            1, 1, _scenario.SourceAgreementId, [], [], [], null);
+        await AssertFrozenReplayAsync("legacy-agreement-edit",
+            new EditLeaseAgreementDraftCommand(
+                _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SourceAgreementId,
+                1, "L-1", LeaseAgreementTermType.FixedTerm, businessDate,
+                businessDate.AddYears(1), businessDate, 1000m, 1, 500m, 25m, 5, 1, "{}", null,
+                [], ActorUserId, _scenario.SessionId, _scenario.AccessContextId,
+                _scenario.AccessRevision, "legacy-agreement-edit-delivery"), agreementResult);
+        await AssertFrozenReplayAsync("legacy-successor-create",
+            new CreateLeaseAgreementSuccessorDraftCommand(
+                _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.SourceAgreementId,
+                LeaseAgreementChangeType.Renewal, businessDate, businessDate.AddYears(1),
+                businessDate, null, null, [], ActorUserId, _scenario.SessionId,
+                _scenario.AccessContextId, _scenario.AccessRevision,
+                "legacy-successor-create-delivery"), agreementResult);
+        await AssertFrozenReplayAsync("legacy-issued-replacement",
+            new ReplaceIssuedAgreementWithDraftCommand(
+                _scenario.PortfolioId, _scenario.LeaseManagementId, _scenario.IssuedAgreementId,
+                null, "Frozen replay", ActorUserId, _scenario.SessionId,
+                _scenario.AccessContextId, _scenario.AccessRevision,
+                "legacy-issued-replacement-delivery"), agreementResult);
+
+        var disposition = new CreatePropertyDispositionCommand(
+            _scenario.PortfolioId, propertyId, businessNow.Date, 250_000m, 12_500m,
+            "Frozen Buyer", "Frozen replay", ActorUserId, _scenario.SessionId,
+            _scenario.AccessContextId, _scenario.AccessRevision, "legacy-disposition-delivery");
+        await AssertFrozenReplayAsync("legacy-disposition", disposition,
+            new CreatePropertyDispositionResult(CreatePropertyDispositionOutcome.Created, 51, 3, 1));
     }
 
     [SkippableFact]
@@ -163,12 +398,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         }
 
         var command = Command("revoked-session", "This mutation must not commit.");
-        Func<Task> act = async () => await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "lease-agreement.successor-draft.cancel",
-                command.DeliveryIdempotencyKey),
-            command,
-            Codec);
+        Func<Task> act = async () => await ExecuteCancelAsync(command.DeliveryIdempotencyKey, command);
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
 
         await using var assert = NewContext();
@@ -335,8 +565,8 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             RecoveryCommandType,
             command.DeliveryIdempotencyKey);
 
-        var first = await Atomic.ExecuteAsync(identity, command, RecoveryCodec);
-        var replay = await Atomic.ExecuteAsync(identity, command, RecoveryCodec);
+        var first = await ExecuteRecoveryAsync(identity.IdempotencyKey, command);
+        var replay = await ExecuteRecoveryAsync(identity.IdempotencyKey, command);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -463,7 +693,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             "lease-agreement.issued-replacement-draft.create",
             command.DeliveryIdempotencyKey);
 
-        Func<Task> act = async () => await Atomic.ExecuteAsync(identity, command, RecoveryCodec);
+        Func<Task> act = async () => await ExecuteRecoveryAsync(identity.IdempotencyKey, command);
         await act.Should().ThrowAsync<Exception>();
 
         await using var assert = NewContext();
@@ -495,12 +725,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             _scenario.AccessContextId,
             _scenario.AccessRevision,
             "issued-replacement:cancel-retry:first");
-        var first = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "lease-agreement.issued-replacement-draft.create",
-                firstCommand.DeliveryIdempotencyKey),
-            firstCommand,
-            RecoveryCodec);
+        var first = await ExecuteRecoveryAsync(firstCommand.DeliveryIdempotencyKey, firstCommand);
 
         var cancel = new CancelLeaseAgreementSuccessorDraftCommand(
             _scenario.PortfolioId,
@@ -512,24 +737,14 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             _scenario.AccessContextId,
             _scenario.AccessRevision,
             "successor-cancel:reissue-retry");
-        var canceled = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "lease-agreement.successor-draft.cancel",
-                cancel.DeliveryIdempotencyKey),
-            cancel,
-            Codec);
+        var canceled = await ExecuteCancelAsync(cancel.DeliveryIdempotencyKey, cancel);
 
         var retryCommand = firstCommand with
         {
             ReissueReason = "Correct the resident legal name using the verified spelling.",
             DeliveryIdempotencyKey = "issued-replacement:cancel-retry:second",
         };
-        var retry = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "lease-agreement.issued-replacement-draft.create",
-                retryCommand.DeliveryIdempotencyKey),
-            retryCommand,
-            RecoveryCodec);
+        var retry = await ExecuteRecoveryAsync(retryCommand.DeliveryIdempotencyKey, retryCommand);
 
         first.Value.Outcome.Should().Be(LeaseAgreementDraftMutationOutcome.Applied);
         canceled.Value.Outcome.Should().Be(CancelLeaseAgreementSuccessorDraftOutcome.Canceled);
@@ -572,12 +787,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             _scenario.AccessContextId,
             _scenario.AccessRevision,
             "issued-replacement:initial-execute");
-        var recovery = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "lease-agreement.issued-replacement-draft.create",
-                command.DeliveryIdempotencyKey),
-            command,
-            RecoveryCodec);
+        var recovery = await ExecuteRecoveryAsync(command.DeliveryIdempotencyKey, command);
 
         recovery.Value.Outcome.Should().Be(LeaseAgreementDraftMutationOutcome.Applied);
         await using (var inspect = NewContext())
@@ -625,11 +835,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
                 + (agreementId == _scenario.IssuedAgreementId ? 1 : 2),
             LeaseAgreementId = agreementId,
         };
-        var outcome = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "lease-agreement.successor-draft.cancel", command.DeliveryIdempotencyKey),
-            command,
-            Codec);
+        var outcome = await ExecuteCancelAsync(command.DeliveryIdempotencyKey, command);
 
         outcome.Value.Outcome.Should().Be(CancelLeaseAgreementSuccessorDraftOutcome.IssuedOrExecuted);
     }
@@ -650,10 +856,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
                 signer.LeaseAgreement!.LeaseManagementId == command.LeaseManagementId);
         }
 
-        Func<Task> act = async () => await Atomic.ExecuteAsync(
-            identity,
-            command,
-            RecoveryCodec);
+        Func<Task> act = async () => await ExecuteRecoveryAsync(identity.IdempotencyKey, command);
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
 
         await using var assert = NewContext();
@@ -722,7 +925,116 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         _scenario.AccessRevision,
         $"successor-cancel:{key}");
 
-    private IAtomicUnitOfWork Atomic => _scope!.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+    private Task<AtomicCommandOutcome<CancelLeaseAgreementSuccessorDraftResult>> ExecuteCancelAsync(
+        string key,
+        CancelLeaseAgreementSuccessorDraftCommand command)
+    {
+        var db = _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            key, LeasingWriteSupport.Write<CancelLeaseAgreementSuccessorDraftCommand,
+                CancelLeaseAgreementSuccessorDraftResult>(db, command));
+    }
+
+    private Task<AtomicCommandOutcome<RecordLeaseEndingDispositionResult>> ExecuteEndingAsync(
+        string key,
+        RecordLeaseEndingDispositionCommand command)
+    {
+        var db = _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            key, LeasingWriteSupport.Write<RecordLeaseEndingDispositionCommand,
+                RecordLeaseEndingDispositionResult>(db, command));
+    }
+
+    private async Task<EndingCounts> EndingCountsAsync(string key, string deliveryKey)
+    {
+        await using var db = NewContext();
+        return new(
+            await db.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == "lease-management.ending-disposition" && row.IdempotencyKey == key),
+            await db.AtomicAuditLogs.CountAsync(row => row.EntityType == nameof(LeaseManagement)
+                && row.EntityId == _scenario.LeaseManagementId),
+            await db.OutboxMessages.CountAsync(row => row.IdempotencyKey == deliveryKey));
+    }
+
+    private Task<AtomicCommandOutcome<CreatePropertyDispositionResult>> ExecutePropertyDispositionAsync(
+        string key,
+        CreatePropertyDispositionCommand command)
+    {
+        var db = _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            key, LeasingWriteSupport.Write<CreatePropertyDispositionCommand,
+                CreatePropertyDispositionResult>(db, command));
+    }
+
+    private async Task AssertFrozenReplayAsync<TCommand, TResult>(
+        string key,
+        TCommand command,
+        TResult storedResult)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        var scopedDb = _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var write = LeasingWriteSupport.Write<TCommand, TResult>(scopedDb, command);
+        var codec = new AtomicJsonResultCodec<TResult>(write.ResultContract);
+        await using (var seed = NewContext())
+        {
+            seed.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+            {
+                Id = Guid.NewGuid(),
+                AttemptId = Guid.NewGuid(),
+                CommandType = write.OperationName,
+                IdempotencyKey = key,
+                RequestFingerprint = AtomicCommandFingerprint.Create(command),
+                Status = AtomicCommandReceiptStatus.Completed,
+                ResultContract = write.ResultContract,
+                ResultJson = codec.Serialize(storedResult),
+                StartedAt = DateTime.UtcNow,
+                CompletedAt = DateTime.UtcNow,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        int auditsBefore;
+        int outboxBefore;
+        await using (var before = NewContext())
+        {
+            auditsBefore = await before.AtomicAuditLogs.CountAsync();
+            outboxBefore = await before.OutboxMessages.CountAsync();
+        }
+        var replay = await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(key, write);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(storedResult);
+        await using var verify = NewContext();
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == write.OperationName && row.IdempotencyKey == key)).Should().Be(1);
+        (await verify.AtomicAuditLogs.CountAsync()).Should().Be(auditsBefore);
+        (await verify.OutboxMessages.CountAsync()).Should().Be(outboxBefore);
+    }
+
+    private async Task<PropertyDispositionCounts> PropertyDispositionCountsAsync(
+        int propertyId,
+        string deliveryKey)
+    {
+        await using var db = NewContext();
+        return new(
+            await db.PropertyDispositions.CountAsync(row => row.PropertyId == propertyId),
+            await db.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == "property-disposition.create" && row.IdempotencyKey == deliveryKey),
+            await db.AtomicAuditLogs.CountAsync(row => row.PortfolioId == _scenario.PortfolioId),
+            await db.OutboxMessages.CountAsync(row => row.IdempotencyKey == deliveryKey));
+    }
+
+    private Task<AtomicCommandOutcome<LeaseAgreementDraftMutationResult>> ExecuteRecoveryAsync(
+        string key,
+        ReplaceIssuedAgreementWithDraftCommand command)
+    {
+        var db = _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            key, LeasingWriteSupport.Write<ReplaceIssuedAgreementWithDraftCommand,
+                LeaseAgreementDraftMutationResult>(db, command));
+    }
 
     private RentalCommandDbContext NewContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -1224,6 +1536,14 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         int IssuedArtifactId,
         string ContentSha256,
         string? LegalIssuanceFingerprint);
+
+    private sealed record EndingCounts(int Receipts, int Audits, int OutboxMessages);
+
+    private sealed record PropertyDispositionCounts(
+        int Dispositions,
+        int Receipts,
+        int Audits,
+        int OutboxMessages);
 
     private sealed record Scenario(
         int PortfolioId,

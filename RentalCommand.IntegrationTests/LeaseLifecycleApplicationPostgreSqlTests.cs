@@ -54,8 +54,6 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(_sqlCapture);
         services.AddSingleton(_failure);
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<TransferLeaseManagementCommand,
-            TransferLeaseManagementResult, TransferLeaseManagementHandler>();
         services.AddAtomicCommandHandler<CloseTenantAccountCommand,
             CloseTenantAccountResult, CloseTenantAccountHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
@@ -114,8 +112,8 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             scenario,
             "cross-scope-denied");
         var beforeDenied = await LifecycleGraphCountsAsync();
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(
-                TransferIdentity(denied), denied, TransferCodec))
+        await FluentActions.Invoking(() => ExecuteTransferAsync(
+                TransferIdentity(denied).IdempotencyKey, denied))
             .Should().ThrowAsync<UnauthorizedAccessException>();
         (await LifecycleGraphCountsAsync()).Should().BeEquivalentTo(beforeDenied);
 
@@ -126,8 +124,8 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             "injected-rollback");
         var beforeRollback = await LifecycleGraphCountsAsync();
         _failure.Arm();
-        var rollbackFailure = await FluentActions.Invoking(() => Atomic.ExecuteAsync(
-                TransferIdentity(rollback), rollback, TransferCodec))
+        var rollbackFailure = await FluentActions.Invoking(() => ExecuteTransferAsync(
+                TransferIdentity(rollback).IdempotencyKey, rollback))
             .Should().ThrowAsync<DbUpdateException>();
         rollbackFailure.WithInnerException<InjectedAtomicAuditFailure>();
         _context.Db.ChangeTracker.Clear();
@@ -153,8 +151,11 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             scenario,
             "successful-transfer");
         var identity = TransferIdentity(transfer);
-        var first = await Atomic.ExecuteAsync(identity, transfer, TransferCodec);
-        var replay = await Atomic.ExecuteAsync(identity, transfer, TransferCodec);
+        var beforeTransfer = await LifecycleGraphCountsAsync();
+        var first = await ExecuteTransferAsync(identity.IdempotencyKey, transfer);
+        var afterFirstTransfer = await LifecycleGraphCountsAsync();
+        var replay = await ExecuteTransferAsync(identity.IdempotencyKey, transfer);
+        var afterReplayTransfer = await LifecycleGraphCountsAsync();
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -164,6 +165,11 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         first.Value.DestinationTenantAccountId.Should().BePositive();
         first.Value.DestinationAgreementId.Should().BePositive();
         first.Value.TurnoverPeriodId.Should().BePositive();
+        afterFirstTransfer.Receipts.Should().Be(beforeTransfer.Receipts + 1);
+        afterFirstTransfer.Audits.Should().BeGreaterThan(beforeTransfer.Audits);
+        afterFirstTransfer.OutboxMessages.Should().BeGreaterThan(beforeTransfer.OutboxMessages);
+        afterReplayTransfer.Should().Be(afterFirstTransfer,
+            "an exact transfer retry must not repeat graph, audit, or outbox writes");
 
         _context.Db.ChangeTracker.Clear();
         var destination = await _context.Db.LeaseManagements.AsNoTracking()
@@ -300,6 +306,16 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
 
     private IAtomicUnitOfWork Atomic =>
         _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+
+    private Task<AtomicCommandOutcome<TransferLeaseManagementResult>> ExecuteTransferAsync(
+        string key,
+        TransferLeaseManagementCommand command)
+    {
+        var db = _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            key, LeasingWriteSupport.Write<TransferLeaseManagementCommand,
+                TransferLeaseManagementResult>(db, command));
+    }
 
     private IReadOnlyList<string> CaptureSql() => _sqlCapture.Commands;
 
