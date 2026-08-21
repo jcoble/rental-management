@@ -15,6 +15,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Operations;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Operations;
 using RentalCommand.TestCommon;
 using Xunit;
@@ -25,18 +26,6 @@ namespace RentalCommand.IntegrationTests;
 public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
 {
     private static readonly DateTime BusinessNowUtc = new(2027, 1, 25, 5, 0, 0, DateTimeKind.Utc);
-    private static readonly AtomicJsonResultCodec<AssignWorkOrderResponsibilityResult> AssignCodec =
-        new("work-order-responsibility.assign.v1");
-    private static readonly AtomicJsonResultCodec<CloseWorkOrderResponsibilityResult> CloseCodec =
-        new("work-order-responsibility.close.v1");
-    private static readonly AtomicJsonResultCodec<UpdateAssignedWorkOrderResult> UpdateCodec =
-        new("assigned-work-order.update.v1");
-    private static readonly AtomicJsonResultCodec<RecordTechnicianWorkEntryResult> EntryCodec =
-        new("technician-work-entry.v1");
-    private static readonly AtomicJsonResultCodec<SendTechnicianAssignmentMessageResult> MessageCodec =
-        new("technician-assignment-message.v1");
-    private static readonly AtomicJsonResultCodec<MarkTechnicianAssignmentConversationReadResult> ReadCodec =
-        new("technician-assignment-conversation-read.v1");
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _context = null!;
     private ServiceProvider _services = null!;
@@ -104,10 +93,8 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         using var firstScope = _services.CreateScope();
         using var secondScope = _services.CreateScope();
         var outcomes = await Task.WhenAll(
-            firstScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-                .ExecuteAsync(identity, command, UpdateCodec),
-            secondScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-                .ExecuteAsync(identity, command, UpdateCodec));
+            ExecuteAsync(firstScope.ServiceProvider, identity, command),
+            ExecuteAsync(secondScope.ServiceProvider, identity, command));
 
         outcomes.Select(outcome => outcome.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -138,12 +125,11 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             null,
             BusinessNowUtc,
             "unassigned-update-denied");
-        var denied = async () => await Atomic.ExecuteAsync(
+        var denied = async () => await ExecuteAsync(_serviceScope.ServiceProvider,
             new AtomicCommandIdentity(
                 "assigned-work-order.update",
                 $"{scenario.PortfolioId}:{scenario.AccessContextId}:{scenario.UnassignedWorkOrderId}:unassigned-update-denied"),
-            unassigned,
-            UpdateCodec);
+            unassigned);
 
         await denied.Should().ThrowAsync<UnauthorizedAccessException>();
         _context.Db.ChangeTracker.Clear();
@@ -171,15 +157,15 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             scenario.PortfolioId, scenario.UserId, scenario.SessionId, scenario.AccessContextId,
             scenario.AccessRevision, scenario.AssignedWorkOrderId, "assigned-read");
 
-        await Atomic.ExecuteAsync(new AtomicCommandIdentity(
+        await ExecuteAsync(_serviceScope.ServiceProvider, new AtomicCommandIdentity(
             "technician-work-entry.record", $"{scenario.PortfolioId}:{scenario.AssignedWorkOrderId}:assigned-entry"),
-            entry, EntryCodec);
-        await Atomic.ExecuteAsync(new AtomicCommandIdentity(
+            entry);
+        await ExecuteAsync(_serviceScope.ServiceProvider, new AtomicCommandIdentity(
             "technician-assignment-message.send", $"{scenario.PortfolioId}:{scenario.AssignedWorkOrderId}:assigned-message"),
-            message, MessageCodec);
-        await Atomic.ExecuteAsync(new AtomicCommandIdentity(
+            message);
+        await ExecuteAsync(_serviceScope.ServiceProvider, new AtomicCommandIdentity(
             "technician-assignment-conversation.read", $"{scenario.PortfolioId}:{scenario.AssignedWorkOrderId}:assigned-read"),
-            read, ReadCodec);
+            read);
 
         _context.Db.ChangeTracker.Clear();
         (await _context.Db.TechnicianWorkEntries.AsNoTracking().CountAsync(item =>
@@ -195,26 +181,22 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             .Select(item => item.TechnicianUnreadCount)
             .SingleAsync()).Should().Be(0);
 
-        await AssertDeniedAsync(new AtomicCommandIdentity(
+        await AssertDeniedAsync(() => ExecuteAsync(_serviceScope.ServiceProvider, new AtomicCommandIdentity(
                 "technician-work-entry.record", $"{scenario.PortfolioId}:{scenario.UnassignedWorkOrderId}:unassigned-entry"),
-            entry with { WorkOrderId = scenario.UnassignedWorkOrderId, DeliveryIdempotencyKey = "unassigned-entry" },
-            EntryCodec);
-        await AssertDeniedAsync(new AtomicCommandIdentity(
+            entry with { WorkOrderId = scenario.UnassignedWorkOrderId, DeliveryIdempotencyKey = "unassigned-entry" }));
+        await AssertDeniedAsync(() => ExecuteAsync(_serviceScope.ServiceProvider, new AtomicCommandIdentity(
                 "technician-assignment-message.send", $"{scenario.PortfolioId}:{scenario.UnassignedWorkOrderId}:unassigned-message"),
-            message with { WorkOrderId = scenario.UnassignedWorkOrderId, DeliveryIdempotencyKey = "unassigned-message" },
-            MessageCodec);
-        await AssertDeniedAsync(new AtomicCommandIdentity(
+            message with { WorkOrderId = scenario.UnassignedWorkOrderId, DeliveryIdempotencyKey = "unassigned-message" }));
+        await AssertDeniedAsync(() => ExecuteAsync(_serviceScope.ServiceProvider, new AtomicCommandIdentity(
                 "technician-assignment-conversation.read", $"{scenario.PortfolioId}:{scenario.UnassignedWorkOrderId}:unassigned-read"),
-            read with { WorkOrderId = scenario.UnassignedWorkOrderId, DeliveryIdempotencyKey = "unassigned-read" },
-            ReadCodec);
-        await AssertDeniedAsync(new AtomicCommandIdentity(
+            read with { WorkOrderId = scenario.UnassignedWorkOrderId, DeliveryIdempotencyKey = "unassigned-read" }));
+        await AssertDeniedAsync(() => ExecuteAsync(_serviceScope.ServiceProvider, new AtomicCommandIdentity(
                 "technician-work-entry.record", $"{scenario.PortfolioId}:{scenario.AssignedWorkOrderId}:stale-entry"),
             entry with
             {
                 ActorAccessRevision = scenario.AccessRevision + 1,
                 DeliveryIdempotencyKey = "stale-entry",
-            },
-            EntryCodec);
+            }));
 
         _context.Db.ChangeTracker.Clear();
         (await _context.Db.TechnicianWorkEntries.AsNoTracking().AnyAsync(item =>
@@ -227,6 +209,99 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SixResponsibilityAndTechnicianContracts_ReplayFrozenLegacyReceipts()
+    {
+        var technician = await SeedScenarioAsync(
+            sessionId: Guid.Parse("55555555-5555-5555-5555-555555555555"));
+        var management = await SeedResponsibilityAssignmentScenarioAsync("frozen-replay");
+        var update = new UpdateAssignedWorkOrderCommand(
+            technician.PortfolioId, technician.UserId, technician.SessionId,
+            technician.AccessContextId, technician.AccessRevision, technician.AssignedWorkOrderId,
+            BusinessNowUtc, WorkOrderStatus.InProgress, "Frozen replay", null, null,
+            null, BusinessNowUtc, "frozen-update");
+        var entry = new RecordTechnicianWorkEntryCommand(
+            technician.PortfolioId, technician.UserId, technician.SessionId,
+            technician.AccessContextId, technician.AccessRevision, technician.AssignedWorkOrderId,
+            TechnicianWorkEntryKind.Note, "Frozen replay", null, null, null, BusinessNowUtc,
+            "frozen-entry");
+        var message = new SendTechnicianAssignmentMessageCommand(
+            technician.PortfolioId, technician.UserId, technician.SessionId,
+            technician.AccessContextId, technician.AccessRevision, technician.AssignedWorkOrderId,
+            "Frozen replay", "frozen-message");
+        var read = new MarkTechnicianAssignmentConversationReadCommand(
+            technician.PortfolioId, technician.UserId, technician.SessionId,
+            technician.AccessContextId, technician.AccessRevision, technician.AssignedWorkOrderId,
+            "frozen-read");
+        var assign = AssignCommand(management, "frozen-assign");
+        var responsibilityId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var close = new CloseWorkOrderResponsibilityCommand(
+            management.PortfolioId, management.ManagerUserId, management.ManagerSessionId,
+            management.ManagerAccessContextId, management.ManagerAccessRevision,
+            management.WorkOrderId, responsibilityId,
+            [new WorkspaceAccessRevisionExpectation(
+                management.TechnicianAccessContextId, management.TechnicianAccessRevision)],
+            "Frozen close", BusinessNowUtc, "frozen-close");
+
+        new IAtomicCommandData[] { update, entry, message, read, assign, close }
+            .Select(AtomicCommandFingerprint.Create).Should().Equal(
+                "6e9afb75e2d8559ff80824780f2347ad8c8eb06215783049341dabd6109093d0",
+                "767b8f05917dee7e29811b5eefadadd80659649e482021a8d5eefd182ad3e626",
+                "939245342ed9615b99d5d7e73f90a691e5ff4e2c2e4e5f456d66d59d252e6c6d",
+                "b90a96514b3ceb79a090d195124e61602b65e373b89051503ee440a7f1f49bf2",
+                "c4989830c246677e3a6ca51198f42d43ee70a5c438b6278d74ec9953ec3b77ee",
+                "5ba51b11d61a784d98f2d6cc32629638d477a36db1ae9503c0c8c32d4a508b10");
+
+        var updated = await SeedAndReplayAsync(
+            _serviceScope.ServiceProvider, "frozen-update", UpdateAssignedWorkOrderHandler.Write(update,
+                _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()),
+            "assigned-work-order.update", "6e9afb75e2d8559ff80824780f2347ad8c8eb06215783049341dabd6109093d0", "assigned-work-order.update.v1",
+            $$"""{"Outcome":0,"WorkOrderId":{{technician.AssignedWorkOrderId}},"Status":1,"ScheduledForUtc":null,"ScheduledWindowEndUtc":null,"CompletedAtUtc":null,"UpdatedAtUtc":"2099-08-21T12:34:56Z"}""");
+        var recorded = await SeedAndReplayAsync(
+            _serviceScope.ServiceProvider, "frozen-entry", RecordTechnicianWorkEntryHandler.Write(entry,
+                _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()),
+            "technician-work-entry.record", "767b8f05917dee7e29811b5eefadadd80659649e482021a8d5eefd182ad3e626", "technician-work-entry.v1",
+            $$"""{"EntryId":42,"WorkOrderId":{{technician.AssignedWorkOrderId}},"Kind":0,"CreatedAtUtc":"2099-08-21T12:34:56Z"}""");
+        var sent = await SeedAndReplayAsync(
+            _serviceScope.ServiceProvider, "frozen-message", SendTechnicianAssignmentMessageHandler.Write(message,
+                _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()),
+            "technician-assignment-message.send", "939245342ed9615b99d5d7e73f90a691e5ff4e2c2e4e5f456d66d59d252e6c6d", "technician-assignment-message.v1",
+            """{"ConversationId":43,"MessageId":44,"CreatedAtUtc":"2099-08-21T12:34:56Z"}""");
+        var marked = await SeedAndReplayAsync(
+            _serviceScope.ServiceProvider, "frozen-read", MarkTechnicianAssignmentConversationReadHandler.Write(read,
+                _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()),
+            "technician-assignment-conversation.read", "b90a96514b3ceb79a090d195124e61602b65e373b89051503ee440a7f1f49bf2", "technician-assignment-conversation-read.v1",
+            """{"ConversationId":43,"Found":true}""");
+
+        await using var managementServices = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc));
+        using var managementScope = managementServices.CreateScope();
+        var guard = managementScope.ServiceProvider
+            .GetRequiredService<WorkOrderResponsibilityAccessRevisionGuard>();
+        var assigned = await SeedAndReplayAsync(
+            managementScope.ServiceProvider,
+            $"{management.PortfolioId}:{management.WorkOrderId}:frozen-assign",
+            AssignWorkOrderResponsibilityHandler.Write(assign,
+                managementScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(), guard),
+            "work-order-responsibility.assign", "c4989830c246677e3a6ca51198f42d43ee70a5c438b6278d74ec9953ec3b77ee", "work-order-responsibility.assign.v1",
+            $$"""{"ResponsibilityId":"33333333-3333-3333-3333-333333333333","WorkOrderId":{{management.WorkOrderId}},"WorkspaceMembershipId":{{management.TechnicianMembershipId}},"MembershipRoleAssignmentId":{{management.TechnicianRoleAssignmentId}},"Kind":0,"EffectiveFromUtc":"2099-08-21T12:34:56Z","AccessRevisions":[{"AccessContextId":{{management.TechnicianAccessContextId}},"ExpectedRevision":{{management.TechnicianAccessRevision + 1}}}]}""");
+        var closed = await SeedAndReplayAsync(
+            managementScope.ServiceProvider,
+            $"{management.PortfolioId}:{management.WorkOrderId}:frozen-close",
+            CloseWorkOrderResponsibilityHandler.Write(close,
+                managementScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(), guard),
+            "work-order-responsibility.close", "5ba51b11d61a784d98f2d6cc32629638d477a36db1ae9503c0c8c32d4a508b10", "work-order-responsibility.close.v1",
+            $$"""{"ResponsibilityId":"33333333-3333-3333-3333-333333333333","WorkOrderId":{{management.WorkOrderId}},"EffectiveToUtc":"2099-08-21T12:34:56Z","AccessRevisions":[{"AccessContextId":{{management.TechnicianAccessContextId}},"ExpectedRevision":{{management.TechnicianAccessRevision + 1}}}]}""");
+
+        updated.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        recorded.Value.EntryId.Should().Be(42);
+        sent.Value.MessageId.Should().Be(44);
+        marked.Value.Should().Be(new MarkTechnicianAssignmentConversationReadResult(43, true));
+        assigned.Value.ResponsibilityId.Should().Be(responsibilityId);
+        closed.Value.ResponsibilityId.Should().Be(responsibilityId);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.IdempotencyKey.Contains("frozen-"))).Should().Be(6);
+    }
+
+    [Fact]
     public async Task AssignResponsibility_UsesBusinessClockForLifecycleAuditAndOutbox_AndReplaysOriginalResult()
     {
         var scenario = await SeedResponsibilityAssignmentScenarioAsync("business-clock");
@@ -235,8 +310,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         var command = AssignCommand(scenario, "business-clock");
         var identity = AssignIdentity(scenario, command);
 
-        var executed = await serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, AssignCodec);
+        var executed = await ExecuteAsync(serviceScope.ServiceProvider, identity, command);
 
         executed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         executed.Value.EffectiveFromUtc.Should().Be(BusinessNowUtc);
@@ -283,8 +357,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
 
         await using var replayServices = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc.AddDays(1)));
         using var replayScope = replayServices.CreateScope();
-        var replayed = await replayScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, AssignCodec);
+        var replayed = await ExecuteAsync(replayScope.ServiceProvider, identity, command);
 
         replayed.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replayed.Value.Should().BeEquivalentTo(executed.Value);
@@ -311,8 +384,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         var command = AssignCommand(scenario, "rollback");
         var identity = AssignIdentity(scenario, command);
 
-        var act = async () => await serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, AssignCodec);
+        var act = async () => await ExecuteAsync(serviceScope.ServiceProvider, identity, command);
 
         await act.Should().ThrowAsync<DbUpdateException>()
             .Where(exception => exception.InnerException is InjectedOutboxFailure);
@@ -346,8 +418,8 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         await using var assignServices = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc));
         using var assignScope = assignServices.CreateScope();
         var assignCommand = AssignCommand(scenario, "close-clock-assign");
-        var assigned = await assignScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(AssignIdentity(scenario, assignCommand), assignCommand, AssignCodec);
+        var assigned = await ExecuteAsync(
+            assignScope.ServiceProvider, AssignIdentity(scenario, assignCommand), assignCommand);
         var closeNow = BusinessNowUtc.AddHours(4);
         await using var closeServices = BuildResponsibilityServices(new FixedTimeProvider(closeNow));
         using var closeScope = closeServices.CreateScope();
@@ -369,8 +441,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             "work-order-responsibility.close",
             $"{scenario.PortfolioId}:{scenario.WorkOrderId}:{closeCommand.DeliveryIdempotencyKey}");
 
-        var closed = await closeScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(closeIdentity, closeCommand, CloseCodec);
+        var closed = await ExecuteAsync(closeScope.ServiceProvider, closeIdentity, closeCommand);
 
         closed.Value.EffectiveToUtc.Should().Be(closeNow);
         _context.Db.ChangeTracker.Clear();
@@ -464,12 +535,11 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             BusinessNowUtc,
             "reversed-context-second");
 
-        var firstTask = Task.Run(() => firstScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
+        var firstTask = Task.Run(() => ExecuteAsync(firstScope.ServiceProvider,
             new AtomicCommandIdentity(
                 "work-order-responsibility.assign",
                 "reversed-context-first"),
-            firstCommand,
-            AssignCodec));
+            firstCommand));
         try
         {
             await firstProbe.WorkOrderLockReached.WaitAsync(TimeSpan.FromSeconds(10));
@@ -479,12 +549,11 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             throw new InvalidOperationException("First responsibility work-order lock was not reached.");
         }
 
-        var secondTask = Task.Run(() => secondScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
+        var secondTask = Task.Run(() => ExecuteAsync(secondScope.ServiceProvider,
             new AtomicCommandIdentity(
                 "work-order-responsibility.assign",
                 "reversed-context-second"),
-            secondCommand,
-            AssignCodec));
+            secondCommand));
         // With the unfixed order, the second command owns the reversed actor context while it waits
         // on the work order. The fixed order makes it wait for the first command's lowest context.
         _ = await Task.WhenAny(secondProbe.ActorContextLockReached, Task.Delay(TimeSpan.FromSeconds(2)));
@@ -516,7 +585,6 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         await using var services = BuildResponsibilityServices(
             new FixedTimeProvider(BusinessNowUtc), probe);
         using var scope = services.CreateScope();
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
         var command = new AssignWorkOrderResponsibilityCommand(
             scenario.PortfolioId,
             scenario.ManagerUserId,
@@ -536,7 +604,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             "changed-set-409");
         var identity = AssignIdentity(scenario, command);
 
-        var task = Task.Run(() => atomic.ExecuteAsync(identity, command, AssignCodec));
+        var task = Task.Run(() => ExecuteAsync(scope.ServiceProvider, identity, command));
         try
         {
             await probe.FirstContextLockReached.WaitAsync(TimeSpan.FromSeconds(10));
@@ -590,8 +658,8 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         AssignWorkOrderResponsibilityResult assigned;
         using (var assignScope = assignServices.CreateScope())
         {
-            assigned = (await assignScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-                .ExecuteAsync(AssignIdentity(scenario, assignCommand), assignCommand, AssignCodec)).Value;
+            assigned = (await ExecuteAsync(
+                assignScope.ServiceProvider, AssignIdentity(scenario, assignCommand), assignCommand)).Value;
         }
         var responsibilityId = assigned.ResponsibilityId;
         var expectedTechnicianRevision = assigned.AccessRevisions.Single().ExpectedRevision;
@@ -610,7 +678,6 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         await using var services = BuildResponsibilityServices(
             new FixedTimeProvider(BusinessNowUtc), probe);
         using var scope = services.CreateScope();
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
         var identity = new AtomicCommandIdentity(
             "work-order-responsibility.close",
             "context-changed-409-close");
@@ -629,7 +696,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             BusinessNowUtc,
             identity.IdempotencyKey);
 
-        var task = Task.Run(() => atomic.ExecuteAsync(identity, command, CloseCodec));
+        var task = Task.Run(() => ExecuteAsync(scope.ServiceProvider, identity, command));
         try
         {
             await probe.WorkOrderLockReached.WaitAsync(TimeSpan.FromSeconds(10));
@@ -675,19 +742,103 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
                 item.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
     }
 
-    private async Task AssertDeniedAsync<TCommand, TResult>(
-        AtomicCommandIdentity identity,
-        TCommand command,
-        AtomicJsonResultCodec<TResult> codec)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
+    private static async Task AssertDeniedAsync(Func<Task> execute)
     {
-        var act = async () => await Atomic.ExecuteAsync(identity, command, codec);
+        var act = async () => await execute();
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
-    private IAtomicUnitOfWork Atomic =>
-        _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<AtomicCommandOutcome<TResult>> SeedAndReplayAsync<TCommand, TResult>(
+        IServiceProvider services,
+        string key,
+        TransactionalWrite<TCommand, TResult> write,
+        string operation,
+        string frozenFingerprint,
+        string resultContract,
+        string literalResultJson)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        _context.Db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+        {
+            Id = Guid.NewGuid(),
+            AttemptId = Guid.NewGuid(),
+            CommandType = operation,
+            IdempotencyKey = key,
+            RequestFingerprint = frozenFingerprint,
+            Status = AtomicCommandReceiptStatus.Completed,
+            ResultContract = resultContract,
+            ResultJson = literalResultJson,
+            StartedAt = BusinessNowUtc,
+            CompletedAt = BusinessNowUtc,
+        });
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+
+        return await services.GetRequiredService<IWriteExecutor>().ExecuteAsync(key, write);
+    }
+
+    private static Task<AtomicCommandOutcome<AssignWorkOrderResponsibilityResult>> ExecuteAsync(
+        IServiceProvider services,
+        AtomicCommandIdentity identity,
+        AssignWorkOrderResponsibilityCommand command)
+    {
+        var db = services.GetRequiredService<RentalCommandDbContext>();
+        var guard = services.GetRequiredService<WorkOrderResponsibilityAccessRevisionGuard>();
+        return services.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, AssignWorkOrderResponsibilityHandler.Write(command, db, guard));
+    }
+
+    private static Task<AtomicCommandOutcome<CloseWorkOrderResponsibilityResult>> ExecuteAsync(
+        IServiceProvider services,
+        AtomicCommandIdentity identity,
+        CloseWorkOrderResponsibilityCommand command)
+    {
+        var db = services.GetRequiredService<RentalCommandDbContext>();
+        var guard = services.GetRequiredService<WorkOrderResponsibilityAccessRevisionGuard>();
+        return services.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, CloseWorkOrderResponsibilityHandler.Write(command, db, guard));
+    }
+
+    private static Task<AtomicCommandOutcome<UpdateAssignedWorkOrderResult>> ExecuteAsync(
+        IServiceProvider services,
+        AtomicCommandIdentity identity,
+        UpdateAssignedWorkOrderCommand command)
+    {
+        var db = services.GetRequiredService<RentalCommandDbContext>();
+        return services.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, UpdateAssignedWorkOrderHandler.Write(command, db));
+    }
+
+    private static Task<AtomicCommandOutcome<RecordTechnicianWorkEntryResult>> ExecuteAsync(
+        IServiceProvider services,
+        AtomicCommandIdentity identity,
+        RecordTechnicianWorkEntryCommand command)
+    {
+        var db = services.GetRequiredService<RentalCommandDbContext>();
+        return services.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, RecordTechnicianWorkEntryHandler.Write(command, db));
+    }
+
+    private static Task<AtomicCommandOutcome<SendTechnicianAssignmentMessageResult>> ExecuteAsync(
+        IServiceProvider services,
+        AtomicCommandIdentity identity,
+        SendTechnicianAssignmentMessageCommand command)
+    {
+        var db = services.GetRequiredService<RentalCommandDbContext>();
+        return services.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, SendTechnicianAssignmentMessageHandler.Write(command, db));
+    }
+
+    private static Task<AtomicCommandOutcome<MarkTechnicianAssignmentConversationReadResult>> ExecuteAsync(
+        IServiceProvider services,
+        AtomicCommandIdentity identity,
+        MarkTechnicianAssignmentConversationReadCommand command)
+    {
+        var db = services.GetRequiredService<RentalCommandDbContext>();
+        return services.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, MarkTechnicianAssignmentConversationReadHandler.Write(command, db));
+    }
 
     private ServiceProvider BuildResponsibilityServices(
         TimeProvider timeProvider,
@@ -959,9 +1110,11 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         ExpiresAtUtc = now.AddDays(30),
     };
 
-    private async Task<Scenario> SeedScenarioAsync()
+    private async Task<Scenario> SeedScenarioAsync(
+        DateTime? fixtureNowUtc = null,
+        Guid? sessionId = null)
     {
-        var now = DateTime.UtcNow;
+        var now = fixtureNowUtc ?? DateTime.UtcNow;
         var db = _context.Db;
         var user = new ApplicationUser
         {
@@ -1030,7 +1183,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         };
         var session = new AuthSession
         {
-            Id = Guid.NewGuid(),
+            Id = sessionId ?? Guid.NewGuid(),
             User = user,
             ActiveAccessContext = context,
             Status = AuthSessionStatus.Active,

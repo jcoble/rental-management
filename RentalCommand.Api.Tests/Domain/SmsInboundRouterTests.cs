@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -35,6 +36,7 @@ public class SmsInboundRouterTests : IDisposable
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             CompleteVendorDispatchFromInboundCommand,
             CompleteVendorDispatchFromInboundResult,
@@ -53,9 +55,9 @@ public class SmsInboundRouterTests : IDisposable
     private SmsInboundRouter CreateRouter()
     {
         var vendorDone = new SmsInboundVendorDoneService(
-            _ctx.Db,
+            _services.GetRequiredService<RentalCommandDbContext>(),
             Mock.Of<IDataUpdateService>(),
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            _services.GetRequiredService<IRequestWriteExecutor>(),
             Mock.Of<ILogger<SmsInboundVendorDoneService>>());
 
         return new SmsInboundRouter(vendorDone);

@@ -463,9 +463,9 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         var workOrderId = summary!.CreatedWorkOrderIds.Should().ContainSingle().Subject;
 
         var dispatchService = new VendorDispatchService(
-            _db,
+            _services.GetRequiredService<RentalCommandDbContext>(),
             new NoopInspectionDataUpdate(),
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>(),
             NullLogger<VendorDispatchService>.Instance,
             TimeProvider.System);
         var dispatch = await dispatchService.DispatchAsync(PortfolioId, workOrderId,
@@ -537,9 +537,9 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         }
 
         var doneService = new SmsInboundVendorDoneService(
-            _db,
+            _services.GetRequiredService<RentalCommandDbContext>(),
             new NoopInspectionDataUpdate(),
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>(),
             NullLogger<SmsInboundVendorDoneService>.Instance);
         var done = await doneService.TryHandleAsync(
             NextOperationKey(), vendor.Phone, "DONE", DateTime.UtcNow);

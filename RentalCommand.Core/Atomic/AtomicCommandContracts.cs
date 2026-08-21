@@ -116,6 +116,11 @@ public enum WriteLockProtocol
     Portfolio,
     StoredFile,
     WorkOrder,
+    VendorDispatchInbound,
+    WorkOrderResponsibility,
+    WorkspaceAccessContextWorkOrder,
+    WorkOrderVendor,
+    Vendor,
     AppointmentWorkOrder,
     WorkOrderAppointmentProgression,
     Possession,
@@ -165,6 +170,12 @@ public sealed class WriteLockPlan
             [WriteLockProtocol.Portfolio] = ["Portfolio"],
             [WriteLockProtocol.StoredFile] = ["StoredFile"],
             [WriteLockProtocol.WorkOrder] = ["WorkOrder"],
+            [WriteLockProtocol.VendorDispatchInbound] = ["VendorDispatch"],
+            [WriteLockProtocol.WorkOrderResponsibility] = [],
+            [WriteLockProtocol.WorkspaceAccessContextWorkOrder] =
+                ["WorkspaceAccessContext", "WorkOrder"],
+            [WriteLockProtocol.WorkOrderVendor] = ["WorkOrder", "Vendor"],
+            [WriteLockProtocol.Vendor] = ["Vendor"],
             // The work-order tail is resolved by the rule only after this appointment lock is held.
             [WriteLockProtocol.AppointmentWorkOrder] = ["Appointment"],
             // Both classes are resolved and acquired by the rule in the published progression order.
@@ -234,6 +245,8 @@ public sealed class WriteLockPlan
         {
             WriteLockProtocol.AppointmentWorkOrder => ["WorkOrder"],
             WriteLockProtocol.WorkOrderAppointmentProgression => ["Appointment", "WorkOrder"],
+            WriteLockProtocol.VendorDispatchInbound => ["WorkOrder"],
+            WriteLockProtocol.WorkOrderResponsibility => ["WorkspaceAccessContext", "WorkOrder"],
             WriteLockProtocol.LeasePartyAccessGrant =>
                 ["TenantIdentityEmail", "WorkspaceAccessContext"],
             WriteLockProtocol.LeasePartyAccessRevoke => ["WorkspaceAccessContext"],

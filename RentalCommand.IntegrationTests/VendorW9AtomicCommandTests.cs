@@ -226,6 +226,42 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task FrozenLegacyReceipt_ReplaysLiteralW9ResultWithCurrentAuthorization()
+    {
+        SkipIfNoDocker();
+        var identity = Identity("frozen-legacy-receipt");
+        var command = Command(_portfolioId, _vendorId, "frozen-legacy-receipt");
+        AtomicCommandFingerprint.Create(command).Should().Be(
+            "03ccbddd48e634f56c476322cd53f0ed519659aeeddedbbd361317e9c065268b");
+        await using (var seed = NewContext())
+        {
+            seed.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+            {
+                Id = Guid.NewGuid(),
+                AttemptId = Guid.NewGuid(),
+                CommandType = "vendor-w9.request",
+                IdempotencyKey = identity.IdempotencyKey,
+                RequestFingerprint = "03ccbddd48e634f56c476322cd53f0ed519659aeeddedbbd361317e9c065268b",
+                Status = AtomicCommandReceiptStatus.Completed,
+                ResultContract = "vendor-w9.request.result.v1",
+                ResultJson = """{"Outcome":0,"Phone":"+15550102020"}""",
+                StartedAt = _now,
+                CompletedAt = _now,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(new RequestVendorW9Result(
+            RequestVendorW9Outcome.Queued, "+15550102020"));
+        await using var verify = NewContext();
+        (await verify.OutboxMessages.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
     public async Task Replay_ReauthorizesAndDeniesRevokedSessionBeforeReturningReceipt()
     {
         SkipIfNoDocker();
@@ -359,17 +395,17 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         recovered.Value.Outcome.Should().Be(RequestVendorW9Outcome.Queued);
     }
 
-    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+    private async Task<AtomicCommandOutcome<RequestVendorW9Result>> ExecuteAtomicAsync(
         AtomicCommandIdentity identity,
-        TCommand command,
-        AtomicJsonResultCodec<TResult> resultCodec,
+        RequestVendorW9Command command,
+        AtomicJsonResultCodec<RequestVendorW9Result> resultCodec,
         CancellationToken ct = default)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
     {
         await using var scope = _services!.CreateAsyncScope();
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-        return await atomic.ExecuteAsync(identity, command, resultCodec, ct);
+        var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return await writes.ExecuteAsync(
+            identity.IdempotencyKey, RequestVendorW9Handler.Write(command, db), ct);
     }
 
     private CommandProbe Probe => _services!.GetRequiredService<CommandProbe>();

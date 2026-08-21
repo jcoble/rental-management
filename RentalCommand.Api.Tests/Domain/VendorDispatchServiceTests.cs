@@ -1,4 +1,6 @@
 using System.Data.Common;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -8,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -30,6 +33,8 @@ namespace RentalCommand.Api.Tests.Domain;
 public class VendorDispatchServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
+    private static readonly Guid FrozenSessionId =
+        Guid.Parse("44444444-4444-4444-4444-444444444444");
 
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
@@ -42,13 +47,15 @@ public class VendorDispatchServiceTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
-        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorDispatchServiceTests));
+        _scope = _ctx.Db.SeedAdministratorScope(
+            PortfolioId, nameof(VendorDispatchServiceTests), FrozenSessionId);
         await _ctx.ActivateApiScopeAsync(_scope);
 
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             DispatchWorkOrderToVendorCommand,
             DispatchWorkOrderToVendorResult,
@@ -79,9 +86,9 @@ public class VendorDispatchServiceTests : IAsyncLifetime
     }
 
     private VendorDispatchService CreateDispatchSut() => new(
-        _ctx.Db,
+        _services.GetRequiredService<RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
-        _services.GetRequiredService<IAtomicUnitOfWork>(),
+        _services.GetRequiredService<IRequestWriteExecutor>(),
         Mock.Of<ILogger<VendorDispatchService>>(),
         TimeProvider.System);
 
@@ -92,9 +99,9 @@ public class VendorDispatchServiceTests : IAsyncLifetime
     };
 
     private SmsInboundVendorDoneService CreateDoneSut() => new(
-        _ctx.Db,
+        _services.GetRequiredService<RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
-        _services.GetRequiredService<IAtomicUnitOfWork>(),
+        _services.GetRequiredService<IRequestWriteExecutor>(),
         Mock.Of<ILogger<SmsInboundVendorDoneService>>());
 
     [Fact]
@@ -542,6 +549,118 @@ public class VendorDispatchServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task FiveProviderContracts_ReplayFrozenLegacyReceipts()
+    {
+        var (property, vendor) = SeedPropertyAndVendor(vendorPhone: "+16145550199");
+        var workOrder = SeedWorkOrder(property);
+        await _ctx.Db.SaveChangesAsync();
+        var access = new DispatchManagementAccess(
+            _scope.SessionId, _scope.UserId, _scope.AccessContextId, _scope.AccessRevision);
+        var dispatchKey = $"{PortfolioId}:{workOrder.Id}:frozen-dispatch";
+        var dispatch = new DispatchWorkOrderToVendorCommand(
+            PortfolioId, workOrder.Id, vendor.Id, "+16145550199",
+            "New job at Maple Court: Leaky faucet. Kitchen sink drips Priority: High. Reply DONE when the job is complete.",
+            5, DateTime.UtcNow, access);
+        var cancelKey = $"{PortfolioId}:{workOrder.Id}:91:frozen-cancel";
+        var cancel = new CancelVendorDispatchCommand(
+            PortfolioId, workOrder.Id, 91, 5, "Frozen cancellation", DateTime.UtcNow,
+            cancelKey, access);
+        var recoveryDigest = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes("frozen-recovery"))).ToLowerInvariant();
+        var recoveryKey =
+            $"vendor-dispatch-chronology:{PortfolioId}:{workOrder.Id}:91:{recoveryDigest}";
+        var recoveryRequest = new RecoverVendorDispatchChronologyRequest
+        {
+            ExpectedContaminatedDispatchedAtUtc = new DateTime(2098, 8, 21, 14, 0, 0, DateTimeKind.Utc),
+            ExpectedStatusEventId = 92,
+            ExpectedOutboxId = 93,
+            ExpectedOutboxIdempotencyKey = "vendor-dispatch:91:sms",
+            OriginalCommandIdempotencyKey = dispatchKey,
+            CorrectDispatchedAtUtc = new DateTime(2099, 8, 21, 12, 0, 0, DateTimeKind.Utc),
+        };
+        var recovery = new RecoverVendorDispatchChronologyCommand(
+            PortfolioId, workOrder.Id, 91, recoveryRequest.ExpectedContaminatedDispatchedAtUtc,
+            recoveryRequest.ExpectedStatusEventId, recoveryRequest.ExpectedOutboxId,
+            recoveryRequest.ExpectedOutboxIdempotencyKey, recoveryRequest.OriginalCommandIdempotencyKey,
+            recoveryRequest.CorrectDispatchedAtUtc, _scope.UserId, access, recoveryKey);
+        var ratingKey = "frozen-rating";
+        var rating = new CreateVendorRatingCommand(
+            PortfolioId,
+            new StaffOperationActor(_scope.UserId, _scope.SessionId,
+                _scope.AccessContextId, _scope.AccessRevision),
+            vendor.Id, null, 5, "Frozen rating", DateTime.UtcNow, ratingKey);
+        var inboundEvent = "provider-frozen-event";
+        var inboundKey = $"provider-event:{HashLower(inboundEvent)}";
+        var inbound = new CompleteVendorDispatchFromInboundCommand(
+            inboundEvent, "+16145550199", true,
+            new DateTime(2099, 8, 21, 12, 0, 0, DateTimeKind.Utc));
+
+        new IAtomicCommandData[] { dispatch, cancel, recovery, rating, inbound }
+            .Select(AtomicCommandFingerprint.Create).Should().Equal(
+                "4140d2b9d30ceae74b2356f67f8c7ea80f3d621f3300fbdb956dca40b89e3589",
+                "3b0ab036cf6e2a5822e87efe46221d7c27269ac30927790b85e524c86ee932ec",
+                "2ad9380df0ba858a66925258460f270dec110b993182b5f09a7a89a0de136228",
+                "b9960f7fa31960daf02ba32a1fac644bdeabef2c4297e18b69585526e12e6be3",
+                "8db4410ca3ce0277821c8ff00604bd74884963b0d1a1720ac525082228393441");
+
+        SeedReceipt(dispatchKey, DispatchWorkOrderToVendorHandler.Write(dispatch, _ctx.Db),
+            "vendor-dispatch.create", "4140d2b9d30ceae74b2356f67f8c7ea80f3d621f3300fbdb956dca40b89e3589", "vendor-dispatch.create.v1",
+            $$"""{"Outcome":0,"DispatchId":90,"PortfolioId":1,"WorkOrderId":{{workOrder.Id}},"VendorId":{{vendor.Id}},"Status":0,"DispatchedAtUtc":"2099-08-21T12:00:00Z","Message":"Frozen dispatch"}""");
+        SeedReceipt(cancelKey, CancelVendorDispatchHandler.Write(cancel, _ctx.Db),
+            "vendor-dispatch.cancel", "3b0ab036cf6e2a5822e87efe46221d7c27269ac30927790b85e524c86ee932ec", "vendor-dispatch.cancel.v1",
+            $$"""{"Outcome":0,"DispatchId":91,"PortfolioId":1,"WorkOrderId":{{workOrder.Id}},"VendorId":{{vendor.Id}},"Status":3,"CancelledAtUtc":"2099-08-21T12:00:00Z","Reason":"Frozen cancellation"}""");
+        SeedReceipt(recoveryKey, RecoverVendorDispatchChronologyHandler.Write(recovery, _ctx.Db),
+            "vendor-dispatch.recover-chronology", "2ad9380df0ba858a66925258460f270dec110b993182b5f09a7a89a0de136228", "vendor-dispatch.chronology-recovery.v1",
+            $$"""{"WorkOrderId":{{workOrder.Id}},"DispatchId":91,"StatusEventId":92,"OutboxId":93,"DispatchedAtUtc":"2099-08-21T12:00:00Z","WorkOrderUpdatedAtRepaired":true}""");
+        SeedReceipt(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ratingKey))),
+            CreateVendorRatingHandler.Write(rating, _ctx.Db),
+            "vendor-rating.create", "b9960f7fa31960daf02ba32a1fac644bdeabef2c4297e18b69585526e12e6be3", "vendor-rating.create.v1",
+            $$"""{"Outcome":0,"RatingId":94,"VendorId":{{vendor.Id}},"ResponseJson":"{\"Id\":94,\"VendorId\":{{vendor.Id}},\"WorkOrderId\":null,\"Stars\":5,\"Comment\":\"Frozen rating\",\"CreatedAtUtc\":\"2099-08-21T12:00:00Z\"}"}""");
+        SeedReceipt(inboundKey, CompleteVendorDispatchFromInboundHandler.Write(inbound, _ctx.Db),
+            "sms.vendor-done", "8db4410ca3ce0277821c8ff00604bd74884963b0d1a1720ac525082228393441", "complete-vendor-dispatch-from-inbound-result.v1",
+            """{"Outcome":1,"PortfolioId":0,"DispatchId":0,"WorkOrderId":0,"VendorId":0,"NotificationIds":[]}""");
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var service = CreateDispatchSut();
+        var dispatchReplay = await service.DispatchAuthorizedAsync(
+            _scope, workOrder.Id,
+            new DispatchWorkOrderRequest { VendorId = vendor.Id, IdempotencyKey = "frozen-dispatch" }, 5);
+        var cancelReplay = await service.CancelAuthorizedAsync(
+            _scope, workOrder.Id, 91,
+            new CancelVendorDispatchRequest
+            {
+                IdempotencyKey = "frozen-cancel",
+                Reason = "Frozen cancellation",
+            }, 5);
+        var recoveryReplay = await service.RecoverChronologyAuthorizedAsync(
+            _scope, workOrder.Id, 91, recoveryRequest, _scope.UserId, "frozen-recovery");
+        var ratingReplay = await service.RateAsync(
+            _scope, vendor.Id,
+            new CreateVendorRatingRequest
+            {
+                WorkOrderId = null,
+                Stars = 5,
+                Comment = "Frozen rating",
+            }, ratingKey);
+        var inboundReplay = await CreateDoneSut().TryHandleAsync(
+            inboundEvent, "+16145550199", "DONE", inbound.ReceivedAtUtc);
+
+        dispatchReplay.Dispatch!.Id.Should().Be(90);
+        cancelReplay.Dispatch!.Replayed.Should().BeTrue();
+        recoveryReplay.Should().Match<RecoverVendorDispatchChronologyResponse>(item =>
+            item.Replayed && item.StatusEventId == 92 && item.OutboxId == 93);
+        ratingReplay!.Id.Should().Be(94);
+        inboundReplay.Handled.Should().BeFalse();
+        (await _ctx.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == "vendor-dispatch.create"
+            || row.CommandType == "vendor-dispatch.cancel"
+            || row.CommandType == "vendor-dispatch.recover-chronology"
+            || row.CommandType == "vendor-rating.create"
+            || row.CommandType == "sms.vendor-done")).Should().Be(5);
+    }
+
+    [Fact]
     public async Task GetScorecard_IncludesAvgResponseHours_FromCompletedDispatch()
     {
         var (property, vendor) = SeedPropertyAndVendor(vendorPhone: "+16145550199");
@@ -612,6 +731,32 @@ public class VendorDispatchServiceTests : IAsyncLifetime
         _ctx.Db.WorkOrders.Add(workOrder);
         return workOrder;
     }
+
+    private void SeedReceipt<TCommand, TResult>(
+        string key,
+        TransactionalWrite<TCommand, TResult> write,
+        string operation,
+        string frozenFingerprint,
+        string resultContract,
+        string literalResultJson)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull =>
+        _ctx.Db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+        {
+            Id = Guid.NewGuid(),
+            AttemptId = Guid.NewGuid(),
+            CommandType = operation,
+            IdempotencyKey = key,
+            RequestFingerprint = frozenFingerprint,
+            Status = AtomicCommandReceiptStatus.Completed,
+            ResultContract = resultContract,
+            ResultJson = literalResultJson,
+            StartedAt = new DateTime(2099, 8, 21, 12, 0, 0, DateTimeKind.Utc),
+            CompletedAt = new DateTime(2099, 8, 21, 12, 0, 0, DateTimeKind.Utc),
+        });
+
+    private static string HashLower(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private sealed class RequestGucConnectionInterceptor(WorkspaceReadScope scope) : DbConnectionInterceptor
     {
