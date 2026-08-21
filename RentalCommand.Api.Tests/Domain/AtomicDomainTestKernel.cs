@@ -217,14 +217,7 @@ internal static class AtomicDomainTestKernel
     {
         var services = CorePostgreSql(connectionString);
         services.AddPendingFileUploadStore();
-        services.AddAtomicCommandHandler<
-            PrepareAdverseActionNoticeCommand,
-            PrepareAdverseActionNoticeResult,
-            PrepareAdverseActionNoticeHandler>();
-        services.AddAtomicCommandHandler<
-            CreateAdverseActionNoticeCommand,
-            CreateAdverseActionNoticeResult,
-            CreateAdverseActionNoticeHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 

@@ -12,13 +12,12 @@ using RentalCommand.Data.Documents;
 namespace RentalCommand.Data.Screening;
 
 public sealed class PrepareAdverseActionNoticeHandler
-    : IAtomicCommandHandler<PrepareAdverseActionNoticeCommand, PrepareAdverseActionNoticeResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PrepareAdverseActionNoticeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<PrepareAdverseActionNoticeResult> HandleAsync(
+    public async Task<PrepareAdverseActionNoticeResult> ExecuteAsync(
         PrepareAdverseActionNoticeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -27,8 +26,6 @@ public sealed class PrepareAdverseActionNoticeHandler
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
             command.ExpectedAccessRevision);
         ScreeningCommandSupport.RequireKey(command.OperationKey);
-        await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
-            command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
 
         var prepared = await ScreeningCommandSupport.AuthorizedApplications(
@@ -146,7 +143,7 @@ public sealed class PrepareAdverseActionNoticeHandler
             now);
     }
 
-    public Task AuthorizeReplayAsync(
+    public Task AuthorizeAsync(
         PrepareAdverseActionNoticeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ScreeningCommandSupport.AuthorizeReplayAsync(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
@@ -155,13 +152,12 @@ public sealed class PrepareAdverseActionNoticeHandler
 
 /// <summary>Pure database finalizer for an adverse-action notice package.</summary>
 public sealed class CreateAdverseActionNoticeHandler
-    : IAtomicCommandHandler<CreateAdverseActionNoticeCommand, CreateAdverseActionNoticeResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public CreateAdverseActionNoticeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<CreateAdverseActionNoticeResult> HandleAsync(
+    public async Task<CreateAdverseActionNoticeResult> ExecuteAsync(
         CreateAdverseActionNoticeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -182,8 +178,6 @@ public sealed class CreateAdverseActionNoticeHandler
             || command.DecisionRecordedAtUtc == default || command.FileSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(command.FileSize));
 
-        await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
-            command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         context.UseDatabaseWallClockForAudit(now);
         var application = await ScreeningCommandSupport.AuthorizedApplications(
@@ -335,7 +329,7 @@ public sealed class CreateAdverseActionNoticeHandler
             notice.SentAtUtc);
     }
 
-    public Task AuthorizeReplayAsync(
+    public Task AuthorizeAsync(
         CreateAdverseActionNoticeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ScreeningCommandSupport.AuthorizeReplayAsync(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
