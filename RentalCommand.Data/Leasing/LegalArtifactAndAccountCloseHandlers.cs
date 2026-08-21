@@ -15,10 +15,13 @@ public sealed class VoidLeaseAgreementHandler
     public VoidLeaseAgreementHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<VoidLegalArtifactResult> HandleAsync(
+        VoidLeaseAgreementCommand command, IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<VoidLegalArtifactResult> ExecuteAsync(
         VoidLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LegalArtifactCommandSupport.Validate(command, command.LeaseAgreementId);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var target = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, _db, now)
             .SelectMany(item => item.Agreements)
@@ -86,10 +89,13 @@ public sealed class VoidLeaseAddendumHandler
     public VoidLeaseAddendumHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<VoidLegalArtifactResult> HandleAsync(
+        VoidLeaseAddendumCommand command, IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<VoidLegalArtifactResult> ExecuteAsync(
         VoidLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LegalArtifactCommandSupport.Validate(command, command.LeaseAddendumId);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var target = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, _db, now)
             .SelectMany(item => item.Addenda)
@@ -143,6 +149,10 @@ public sealed class CloseTenantAccountHandler
     public CloseTenantAccountHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<CloseTenantAccountResult> HandleAsync(
+        CloseTenantAccountCommand command, IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<CloseTenantAccountResult> ExecuteAsync(
         CloseTenantAccountCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);

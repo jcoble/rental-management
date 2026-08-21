@@ -70,6 +70,29 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
     }
 
     [Fact]
+    public async Task PossessionRule_ExecutorRecordsUnitThenRelationshipLock()
+    {
+        var recorder = new ResolvedLockRecorder(new Dictionary<int, string>
+        {
+            [606] = "Unit",
+            [707] = "LeaseManagement",
+        });
+        await using var database = await fixture.CreateContextAsync();
+        await using var services = BuildMigrationServices(database.ConnectionString, recorder);
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var command = new GivePossessionCommand(
+            1, 707, 606, 1, Guid.NewGuid(), 1, 1, DateTime.UtcNow, "possession-lock-proof");
+
+        Func<Task> act = async () => await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync("possession-lock-proof",
+                LeasingWriteSupport.Write<GivePossessionCommand, GivePossessionResult>(db, command));
+
+        await act.Should().ThrowAsync<Exception>();
+        recorder.Sequence.Should().Equal(("Unit", 606), ("LeaseManagement", 707));
+    }
+
+    [Fact]
     public void ExplicitProtocols_EnforceCommonPrefixAndLegacyMultiAggregateOrder()
     {
         var authSessionId = Guid.Parse("9e10d15b-f5f0-48c0-9334-3215f24d07b5");
