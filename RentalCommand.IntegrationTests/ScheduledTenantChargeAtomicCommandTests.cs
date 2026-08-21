@@ -25,6 +25,7 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 using RentalCommand.Engine.Services;
+using RentalCommand.Engine.Writes;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -83,6 +84,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             ApplyScheduledLateFeeChargeBatchResult,
             ApplyScheduledLateFeeChargeBatchHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -678,7 +680,8 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         await FreezeAtAsync(chargeNow, "America/New_York");
         await using var atomicScope = _services!.CreateAsyncScope();
         var service = new RentChargeService(
-            atomicScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            atomicScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+            atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             new FixedTimeProvider(chargeNow),
             NullLogger<RentChargeService>.Instance);
 
@@ -755,7 +758,8 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         await FreezeAtAsync(chargeNow, "America/New_York");
         await using var atomicScope = _services!.CreateAsyncScope();
         var service = new RentChargeService(
-            atomicScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            atomicScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+            atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             new FixedTimeProvider(chargeNow),
             NullLogger<RentChargeService>.Instance);
 
