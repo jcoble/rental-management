@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -50,7 +51,7 @@ public class ExpenseServiceTests : IDisposable
         _db.SaveChanges();
 
         _sut = new ExpenseService(
-            _db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
+            _db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
     }
 
     public void Dispose()
@@ -330,16 +331,15 @@ public class ExpenseServiceTests : IDisposable
     {
         var businessNowUtc = new DateTime(2027, 1, 31, 5, 0, 0, DateTimeKind.Utc);
         var captured = new List<AtomicMoneyMutationCommand>();
-        var atomic = new Mock<IAtomicUnitOfWork>(MockBehavior.Strict);
-        atomic.Setup(service => service.ExecuteAsync<
+        var writes = new Mock<IRequestWriteExecutor>(MockBehavior.Strict);
+        writes.Setup(service => service.ExecuteAsync<
                 AtomicMoneyMutationCommand, AtomicMoneyMutationResult>(
-                It.IsAny<AtomicCommandIdentity>(),
-                It.IsAny<AtomicMoneyMutationCommand>(),
-                It.IsAny<AtomicJsonResultCodec<AtomicMoneyMutationResult>>(),
+                It.IsAny<string>(),
+                It.IsAny<TransactionalWrite<AtomicMoneyMutationCommand, AtomicMoneyMutationResult>>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<AtomicCommandIdentity, AtomicMoneyMutationCommand,
-                AtomicJsonResultCodec<AtomicMoneyMutationResult>, CancellationToken>(
-                (_, command, _, _) => captured.Add(command))
+            .Callback<string,
+                TransactionalWrite<AtomicMoneyMutationCommand, AtomicMoneyMutationResult>,
+                CancellationToken>((_, write, _) => captured.Add(write.Request))
             .ReturnsAsync(new AtomicCommandOutcome<AtomicMoneyMutationResult>(
                 new AtomicMoneyMutationResult(false, false, 0),
                 AtomicCommandDisposition.Executed,
@@ -348,7 +348,7 @@ public class ExpenseServiceTests : IDisposable
             _db,
             Mock.Of<IFileStorage>(),
             new FixedTimeProvider(new DateTimeOffset(businessNowUtc)),
-            atomic.Object);
+            writes.Object);
         var scope = new WorkspaceReadScope(
             PortfolioId, 2, Guid.Parse("7dc8658f-a9d8-4760-b59c-f3087f06ee40"), 3, 4);
 
@@ -381,7 +381,7 @@ public class ExpenseServiceTests : IDisposable
             default);
         var handler = new AtomicMoneyMutationHandler(_db);
 
-        var act = () => handler.HandleAsync(
+        var act = () => handler.ExecuteAsync(
             command, Mock.Of<IAtomicCommandContext>(), CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>()

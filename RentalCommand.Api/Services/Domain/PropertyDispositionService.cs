@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using System.Text;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -23,15 +24,18 @@ public class PropertyDispositionService : IPropertyDispositionService
     private static readonly AtomicJsonResultCodec<CreatePropertyDispositionResult> CreateCodec =
         new("property-disposition.create.v1");
     private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IRequestWriteExecutor? _writes;
     private readonly TimeProvider _timeProvider;
 
     public PropertyDispositionService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null)
+        IAtomicUnitOfWork? atomic = null,
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _atomic = atomic;
+        _writes = writes;
         _timeProvider = timeProvider;
     }
 
@@ -133,13 +137,14 @@ public class PropertyDispositionService : IPropertyDispositionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var atomic = _atomic
-            ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
+        var writes = _writes
+            ?? throw new InvalidOperationException("Property disposition writes are not configured.");
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.RentalsManage,
             AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Update, id, operationKey, request,
             _timeProvider.UtcNow());
-        var outcome = await atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await writes.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command).IdempotencyKey,
+            AtomicMoneyMutation.Write(command, _db), ct);
         return outcome.Value.Found
             ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct)
             : null;
@@ -151,13 +156,14 @@ public class PropertyDispositionService : IPropertyDispositionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var atomic = _atomic
-            ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
+        var writes = _writes
+            ?? throw new InvalidOperationException("Property disposition writes are not configured.");
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.RentalsManage,
             AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Delete, id, operationKey, new object(),
             _timeProvider.UtcNow());
-        var outcome = await atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await writes.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command).IdempotencyKey,
+            AtomicMoneyMutation.Write(command, _db), ct);
         return outcome.Value.Found;
     }
 
