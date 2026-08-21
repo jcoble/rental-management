@@ -16,11 +16,14 @@ public sealed class CancelPlannedRelationshipHandler
     public async Task<CancelPlannedRelationshipResult> HandleAsync(
         CancelPlannedRelationshipCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<CancelPlannedRelationshipResult> ExecuteAsync(
+        CancelPlannedRelationshipCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         if (!await AuthorizedRelationships(

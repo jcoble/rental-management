@@ -885,7 +885,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         if (reason.Length > 1000)
             reason = reason[..1000];
 
-        var result = await new RecordLeaseEndingDispositionHandler(_db).HandleAsync(
+        var result = await new RecordLeaseEndingDispositionHandler(_db).ExecuteAsync(
             new RecordLeaseEndingDispositionCommand(
                 command.PortfolioId,
                 target.LeaseManagementId,

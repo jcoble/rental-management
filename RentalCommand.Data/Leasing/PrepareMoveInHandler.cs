@@ -22,6 +22,11 @@ public sealed class PrepareMoveInHandler
     public async Task<PrepareMoveInResult> HandleAsync(
         PrepareMoveInCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<PrepareMoveInResult> ExecuteAsync(
+        PrepareMoveInCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var hasInvalidPartyRole = command.Parties.Any(party => !Enum.IsDefined(party.Role));
@@ -31,7 +36,6 @@ public sealed class PrepareMoveInHandler
 
         // Every command taking both locks uses this order. The Unit id is explicit in the request
         // so no unlocked application read is needed to discover the first aggregate lock.
-        await context.AcquireLockAsync("Unit", command.UnitId, ct);
         if (command.ApplicationId is { } applicationId)
         {
             await context.AcquireLockAsync("RentalApplication", applicationId, ct);

@@ -19,17 +19,15 @@ public sealed class EditLeaseAgreementDraftHandler
     public async Task<LeaseAgreementDraftMutationResult> HandleAsync(
         EditLeaseAgreementDraftCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<LeaseAgreementDraftMutationResult> ExecuteAsync(
+        EditLeaseAgreementDraftCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeaseAgreementDraftCommandSupport.ValidateAuthorizationShape(command);
         LeaseAgreementDraftCommandSupport.ValidateEditShape(command);
-        await context.AcquireLockAsync(
-            "AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
-
         var nowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var agreement = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(
                 command, _db, nowUtc)
@@ -167,17 +165,15 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
     public async Task<LeaseAgreementDraftMutationResult> HandleAsync(
         CreateLeaseAgreementSuccessorDraftCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<LeaseAgreementDraftMutationResult> ExecuteAsync(
+        CreateLeaseAgreementSuccessorDraftCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeaseAgreementDraftCommandSupport.ValidateAuthorizationShape(command);
         LeaseAgreementDraftCommandSupport.ValidateSuccessorShape(command);
-        await context.AcquireLockAsync(
-            "AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
-
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var source = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(
                 command, _db, times.WallClockUtc)
@@ -464,17 +460,15 @@ public sealed class ReplaceIssuedAgreementWithDraftHandler
     public async Task<LeaseAgreementDraftMutationResult> HandleAsync(
         ReplaceIssuedAgreementWithDraftCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<LeaseAgreementDraftMutationResult> ExecuteAsync(
+        ReplaceIssuedAgreementWithDraftCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeaseAgreementDraftCommandSupport.ValidateAuthorizationShape(command);
         LeaseAgreementDraftCommandSupport.ValidateIssuedReplacementShape(command);
-        await context.AcquireLockAsync(
-            "AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync(
-            "LeaseManagement", command.LeaseManagementId, ct);
-
         var nowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var target = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(
                 command, _db, nowUtc)

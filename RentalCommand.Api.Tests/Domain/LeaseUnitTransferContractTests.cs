@@ -29,7 +29,7 @@ public sealed class LeaseUnitTransferContractTests
 
         using var testContext = new SqliteTestContext();
         Func<Task> act = async () => await new TransferLeaseManagementHandler(testContext.Db)
-            .HandleAsync(command, null!, CancellationToken.None);
+            .ExecuteAsync(command, null!, CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>();
     }
@@ -45,7 +45,7 @@ public sealed class LeaseUnitTransferContractTests
 
         using var testContext = new SqliteTestContext();
         Func<Task> act = async () => await new TransferLeaseManagementHandler(testContext.Db)
-            .HandleAsync(command, null!, CancellationToken.None);
+            .ExecuteAsync(command, null!, CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>();
     }

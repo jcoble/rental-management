@@ -131,6 +131,11 @@ public enum WriteLockProtocol
     AccountingConnection,
     NativeEsignLeaseManagement,
     NativeEsignRequest,
+    PrepareMoveIn,
+    LeaseManagement,
+    LeaseAgreementDraft,
+    LeaseTransfer,
+    PropertyDisposition,
 }
 
 public sealed class WriteLockPlan
@@ -181,6 +186,12 @@ public sealed class WriteLockPlan
             [WriteLockProtocol.AccountingConnection] = ["AccountingConnection"],
             [WriteLockProtocol.NativeEsignLeaseManagement] = ["LeaseManagement"],
             [WriteLockProtocol.NativeEsignRequest] = ["SignatureRequest"],
+            [WriteLockProtocol.PrepareMoveIn] = ["Unit"],
+            [WriteLockProtocol.LeaseManagement] = ["LeaseManagement"],
+            [WriteLockProtocol.LeaseAgreementDraft] =
+                ["AuthSession", "WorkspaceAccessContext", "LeaseManagement"],
+            [WriteLockProtocol.LeaseTransfer] = ["Unit", "Unit", "LeaseManagement"],
+            [WriteLockProtocol.PropertyDisposition] = ["Property"],
         };
 
     public static WriteLockPlan None { get; } = new();
@@ -224,6 +235,7 @@ public sealed class WriteLockPlan
                 ["TenantIdentityEmail", "WorkspaceAccessContext"],
             WriteLockProtocol.LeasePartyAccessRevoke => ["WorkspaceAccessContext"],
             WriteLockProtocol.NativeEsignRequest => ["LeaseManagement"],
+            WriteLockProtocol.PrepareMoveIn => ["RentalApplication"],
             _ => [],
         };
 }

@@ -15,10 +15,13 @@ public sealed class CreateLeaseAddendumDraftHandler
     public CreateLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<LeaseAddendumDraftMutationResult> HandleAsync(
+        CreateLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<LeaseAddendumDraftMutationResult> ExecuteAsync(
         CreateLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LeaseAddendumCommandSupport.Validate(command);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var relationship = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, _db, times.WallClockUtc)
             .Select(item => new
@@ -106,10 +109,13 @@ public sealed class EditLeaseAddendumDraftHandler
     public EditLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<LeaseAddendumDraftMutationResult> HandleAsync(
+        EditLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<LeaseAddendumDraftMutationResult> ExecuteAsync(
         EditLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LeaseAddendumCommandSupport.Validate(command);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var addendum = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, _db, now)
             .SelectMany(item => item.Addenda)
@@ -204,10 +210,13 @@ public sealed class CorrectLeaseAddendumDraftHandler
     public CorrectLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<LeaseAddendumDraftMutationResult> HandleAsync(
+        CorrectLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw LeasingWriteSupport.RetiredPath();
+
+    public async Task<LeaseAddendumDraftMutationResult> ExecuteAsync(
         CorrectLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LeaseAddendumCommandSupport.Validate(command);
-        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         var source = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, _db, now)
             .SelectMany(item => item.Addenda)

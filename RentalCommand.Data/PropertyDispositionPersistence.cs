@@ -43,7 +43,7 @@ public static partial class AtomicLeaseMutationPersistence
             Timestamp("changedAtUtc", changedAtUtc),
             Date("businessDate", businessDate),
             Integer("inactivePropertyStatus", (int)PropertyStatus.Inactive),
-            Integer("managementHoldType", (int)UnitOperationalPeriodType.ManagementHold),
+            Text("managementHoldType", "ManagementHold"),
         };
 
         var auditScope = RequireAuditScope(db, context);
@@ -117,12 +117,11 @@ public static partial class AtomicLeaseMutationPersistence
             JOIN inserted_disposition AS disposition
               ON disposition."PortfolioId" = management."PortfolioId"
              AND disposition."PropertyId" = management."PropertyId"
-            WHERE (management."PossessionGivenAtUtc" IS NOT NULL
-                   AND management."PossessionReturnedAtUtc" IS NULL)
-               OR (management."PossessionGivenAtUtc" IS NULL
-                   AND management."CanceledAtUtc" IS NULL)
-               OR management."AccountClosedAtUtc" IS NULL
-               OR EXISTS (
+            WHERE ((management."PossessionGivenAtUtc" IS NOT NULL
+                    AND management."PossessionReturnedAtUtc" IS NULL)
+                OR (management."PossessionGivenAtUtc" IS NULL
+                    AND management."CanceledAtUtc" IS NULL))
+              AND NOT EXISTS (
                     SELECT 1
                     FROM "TenantAccounts" AS account
                     WHERE account."PortfolioId" = management."PortfolioId"
@@ -155,10 +154,18 @@ public static partial class AtomicLeaseMutationPersistence
                       THEN 'Planned relationship canceled because the property was disposed.'
                     ELSE management."CancellationNote"
                 END,
-                "AccountClosedAtUtc" = COALESCE(
-                    management."AccountClosedAtUtc",
-                    GREATEST(management."PossessionGivenAtUtc", management."PossessionReturnedAtUtc",
-                             management."CanceledAtUtc", @changedAtUtc)),
+                "AccountClosedAtUtc" = CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM "TenantAccounts" AS account
+                        WHERE account."PortfolioId" = management."PortfolioId"
+                          AND account."LeaseManagementId" = management."Id")
+                      THEN COALESCE(
+                          management."AccountClosedAtUtc",
+                          GREATEST(management."PossessionGivenAtUtc", management."PossessionReturnedAtUtc",
+                                   management."CanceledAtUtc", @changedAtUtc))
+                    ELSE management."AccountClosedAtUtc"
+                END,
                 "UpdatedAtUtc" = @changedAtUtc,
                 "RowVersion" = gen_random_uuid()
             FROM target_relationships AS target
@@ -207,6 +214,8 @@ public static partial class AtomicLeaseMutationPersistence
             JOIN "LeaseManagements" AS management
               ON management."Id" = account."LeaseManagementId"
              AND management."PortfolioId" = account."PortfolioId"
+            JOIN target_relationships AS target
+              ON target."Id" = management."Id"
             JOIN inserted_disposition AS disposition
               ON disposition."PortfolioId" = management."PortfolioId"
              AND disposition."PropertyId" = management."PropertyId"

@@ -13,6 +13,7 @@ using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -21,20 +22,15 @@ public class PropertyDispositionService : IPropertyDispositionService
     private static readonly string[] ReadCapabilities = [CapabilityKeys.MoneyOwnerReportsRead];
 
     private readonly RentalCommandDbContext _db;
-    private static readonly AtomicJsonResultCodec<CreatePropertyDispositionResult> CreateCodec =
-        new("property-disposition.create.v1");
-    private readonly IAtomicUnitOfWork? _atomic;
     private readonly IRequestWriteExecutor? _writes;
     private readonly TimeProvider _timeProvider;
 
     public PropertyDispositionService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null,
         IRequestWriteExecutor? writes = null)
     {
         _db = db;
-        _atomic = atomic;
         _writes = writes;
         _timeProvider = timeProvider;
     }
@@ -107,21 +103,21 @@ public class PropertyDispositionService : IPropertyDispositionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var atomic = _atomic
-            ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
+        var writes = _writes
+            ?? throw new InvalidOperationException("Property disposition writes are not configured.");
         var portfolioId = accessContext.PortfolioId;
         var closedOn = request.ClosedOnDate.ToUtc().Date;
         ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
         var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey.Trim())))
             .ToLowerInvariant();
         var deliveryKey = $"property-disposition:{portfolioId}:{request.PropertyId}:{digest}";
-        var outcome = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity("property-disposition.create", deliveryKey),
-            new CreatePropertyDispositionCommand(portfolioId, request.PropertyId, closedOn,
+        var command = new CreatePropertyDispositionCommand(portfolioId, request.PropertyId, closedOn,
                 request.SalePrice, request.SellingCosts, Normalize(request.BuyerName),
                 Normalize(request.Memo), accessContext.UserId, accessContext.SessionId,
-                accessContext.AccessContextId, accessContext.AccessRevision, deliveryKey),
-            CreateCodec, ct);
+                accessContext.AccessContextId, accessContext.AccessRevision, deliveryKey);
+        var outcome = await writes.ExecuteAsync(deliveryKey,
+            LeasingWriteSupport.Write<CreatePropertyDispositionCommand,
+                CreatePropertyDispositionResult>(_db, command), ct);
         if (outcome.Value.Outcome == CreatePropertyDispositionOutcome.PropertyNotFoundOrAlreadyDisposed
             || outcome.Value.DispositionId is not { } dispositionId)
             return null;
