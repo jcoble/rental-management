@@ -18,15 +18,19 @@ public sealed class RecoverRefundedTenantAllocationHandler
 
     public RecoverRefundedTenantAllocationHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecoverRefundedTenantAllocationResult> HandleAsync(
+    public Task<RecoverRefundedTenantAllocationResult> HandleAsync(
+        RecoverRefundedTenantAllocationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<RecoverRefundedTenantAllocationResult> ExecuteAsync(
         RecoverRefundedTenantAllocationCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
         Validate(command);
-        await context.AcquireLockAsync(
-            "TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         if (!await TenantMoneyCommandSupport
                 .AuthorizedAccounts(command, _db, times.WallClockUtc)
@@ -83,7 +87,11 @@ public sealed class RecoverRefundedTenantAllocationHandler
             reference);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        RecoverRefundedTenantAllocationCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         RecoverRefundedTenantAllocationCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);

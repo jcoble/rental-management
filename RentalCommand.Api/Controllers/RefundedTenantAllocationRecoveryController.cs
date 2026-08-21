@@ -2,9 +2,12 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Payments;
+using RentalCommand.Data;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -14,12 +17,16 @@ namespace RentalCommand.Api.Controllers;
 public sealed class RefundedTenantAllocationRecoveryController
     : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<RecoverRefundedTenantAllocationResult> Codec =
-        new("refunded-tenant-allocation.recover.v1");
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
 
-    public RefundedTenantAllocationRecoveryController(IAtomicUnitOfWork atomic) =>
-        _atomic = atomic;
+    public RefundedTenantAllocationRecoveryController(
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes)
+    {
+        _db = db;
+        _writes = writes;
+    }
 
     [HttpPost("recover")]
     public async Task<IActionResult> Recover(
@@ -57,12 +64,11 @@ public sealed class RefundedTenantAllocationRecoveryController
             $"refunded-allocation-recovery:{access.PortfolioId}:{request.TenantAccountId}:{digest}");
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "refunded-tenant-allocation.recover",
-                    command.DeliveryIdempotencyKey),
-                command,
-                Codec,
+            var handler = new RecoverRefundedTenantAllocationHandler(_db);
+            var outcome = await _writes.ExecuteAsync(
+                command.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
                 ct);
             return Ok(new
             {

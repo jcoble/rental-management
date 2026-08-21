@@ -4,12 +4,15 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Payments;
+using RentalCommand.Data;
+using RentalCommand.Data.Payments;
 using RentalCommand.Data.Security;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Core.Time;
@@ -24,6 +27,8 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
     private const string EnginePassword = "scheduled-rent-engine-role-test-password";
     private static readonly DateTime SeededAtUtc =
         new(2027, 01, 08, 14, 30, 00, DateTimeKind.Utc);
+    private static readonly DateTime InterceptorNow =
+        new(2099, 08, 20, 12, 00, 00, DateTimeKind.Utc);
     private static readonly AtomicJsonResultCodec<ApplyScheduledRentChargeBatchResult> Codec =
         new("scheduled-tenant-charges.rent.apply.v1");
     private static readonly AtomicJsonResultCodec<ApplyScheduledLateFeeChargeBatchResult> LateFeeCodec =
@@ -45,7 +50,8 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await new ChartOfAccountsSeedService(_ctx.Db).SeedAsync(PortfolioId);
         await _ctx.Db.SaveChangesAsync();
         _services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
-            _ctx.ConnectionString);
+            _ctx.ConnectionString,
+            timeProvider: new FixedTimeProvider(InterceptorNow));
         _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
     }
 
@@ -721,17 +727,29 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             ExpectedAccessRevision: scope.AccessRevision,
             RequiredCapability: CapabilityKeys.MoneyChargesManage,
             DeliveryIdempotencyKey: identity.IdempotencyKey);
-        var codec = new AtomicJsonResultCodec<RecoverLateFeeChargesResult>(
-            "late-fee-charges.recover.v1");
-
-        var first = await _atomic.ExecuteAsync(identity, command, codec);
-        var replay = await _atomic.ExecuteAsync(identity, command, codec);
+        var first = await ExecuteLateFeeRecoveryAsync(command);
+        _ctx.Db.ChangeTracker.Clear();
+        var auditCountAfterExecution = await _ctx.Db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey);
+        (await _ctx.Db.AtomicAuditLogs
+            .Where(row => row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .Distinct()
+            .ToListAsync()).Should().OnlyContain(timestamp => timestamp == SeededAtUtc);
+        var replay = await ExecuteLateFeeRecoveryAsync(command);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         first.Value.Should().Be(new RecoverLateFeeChargesResult(
             1, 2, 1, 1, 75m, 100m, 50m, 50m, "FIN-LATE-FEE-TEST"));
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().Be(first.Value);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(
+            auditCountAfterExecution,
+            "the no-change late-fee replay must not stage a mutation audit clock");
 
         _ctx.Db.ChangeTracker.Clear();
         var entries = await _ctx.Db.TenantLedgerEntries
@@ -846,11 +864,8 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             ExpectedAccessRevision: scope.AccessRevision,
             RequiredCapability: CapabilityKeys.MoneyChargesManage,
             DeliveryIdempotencyKey: identity.IdempotencyKey);
-        var codec = new AtomicJsonResultCodec<RecoverLateFeeChargesResult>(
-            "late-fee-charges.recover.v1");
-
-        var first = await _atomic.ExecuteAsync(identity, command, codec);
-        var replay = await _atomic.ExecuteAsync(identity, command, codec);
+        var first = await ExecuteLateFeeRecoveryAsync(command);
+        var replay = await ExecuteLateFeeRecoveryAsync(command);
 
         first.Value.ReplacementAllocationCount.Should().Be(2);
         first.Value.ReplacementAllocationTotal.Should().Be(50m);
@@ -1315,6 +1330,24 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         CreatedAtUtc = SeededAtUtc,
         CreatedByUserId = 1,
     };
+
+    private async Task<AtomicCommandOutcome<RecoverLateFeeChargesResult>> ExecuteLateFeeRecoveryAsync(
+        RecoverLateFeeChargesCommand command)
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var handler = new RecoverLateFeeChargesHandler(db);
+        return await writes.ExecuteAsync(
+            command.DeliveryIdempotencyKey,
+            TenantMoneyWriteSupport.Write(
+                command, handler.ExecuteAsync, handler.AuthorizeAsync));
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
+    }
 
     private void EnsureFrozenBusinessDate()
         => SetFrozenBusinessDate(SeededAtUtc);
