@@ -6,7 +6,7 @@ namespace RentalCommand.Core.Entities;
 /// The pre-tenancy financial account owned by exactly one rental application. It is deliberately
 /// separate from TenantAccount: an applicant has not entered a lease relationship yet.
 /// </summary>
-public sealed class ApplicationFinancialAccount : IPortfolioScoped
+public sealed class ApplicationFinancialAccount : IPortfolioScoped, IAuditable
 {
     public int Id { get; set; }
     public Guid PublicId { get; set; }

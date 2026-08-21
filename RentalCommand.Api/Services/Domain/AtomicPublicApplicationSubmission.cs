@@ -36,7 +36,12 @@ public sealed class AtomicPublicApplicationSubmissionHandler
 
     public AtomicPublicApplicationSubmissionHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AtomicPublicApplicationSubmissionResult> HandleAsync(
+    public Task<AtomicPublicApplicationSubmissionResult> HandleAsync(
+        AtomicPublicApplicationSubmissionCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<AtomicPublicApplicationSubmissionResult> ExecuteAsync(
         AtomicPublicApplicationSubmissionCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -142,7 +147,12 @@ public sealed class AtomicPublicApplicationSubmissionHandler
             "Thank you. Your application has been received.");
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        AtomicPublicApplicationSubmissionCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         AtomicPublicApplicationSubmissionCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -210,12 +220,32 @@ public sealed class AtomicPublicApplicationSubmissionHandler
         }
         return null;
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Public application submissions must use the shared write executor.");
 }
 
 public static class AtomicPublicApplicationSubmission
 {
     public static readonly AtomicJsonResultCodec<AtomicPublicApplicationSubmissionResult> Codec =
         new("application.public-submit.v1");
+
+    public static TransactionalWrite<AtomicPublicApplicationSubmissionCommand,
+        AtomicPublicApplicationSubmissionResult> Write(
+        AtomicPublicApplicationSubmissionCommand command,
+        RentalCommandDbContext db)
+    {
+        var identity = Identity(command);
+        var handler = new AtomicPublicApplicationSubmissionHandler(db);
+        return new(
+            identity.CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            Codec.ContractName,
+            WriteLockPlan.None,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync);
+    }
 
     public static AtomicCommandIdentity Identity(AtomicPublicApplicationSubmissionCommand command)
     {
