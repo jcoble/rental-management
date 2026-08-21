@@ -75,14 +75,6 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<CompanionFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            ApplyScheduledRentChargeBatchCommand,
-            ApplyScheduledRentChargeBatchResult,
-            ApplyScheduledRentChargeBatchHandler>();
-        services.AddAtomicCommandHandler<
-            ApplyScheduledLateFeeChargeBatchCommand,
-            ApplyScheduledLateFeeChargeBatchResult,
-            ApplyScheduledLateFeeChargeBatchHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
@@ -2534,6 +2526,20 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             var handler = new ReverseTenantChargeHandler(db);
             var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
                 TenantMoneyWriteSupport.Write(reverse, handler.ExecuteAsync, handler.AuthorizeAsync));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is ApplyScheduledRentChargeBatchCommand rent)
+        {
+            var handler = new ApplyScheduledRentChargeBatchHandler(db);
+            var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
+                TenantMoneyWriteSupport.Write(rent, handler.ExecuteAsync, handler.AuthorizeAsync));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is ApplyScheduledLateFeeChargeBatchCommand lateFee)
+        {
+            var handler = new ApplyScheduledLateFeeChargeBatchHandler(db);
+            var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
+                TenantMoneyWriteSupport.Write(lateFee, handler.ExecuteAsync, handler.AuthorizeAsync));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
 

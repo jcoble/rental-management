@@ -17,16 +17,10 @@ namespace RentalCommand.Data.Payments;
 /// bounded insert statement.
 /// </summary>
 public sealed class ApplyScheduledRentChargeBatchHandler
-    : IAtomicCommandHandler<ApplyScheduledRentChargeBatchCommand, ApplyScheduledRentChargeBatchResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ApplyScheduledRentChargeBatchHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ApplyScheduledRentChargeBatchResult> HandleAsync(
-        ApplyScheduledRentChargeBatchCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<ApplyScheduledRentChargeBatchResult> ExecuteAsync(
         ApplyScheduledRentChargeBatchCommand command,
@@ -59,11 +53,6 @@ public sealed class ApplyScheduledRentChargeBatchHandler
         return new ApplyScheduledRentChargeBatchResult(rent.Count);
     }
 
-    public Task AuthorizeReplayAsync(
-        ApplyScheduledRentChargeBatchCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         ApplyScheduledRentChargeBatchCommand command,
         IAtomicCommandContext context,
@@ -86,16 +75,10 @@ public sealed class ApplyScheduledRentChargeBatchHandler
 }
 
 public sealed class ApplyScheduledLateFeeChargeBatchHandler
-    : IAtomicCommandHandler<ApplyScheduledLateFeeChargeBatchCommand, ApplyScheduledLateFeeChargeBatchResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ApplyScheduledLateFeeChargeBatchHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ApplyScheduledLateFeeChargeBatchResult> HandleAsync(
-        ApplyScheduledLateFeeChargeBatchCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task<ApplyScheduledLateFeeChargeBatchResult> ExecuteAsync(
         ApplyScheduledLateFeeChargeBatchCommand command,
@@ -123,11 +106,6 @@ public sealed class ApplyScheduledLateFeeChargeBatchHandler
 
         return new ApplyScheduledLateFeeChargeBatchResult(lateFees.Count);
     }
-
-    public Task AuthorizeReplayAsync(
-        ApplyScheduledLateFeeChargeBatchCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         ApplyScheduledLateFeeChargeBatchCommand command,
