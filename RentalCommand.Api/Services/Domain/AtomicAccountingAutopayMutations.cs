@@ -39,17 +39,17 @@ public sealed class PrepareAccountingConnectHandler
 
     private readonly TimeSpan StateTtl = TimeSpan.FromMinutes(10);
 
-    public async Task<PrepareAccountingConnectResult> HandleAsync(
+    public Task<PrepareAccountingConnectResult> HandleAsync(
+        PrepareAccountingConnectCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public async Task<PrepareAccountingConnectResult> ExecuteAsync(
         PrepareAccountingConnectCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await attempt.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
-
         var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         if (!await IsAuthorizedAsync(command, _db, now, ct))
         {
@@ -94,7 +94,12 @@ public sealed class PrepareAccountingConnectHandler
             stateToken, command.RedirectUri, expiresAtUtc);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        PrepareAccountingConnectCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         PrepareAccountingConnectCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -200,19 +205,17 @@ public sealed class CancelTenantAutopayHandler
 
     public CancelTenantAutopayHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<CancelTenantAutopayResult> HandleAsync(
+    public Task<CancelTenantAutopayResult> HandleAsync(
+        CancelTenantAutopayCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public async Task<CancelTenantAutopayResult> ExecuteAsync(
         CancelTenantAutopayCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.AcquireLockAsync(
-            "AuthSession", command.TenantAuthSessionId, ct);
-        await attempt.AcquireLockAsync(
-            "WorkspaceAccessContext", command.TenantAccessContextId, ct);
-        await attempt.AcquireLockAsync(
-            "TenantAccount", command.TenantAccountId, ct);
-
         var times = await AtomicCommandDbClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var target = await AuthorizedAccount(command, _db, times)
             .FirstOrDefaultAsync(ct);
@@ -273,7 +276,12 @@ public sealed class CancelTenantAutopayHandler
         return new CancelTenantAutopayResult(true, true, command.TenantAccountId);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        CancelTenantAutopayCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         CancelTenantAutopayCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -768,18 +769,20 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     }
 
     private AccountingImportService CreateImportService(
-        RentalCommandDbContext db,
+        RentalCommandDbContext _,
         IAccountingProvider provider,
         List<string>? applyCommands = null)
     {
+        var execution = CreateWriteExecution(applyCommands);
+        var db = execution.Db;
         var (providerResolver, settingsResolver) = CreateResolvers(provider);
         var claims = new AccountingConnectionClaimStore(db);
         return new AccountingImportService(
-            _dataProtection, providerResolver, settingsResolver,
+            db, _dataProtection, providerResolver, settingsResolver,
             new AccountingTokenService(_dataProtection, providerResolver, settingsResolver,
                 claims, TimeProvider.System, NullLogger<AccountingTokenService>.Instance),
             claims,
-            CreateAtomicUnitOfWork(applyCommands),
+            execution.Writes,
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
     }
 
@@ -793,21 +796,22 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     }
 
     private AccountingConnectionService CreateConnectionService(
-        RentalCommandDbContext db, IAccountingProvider provider)
+        RentalCommandDbContext _, IAccountingProvider provider)
     {
+        var execution = CreateWriteExecution();
+        var db = execution.Db;
         var (providerResolver, settingsResolver) = CreateResolvers(provider);
         var claims = new AccountingConnectionClaimStore(db);
         var tokenService = new AccountingTokenService(
             _dataProtection, providerResolver, settingsResolver, claims,
             TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
-        var atomic = CreateAtomicUnitOfWork();
         var import = new AccountingImportService(
-            _dataProtection, providerResolver, settingsResolver, tokenService, claims,
-            atomic,
+            db, _dataProtection, providerResolver, settingsResolver, tokenService, claims,
+            execution.Writes,
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
             db, _dataProtection, providerResolver, settingsResolver, import,
-            TimeProvider.System, atomic,
+            TimeProvider.System, execution.Writes,
             NullLogger<AccountingConnectionService>.Instance);
     }
 
@@ -855,12 +859,14 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         return new RentalCommandDbContext(options);
     }
 
-    private IAtomicUnitOfWork CreateAtomicUnitOfWork(List<string>? applyCommands = null)
+    private (RentalCommandDbContext Db, IRequestWriteExecutor Writes) CreateWriteExecution(
+        List<string>? applyCommands = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             RentalCommand.Core.Accounting.ApplyAccountingPullResultCommand,
             RentalCommand.Core.Accounting.ApplyAccountingPullResult,
@@ -882,7 +888,10 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(sp);
             if (applyCommands is not null) options.AddInterceptors(new AccountingApplyCommandInterceptor(applyCommands));
         });
-        return services.BuildServiceProvider().GetRequiredService<IAtomicUnitOfWork>();
+        var scope = services.BuildServiceProvider().CreateScope();
+        return (
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
     }
 
     private sealed class AccountingApplyCommandInterceptor(List<string> commands) : DbCommandInterceptor

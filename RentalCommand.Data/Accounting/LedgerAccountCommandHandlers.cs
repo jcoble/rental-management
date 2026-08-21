@@ -17,13 +17,17 @@ public sealed class CreateLedgerAccountHandler
 
     public CreateLedgerAccountHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<LedgerAccountMutationResult> HandleAsync(
+    public Task<LedgerAccountMutationResult> HandleAsync(
+        CreateLedgerAccountCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<LedgerAccountMutationResult> ExecuteAsync(
         CreateLedgerAccountCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         LedgerAccountAtomicSupport.ValidateEnvelope(command);
-        await LedgerAccountAtomicSupport.LockAuthorityAsync(command, context, ct);
 
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         await LedgerAccountAtomicSupport.EnsureAuthorizedAsync(command, _db, now, ct);
@@ -91,8 +95,16 @@ public sealed class CreateLedgerAccountHandler
     public Task AuthorizeReplayAsync(
         CreateLedgerAccountCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public Task AuthorizeAsync(
+        CreateLedgerAccountCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
         LedgerAccountAtomicSupport.AuthorizeReplayAsync(command, _db, ct);
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic ledger-account writes are retired; use the shared write executor.");
 }
 
 public sealed class UpdateLedgerAccountHandler
@@ -102,14 +114,17 @@ public sealed class UpdateLedgerAccountHandler
 
     public UpdateLedgerAccountHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<LedgerAccountMutationResult> HandleAsync(
+    public Task<LedgerAccountMutationResult> HandleAsync(
+        UpdateLedgerAccountCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<LedgerAccountMutationResult> ExecuteAsync(
         UpdateLedgerAccountCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         LedgerAccountAtomicSupport.ValidateEnvelope(command);
-        await LedgerAccountAtomicSupport.LockAuthorityAsync(command, context, ct);
-        await context.AcquireLockAsync("LedgerAccount", command.AccountId, ct);
 
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         await LedgerAccountAtomicSupport.EnsureAuthorizedAsync(command, _db, now, ct);
@@ -297,8 +312,16 @@ public sealed class UpdateLedgerAccountHandler
     public Task AuthorizeReplayAsync(
         UpdateLedgerAccountCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public Task AuthorizeAsync(
+        UpdateLedgerAccountCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
         LedgerAccountAtomicSupport.AuthorizeReplayAsync(command, _db, ct);
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic ledger-account writes are retired; use the shared write executor.");
 }
 
 internal static class LedgerAccountAtomicSupport

@@ -123,6 +123,10 @@ public enum WriteLockProtocol
     LeasePartyAccessRevoke,
     TenantAccount,
     TenantAccountRecurringCharge,
+    AuthorizationScopeLedgerAccount,
+    AuthorizationScopeTenantAccount,
+    AuthorizationScopeAccountingConnection,
+    AccountingConnection,
 }
 
 public sealed class WriteLockPlan
@@ -161,6 +165,13 @@ public sealed class WriteLockPlan
             [WriteLockProtocol.TenantAccount] = ["TenantAccount"],
             [WriteLockProtocol.TenantAccountRecurringCharge] =
                 ["TenantAccount", "RecurringTenantCharge"],
+            [WriteLockProtocol.AuthorizationScopeLedgerAccount] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "LedgerAccount"],
+            [WriteLockProtocol.AuthorizationScopeTenantAccount] =
+                ["AuthSession", "WorkspaceAccessContext", "TenantAccount"],
+            [WriteLockProtocol.AuthorizationScopeAccountingConnection] =
+                ["AuthSession", "WorkspaceAccessContext", "AccountingConnection"],
+            [WriteLockProtocol.AccountingConnection] = ["AccountingConnection"],
         };
 
     public static WriteLockPlan None { get; } = new();
