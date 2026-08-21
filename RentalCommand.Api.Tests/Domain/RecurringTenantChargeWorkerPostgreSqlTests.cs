@@ -6,6 +6,7 @@ using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Payments;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -37,35 +38,30 @@ public sealed class RecurringTenantChargeWorkerPostgreSqlTests
 
         await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
             setup.ConnectionString);
-        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
+        var db = services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>();
+        var writes = services.GetRequiredService<IWriteExecutor>();
+        var handler = new ApplyRecurringTenantChargeBatchHandler(db);
 
-        var january = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-finance.recurring-tenant-charge.apply",
-                "recurring-charge-january"),
-            new ApplyRecurringTenantChargeBatchCommand(
+        var januaryCommand = new ApplyRecurringTenantChargeBatchCommand(
                 Guid.Parse("6b4c66d1-6f41-4a6f-a0f5-0a1dbf11cb01"),
                 JanuaryRunUtc,
-                200),
-            Codec);
-        var february = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-finance.recurring-tenant-charge.apply",
-                "recurring-charge-february"),
-            new ApplyRecurringTenantChargeBatchCommand(
+                200);
+        var februaryCommand = new ApplyRecurringTenantChargeBatchCommand(
                 Guid.Parse("734b29db-27db-4f97-8e9e-a8d7c96a5902"),
                 FebruaryRunUtc,
-                200),
-            Codec);
-        var replay = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "scheduled-finance.recurring-tenant-charge.apply",
-                "recurring-charge-february"),
-            new ApplyRecurringTenantChargeBatchCommand(
-                Guid.Parse("734b29db-27db-4f97-8e9e-a8d7c96a5902"),
-                FebruaryRunUtc,
-                200),
-            Codec);
+                200);
+        var january = await writes.ExecuteAsync(
+            "recurring-charge-january",
+            TenantMoneyWriteSupport.Write(
+                januaryCommand, handler.ExecuteAsync, handler.AuthorizeAsync));
+        var february = await writes.ExecuteAsync(
+            "recurring-charge-february",
+            TenantMoneyWriteSupport.Write(
+                februaryCommand, handler.ExecuteAsync, handler.AuthorizeAsync));
+        var replay = await writes.ExecuteAsync(
+            "recurring-charge-february",
+            TenantMoneyWriteSupport.Write(
+                februaryCommand, handler.ExecuteAsync, handler.AuthorizeAsync));
 
         january.Value.ChargeCount.Should().Be(1);
         february.Value.ChargeCount.Should().Be(1);
@@ -100,6 +96,50 @@ public sealed class RecurringTenantChargeWorkerPostgreSqlTests
             .Select(row => row.NextRunDate)
             .SingleAsync();
         nextRunDate.Should().Be(new DateOnly(2027, 3, 31));
+    }
+
+    [Fact]
+    public async Task FrozenLegacyReceiptReplaysWithoutCreatingTenantCharge()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await new ChartOfAccountsSeedService(setup.Db).SeedAsync(PortfolioId);
+        await setup.Db.SaveChangesAsync();
+        var schedule = SeedSchedule(setup.Db);
+        await setup.Db.SaveChangesAsync();
+        var token = Guid.Parse("2fc1eeb9-0400-4ea2-b5f3-4012e0468396");
+        var command = new ApplyRecurringTenantChargeBatchCommand(token, JanuaryRunUtc, 200);
+        var stored = new ApplyRecurringTenantChargeBatchResult(6);
+        setup.Db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+        {
+            Id = Guid.NewGuid(),
+            AttemptId = Guid.NewGuid(),
+            CommandType = "scheduled-finance.recurring-tenant-charge.apply",
+            IdempotencyKey = token.ToString("N"),
+            RequestFingerprint = AtomicCommandFingerprint.Create(command),
+            Status = AtomicCommandReceiptStatus.Completed,
+            ResultContract = Codec.ContractName,
+            ResultJson = Codec.Serialize(stored),
+            StartedAt = JanuaryRunUtc,
+            CompletedAt = JanuaryRunUtc,
+        });
+        await setup.Db.SaveChangesAsync();
+
+        await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
+            setup.ConnectionString);
+        var db = services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>();
+        var handler = new ApplyRecurringTenantChargeBatchHandler(db);
+        var replay = await services.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+            token.ToString("N"),
+            TenantMoneyWriteSupport.Write(
+                command, handler.ExecuteAsync, handler.AuthorizeAsync));
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(stored);
+        setup.Db.ChangeTracker.Clear();
+        (await setup.Db.TenantLedgerEntries.CountAsync(entry =>
+            entry.TenantAccountId == schedule.TenantAccountId
+            && entry.BusinessKey.StartsWith($"recurring-tenant-charge:{schedule.Id}:")))
+            .Should().Be(0);
     }
 
     private static RecurringTenantCharge SeedSchedule(RentalCommand.Data.RentalCommandDbContext db)
@@ -208,4 +248,5 @@ public sealed class RecurringTenantChargeWorkerPostgreSqlTests
         db.AddRange(source, property, unit, management, account, agreement, schedule);
         return schedule;
     }
+
 }

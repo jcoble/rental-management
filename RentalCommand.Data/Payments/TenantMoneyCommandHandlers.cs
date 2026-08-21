@@ -71,6 +71,9 @@ public static class TenantMoneyWriteSupport
             ApplyScheduledLateFeeChargeBatchCommand =>
                 ("scheduled-tenant-charges.late-fee.apply",
                     "scheduled-tenant-charges.late-fee.apply.v1"),
+            ApplyRecurringTenantChargeBatchCommand =>
+                ("scheduled-finance.recurring-tenant-charge.apply",
+                    "scheduled-finance.recurring-tenant-charge.apply.v1"),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         var lockPlan = command switch
@@ -94,6 +97,7 @@ public static class TenantMoneyWriteSupport
                 WriteLock.For("RecurringTenantCharge", deactivate.RecurringTenantChargeId)),
             ApplyScheduledRentChargeBatchCommand => WriteLockPlan.None,
             ApplyScheduledLateFeeChargeBatchCommand => WriteLockPlan.None,
+            ApplyRecurringTenantChargeBatchCommand => WriteLockPlan.None,
             ITenantMoneyCommand tenantMoney => new WriteLockPlan(
                 WriteLockProtocol.TenantAccount,
                 WriteLock.For("TenantAccount", tenantMoney.TenantAccountId)),
