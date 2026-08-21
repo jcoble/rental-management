@@ -15,6 +15,7 @@ using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.Tests;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Authorization;
@@ -22,6 +23,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.TestCommon;
 
@@ -35,6 +37,8 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
     private UserManager<ApplicationUser> _users = null!;
     private ServiceProvider _services = null!;
     private IAtomicUnitOfWork _atomic = null!;
+    private IRequestWriteExecutor _writes = null!;
+    private RentalCommandDbContext _writeDb = null!;
 
     public CanonicalRegistrationBootstrapTests(MigratedPostgreSqlFixture fixture)
     {
@@ -47,6 +51,8 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
         _services = AtomicDomainTestKernel.CreateForAccountBootstrapPostgreSql(
             (NpgsqlConnection)_ctx.Db.Database.GetDbConnection());
         _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
+        _writes = _services.GetRequiredService<IRequestWriteExecutor>();
+        _writeDb = _services.GetRequiredService<RentalCommandDbContext>();
         _users = CreateUserManager(_ctx.Db);
     }
 
@@ -912,8 +918,9 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             _users,
             Options.Create(settings),
             new CanonicalAccountBootstrapService(
+                _writeDb,
                 _users,
-                _atomic,
+                _writes,
                 Options.Create(new AtomicAuthSessionCredentialOptions
                 {
                     SigningKey = Convert.ToBase64String(new byte[32]),
@@ -1000,6 +1007,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
         ICanonicalAccessTokenService canonicalTokens)
     {
         return new AuthService(
+            _writeDb,
             _users,
             CreateSignInManager(_users),
             sessions,
@@ -1015,13 +1023,14 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             }),
             Mock.Of<IAuthEmailSender>(),
             new CanonicalAccountBootstrapService(
+                _writeDb,
                 _users,
-                _atomic,
+                _writes,
                 Options.Create(new AtomicAuthSessionCredentialOptions
                 {
                     SigningKey = Convert.ToBase64String(new byte[32]),
                 })),
-            _atomic,
+            _writes,
             NullLogger<AuthService>.Instance,
             new SystemAuthSecurityClock());
     }
@@ -1033,7 +1042,8 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 .Select(value => (byte)value)
                 .ToArray());
         return new AtomicAuthSessionCredentialService(
-            _atomic,
+            _writeDb,
+            _writes,
             new RefreshCredentialTokenFactory(signingKey),
             Options.Create(new AtomicAuthSessionCredentialOptions
             {

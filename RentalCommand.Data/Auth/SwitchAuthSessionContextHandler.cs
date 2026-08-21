@@ -15,7 +15,11 @@ public sealed class SwitchAuthSessionContextHandler
 
     public SwitchAuthSessionContextHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SwitchAuthSessionContextResult> HandleAsync(
+    public Task<SwitchAuthSessionContextResult> HandleAsync(
+        SwitchAuthSessionContextCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<SwitchAuthSessionContextResult> ExecuteAsync(
         SwitchAuthSessionContextCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -87,7 +91,11 @@ public sealed class SwitchAuthSessionContextHandler
             selected.AccessRevision);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        SwitchAuthSessionContextCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         SwitchAuthSessionContextCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
