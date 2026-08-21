@@ -39,22 +39,10 @@ public static class StoredDocumentWriteSupport
                 WriteLock.For("StoredFile", command.StoredFileId)),
             executeAsync, authorizeReplayAsync);
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Stored document writes no longer use the legacy stored document handlers.");
 }
 
 public sealed class CreateStoredDocumentHandler
-    : IAtomicCommandHandler<CreateStoredDocumentCommand, CreateStoredDocumentResult>
 {
-    public Task<CreateStoredDocumentResult> HandleAsync(
-        CreateStoredDocumentCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw StoredDocumentWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        CreateStoredDocumentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw StoredDocumentWriteSupport.RetiredPath();
-
     public static async Task<CreateStoredDocumentResult> ExecuteAsync(
         RentalCommandDbContext db, CreateStoredDocumentCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -225,17 +213,7 @@ public sealed class CreateStoredDocumentHandler
 }
 
 public sealed class DeleteStoredDocumentHandler
-    : IAtomicCommandHandler<DeleteStoredDocumentCommand, DeleteStoredDocumentResult>
 {
-    public Task<DeleteStoredDocumentResult> HandleAsync(
-        DeleteStoredDocumentCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw StoredDocumentWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        DeleteStoredDocumentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw StoredDocumentWriteSupport.RetiredPath();
-
     public static async Task<DeleteStoredDocumentResult> ExecuteAsync(
         RentalCommandDbContext db, DeleteStoredDocumentCommand command,
         IAtomicCommandContext context, CancellationToken ct)

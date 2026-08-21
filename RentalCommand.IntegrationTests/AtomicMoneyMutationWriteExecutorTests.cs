@@ -165,17 +165,6 @@ public sealed class AtomicMoneyMutationWriteExecutorTests
         (await db.Expenses.CountAsync()).Should().Be(before);
     }
 
-    [Fact]
-    public async Task LegacyHandlerArmThrows()
-    {
-        var command = Command(AtomicMoneyDomain.Expense, AtomicMoneyOperation.Update, 41, "retired");
-        var handler = new AtomicMoneyMutationHandler(null!);
-
-        await handler.Invoking(item => item.HandleAsync(command, null!, CancellationToken.None))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Atomic money mutations no longer use the legacy atomic handler.");
-    }
-
     private static AtomicMoneyMutationCommand Command(
         AtomicMoneyDomain domain, AtomicMoneyOperation operation, int entityId, string key) =>
         new(7, 8, SessionId, 9, 10, "money.test", domain, operation, entityId, key, "{}", BusinessNow);

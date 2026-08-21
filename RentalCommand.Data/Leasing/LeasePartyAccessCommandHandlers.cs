@@ -63,22 +63,10 @@ public static class LeasePartyAccessWriteSupport
             authorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Lease-party and access writes no longer use the legacy atomic handlers.");
 }
 
 public sealed class AddEffectivePartyHandler
-    : IAtomicCommandHandler<AddEffectivePartyCommand, LeasePartyMutationResult>
 {
-    public Task<LeasePartyMutationResult> HandleAsync(
-        AddEffectivePartyCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        AddEffectivePartyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw LeasePartyAccessWriteSupport.RetiredPath();
-
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,
         AddEffectivePartyCommand command,
@@ -205,17 +193,7 @@ public sealed class AddEffectivePartyHandler
 }
 
 public sealed class EndEffectivePartyHandler
-    : IAtomicCommandHandler<EndEffectivePartyCommand, LeasePartyMutationResult>
 {
-    public Task<LeasePartyMutationResult> HandleAsync(
-        EndEffectivePartyCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        EndEffectivePartyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw LeasePartyAccessWriteSupport.RetiredPath();
-
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,
         EndEffectivePartyCommand command,
@@ -412,17 +390,7 @@ public sealed class EndEffectivePartyHandler
 }
 
 public sealed class ChangeEffectivePartyRoleHandler
-    : IAtomicCommandHandler<ChangeEffectivePartyRoleCommand, LeasePartyMutationResult>
 {
-    public Task<LeasePartyMutationResult> HandleAsync(
-        ChangeEffectivePartyRoleCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        ChangeEffectivePartyRoleCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw LeasePartyAccessWriteSupport.RetiredPath();
-
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,
         ChangeEffectivePartyRoleCommand command,
@@ -648,17 +616,7 @@ public sealed class ChangeEffectivePartyRoleHandler
 }
 
 public sealed class GrantTenantUserAccessHandler
-    : IAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult>
 {
-    public Task<LeasePartyMutationResult> HandleAsync(
-        GrantTenantUserAccessCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        GrantTenantUserAccessCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw LeasePartyAccessWriteSupport.RetiredPath();
-
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,
         GrantTenantUserAccessCommand command,
@@ -1049,17 +1007,7 @@ public sealed class GrantTenantUserAccessHandler
 }
 
 public sealed class RevokeTenantUserAccessHandler
-    : IAtomicCommandHandler<RevokeTenantUserAccessCommand, LeasePartyMutationResult>
 {
-    public Task<LeasePartyMutationResult> HandleAsync(
-        RevokeTenantUserAccessCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw LeasePartyAccessWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        RevokeTenantUserAccessCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw LeasePartyAccessWriteSupport.RetiredPath();
-
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,
         RevokeTenantUserAccessCommand command,

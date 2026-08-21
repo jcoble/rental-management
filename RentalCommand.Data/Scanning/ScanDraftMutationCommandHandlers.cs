@@ -50,9 +50,6 @@ public static class ScanDraftWriteSupport
             lockPlan, executeAsync, authorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Scan upload and draft mutations no longer use the legacy atomic handlers.");
-
     private static WriteLockPlan ScopePlan(Guid sessionId, int accessContextId, int portfolioId) =>
         new(WriteLockProtocol.AuthorizationScope,
             WriteLock.For("AuthSession", sessionId),
@@ -85,16 +82,7 @@ public static class ScanDraftWriteSupport
 }
 
 public sealed class RetryScanDraftHandler
-    : IAtomicCommandHandler<RetryScanDraftCommand, ScanDraftMutationResult>
 {
-    public Task<ScanDraftMutationResult> HandleAsync(
-        RetryScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        RetryScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
     public static async Task<ScanDraftMutationResult> ExecuteAsync(
         RentalCommandDbContext db, RetryScanDraftCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -153,16 +141,7 @@ public sealed class RetryScanDraftHandler
 }
 
 public sealed class CreateVoiceScanDraftHandler
-    : IAtomicCommandHandler<CreateVoiceScanDraftCommand, ScanDraftMutationResult>
 {
-    public Task<ScanDraftMutationResult> HandleAsync(
-        CreateVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        CreateVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
     public static async Task<ScanDraftMutationResult> ExecuteAsync(
         RentalCommandDbContext db, CreateVoiceScanDraftCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -260,16 +239,7 @@ public sealed class CreateVoiceScanDraftHandler
 }
 
 public sealed class AnswerVoiceScanDraftHandler
-    : IAtomicCommandHandler<AnswerVoiceScanDraftCommand, ScanDraftMutationResult>
 {
-    public Task<ScanDraftMutationResult> HandleAsync(
-        AnswerVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        AnswerVoiceScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
     public static async Task<ScanDraftMutationResult> ExecuteAsync(
         RentalCommandDbContext db, AnswerVoiceScanDraftCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -327,16 +297,7 @@ public sealed class AnswerVoiceScanDraftHandler
 }
 
 public sealed class SetScanDraftPaymentAccountHandler
-    : IAtomicCommandHandler<SetScanDraftPaymentAccountCommand, ScanDraftMutationResult>
 {
-    public Task<ScanDraftMutationResult> HandleAsync(
-        SetScanDraftPaymentAccountCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        SetScanDraftPaymentAccountCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
     public static async Task<ScanDraftMutationResult> ExecuteAsync(
         RentalCommandDbContext db, SetScanDraftPaymentAccountCommand command,
         IAtomicCommandContext context, CancellationToken ct)

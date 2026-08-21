@@ -13,42 +13,6 @@ using RentalCommand.Core.Operations;
 
 namespace RentalCommand.Data.Operations;
 
-public sealed class CreateAppointmentHandler
-    : IAtomicCommandHandler<CreateAppointmentCommand, OperationMutationResult>
-{
-    public Task<OperationMutationResult> HandleAsync(
-        CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AppointmentCrudWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AppointmentCrudWriteSupport.RetiredPath();
-}
-
-public sealed class UpdateAppointmentHandler
-    : IAtomicCommandHandler<UpdateAppointmentCommand, OperationMutationResult>
-{
-    public Task<OperationMutationResult> HandleAsync(
-        UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AppointmentCrudWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AppointmentCrudWriteSupport.RetiredPath();
-}
-
-public sealed class DeleteAppointmentHandler
-    : IAtomicCommandHandler<DeleteAppointmentCommand, OperationMutationResult>
-{
-    public Task<OperationMutationResult> HandleAsync(
-        DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AppointmentCrudWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AppointmentCrudWriteSupport.RetiredPath();
-}
-
 public static class AppointmentCrudWriteSupport
 {
     public const string ResultContract = "appointment.mutation.v1";
@@ -305,9 +269,6 @@ public static class AppointmentCrudWriteSupport
                 item.PropertyId == command.ExpectedPropertyId, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
     }
-
-    internal static InvalidOperationException RetiredPath() => new(
-        "Appointment writes no longer use the legacy appointment mutation handlers.");
 
     private static WriteLockPlan AppointmentPlan(int appointmentId) => new(
         WriteLockProtocol.AppointmentWorkOrder,

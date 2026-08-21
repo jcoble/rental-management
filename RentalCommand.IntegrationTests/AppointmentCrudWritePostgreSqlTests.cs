@@ -154,7 +154,7 @@ public sealed class AppointmentCrudWritePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task LockPlansDeclareLegacyOrder_AndAllLegacyHandlerArmsThrow()
+    public void LockPlansDeclareLegacyOrder()
     {
         var actor = new StaffOperationActor(1, Guid.NewGuid(), 2, 3);
         var create = new CreateAppointmentCommand(
@@ -184,23 +184,7 @@ public sealed class AppointmentCrudWritePostgreSqlTests : IAsyncLifetime
         updateWrite.LockPlan.DeferredLockNamespaces.Should().Equal("WorkOrder");
         deleteWrite.LockPlan.Protocol.Should().Be(WriteLockProtocol.AppointmentWorkOrder);
 
-        await using var services = BuildServices(new FixedTimeProvider(BusinessNow));
-        await using var scope = services.CreateAsyncScope();
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-        await AssertRetiredAsync(() => atomic.ExecuteAsync(
-            new AtomicCommandIdentity("retired.appointment.create", "create"), create,
-            new AtomicJsonResultCodec<OperationMutationResult>(AppointmentCrudWriteSupport.ResultContract)));
-        await AssertRetiredAsync(() => atomic.ExecuteAsync(
-            new AtomicCommandIdentity("retired.appointment.update", "update"), update,
-            new AtomicJsonResultCodec<OperationMutationResult>(AppointmentCrudWriteSupport.ResultContract)));
-        await AssertRetiredAsync(() => atomic.ExecuteAsync(
-            new AtomicCommandIdentity("retired.appointment.delete", "delete"), delete,
-            new AtomicJsonResultCodec<OperationMutationResult>(AppointmentCrudWriteSupport.ResultContract)));
     }
-
-    private static async Task AssertRetiredAsync(Func<Task> action) =>
-        await action.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Appointment writes no longer use the legacy appointment mutation handlers.");
 
     private async Task<WorkspaceReadScope> SeedScopeAsync(DateTime now)
     {
@@ -278,9 +262,6 @@ public sealed class AppointmentCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<CreateAppointmentCommand, OperationMutationResult, CreateAppointmentHandler>();
-        services.AddAtomicCommandHandler<UpdateAppointmentCommand, OperationMutationResult, UpdateAppointmentHandler>();
-        services.AddAtomicCommandHandler<DeleteAppointmentCommand, OperationMutationResult, DeleteAppointmentHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<AppointmentService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>

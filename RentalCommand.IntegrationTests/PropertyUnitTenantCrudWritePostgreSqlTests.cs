@@ -117,7 +117,7 @@ public sealed class PropertyUnitTenantCrudWritePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task UnitAndTenantCreates_UseExecutorContracts_AndLegacyUnitPathThrows()
+    public async Task UnitAndTenantCreates_UseExecutorContracts()
     {
         var now = DateTime.UtcNow;
         var scope = await SeedScopeAsync(now);
@@ -160,20 +160,6 @@ public sealed class PropertyUnitTenantCrudWritePostgreSqlTests : IAsyncLifetime
         JsonSerializer.Deserialize<AtomicCoreCrudMutationResult>(tenantReceipt.ResultJson!)!
             .EntityId.Should().Be(tenant.Id);
 
-        var retired = AtomicRentalMutation.Command(
-            scope, AtomicRentalMutationDomain.Unit, AtomicRentalMutationOperation.Create,
-            0, "retired-unit-create", new CreateUnitRequest
-            {
-                PropertyId = propertyId,
-                UnitNumber = "retired",
-                Bedrooms = 1,
-                Bathrooms = 1,
-            });
-        Func<Task> retiredPath = () => serviceScope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(AtomicRentalMutation.Identity(retired), retired, AtomicRentalMutation.Codec);
-        await retiredPath.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Unit writes no longer use the legacy rental mutation handler.");
     }
 
     private async Task<WorkspaceReadScope> SeedScopeAsync(DateTime now)
