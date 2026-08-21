@@ -1,15 +1,25 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Atomic;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-public sealed class AccountingWriteExecutorTests
+[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
 {
     private static readonly Guid SessionId =
         Guid.Parse("11111111-1111-1111-1111-111111111111");
@@ -74,32 +84,148 @@ public sealed class AccountingWriteExecutorTests
     }
 
     [Fact]
-    public void DynamicLockTails_RemainAtTheirLegacyRulePositions()
+    public async Task LedgerCreateRecorder_AcquiresConditionalParentBeforeCodeLock()
     {
-        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../.."));
-        var ledgerSource = File.ReadAllText(Path.Combine(root, "RentalCommand.Data", "Accounting",
-            "LedgerAccountCommandHandlers.cs"));
-        var create = Slice(ledgerSource, "public async Task<LedgerAccountMutationResult> ExecuteAsync(\n        CreateLedgerAccountCommand",
-            "public Task AuthorizeReplayAsync", 0);
-        create.IndexOf("AcquireLockAsync(\"LedgerAccount\", parentAccountId", StringComparison.Ordinal)
-            .Should().BeLessThan(create.IndexOf("AcquireLockAsync(\"LedgerAccountCode\"", StringComparison.Ordinal));
+        await using var database = await fixture.CreateContextAsync();
+        var scope = await SeedAuthorityAsync(database.Db, "create-locks");
+        var parent = await AddLedgerAsync(database.Db, scope.PortfolioId, "6100", "Parent");
+        database.Db.ChangeTracker.Clear();
 
-        var lifecycleSource = File.ReadAllText(Path.Combine(root, "RentalCommand.Api", "Services", "Domain",
-            "AtomicAccountingLifecycleMutations.cs"));
-        var prepare = Slice(lifecycleSource,
-            "public async Task<PrepareAccountingDisconnectResult> ExecuteAsync",
-            "public Task AuthorizeReplayAsync", 0);
-        prepare.Should().Contain("ResolveAndLockConnectionIdAsync");
-        var direction = Slice(lifecycleSource,
-            "public async Task<SetAccountingDirectionResult> ExecuteAsync",
-            "public Task AuthorizeReplayAsync", 0);
-        direction.Should().Contain("ResolveAndLockConnectionIdAsync");
+        foreach (var parentId in new int?[] { parent.Id, null })
+        {
+            var command = new CreateLedgerAccountCommand(
+                scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
+                scope.AccessRevision, parentId is null ? "6200" : "6201", "Recorder child",
+                AccountType.Expense, parentId, null, ScheduleECategory.Other, true,
+                $"create-lock-{parentId?.ToString() ?? "none"}");
+            var (context, acquired) = Recorder(database.Db);
+            var handler = new CreateLedgerAccountHandler(database.Db);
 
-        var mapping = AccountingWriteSupport.Write(
-            ConfirmMapping(), (_, _, _) => Task.FromResult(true), (_, _, _) => Task.CompletedTask);
-        mapping.LockPlan.Locks.Select(item => item.LockNamespace).Should()
-            .Equal("AuthSession", "WorkspaceAccessContext", "AccountingConnection");
-        mapping.LockPlan.Locks.Should().NotContain(item => item.LockNamespace == "Portfolio");
+            await ExecuteRecordedAsync(command, handler.ExecuteAsync, handler.AuthorizeAsync, context);
+
+            acquired.Should().Equal(Prefix(scope)
+                .Concat(parentId is null ? [] : new[] { $"LedgerAccount:{parent.Id}" })
+                .Append($"LedgerAccountCode:{scope.PortfolioId}"));
+        }
+    }
+
+    [Fact]
+    public async Task LedgerUpdateRecorder_AcquiresDistinctTargetAndEffectiveParentOnce()
+    {
+        await using var database = await fixture.CreateContextAsync();
+        var scope = await SeedAuthorityAsync(database.Db, "update-locks");
+        var target = await AddLedgerAsync(database.Db, scope.PortfolioId, "6300", "Target");
+        var parent = await AddLedgerAsync(database.Db, scope.PortfolioId, "6301", "Effective parent");
+        database.Db.ChangeTracker.Clear();
+        var command = new UpdateLedgerAccountCommand(
+            scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
+            scope.AccessRevision, target.Id, "Updated target", null, parent.Id, true,
+            ScheduleECategory.Other, true, false, "update-lock");
+        var (context, acquired) = Recorder(database.Db);
+        var handler = new UpdateLedgerAccountHandler(database.Db);
+
+        await ExecuteRecordedAsync(command, handler.ExecuteAsync, handler.AuthorizeAsync, context);
+
+        acquired.Should().Equal(Prefix(scope)
+            .Append($"LedgerAccount:{target.Id}")
+            .Append($"LedgerAccount:{parent.Id}"));
+        acquired.Should().OnlyHaveUniqueItems();
+    }
+
+    [Fact]
+    public async Task DirectionRecorder_AcquiresAuthorizationPrefixThenResolvedConnection()
+    {
+        await using var database = await fixture.CreateContextAsync();
+        var scope = await SeedAuthorityAsync(database.Db, "direction-locks");
+        var connection = await AddConnectionAsync(database.Db, scope.PortfolioId);
+        database.Db.ChangeTracker.Clear();
+        var command = AtomicAccountingLifecycle.DirectionCommand(
+            scope, AccountingProvider.QuickBooks, false, true, "direction-lock");
+        var (context, acquired) = Recorder(database.Db);
+        var handler = new SetAccountingDirectionHandler(database.Db);
+
+        await ExecuteRecordedAsync(command, handler.ExecuteAsync, handler.AuthorizeAsync, context);
+
+        acquired.Should().Equal(Prefix(scope).Append($"AccountingConnection:{connection.Id}"));
+    }
+
+    [Fact]
+    public async Task LifecycleWrites_ExecuteThenReplayWithoutRepeatingMutation()
+    {
+        await using var database = await fixture.CreateContextAsync();
+        var scope = await SeedAuthorityAsync(database.Db, "lifecycle-replay");
+        var connection = await AddConnectionAsync(database.Db, scope.PortfolioId);
+        await using var services = BuildServices(database.ConnectionString);
+        await using var serviceScope = services.CreateAsyncScope();
+        var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+
+        var connect = AtomicAccountingConnect.Command(
+            scope, AccountingProvider.QuickBooks, "https://example.test/callback", "connect-replay");
+        var connectHandler = new PrepareAccountingConnectHandler(db);
+        var connectWrite = AccountingWriteSupport.Write(
+            connect, connectHandler.ExecuteAsync, connectHandler.AuthorizeAsync);
+        var firstConnect = await writes.ExecuteAsync(
+            AtomicAccountingConnect.Identity(connect).IdempotencyKey, connectWrite);
+        var replayConnect = await writes.ExecuteAsync(
+            AtomicAccountingConnect.Identity(connect).IdempotencyKey, connectWrite);
+        replayConnect.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayConnect.Value.Should().BeEquivalentTo(firstConnect.Value);
+        (await db.OAuthStates.CountAsync()).Should().Be(1);
+
+        var prepare = AtomicAccountingLifecycle.PrepareDisconnectCommand(
+            scope, AccountingProvider.QuickBooks, "disconnect-replay");
+        var prepareHandler = new PrepareAccountingDisconnectHandler(db);
+        var prepareWrite = AccountingWriteSupport.Write(
+            prepare, prepareHandler.ExecuteAsync, prepareHandler.AuthorizeAsync);
+        var firstPrepare = await writes.ExecuteAsync(
+            AtomicAccountingLifecycle.PrepareDisconnectIdentity(prepare).IdempotencyKey, prepareWrite);
+        db.ChangeTracker.Clear();
+        var preparedState = await db.AccountingConnections.AsNoTracking()
+            .SingleAsync(row => row.Id == connection.Id);
+        var replayPrepare = await writes.ExecuteAsync(
+            AtomicAccountingLifecycle.PrepareDisconnectIdentity(prepare).IdempotencyKey, prepareWrite);
+        replayPrepare.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayPrepare.Value.Should().BeEquivalentTo(firstPrepare.Value);
+        db.ChangeTracker.Clear();
+        (await db.AccountingConnections.AsNoTracking().SingleAsync(row => row.Id == connection.Id))
+            .Should().BeEquivalentTo(preparedState);
+
+        var finalize = AtomicAccountingLifecycle.FinalizeDisconnectCommand(prepare, firstPrepare.Value);
+        var finalizeHandler = new FinalizeAccountingDisconnectHandler(db);
+        var finalizeWrite = AccountingWriteSupport.Write(
+            finalize, finalizeHandler.ExecuteAsync, finalizeHandler.AuthorizeAsync);
+        var firstFinalize = await writes.ExecuteAsync(
+            AtomicAccountingLifecycle.FinalizeDisconnectIdentity(finalize).IdempotencyKey, finalizeWrite);
+        db.ChangeTracker.Clear();
+        var finalizedState = await db.AccountingConnections.AsNoTracking()
+            .SingleAsync(row => row.Id == connection.Id);
+        var replayFinalize = await writes.ExecuteAsync(
+            AtomicAccountingLifecycle.FinalizeDisconnectIdentity(finalize).IdempotencyKey, finalizeWrite);
+        replayFinalize.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayFinalize.Value.Should().BeEquivalentTo(firstFinalize.Value);
+        db.ChangeTracker.Clear();
+        (await db.AccountingConnections.AsNoTracking().SingleAsync(row => row.Id == connection.Id))
+            .Should().BeEquivalentTo(finalizedState);
+
+        var direction = AtomicAccountingLifecycle.DirectionCommand(
+            scope, AccountingProvider.QuickBooks, false, true, "direction-replay");
+        var directionHandler = new SetAccountingDirectionHandler(db);
+        var directionWrite = AccountingWriteSupport.Write(
+            direction, directionHandler.ExecuteAsync, directionHandler.AuthorizeAsync);
+        var firstDirection = await writes.ExecuteAsync(
+            AtomicAccountingLifecycle.DirectionIdentity(direction).IdempotencyKey, directionWrite);
+        db.ChangeTracker.Clear();
+        var directedState = await db.AccountingConnections.AsNoTracking()
+            .SingleAsync(row => row.Id == connection.Id);
+        var replayDirection = await writes.ExecuteAsync(
+            AtomicAccountingLifecycle.DirectionIdentity(direction).IdempotencyKey, directionWrite);
+        replayDirection.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayDirection.Value.Should().BeEquivalentTo(firstDirection.Value);
+        db.ChangeTracker.Clear();
+        (await db.AccountingConnections.AsNoTracking().SingleAsync(row => row.Id == connection.Id))
+            .Should().BeEquivalentTo(directedState);
+        (await db.AccountingConnections.CountAsync()).Should().Be(1);
     }
 
     [Fact]
@@ -195,12 +321,139 @@ public sealed class AccountingWriteExecutorTests
         1, 12, ContinuationId, 7, SessionId, 8, 9, CapabilityKeys.IntegrationsManage,
         "mapping-continue", BusinessNow);
 
-    private static string Slice(string source, string startText, string endText, int startIndex)
+    private static async Task ExecuteRecordedAsync<TCommand, TResult>(
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> execute,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorize,
+        IAtomicCommandContext context)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
     {
-        var start = source.IndexOf(startText, startIndex, StringComparison.Ordinal);
-        start.Should().BeGreaterThanOrEqualTo(0);
-        var end = source.IndexOf(endText, start, StringComparison.Ordinal);
-        end.Should().BeGreaterThan(start);
-        return source[start..end];
+        var write = AccountingWriteSupport.Write(command, execute, authorize);
+        foreach (var writeLock in write.LockPlan.Locks)
+            await writeLock.AcquireAsync(context);
+        await write.ExecuteAsync(command, context, CancellationToken.None);
+    }
+
+    private static (IAtomicCommandContext Context, List<string> Acquired) Recorder(
+        RentalCommandDbContext db)
+    {
+        var acquired = new List<string>();
+        var recorder = new Mock<IAtomicCommandContext>();
+        recorder.Setup(item => item.ReadDatabaseClockUtcAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(DateTime.UtcNow);
+        recorder.Setup(item => item.AcquireLockAsync(
+                It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Callback<string, int, CancellationToken>((name, id, _) => acquired.Add($"{name}:{id}"))
+            .Returns(Task.CompletedTask);
+        recorder.Setup(item => item.AcquireLockAsync(
+                It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Callback<string, Guid, CancellationToken>((name, id, _) => acquired.Add($"{name}:{id}"))
+            .Returns(Task.CompletedTask);
+        recorder.Setup(item => item.FlushBusinessAsync(It.IsAny<CancellationToken>()))
+            .Returns(async (CancellationToken ct) =>
+                new AtomicBusinessFlush(await db.SaveChangesAsync(ct), []));
+        return (recorder.Object, acquired);
+    }
+
+    private static string[] Prefix(WorkspaceReadScope scope) =>
+        [$"AuthSession:{scope.SessionId}", $"WorkspaceAccessContext:{scope.AccessContextId}",
+            $"Portfolio:{scope.PortfolioId}"];
+
+    private static async Task<WorkspaceReadScope> SeedAuthorityAsync(
+        RentalCommandDbContext db, string suffix)
+    {
+        var now = DateTime.UtcNow;
+        var portfolio = new Portfolio
+        {
+            Name = $"Accounting {suffix}", ManagementCompanyName = "Recorder", TimeZone = "UTC",
+            CreatedAt = now, UpdatedAt = now,
+        };
+        var user = new ApplicationUser
+        {
+            UserName = $"{suffix}@example.test", NormalizedUserName = $"{suffix}@example.test".ToUpperInvariant(),
+            Email = $"{suffix}@example.test", NormalizedEmail = $"{suffix}@example.test".ToUpperInvariant(),
+            DisplayName = suffix, CreatedAt = now,
+        };
+        db.AddRange(portfolio, user);
+        await db.SaveChangesAsync();
+        var access = new WorkspaceAccessContext
+        {
+            UserId = user.Id, PortfolioId = portfolio.Id, Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now, UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = access, PortfolioId = portfolio.Id, Status = WorkspaceMembershipStatus.Active,
+            EffectiveFromUtc = now.AddMinutes(-1), CreatedAtUtc = now, UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(), UserId = user.Id, ActiveAccessContext = access,
+            Status = AuthSessionStatus.Active, CreatedAtUtc = now, LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership, PortfolioId = portfolio.Id,
+            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1), CreatedAtUtc = now, UpdatedAtUtc = now,
+        }, session);
+        await db.SaveChangesAsync();
+        return new WorkspaceReadScope(
+            portfolio.Id, user.Id, session.Id, access.Id, access.AccessRevision);
+    }
+
+    private static async Task<LedgerAccount> AddLedgerAsync(
+        RentalCommandDbContext db, int portfolioId, string code, string name)
+    {
+        var now = DateTime.UtcNow;
+        var account = new LedgerAccount
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = portfolioId, Code = code, Name = name,
+            AccountType = AccountType.Expense, NormalBalance = NormalBalance.Debit,
+            ScheduleECategory = ScheduleECategory.Other, CreatedAtUtc = now, UpdatedAtUtc = now,
+        };
+        db.Add(account);
+        await db.SaveChangesAsync();
+        return account;
+    }
+
+    private static async Task<AccountingConnection> AddConnectionAsync(
+        RentalCommandDbContext db, int portfolioId)
+    {
+        var now = DateTime.UtcNow;
+        var connection = new AccountingConnection
+        {
+            PortfolioId = portfolioId, Provider = AccountingProvider.QuickBooks,
+            Status = AccountingConnectionStatus.Connected, AccessTokenCipherText = "access",
+            RefreshTokenCipherText = "refresh", TokenExpiresAt = now.AddHours(1),
+            PullEnabled = true, PushEnabled = false, CreatedAt = now, UpdatedAt = now,
+        };
+        db.Add(connection);
+        await db.SaveChangesAsync();
+        return connection;
+    }
+
+    private static ServiceProvider BuildServices(string connectionString)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, TestActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
+        return services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+    }
+
+    private sealed class TestActor : ICurrentActor
+    {
+        public int? UserId => null;
+        public string? ActorLabel => "integration:accounting-write-executor";
+        public string? IpAddress => "127.0.0.1";
     }
 }
