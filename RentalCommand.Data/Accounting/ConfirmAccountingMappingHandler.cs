@@ -34,7 +34,12 @@ public sealed class ConfirmAccountingMappingHandler
         .Where(name => name != nameof(ScheduleECategory.Depreciation))
         .ToArray();
 
-    public async Task<ConfirmAccountingMappingResult> HandleAsync(
+    public Task<ConfirmAccountingMappingResult> HandleAsync(
+        ConfirmAccountingMappingCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<ConfirmAccountingMappingResult> ExecuteAsync(
         ConfirmAccountingMappingCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -43,12 +48,6 @@ public sealed class ConfirmAccountingMappingHandler
             command.PortfolioId, command.AccountingConnectionId, command.ConfirmedByUserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
             command.RequiredCapability);
-        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync(
-            "AccountingConnection",
-            command.AccountingConnectionId,
-            ct);
         var authorizationNow = await context.ReadDatabaseClockUtcAsync(ct);
         if (!await AccountingMappingAuthorizationSupport.HasAuthorityAsync(
                 command.PortfolioId, command.ConfirmedByUserId, command.AuthSessionId,
@@ -154,7 +153,11 @@ public sealed class ConfirmAccountingMappingHandler
             hasMore);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        ConfirmAccountingMappingCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         ConfirmAccountingMappingCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AccountingMappingAuthorizationSupport.Validate(
@@ -168,6 +171,9 @@ public sealed class ConfirmAccountingMappingHandler
                 command.RequiredCapability, _db, now, ct))
             throw new UnauthorizedAccessException();
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic accounting-mapping writes are retired; use the shared write executor.");
 
     private async Task<bool> IsValidTargetAsync(
         ConfirmAccountingMappingCommand command,
@@ -644,7 +650,12 @@ public sealed class ContinueAccountingMappingPromotionHandler
 
     public ContinueAccountingMappingPromotionHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ContinueAccountingMappingPromotionResult> HandleAsync(
+    public Task<ContinueAccountingMappingPromotionResult> HandleAsync(
+        ContinueAccountingMappingPromotionCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task<ContinueAccountingMappingPromotionResult> ExecuteAsync(
         ContinueAccountingMappingPromotionCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -653,12 +664,6 @@ public sealed class ContinueAccountingMappingPromotionHandler
             command.PortfolioId, command.AccountingConnectionId, command.RequestedByUserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
             command.RequiredCapability);
-        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync(
-            "AccountingConnection",
-            command.AccountingConnectionId,
-            ct);
         var authorizationNow = await context.ReadDatabaseClockUtcAsync(ct);
         if (!await AccountingMappingAuthorizationSupport.HasAuthorityAsync(
                 command.PortfolioId, command.RequestedByUserId, command.AuthSessionId,
@@ -698,7 +703,11 @@ public sealed class ContinueAccountingMappingPromotionHandler
         return Result(ContinueAccountingMappingPromotionOutcome.Applied, command, promoted, job.PromotedCount, hasMore);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        ContinueAccountingMappingPromotionCommand command, IAtomicCommandContext context,
+        CancellationToken ct) => throw RetiredPath();
+
+    public async Task AuthorizeAsync(
         ContinueAccountingMappingPromotionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AccountingMappingAuthorizationSupport.Validate(
@@ -712,6 +721,9 @@ public sealed class ContinueAccountingMappingPromotionHandler
                 command.RequiredCapability, _db, now, ct))
             throw new UnauthorizedAccessException();
     }
+
+    private static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic accounting-mapping writes are retired; use the shared write executor.");
 
     private static ContinueAccountingMappingPromotionResult Result(
         ContinueAccountingMappingPromotionOutcome outcome,

@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -11,6 +12,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -58,7 +60,7 @@ public class AccountingConnectionService
     private readonly AccountingImportService _importService;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingConnectionService> _logger;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public AccountingConnectionService(
         RentalCommandDbContext db,
@@ -67,7 +69,7 @@ public class AccountingConnectionService
         AccountingAppSettingsResolver settingsResolver,
         AccountingImportService importService,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         ILogger<AccountingConnectionService> logger)
     {
         _db = db;
@@ -77,7 +79,7 @@ public class AccountingConnectionService
         _importService = importService;
         _timeProvider = timeProvider;
         _logger = logger;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     /// <summary>
@@ -115,11 +117,10 @@ public class AccountingConnectionService
         // the Phase-2/5 note. We do not branch on the provider name to decide this.
         var command = AtomicAccountingConnect.Command(
             scope, provider, redirectUri, operationKey);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicAccountingConnect.Identity(command),
-            command,
-            AtomicAccountingConnect.Codec,
-            ct);
+        var identity = AtomicAccountingConnect.Identity(command);
+        var handler = new PrepareAccountingConnectHandler(_db);
+        var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
+            AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
 
         var prov = _providerResolver.Resolve(provider);
         return prov.BuildAuthorizeUrl(
@@ -188,11 +189,11 @@ public class AccountingConnectionService
     {
         var prepareCommand = AtomicAccountingLifecycle.PrepareDisconnectCommand(
             scope, provider, operationKey);
-        var prepared = await _atomic.ExecuteAsync(
-            AtomicAccountingLifecycle.PrepareDisconnectIdentity(prepareCommand),
-            prepareCommand,
-            AtomicAccountingLifecycle.DisconnectPrepareCodec,
-            ct);
+        var prepareIdentity = AtomicAccountingLifecycle.PrepareDisconnectIdentity(prepareCommand);
+        var prepareHandler = new PrepareAccountingDisconnectHandler(_db);
+        var prepared = await _writes.ExecuteAsync(prepareIdentity.IdempotencyKey,
+            AccountingWriteSupport.Write(
+                prepareCommand, prepareHandler.ExecuteAsync, prepareHandler.AuthorizeAsync), ct);
         if (prepared.Value.Outcome is PrepareAccountingDisconnectOutcome.NotFound
             or PrepareAccountingDisconnectOutcome.AlreadyDisconnected)
         {
@@ -218,10 +219,12 @@ public class AccountingConnectionService
 
         var finalizeCommand = AtomicAccountingLifecycle.FinalizeDisconnectCommand(
             prepareCommand, prepared.Value);
-        var finalized = await _atomic.ExecuteAsync(
-            AtomicAccountingLifecycle.FinalizeDisconnectIdentity(finalizeCommand),
-            finalizeCommand,
-            AtomicAccountingLifecycle.DisconnectFinalizeCodec,
+        var finalizeIdentity = AtomicAccountingLifecycle.FinalizeDisconnectIdentity(finalizeCommand);
+        var finalizeHandler = new FinalizeAccountingDisconnectHandler(_db);
+        var finalized = await _writes.ExecuteAsync(
+            finalizeIdentity.IdempotencyKey,
+            AccountingWriteSupport.Write(
+                finalizeCommand, finalizeHandler.ExecuteAsync, finalizeHandler.AuthorizeAsync),
             // Once prepare commits, request cancellation must not strand the retained revoke
             // credential or undo the already-durable local disconnect.
             CancellationToken.None);
@@ -347,11 +350,10 @@ public class AccountingConnectionService
     {
         var command = AtomicAccountingLifecycle.DirectionCommand(
             scope, provider, pull, push, operationKey);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicAccountingLifecycle.DirectionIdentity(command),
-            command,
-            AtomicAccountingLifecycle.DirectionCodec,
-            ct);
+        var identity = AtomicAccountingLifecycle.DirectionIdentity(command);
+        var handler = new SetAccountingDirectionHandler(_db);
+        var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
+            AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         if (!outcome.Value.Found)
             throw new InvalidOperationException(
                 $"No {provider} connection to configure. Connect the provider first.");
@@ -441,13 +443,12 @@ public class AccountingConnectionService
         var clientOperationId = RequireMappingValue(request.ClientOperationId, "request key");
         if (clientOperationId.Length > 160)
             throw new InvalidOperationException("A request key cannot exceed 160 characters.");
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
+        var identity = new AtomicCommandIdentity(
                 "accounting.mapping.confirm",
                 $"{scope.PortfolioId}:{conn.Id}:{scope.UserId}:" +
                 $"{OperationDigest($"{externalType}\u001f{externalId}")}:" +
-                OperationDigest(clientOperationId)),
-            new ConfirmAccountingMappingCommand(
+                OperationDigest(clientOperationId));
+        var command = new ConfirmAccountingMappingCommand(
                 scope.PortfolioId,
                 conn.Id,
                 provider,
@@ -464,10 +465,10 @@ public class AccountingConnectionService
                 Normalize(request.LocalEnumValue),
                 clientOperationId,
                 request.ExpectedRevision,
-                _timeProvider.UtcNow()),
-            new AtomicJsonResultCodec<ConfirmAccountingMappingResult>(
-                "accounting.mapping.confirm.result.v2"),
-            ct);
+                _timeProvider.UtcNow());
+        var handler = new ConfirmAccountingMappingHandler(_db);
+        var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
+            AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
 
         if (outcome.Value.Outcome == ConfirmAccountingMappingOutcome.Applied)
         {
@@ -527,11 +528,10 @@ public class AccountingConnectionService
         var clientOperationId = RequireMappingValue(request.ClientOperationId, "request key");
         if (clientOperationId.Length > 160)
             throw new InvalidOperationException("A request key cannot exceed 160 characters.");
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
+        var identity = new AtomicCommandIdentity(
                 "accounting.mapping.promote.continue",
-                $"{scope.PortfolioId}:{connectionId}:{continuationId:N}:{scope.UserId}:{OperationDigest(clientOperationId)}"),
-            new ContinueAccountingMappingPromotionCommand(
+                $"{scope.PortfolioId}:{connectionId}:{continuationId:N}:{scope.UserId}:{OperationDigest(clientOperationId)}");
+        var command = new ContinueAccountingMappingPromotionCommand(
                 scope.PortfolioId,
                 connectionId,
                 continuationId,
@@ -541,10 +541,10 @@ public class AccountingConnectionService
                 scope.AccessRevision,
                 CapabilityKeys.IntegrationsManage,
                 clientOperationId,
-                _timeProvider.UtcNow()),
-            new AtomicJsonResultCodec<ContinueAccountingMappingPromotionResult>(
-                "accounting.mapping.promote.continue.result.v1"),
-            ct);
+                _timeProvider.UtcNow());
+        var handler = new ContinueAccountingMappingPromotionHandler(_db);
+        var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
+            AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         if (outcome.Value.Outcome == ContinueAccountingMappingPromotionOutcome.NotFound)
             throw new InvalidOperationException("Accounting mapping promotion continuation was not found.");
         if (outcome.Value.Outcome == ContinueAccountingMappingPromotionOutcome.Superseded)
