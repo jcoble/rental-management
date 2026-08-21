@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Import;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -55,6 +56,7 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
             AtomicPaymentCsvImportCommand,
             AtomicPaymentCsvImportResult,
             AtomicPaymentCsvImportHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -86,8 +88,8 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
         var command = Command(scenario, "csv-import-replay");
         var identity = AtomicPaymentCsvImport.Identity(command);
 
-        var first = await ExecuteAtomicAsync(identity, command, AtomicPaymentCsvImport.Codec);
-        var replay = await ExecuteAtomicAsync(identity, command, AtomicPaymentCsvImport.Codec);
+        var first = await ExecuteAtomicAsync(identity, command);
+        var replay = await ExecuteAtomicAsync(identity, command);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -127,7 +129,7 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
         Failure.FailNextOutboxInsert = true;
 
         var act = async () =>
-            await ExecuteAtomicAsync(identity, command, AtomicPaymentCsvImport.Codec);
+            await ExecuteAtomicAsync(identity, command);
         await act.Should().ThrowAsync<DbUpdateException>();
 
         await using (var failed = NewContext())
@@ -156,12 +158,10 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
 
         var recovered = await ExecuteAtomicAsync(
             identity,
-            command,
-            AtomicPaymentCsvImport.Codec);
+            command);
         var replay = await ExecuteAtomicAsync(
             identity,
-            command,
-            AtomicPaymentCsvImport.Codec);
+            command);
 
         recovered.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -380,17 +380,18 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
             },
         }));
 
-    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+    private async Task<AtomicCommandOutcome<AtomicPaymentCsvImportResult>> ExecuteAtomicAsync(
         AtomicCommandIdentity identity,
-        TCommand command,
-        AtomicJsonResultCodec<TResult> codec)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
+        AtomicPaymentCsvImportCommand command)
     {
         await using var scope = _services!.CreateAsyncScope();
+        var handler = new AtomicPaymentCsvImportHandler(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+            .GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey,
+                AtomicPaymentCsvImport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }
 
     private OutboxFailureInterceptor Failure =>
