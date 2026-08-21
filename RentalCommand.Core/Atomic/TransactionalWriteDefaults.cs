@@ -57,6 +57,7 @@ public static class TransactionalWriteDefaults
                 "Vendor" => WriteLockProtocol.AuthorizationScopeVendor,
                 "Property" => WriteLockProtocol.AuthorizationScopeProperty,
                 "Unit" => WriteLockProtocol.AuthorizationScopeUnit,
+                "RentalApplication" => WriteLockProtocol.AuthorizationScopeApplication,
                 "Tenant" => WriteLockProtocol.AuthorizationScopeTenant,
                 _ => throw new ArgumentException(
                     "That authorization-scoped entity lock is not supported.", nameof(entityLock)),

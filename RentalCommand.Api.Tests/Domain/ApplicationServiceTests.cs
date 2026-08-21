@@ -8,6 +8,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -44,12 +45,10 @@ public class ApplicationServiceTests : IDisposable
         _conn = new SqliteConnection($"Data Source=application-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
         _conn.Open();
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_commands))
-            .Options;
-
-        _db = new ApplicationTestDbContext(options);
+        _services = AtomicDomainTestKernel.CreateForApplications(
+            _conn.ConnectionString,
+            [new RecordingCommandInterceptor(_commands)]);
+        _db = _services.GetRequiredService<RentalCommandDbContext>();
         _db.Database.EnsureCreated();
 
         // The portfolio reachable by the public token, plus an unrelated portfolio used to prove
@@ -75,12 +74,11 @@ public class ApplicationServiceTests : IDisposable
         });
         _db.SaveChanges();
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(ApplicationServiceTests));
-        _services = AtomicDomainTestKernel.CreateForApplications(_conn.ConnectionString);
-
         _sut = new ApplicationService(
             _db, _files.Object, Mock.Of<IDataUpdateService>(), _audit,
             TimeProvider.System,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            _services.GetRequiredService<IRequestWriteExecutor>());
     }
 
     public void Dispose()
@@ -950,6 +948,14 @@ public class ApplicationServiceTests : IDisposable
     }
 }
 
+/// <summary>
+/// SQLite application context using the shared test-only compatibility model.
+/// </summary>
+internal sealed class ApplicationTestDbContext : SqliteCompatibleRentalCommandDbContext
+{
+    public ApplicationTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
+}
+
 [Collection(MigratedPostgreSqlCollection.Name)]
 public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
 {
@@ -981,7 +987,8 @@ public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>(),
+            Mock.Of<IRequestWriteExecutor>());
     }
 
     public async Task DisposeAsync()
@@ -1108,12 +1115,4 @@ public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
-}
-
-/// <summary>
-/// SQLite application context using the shared test-only compatibility model.
-/// </summary>
-internal sealed class ApplicationTestDbContext : SqliteCompatibleRentalCommandDbContext
-{
-    public ApplicationTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }
