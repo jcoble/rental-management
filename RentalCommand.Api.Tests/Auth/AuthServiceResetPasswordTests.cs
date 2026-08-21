@@ -12,6 +12,7 @@ using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Api.Tests.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
@@ -68,7 +69,9 @@ public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
         (await _userManager.SetLockoutEndDateAsync(user, DateTimeOffset.UtcNow.AddMinutes(5))).Succeeded.Should().BeTrue();
         SeedWorkspaceAuthority(user, DateTime.UtcNow);
 
-        var result = await CreateService(_services.GetRequiredService<IAtomicUnitOfWork>()).ResetPasswordAsync(
+        var result = await CreateService(
+            _services.GetRequiredService<IRequestWriteExecutor>(),
+            _services.GetRequiredService<RentalCommandDbContext>()).ResetPasswordAsync(
             user.Id.ToString(), ResetToken, "NewPassword123!", "test-password-reset");
 
         result.Success.Should().BeTrue();
@@ -148,7 +151,7 @@ public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
         _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
         await _ctx.Db.SaveChangesAsync();
 
-        var result = await CreateService(new SuccessfulPasswordAtomicUnitOfWork()).ChangePasswordAsync(
+        var result = await CreateService(new SuccessfulPasswordWriteExecutor()).ChangePasswordAsync(
             new ActiveAccessContext(
                 Guid.NewGuid(), user.Id, accessContext.Id, portfolio.Id, accessContext.AccessRevision,
                 null, null, null),
@@ -159,7 +162,10 @@ public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
         result.Success.Should().BeTrue();
     }
 
-    private AuthService CreateService(IAtomicUnitOfWork? atomic = null) => new(
+    private AuthService CreateService(
+        IRequestWriteExecutor? writes = null,
+        RentalCommandDbContext? writeDb = null) => new(
+        writeDb ?? _ctx.Db,
         _userManager,
         null!,
         Mock.Of<IAtomicAuthSessionCredentialService>(),
@@ -175,21 +181,20 @@ public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
         }),
         Mock.Of<IAuthEmailSender>(),
         Mock.Of<ICanonicalAccountBootstrapService>(),
-        atomic ?? Mock.Of<IAtomicUnitOfWork>(),
+        writes ?? Mock.Of<IRequestWriteExecutor>(),
         NullLogger<AuthService>.Instance,
         new SystemAuthSecurityClock());
 
-    private sealed class SuccessfulPasswordAtomicUnitOfWork : IAtomicUnitOfWork
+    private sealed class SuccessfulPasswordWriteExecutor : IRequestWriteExecutor
     {
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity,
-            TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec,
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
-            var password = command.Should().BeOfType<ChangePasswordCommand>().Subject;
+            var password = write.Request.Should().BeOfType<ChangePasswordCommand>().Subject;
             var result = new ChangePasswordResult(
                 ChangePasswordOutcome.Changed, password.UserId, password.AccessContextId);
             return Task.FromResult(new AtomicCommandOutcome<TResult>(

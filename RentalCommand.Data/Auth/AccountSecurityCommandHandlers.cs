@@ -9,6 +9,46 @@ using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data.Auth;
 
+public static class AuthSessionWriteSupport
+{
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        var (operationName, resultContract) = command switch
+        {
+            BootstrapAccountCommand => ("auth.account.bootstrap", "auth-account-bootstrap-result:v1"),
+            ConfirmAccountEmailCommand => ("auth.email.confirm", "auth-email-confirm-result:v1"),
+            ResetAccountPasswordCommand => ("auth.password.reset", "auth-password-reset-result:v1"),
+            ConfirmGoogleAccountEmailCommand => ("auth.email.google-confirm", "auth-email-confirm-result:v1"),
+            AuthEmailOutboxCommand email => ($"auth.email.{email.EmailKind}", "auth-email-outbox-result:v1"),
+            IssueLoginContextSelectionChallengeCommand => ("auth-context-selection:issue", "auth-context-selection-challenge-result:v1"),
+            StartAuthSessionCommand => ("auth-session:start", "auth-session-start-result:v1"),
+            IssueSessionRefreshCredentialCommand => ("session-refresh:issue", "session-refresh-mutation-result.v1"),
+            RotateSessionRefreshCredentialCommand => ("session-refresh:rotate", "auth-session-refresh-rotation-result:v1"),
+            SwitchAuthSessionContextCommand => ("auth-context:switch", "auth-session-context-switch-result:v1"),
+            ChangePasswordCommand => ("auth.password.change", "auth-password-change-result:v1"),
+            RevokeAuthSessionCommand => ("auth-session:revoke", "auth-session-revoke-result:v1"),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+        return new TransactionalWrite<TCommand, TResult>(
+            operationName,
+            WriteIdempotencyPolicy.Required,
+            command,
+            resultContract,
+            WriteLockPlan.None,
+            executeAsync,
+            authorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy auth/session writes are retired; use the shared write executor.");
+}
+
 public sealed class BootstrapAccountHandler
     : IAtomicCommandHandler<BootstrapAccountCommand, BootstrapAccountResult>
 {
@@ -16,7 +56,11 @@ public sealed class BootstrapAccountHandler
 
     public BootstrapAccountHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<BootstrapAccountResult> HandleAsync(
+    public Task<BootstrapAccountResult> HandleAsync(
+        BootstrapAccountCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<BootstrapAccountResult> ExecuteAsync(
         BootstrapAccountCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -234,7 +278,11 @@ public sealed class BootstrapAccountHandler
             workspace.AccessContextId);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        BootstrapAccountCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         BootstrapAccountCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -285,7 +333,11 @@ public sealed class ConfirmAccountEmailHandler
 
     public ConfirmAccountEmailHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ConfirmAccountEmailResult> HandleAsync(
+    public Task<ConfirmAccountEmailResult> HandleAsync(
+        ConfirmAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<ConfirmAccountEmailResult> ExecuteAsync(
         ConfirmAccountEmailCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -321,7 +373,11 @@ public sealed class ConfirmAccountEmailHandler
         return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.Confirmed, user.Id);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        ConfirmAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         ConfirmAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
@@ -380,7 +436,11 @@ public sealed class ResetAccountPasswordHandler
 
     public ResetAccountPasswordHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ResetAccountPasswordResult> HandleAsync(
+    public Task<ResetAccountPasswordResult> HandleAsync(
+        ResetAccountPasswordCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<ResetAccountPasswordResult> ExecuteAsync(
         ResetAccountPasswordCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -421,7 +481,11 @@ public sealed class ResetAccountPasswordHandler
         return new ResetAccountPasswordResult(ResetAccountPasswordOutcome.Reset, user.Id);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        ResetAccountPasswordCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         ResetAccountPasswordCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
@@ -444,7 +508,11 @@ public sealed class ConfirmGoogleAccountEmailHandler
 
     public ConfirmGoogleAccountEmailHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ConfirmAccountEmailResult> HandleAsync(
+    public Task<ConfirmAccountEmailResult> HandleAsync(
+        ConfirmGoogleAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<ConfirmAccountEmailResult> ExecuteAsync(
         ConfirmGoogleAccountEmailCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -470,7 +538,11 @@ public sealed class ConfirmGoogleAccountEmailHandler
         return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.Confirmed, user.Id);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        ConfirmGoogleAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         ConfirmGoogleAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         if (command.UserId <= 0) throw new ArgumentOutOfRangeException(nameof(command.UserId));
@@ -487,7 +559,11 @@ public sealed class AuthEmailOutboxHandler
 
     public AuthEmailOutboxHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AuthEmailOutboxResult> HandleAsync(
+    public Task<AuthEmailOutboxResult> HandleAsync(
+        AuthEmailOutboxCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<AuthEmailOutboxResult> ExecuteAsync(
         AuthEmailOutboxCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -533,7 +609,11 @@ public sealed class AuthEmailOutboxHandler
         return new AuthEmailOutboxResult(true, user.Id, root.PortfolioId, command.EmailKind);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        AuthEmailOutboxCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         AuthEmailOutboxCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);

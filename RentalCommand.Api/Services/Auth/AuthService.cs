@@ -2,12 +2,15 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Identity;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Atomic;
 using Microsoft.Extensions.Options;
+using RentalCommand.Data;
+using RentalCommand.Data.Auth;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -118,12 +121,7 @@ public class AuthService : IAuthService
     private const string NeutralEmailConfirmationError =
         "Email confirmation failed: invalid or expired token";
 
-    private static readonly AtomicJsonResultCodec<ChangePasswordResult> ChangePasswordCodec =
-        new("auth-password-change-result:v1");
-    private static readonly AtomicJsonResultCodec<ConfirmAccountEmailResult> ConfirmEmailCodec =
-        new("auth-email-confirm-result:v1");
-    private static readonly AtomicJsonResultCodec<ResetAccountPasswordResult> ResetPasswordCodec =
-        new("auth-password-reset-result:v1");
+    private readonly RentalCommandDbContext _db;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IAtomicAuthSessionCredentialService _atomicCredentials;
@@ -133,11 +131,12 @@ public class AuthService : IAuthService
     private readonly AtomicAuthSessionCredentialOptions _credentialOptions;
     private readonly IAuthEmailSender _emailSender;
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly ILogger<AuthService> _logger;
     private readonly IAuthSecurityClock _securityClock;
 
     public AuthService(
+        RentalCommandDbContext db,
         UserManager<ApplicationUser> userManager,
         SignInManager<ApplicationUser> signInManager,
         IAtomicAuthSessionCredentialService atomicCredentials,
@@ -147,10 +146,11 @@ public class AuthService : IAuthService
         IOptions<AtomicAuthSessionCredentialOptions> credentialOptions,
         IAuthEmailSender emailSender,
         ICanonicalAccountBootstrapService accountBootstrap,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         ILogger<AuthService> logger,
         IAuthSecurityClock securityClock)
     {
+        _db = db;
         _userManager = userManager;
         _signInManager = signInManager;
         _atomicCredentials = atomicCredentials;
@@ -160,7 +160,7 @@ public class AuthService : IAuthService
         _credentialOptions = credentialOptions.Value;
         _emailSender = emailSender;
         _accountBootstrap = accountBootstrap;
-        _atomic = atomic;
+        _writes = writes;
         _logger = logger;
         _securityClock = securityClock;
     }
@@ -415,11 +415,10 @@ public class AuthService : IAuthService
             user.SecurityStamp ?? string.Empty,
             tokenValid,
             CreateAuthIntentHash(parsedUserId.ToString(), token, "confirm-email"));
-        var result = (await _atomic.ExecuteAsync(
-            AuthIdentity("auth.email.confirm", parsedUserId, operationKey),
-            command,
-            ConfirmEmailCodec,
-            ct)).Value;
+        var identity = AuthIdentity("auth.email.confirm", parsedUserId, operationKey);
+        var handler = new ConfirmAccountEmailHandler(_db);
+        var result = (await _writes.ExecuteAsync(identity.IdempotencyKey,
+            AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct)).Value;
         if (result.Outcome is ConfirmAccountEmailOutcome.InvalidToken)
         {
             return AuthUserResult.Fail(NeutralEmailConfirmationError, AuthErrorType.BadRequest);
@@ -501,11 +500,10 @@ public class AuthService : IAuthService
             tokenValid,
             _userManager.PasswordHasher.HashPassword(user, newPassword),
             CreateAuthIntentHash(parsedUserId.ToString(), token, newPassword, "reset-password"));
-        var result = (await _atomic.ExecuteAsync(
-            AuthIdentity("auth.password.reset", parsedUserId, operationKey),
-            command,
-            ResetPasswordCodec,
-            ct)).Value;
+        var identity = AuthIdentity("auth.password.reset", parsedUserId, operationKey);
+        var handler = new ResetAccountPasswordHandler(_db);
+        var result = (await _writes.ExecuteAsync(identity.IdempotencyKey,
+            AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct)).Value;
         if (result.Outcome != ResetAccountPasswordOutcome.Reset)
             return AuthUserResult.Fail("Invalid or expired reset link.", AuthErrorType.BadRequest);
 
@@ -586,13 +584,10 @@ public class AuthService : IAuthService
         ChangePasswordResult changed;
         try
         {
-            changed = (await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "auth.password.change",
-                    $"{active.UserId}:{active.AccessContextId}:{keyDigest}"),
-                command,
-                ChangePasswordCodec,
-                ct)).Value;
+            var handler = new ChangePasswordHandler(_db);
+            changed = (await _writes.ExecuteAsync(
+                $"{active.UserId}:{active.AccessContextId}:{keyDigest}",
+                AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct)).Value;
         }
         catch (UnauthorizedAccessException)
         {

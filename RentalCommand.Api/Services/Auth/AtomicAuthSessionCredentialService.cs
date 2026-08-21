@@ -1,9 +1,12 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Data;
+using RentalCommand.Data.Auth;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -79,30 +82,21 @@ public sealed record AtomicAuthSessionRotationOutcome(
 
 public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCredentialService
 {
-    private static readonly AtomicJsonResultCodec<LoginContextSelectionChallengeResult> ChallengeCodec =
-        new("auth-context-selection-challenge-result:v1");
-    private static readonly AtomicJsonResultCodec<StartAuthSessionResult> StartCodec =
-        new("auth-session-start-result:v1");
-
-    private static readonly AtomicJsonResultCodec<SessionRefreshMutationResult> RotationCodec =
-        new("auth-session-refresh-rotation-result:v1");
-    private static readonly AtomicJsonResultCodec<SwitchAuthSessionContextResult> SwitchCodec =
-        new("auth-session-context-switch-result:v1");
-    private static readonly AtomicJsonResultCodec<RevokeAuthSessionResult> RevokeCodec =
-        new("auth-session-revoke-result:v1");
-
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
     private readonly RefreshCredentialTokenFactory _tokens;
     private readonly AtomicAuthSessionCredentialOptions _options;
     private readonly IAuthSecurityClock _securityClock;
 
     public AtomicAuthSessionCredentialService(
-        IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes,
         RefreshCredentialTokenFactory tokens,
         IOptions<AtomicAuthSessionCredentialOptions> options,
         IAuthSecurityClock securityClock)
     {
-        _atomic = atomic;
+        _db = db;
+        _writes = writes;
         _tokens = tokens;
         _options = options.Value;
         _securityClock = securityClock;
@@ -155,11 +149,10 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
                 ? null
                 : _tokens.HashBearer(request.ContextSelectionChallengeBearer));
 
-        var outcome = await _atomic.ExecuteAsync(
-            SessionRefreshCommandIdentity.ForStart(request.OperationId),
-            command,
-            StartCodec,
-            ct);
+        var handler = new StartAuthSessionHandler(_db);
+        var outcome = await _writes.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForStart(request.OperationId).IdempotencyKey,
+            AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
 
         var value = outcome.Value;
         return new AtomicAuthSessionStartOutcome(
@@ -200,16 +193,12 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         var challengeBearer = _tokens.CreateBearer(Guid.NewGuid());
         var expiresAt = now.AddMinutes(5);
         var operationId = Guid.NewGuid();
-        var outcome = await _atomic.ExecuteAsync(
-            SessionRefreshCommandIdentity.ForContextSelectionChallenge(operationId),
-            new IssueLoginContextSelectionChallengeCommand(
-                userId,
-                challengeId,
-                _tokens.HashBearer(challengeBearer),
-                now,
-                expiresAt),
-            ChallengeCodec,
-            ct);
+        var command = new IssueLoginContextSelectionChallengeCommand(
+            userId, challengeId, _tokens.HashBearer(challengeBearer), now, expiresAt);
+        var handler = new IssueLoginContextSelectionChallengeHandler(_db);
+        var outcome = await _writes.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForContextSelectionChallenge(operationId).IdempotencyKey,
+            AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
 
         return new AtomicLoginContextChallengeOutcome(
             outcome.Value.Issued,
@@ -250,11 +239,10 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             now,
             replacementExpiresAt);
 
-        var outcome = await _atomic.ExecuteAsync(
-            SessionRefreshCommandIdentity.ForRotation(request.OperationId),
-            command,
-            RotationCodec,
-            ct);
+        var handler = new RotateSessionRefreshCredentialHandler(_db);
+        var outcome = await _writes.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForRotation(request.OperationId).IdempotencyKey,
+            AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         var value = outcome.Value;
         var mayReturnReplacement =
             value.Status is SessionRefreshMutationStatus.Rotated or SessionRefreshMutationStatus.Recovered &&
@@ -279,11 +267,10 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         Guid operationId,
         CancellationToken ct = default)
     {
-        var outcome = await _atomic.ExecuteAsync(
-            SessionRefreshCommandIdentity.ForContextSwitch(operationId),
-            command,
-            SwitchCodec,
-            ct);
+        var handler = new SwitchAuthSessionContextHandler(_db);
+        var outcome = await _writes.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForContextSwitch(operationId).IdempotencyKey,
+            AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         return outcome.Value;
     }
 
@@ -292,11 +279,10 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         Guid operationId,
         CancellationToken ct = default)
     {
-        var outcome = await _atomic.ExecuteAsync(
-            SessionRefreshCommandIdentity.ForSessionRevocation(operationId),
-            command,
-            RevokeCodec,
-            ct);
+        var handler = new RevokeAuthSessionHandler(_db);
+        var outcome = await _writes.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForSessionRevocation(operationId).IdempotencyKey,
+            AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         return outcome.Value;
     }
 

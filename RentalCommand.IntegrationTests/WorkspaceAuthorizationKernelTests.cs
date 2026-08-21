@@ -107,10 +107,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             CreateWorkspaceMembershipResult,
             CreateWorkspaceMembershipHandler>();
         services.AddAtomicCommandHandler<
-            StartAuthSessionCommand,
-            StartAuthSessionResult,
-            StartAuthSessionHandler>();
-        services.AddAtomicCommandHandler<
             AddWorkspaceRoleAssignmentCommand,
             WorkspaceTeamMutationResult,
             AddWorkspaceRoleAssignmentHandler>();
@@ -2518,6 +2514,15 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey, AtomicMoneyMutation.Write(money, db));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is StartAuthSessionCommand start)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var handler = new StartAuthSessionHandler(db);
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey,
+                    AuthSessionWriteSupport.Write(start, handler.ExecuteAsync, handler.AuthorizeAsync));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         return await scope.ServiceProvider

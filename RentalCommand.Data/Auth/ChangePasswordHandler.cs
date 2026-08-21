@@ -16,7 +16,11 @@ public sealed class ChangePasswordHandler
 
     public ChangePasswordHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ChangePasswordResult> HandleAsync(
+    public Task<ChangePasswordResult> HandleAsync(
+        ChangePasswordCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<ChangePasswordResult> ExecuteAsync(
         ChangePasswordCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -81,7 +85,11 @@ public sealed class ChangePasswordHandler
         return Result(ChangePasswordOutcome.Changed, command);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        ChangePasswordCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         ChangePasswordCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
