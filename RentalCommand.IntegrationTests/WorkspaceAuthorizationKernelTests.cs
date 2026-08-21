@@ -103,10 +103,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
-            AtomicMoneyMutationCommand,
-            AtomicMoneyMutationResult,
-            AtomicMoneyMutationHandler>();
-        services.AddAtomicCommandHandler<
             CreateWorkspaceMembershipCommand,
             CreateWorkspaceMembershipResult,
             CreateWorkspaceMembershipHandler>();

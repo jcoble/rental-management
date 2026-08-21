@@ -15,15 +15,10 @@ using RentalCommand.Data.Accounting;
 namespace RentalCommand.Api.Services.Domain;
 
 public sealed class AtomicMoneyMutationHandler
-    : IAtomicCommandHandler<AtomicMoneyMutationCommand, AtomicMoneyMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicMoneyMutationHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<AtomicMoneyMutationResult> HandleAsync(
-        AtomicMoneyMutationCommand command, IAtomicCommandContext attempt, CancellationToken ct) =>
-        throw AtomicMoneyMutation.RetiredPath();
 
     public async Task<AtomicMoneyMutationResult> ExecuteAsync(
         AtomicMoneyMutationCommand command, IAtomicCommandContext attempt, CancellationToken ct)
@@ -1738,9 +1733,6 @@ public static class AtomicMoneyMutation
             handler.ExecuteAsync,
             handler.AuthorizeReplayAsync);
     }
-
-    internal static InvalidOperationException RetiredPath() => new(
-        "Atomic money mutations no longer use the legacy atomic handler.");
 
     public static AtomicMoneyMutationCommand Command<TRequest>(
         WorkspaceReadScope scope, string capability, AtomicMoneyDomain domain,

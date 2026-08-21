@@ -12,21 +12,8 @@ namespace RentalCommand.Data.Scanning;
 /// <see cref="CanonicalLeaseScanConfirmationWriter"/> and is not reimplemented here.
 /// </summary>
 public sealed class CreateManualLeaseHandler
-    : IAtomicCommandHandler<CreateManualLeaseCommand, ConfirmScanDraftResult>
 {
     private const string SourceLabel = "Guided Setup manual lease";
-
-    public Task<ConfirmScanDraftResult> HandleAsync(
-        CreateManualLeaseCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        CreateManualLeaseCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
 
     public static async Task<ConfirmScanDraftResult> ExecuteAsync(
         RentalCommandDbContext db,

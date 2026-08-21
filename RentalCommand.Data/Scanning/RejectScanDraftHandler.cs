@@ -5,18 +5,7 @@ using RentalCommand.Core.Scanning;
 namespace RentalCommand.Data.Scanning;
 
 public sealed class RejectScanDraftHandler
-    : IAtomicCommandHandler<RejectScanDraftCommand, RejectScanDraftResult>
 {
-    public Task<RejectScanDraftResult> HandleAsync(
-        RejectScanDraftCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        RejectScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ScanDraftWriteSupport.RetiredPath();
-
     public static async Task<RejectScanDraftResult> ExecuteAsync(
         RentalCommandDbContext db,
         RejectScanDraftCommand command,

@@ -48,7 +48,7 @@ public sealed class StoredDocumentCrudWritePostgreSqlTests : IAsyncLifetime
         await _context.DisposeAsync();
 
     [Fact]
-    public void Commands_PreserveFrozenFingerprints_UseLegacyLockPlans_AndRetireHandlers()
+    public void Commands_PreserveFrozenFingerprints_AndUseLegacyLockPlans()
     {
         var access = new StoredDocumentManagementAccess(
             Guid.Parse("11111111-1111-1111-1111-111111111111"), 7, 8, 9);
@@ -76,9 +76,6 @@ public sealed class StoredDocumentCrudWritePostgreSqlTests : IAsyncLifetime
         deleteWrite.ResultContract.Should().Be(StoredDocumentWriteSupport.DeleteResultContract);
         deleteWrite.LockPlan.Protocol.Should().Be(WriteLockProtocol.StoredFile);
         deleteWrite.LockPlan.Locks.Select(row => row.LockNamespace).Should().Equal("StoredFile");
-
-        AssertRetired(new CreateStoredDocumentHandler(), create);
-        AssertRetired(new DeleteStoredDocumentHandler(), delete);
 
         static Task<CreateStoredDocumentResult> Created(
             CreateStoredDocumentCommand command, IAtomicCommandContext _, CancellationToken __) =>
@@ -207,21 +204,6 @@ public sealed class StoredDocumentCrudWritePostgreSqlTests : IAsyncLifetime
                 "delete-original"))
             .Should().ThrowAsync<UnauthorizedAccessException>()
             .WithMessage("*remove this document*");
-    }
-
-    private static void AssertRetired<TCommand, TResult>(
-        IAtomicCommandHandler<TCommand, TResult> handler, TCommand command)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
-    {
-        FluentActions.Invoking(() => handler.HandleAsync(command, null!, default))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Stored document writes no longer use the legacy stored document handlers.")
-            .GetAwaiter().GetResult();
-        FluentActions.Invoking(() => handler.AuthorizeReplayAsync(command, null!, default))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Stored document writes no longer use the legacy stored document handlers.")
-            .GetAwaiter().GetResult();
     }
 
     private async Task<WorkspaceReadScope> SeedScopeAndUnitAsync()

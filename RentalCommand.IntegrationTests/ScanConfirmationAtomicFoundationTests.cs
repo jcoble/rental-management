@@ -60,10 +60,6 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         services.AddScoped<IScanConfirmationTargetWriter, TestExpenseTargetWriter>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            ConfirmScanDraftCommand,
-            ConfirmScanDraftResult,
-            ConfirmScanDraftHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)

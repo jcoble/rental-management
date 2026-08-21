@@ -60,21 +60,10 @@ public static class DocumentTemplateWriteSupport
             executeAsync, authorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Document template writes no longer use the legacy document template mutation handlers.");
 }
 
 public sealed class CreateDocumentTemplateHandler
-    : IAtomicCommandHandler<CreateDocumentTemplateCommand, DocumentTemplateMutationResult>
 {
-    public Task<DocumentTemplateMutationResult> HandleAsync(
-        CreateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        CreateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, CreateDocumentTemplateCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -138,16 +127,7 @@ public sealed class CreateDocumentTemplateHandler
 }
 
 public sealed class FinalizeDocumentTemplateUploadHandler
-    : IAtomicCommandHandler<FinalizeDocumentTemplateUploadCommand, DocumentTemplateMutationResult>
 {
-    public Task<DocumentTemplateMutationResult> HandleAsync(
-        FinalizeDocumentTemplateUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        FinalizeDocumentTemplateUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, FinalizeDocumentTemplateUploadCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -240,16 +220,7 @@ public sealed class FinalizeDocumentTemplateUploadHandler
 }
 
 public sealed class UpdateDocumentTemplateHandler
-    : IAtomicCommandHandler<UpdateDocumentTemplateCommand, DocumentTemplateMutationResult>
 {
-    public Task<DocumentTemplateMutationResult> HandleAsync(
-        UpdateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        UpdateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, UpdateDocumentTemplateCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -317,16 +288,7 @@ public sealed class UpdateDocumentTemplateHandler
 }
 
 public sealed class AddDocumentTemplateFieldHandler
-    : IAtomicCommandHandler<AddDocumentTemplateFieldCommand, DocumentTemplateMutationResult>
 {
-    public Task<DocumentTemplateMutationResult> HandleAsync(
-        AddDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        AddDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, AddDocumentTemplateFieldCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -387,16 +349,7 @@ public sealed class AddDocumentTemplateFieldHandler
 }
 
 public sealed class UpdateDocumentTemplateFieldHandler
-    : IAtomicCommandHandler<UpdateDocumentTemplateFieldCommand, DocumentTemplateMutationResult>
 {
-    public Task<DocumentTemplateMutationResult> HandleAsync(
-        UpdateDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        UpdateDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, UpdateDocumentTemplateFieldCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -461,16 +414,7 @@ public sealed class UpdateDocumentTemplateFieldHandler
 }
 
 public sealed class DeleteDocumentTemplateFieldHandler
-    : IAtomicCommandHandler<DeleteDocumentTemplateFieldCommand, DocumentTemplateMutationResult>
 {
-    public Task<DocumentTemplateMutationResult> HandleAsync(
-        DeleteDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        DeleteDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw DocumentTemplateWriteSupport.RetiredPath();
-
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, DeleteDocumentTemplateFieldCommand command,
         IAtomicCommandContext context, CancellationToken ct)

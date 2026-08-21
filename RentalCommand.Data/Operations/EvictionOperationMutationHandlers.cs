@@ -64,21 +64,10 @@ public static class EvictionCrudWriteSupport
             WriteLock.For("WorkspaceAccessContext", actor.AccessContextId),
             WriteLock.For("Portfolio", portfolioId));
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Eviction case writes no longer use the legacy eviction mutation handlers.");
 }
 
 public sealed class CreateEvictionCaseHandler
-    : IAtomicCommandHandler<CreateEvictionCaseCommand, OperationMutationResult>
 {
-    public Task<OperationMutationResult> HandleAsync(
-        CreateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw EvictionCrudWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        CreateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw EvictionCrudWriteSupport.RetiredPath();
-
     public static async Task<OperationMutationResult> ExecuteAsync(
         RentalCommandDbContext db, CreateEvictionCaseCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -183,16 +172,7 @@ public sealed class CreateEvictionCaseHandler
 }
 
 public sealed class UpdateEvictionCaseHandler
-    : IAtomicCommandHandler<UpdateEvictionCaseCommand, OperationMutationResult>
 {
-    public Task<OperationMutationResult> HandleAsync(
-        UpdateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw EvictionCrudWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        UpdateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw EvictionCrudWriteSupport.RetiredPath();
-
     public static async Task<OperationMutationResult> ExecuteAsync(
         RentalCommandDbContext db, UpdateEvictionCaseCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -244,16 +224,7 @@ public sealed class UpdateEvictionCaseHandler
 }
 
 public sealed class AddEvictionCaseEventHandler
-    : IAtomicCommandHandler<AddEvictionCaseEventCommand, OperationMutationResult>
 {
-    public Task<OperationMutationResult> HandleAsync(
-        AddEvictionCaseEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw EvictionCrudWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        AddEvictionCaseEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw EvictionCrudWriteSupport.RetiredPath();
-
     public static async Task<OperationMutationResult> ExecuteAsync(
         RentalCommandDbContext db, AddEvictionCaseEventCommand command,
         IAtomicCommandContext context, CancellationToken ct)
@@ -316,16 +287,7 @@ public sealed class AddEvictionCaseEventHandler
 }
 
 public sealed class DeleteEvictionCaseHandler
-    : IAtomicCommandHandler<DeleteEvictionCaseCommand, OperationMutationResult>
 {
-    public Task<OperationMutationResult> HandleAsync(
-        DeleteEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw EvictionCrudWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        DeleteEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw EvictionCrudWriteSupport.RetiredPath();
-
     public static async Task<OperationMutationResult> ExecuteAsync(
         RentalCommandDbContext db, DeleteEvictionCaseCommand command,
         IAtomicCommandContext context, CancellationToken ct)

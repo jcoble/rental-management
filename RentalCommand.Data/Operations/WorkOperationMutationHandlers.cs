@@ -12,17 +12,8 @@ using RentalCommand.Core.Outbox;
 namespace RentalCommand.Data.Operations;
 
 public sealed class CreateWorkOrderHandler
-    : IAtomicCommandHandler<CreateWorkOrderCommand, WorkOrderMutationResult>
 {
     public CreateWorkOrderHandler(RentalCommandDbContext db) { }
-
-    public Task<WorkOrderMutationResult> HandleAsync(
-        CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-
-    public Task AuthorizeReplayAsync(
-        CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
 
     internal static OutboxMessage DataUpdate(
         int portfolioId, string entityType, int entityId, string key, DateTime now,
@@ -30,52 +21,9 @@ public sealed class CreateWorkOrderHandler
         CreateWorkOrderRule.DataUpdate(portfolioId, entityType, entityId, key, now, operation);
 }
 
-public sealed class UpdateWorkOrderHandler
-    : IAtomicCommandHandler<UpdateWorkOrderCommand, WorkOrderMutationResult>
-{
-    public UpdateWorkOrderHandler(RentalCommandDbContext db) { }
-    public Task<WorkOrderMutationResult> HandleAsync(
-        UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-    public Task AuthorizeReplayAsync(
-        UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-}
-
-public sealed class DeleteWorkOrderHandler
-    : IAtomicCommandHandler<DeleteWorkOrderCommand, WorkOrderMutationResult>
-{
-    public DeleteWorkOrderHandler(RentalCommandDbContext db) { }
-    public Task<WorkOrderMutationResult> HandleAsync(
-        DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-    public Task AuthorizeReplayAsync(
-        DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-}
-
-public sealed class CreateTenantWorkOrderHandler
-    : IAtomicCommandHandler<CreateTenantWorkOrderCommand, WorkOrderMutationResult>
-{
-    public CreateTenantWorkOrderHandler(RentalCommandDbContext db) { }
-    public Task<WorkOrderMutationResult> HandleAsync(
-        CreateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-    public Task AuthorizeReplayAsync(
-        CreateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-}
-
 public sealed class AddStaffWorkOrderCommentHandler
-    : IAtomicCommandHandler<AddStaffWorkOrderCommentCommand, WorkOrderMutationResult>
 {
     public AddStaffWorkOrderCommentHandler(RentalCommandDbContext db) { }
-    public Task<WorkOrderMutationResult> HandleAsync(
-        AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-    public Task AuthorizeReplayAsync(
-        AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
 
     internal static WorkOrderStatusEvent AddActivity(
         RentalCommandDbContext db,
@@ -91,42 +39,6 @@ public sealed class AddStaffWorkOrderCommentHandler
         AddStaffWorkOrderCommentRule.AddActivity(
             db, context, entity, portfolioId, actorUserId, actorLabel,
             kind, visibility, note, businessNow);
-}
-
-public sealed class AddTenantWorkOrderCommentHandler
-    : IAtomicCommandHandler<AddTenantWorkOrderCommentCommand, WorkOrderMutationResult>
-{
-    public AddTenantWorkOrderCommentHandler(RentalCommandDbContext db) { }
-    public Task<WorkOrderMutationResult> HandleAsync(
-        AddTenantWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-    public Task AuthorizeReplayAsync(
-        AddTenantWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-}
-
-public sealed class UpdateTenantWorkOrderHandler
-    : IAtomicCommandHandler<UpdateTenantWorkOrderCommand, WorkOrderMutationResult>
-{
-    public UpdateTenantWorkOrderHandler(RentalCommandDbContext db) { }
-    public Task<WorkOrderMutationResult> HandleAsync(
-        UpdateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-    public Task AuthorizeReplayAsync(
-        UpdateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-}
-
-public sealed class CancelTenantWorkOrderHandler
-    : IAtomicCommandHandler<CancelTenantWorkOrderCommand, WorkOrderMutationResult>
-{
-    public CancelTenantWorkOrderHandler(RentalCommandDbContext db) { }
-    public Task<WorkOrderMutationResult> HandleAsync(
-        CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
-    public Task AuthorizeReplayAsync(
-        CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw WorkOrderCrudWriteSupport.RetiredPath();
 }
 
 public static class WorkOrderCrudWriteSupport
@@ -185,9 +97,6 @@ public static class WorkOrderCrudWriteSupport
         Func<CancelTenantWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
         Func<CancelTenantWorkOrderCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay) =>
         New("portal.work-order.cancel", command, TenantResultContract, ProgressionPlan(), execute, authorizeReplay);
-
-    internal static InvalidOperationException RetiredPath() => new(
-        "Work-order CRUD and comments no longer use the legacy mutation handlers.");
 
     private static TransactionalWrite<TCommand, WorkOrderMutationResult> New<TCommand>(
         string operation, TCommand command, string resultContract, WriteLockPlan lockPlan,
