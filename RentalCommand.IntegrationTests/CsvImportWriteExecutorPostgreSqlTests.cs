@@ -262,6 +262,127 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
             .Should().Be(1);
     }
 
+    [Fact]
+    public async Task PaymentImport_PreservesFingerprintRetryClockOutboxStaleAuthorizationAndRetiresLegacyPaths()
+    {
+        var scope = await SeedScopeAsync(DateTime.UtcNow, "payment");
+        const string operationKey = "family-p5-payment-csv";
+        const string csv =
+            "relationshipNumber,propertyName,unitNumber,paymentType,amount,paidDate,method,externalReference,notes\n" +
+            "LM-payment,,,Rent,875,2025-01-05,ACH,ref-payment,January rent\n" +
+            "missing-relationship,,,Rent,100,2025-01-06,Cash,ref-missing,Missing tenant\n";
+
+        CsvImportResult first;
+        CsvImportResult replay;
+        var databaseBefore = DateTime.UtcNow;
+        await using (var services = BuildServices())
+        await using (var requestScope = services.CreateAsyncScope())
+        {
+            var sut = requestScope.ServiceProvider.GetRequiredService<CsvImportService>();
+            first = await sut.ImportAsync(scope, "payment", Csv(csv), false,
+                CommandContext(scope, operationKey));
+            replay = await sut.ImportAsync(scope, "payment", Csv(csv), false,
+                CommandContext(scope, operationKey));
+
+            var command = new AtomicPaymentCsvImportCommand(
+                scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
+                scope.AccessRevision, "retired-payment", "[{}]");
+            Func<Task> retiredExecute = () => requestScope.ServiceProvider
+                .GetRequiredService<IAtomicUnitOfWork>()
+                .ExecuteAsync(AtomicPaymentCsvImport.Identity(command), command,
+                    AtomicPaymentCsvImport.Codec);
+            await retiredExecute.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("Payment CSV imports must use the shared request write executor.");
+
+            var replayCommand = new AtomicPaymentCsvImportCommand(
+                scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
+                scope.AccessRevision, operationKey,
+                PaymentRowsJson(scope.PortfolioId, operationKey));
+            Func<Task> retiredReplay = () => requestScope.ServiceProvider
+                .GetRequiredService<IAtomicUnitOfWork>()
+                .ExecuteAsync(AtomicPaymentCsvImport.Identity(replayCommand), replayCommand,
+                    AtomicPaymentCsvImport.Codec);
+            await retiredReplay.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("Payment CSV imports must use the shared request write executor.");
+        }
+        var databaseAfter = DateTime.UtcNow;
+
+        replay.Should().BeEquivalentTo(first);
+        first.TotalRows.Should().Be(2);
+        first.ValidRows.Should().Be(1);
+        first.CreatedRows.Should().Be(1);
+        first.DuplicateRows.Should().Be(0);
+        var ledger = await _context.Db.TenantLedgerEntries.AsNoTracking().SingleAsync(row =>
+            row.PortfolioId == scope.PortfolioId
+            && row.EntryType == TenantLedgerEntryType.PaymentReceipt);
+        first.Rows.Should().BeEquivalentTo(
+            [
+                new CsvImportRowResult
+                {
+                    RowNumber = 2,
+                    Valid = true,
+                    Errors = [],
+                    CreatedId = ledger.Id,
+                    IsDuplicate = false,
+                    SkipReason = null,
+                },
+                new CsvImportRowResult
+                {
+                    RowNumber = 3,
+                    Valid = false,
+                    Errors = ["Tenant account was not found."],
+                    CreatedId = null,
+                    IsDuplicate = false,
+                    SkipReason = null,
+                },
+            ], options => options.WithStrictOrdering());
+
+        var identity = new AtomicCommandIdentity(
+            "payment.csv-import", $"{scope.PortfolioId}:{scope.AccessContextId}:{operationKey}");
+        var receipt = await ReceiptAsync(identity);
+        var rowsJson = PaymentRowsJson(scope.PortfolioId, operationKey);
+        var frozenCommand = new AtomicPaymentCsvImportCommand(
+            scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
+            scope.AccessRevision, operationKey, rowsJson);
+        receipt.RequestFingerprint.Should().Be(AtomicCommandFingerprint.Create(frozenCommand));
+        receipt.ResultContract.Should().Be(AtomicPaymentCsvImport.Codec.ContractName);
+        AtomicPaymentCsvImport.Codec.Deserialize(receipt.ResultJson!).Rows
+            .Should().BeEquivalentTo(
+            [
+                new AtomicPaymentCsvImportRowResult(2, true, false, ledger.Id,
+                    ledger.TenantAccountId, []),
+                new AtomicPaymentCsvImportRowResult(3, false, false, null, null,
+                    ["Tenant account was not found."]),
+            ], options => options.WithStrictOrdering());
+
+        (await _context.Db.TenantPaymentAttempts.AsNoTracking().CountAsync(row =>
+            row.PortfolioId == scope.PortfolioId)).Should().Be(1);
+        (await _context.Db.TenantLedgerEntries.AsNoTracking().CountAsync(row =>
+            row.PortfolioId == scope.PortfolioId
+            && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
+        (await _context.Db.TenantLedgerAllocations.AsNoTracking().CountAsync(row =>
+            row.PortfolioId == scope.PortfolioId)).Should().Be(0);
+        (await _context.Db.JournalEntries.AsNoTracking().CountAsync(row =>
+            row.PortfolioId == scope.PortfolioId)).Should().Be(0);
+        var audit = await AuditAsync(identity, nameof(TenantAccount));
+        audit.Timestamp.Should().BeOnOrAfter(databaseBefore.AddSeconds(-1));
+        audit.Timestamp.Should().BeOnOrBefore(databaseAfter.AddSeconds(1));
+        audit.Timestamp.Should().NotBe(SeparatedAuditClock);
+        (await _context.Db.OutboxMessages.AsNoTracking().CountAsync(row =>
+            row.IdempotencyKey.StartsWith($"payment-import:{operationKey}:tenant-account:")))
+            .Should().Be(1);
+
+        await RevokeAsync(scope, DateTime.UtcNow);
+        await using var staleServices = BuildServices();
+        await using var staleScope = staleServices.CreateAsyncScope();
+        Func<Task> staleReplay = () => staleScope.ServiceProvider
+            .GetRequiredService<CsvImportService>()
+            .ImportAsync(scope, "payment", Csv(csv), false,
+                CommandContext(scope, operationKey));
+        await staleReplay.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("Workspace access changed. Refresh and try again.");
+    }
+
     private async Task<WorkspaceReadScope> SeedScopeAsync(DateTime now, string suffix)
     {
         var user = await _context.Db.Users.SingleAsync(row => row.Id == 1);
@@ -308,7 +429,12 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         var property = new Property
         {
             PortfolioId = 1,
-            Name = suffix == "unit" ? "CSV unit alias property" : "CSV core alias property",
+            Name = suffix switch
+            {
+                "unit" => "CSV unit alias property",
+                "payment" => "CSV payment property",
+                _ => "CSV core alias property",
+            },
             AddressLine1 = $"{suffix} Executor Way",
             City = "Columbus",
             State = "OH",
@@ -318,6 +444,42 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         };
         _context.Db.AddRange(accessContext, membership, assignment, session, property);
         await _context.Db.SaveChangesAsync();
+        if (suffix == "payment")
+        {
+            var unit = new Unit
+            {
+                PortfolioId = 1,
+                PropertyId = property.Id,
+                UnitNumber = "1",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            var management = new LeaseManagement
+            {
+                PortfolioId = 1,
+                PropertyId = property.Id,
+                Unit = unit,
+                RelationshipNumber = "LM-payment",
+                PlannedPossessionAtUtc = now.AddMonths(-1),
+                CreatedAtUtc = now,
+                CreatedByUserId = user.Id,
+                UpdatedAtUtc = now,
+                RowVersion = Guid.NewGuid(),
+            };
+            _context.Db.AddRange(unit, management);
+            await _context.Db.SaveChangesAsync();
+            _context.Db.TenantAccounts.Add(new TenantAccount
+            {
+                PortfolioId = 1,
+                LeaseManagementId = management.Id,
+                AccountNumber = "TA-payment",
+                Currency = "USD",
+                OpenedAtUtc = now.AddMonths(-1),
+                CreatedAtUtc = now,
+                CreatedByUserId = user.Id,
+            });
+            await _context.Db.SaveChangesAsync();
+        }
         _context.Db.ChangeTracker.Clear();
         return new WorkspaceReadScope(
             1, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
@@ -335,6 +497,9 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         services.AddAtomicCommandHandler<
             AtomicUnitCsvImportCommand, AtomicUnitCsvImportResult,
             AtomicUnitCsvImportHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicPaymentCsvImportCommand, AtomicPaymentCsvImportResult,
+            AtomicPaymentCsvImportHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IUnitCsvImportPreviewQuery, AtomicUnitImportPersistence>();
         services.AddScoped<ICoreCsvImportPreviewQuery, AtomicCoreCsvImportPersistence>();
@@ -383,6 +548,39 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
 
     private static Stream Csv(string text) =>
         new MemoryStream(Encoding.UTF8.GetBytes(text));
+
+    private static string PaymentRowsJson(int portfolioId, string operationKey) =>
+        JsonSerializer.Serialize(new[]
+        {
+            new
+            {
+                RowNumber = 2,
+                RelationshipNumber = "LM-payment",
+                PropertyName = (string?)null,
+                UnitNumber = (string?)null,
+                Amount = 875m,
+                PaidOn = new DateOnly(2025, 1, 5),
+                Method = "ACH",
+                ExternalReference = "ref-payment",
+                Description = "January rent",
+                DeliveryKey = $"csv-receipt:{portfolioId}:{operationKey}:2",
+                Errors = Array.Empty<string>(),
+            },
+            new
+            {
+                RowNumber = 3,
+                RelationshipNumber = "missing-relationship",
+                PropertyName = (string?)null,
+                UnitNumber = (string?)null,
+                Amount = 100m,
+                PaidOn = new DateOnly(2025, 1, 6),
+                Method = "Cash",
+                ExternalReference = "ref-missing",
+                Description = "Missing tenant",
+                DeliveryKey = $"csv-receipt:{portfolioId}:{operationKey}:3",
+                Errors = Array.Empty<string>(),
+            },
+        });
 
     private sealed class FixedTimeProvider(DateTime now) : TimeProvider
     {

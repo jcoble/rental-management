@@ -51,7 +51,6 @@ public class CsvImportServiceTests : IDisposable
             _atomic,
             _atomic,
             _atomic,
-            _atomic,
             _ctx.Db,
             _atomic);
     }
@@ -480,7 +479,17 @@ public class CsvImportServiceTests : IDisposable
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
-            if (command is AtomicPaymentCsvImportCommand payment
+            throw new InvalidOperationException("Unexpected atomic command in CSV import test.");
+        }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            if (write.Request is AtomicPaymentCsvImportCommand payment
                 && typeof(TResult) == typeof(AtomicPaymentCsvImportResult))
             {
                 PaymentCommands.Add(payment);
@@ -492,16 +501,6 @@ public class CsvImportServiceTests : IDisposable
                     new AtomicCommandOutcome<AtomicPaymentCsvImportResult>(
                         result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
             }
-            throw new InvalidOperationException("Unexpected atomic command in CSV import test.");
-        }
-
-        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            string idempotencyKey,
-            TransactionalWrite<TCommand, TResult> write,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData
-            where TResult : notnull
-        {
             if (write.Request is AtomicUnitCsvImportCommand unit
                 && typeof(TResult) == typeof(AtomicUnitCsvImportResult))
             {
