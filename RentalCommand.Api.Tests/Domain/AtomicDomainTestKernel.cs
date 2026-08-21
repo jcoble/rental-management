@@ -181,10 +181,6 @@ internal static class AtomicDomainTestKernel
         TimeProvider? timeProvider = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
-        services.AddAtomicCommandHandler<
-            ApplyRecurringTenantChargeBatchCommand,
-            ApplyRecurringTenantChargeBatchResult,
-            ApplyRecurringTenantChargeBatchHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }

@@ -1,29 +1,31 @@
 using Microsoft.Extensions.Logging;
-using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Time;
+using RentalCommand.Data;
 using RentalCommand.Data.Automation;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
 public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerationService
 {
-    private static readonly AtomicJsonResultCodec<ApplyScheduledFinanceBatchResult> ResultCodec =
-        new("scheduled-finance.recurring-expense.apply.v1");
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IJobStepWriteExecutor _writes;
+    private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IAppTimeZoneProvider _tz;
     private readonly IScheduledAutomationClaimStore _claims;
     private readonly ILogger<RecurringExpenseGenerationService> _logger;
 
     public RecurringExpenseGenerationService(
-        IAtomicUnitOfWork atomic,
+        IJobStepWriteExecutor writes,
+        RentalCommandDbContext db,
         TimeProvider timeProvider,
         IAppTimeZoneProvider tz,
         IScheduledAutomationClaimStore claims,
         ILogger<RecurringExpenseGenerationService> logger)
     {
-        _atomic = atomic;
+        _writes = writes;
+        _db = db;
         _timeProvider = timeProvider;
         _tz = tz;
         _claims = claims;
@@ -47,16 +49,16 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
         try
         {
             var token = RequireSingleToken(claims);
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "scheduled-finance.recurring-expense.apply",
-                    token.ToString("N")),
-                new ApplyClaimedRecurringExpenseBatchCommand(
+            var command = new ApplyClaimedRecurringExpenseBatchCommand(
                     claims.Select(claim => claim.Id).ToArray(),
                     token,
                     today,
-                    _timeProvider.GetUtcNow().UtcDateTime),
-                ResultCodec,
+                    _timeProvider.GetUtcNow().UtcDateTime);
+            var handler = new ApplyClaimedRecurringExpenseBatchHandler(_db);
+            var outcome = await _writes.ExecuteAsync(
+                token.ToString("N"),
+                ScheduledFinanceWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
                 ct);
             if (outcome.Value.GeneratedRowCount > 0)
             {

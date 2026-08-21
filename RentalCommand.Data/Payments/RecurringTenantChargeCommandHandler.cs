@@ -11,9 +11,6 @@ namespace RentalCommand.Data.Payments;
 /// atomic transaction. It does not open a transaction or save outside the command context.
 /// </summary>
 public sealed class ApplyRecurringTenantChargeBatchHandler
-    : IAtomicCommandHandler<
-        ApplyRecurringTenantChargeBatchCommand,
-        ApplyRecurringTenantChargeBatchResult>
 {
     private const int MaximumBatchSize = 1_000;
     private const int MaximumOccurrencesPerSchedule = 120;
@@ -24,7 +21,7 @@ public sealed class ApplyRecurringTenantChargeBatchHandler
 
     public ApplyRecurringTenantChargeBatchHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ApplyRecurringTenantChargeBatchResult> HandleAsync(
+    public async Task<ApplyRecurringTenantChargeBatchResult> ExecuteAsync(
         ApplyRecurringTenantChargeBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -121,7 +118,7 @@ public sealed class ApplyRecurringTenantChargeBatchHandler
         return new ApplyRecurringTenantChargeBatchResult(newOccurrences.Length);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public async Task AuthorizeAsync(
         ApplyRecurringTenantChargeBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

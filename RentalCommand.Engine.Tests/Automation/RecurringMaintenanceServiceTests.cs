@@ -18,6 +18,7 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Automation;
 using RentalCommand.Engine.Services;
+using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Engine.Tests.Automation;
@@ -43,10 +44,7 @@ public class RecurringMaintenanceServiceTests : IDisposable
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            ApplyClaimedRecurringMaintenanceBatchCommand,
-            ApplyScheduledFinanceBatchResult,
-            ApplyClaimedRecurringMaintenanceBatchHandler>();
+        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddScoped<IScheduledAutomationClaimStore>(provider =>
             new ThrowingFailureRecordingClaimStore(
                 provider.GetRequiredService<RentalCommandDbContext>(),

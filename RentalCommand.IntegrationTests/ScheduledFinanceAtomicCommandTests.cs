@@ -16,6 +16,7 @@ using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Automation;
 using RentalCommand.Engine.Services;
+using RentalCommand.Engine.Writes;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -60,18 +61,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<CompanionFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            ApplyClaimedDebtServiceBatchCommand,
-            ApplyScheduledFinanceBatchResult,
-            ApplyClaimedDebtServiceBatchHandler>();
-        services.AddAtomicCommandHandler<
-            ApplyClaimedRecurringExpenseBatchCommand,
-            ApplyScheduledFinanceBatchResult,
-            ApplyClaimedRecurringExpenseBatchHandler>();
-        services.AddAtomicCommandHandler<
-            ApplyClaimedRecurringMaintenanceBatchCommand,
-            ApplyScheduledFinanceBatchResult,
-            ApplyClaimedRecurringMaintenanceBatchHandler>();
+        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -181,6 +171,73 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         (await verify.LoanPayments.CountAsync(row => row.LoanId == loanId)).Should().Be(1);
         (await verify.AtomicAuditLogs.CountAsync(row =>
             row.CommandType == identity.CommandType)).Should().BeGreaterThanOrEqualTo(2);
+    }
+
+    [SkippableFact]
+    public async Task DebtService_FrozenLegacyReceiptReplaysWithoutCreatingPayment()
+    {
+        SkipIfNoDocker();
+        var loanId = await SeedLoanAsync();
+        var token = Guid.Parse("72f38a54-6d9a-46dc-aef8-2c3805f85419");
+        var identity = new AtomicCommandIdentity(
+            "scheduled-finance.debt-service.apply", token.ToString("N"));
+        var command = new ApplyClaimedDebtServiceBatchCommand(
+            [loanId], token, _today, _today.AddMinutes(1));
+        var stored = new ApplyScheduledFinanceBatchResult(
+            ScheduledFinanceApplyOutcome.Applied, 1, 7);
+        await SeedLegacyReceiptAsync(identity, command, DebtCodec, stored);
+
+        var replay = await ExecuteAtomicAsync(identity, command, DebtCodec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(stored);
+        await using var verify = NewContext();
+        (await verify.LoanPayments.CountAsync(row => row.LoanId == loanId)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task RecurringExpense_FrozenLegacyReceiptReplaysWithoutCreatingExpense()
+    {
+        SkipIfNoDocker();
+        var scheduleId = await SeedRecurringExpenseAsync(_today);
+        var token = Guid.Parse("6ca25372-606c-42b9-b0e0-ee6e7cbd7238");
+        var identity = new AtomicCommandIdentity(
+            "scheduled-finance.recurring-expense.apply", token.ToString("N"));
+        var command = new ApplyClaimedRecurringExpenseBatchCommand(
+            [scheduleId], token, _today, _today.AddMinutes(1));
+        var stored = new ApplyScheduledFinanceBatchResult(
+            ScheduledFinanceApplyOutcome.Applied, 1, 8);
+        await SeedLegacyReceiptAsync(identity, command, ExpenseCodec, stored);
+
+        var replay = await ExecuteAtomicAsync(identity, command, ExpenseCodec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(stored);
+        await using var verify = NewContext();
+        (await verify.Expenses.CountAsync(row => row.RecurringExpenseId == scheduleId)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task RecurringMaintenance_FrozenLegacyReceiptReplaysWithoutCreatingWorkOrder()
+    {
+        SkipIfNoDocker();
+        var scheduleId = await SeedRecurringMaintenanceAsync(_today);
+        var token = Guid.Parse("1d28f944-7fe9-4aef-95c4-1983569a1609");
+        var identity = new AtomicCommandIdentity(
+            "scheduled-automation.recurring-maintenance.apply", $"{token:N}:{scheduleId}");
+        var command = new ApplyClaimedRecurringMaintenanceBatchCommand(
+            [scheduleId], token, _today, _today.AddMinutes(1), "America/New_York");
+        var stored = new ApplyScheduledFinanceBatchResult(
+            ScheduledFinanceApplyOutcome.Applied, 1, 9);
+        await SeedLegacyReceiptAsync(identity, command, MaintenanceCodec, stored);
+
+        var replay = await ExecuteAtomicAsync(identity, command, MaintenanceCodec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(stored);
+        await using var verify = NewContext();
+        (await verify.WorkOrders.CountAsync(row =>
+            row.RecurringMaintenanceTaskId == scheduleId)).Should().Be(0);
     }
 
     [SkippableFact]
@@ -422,7 +479,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         {
             var runDb = runScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var service = new DebtServiceService(
-                runScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+                runScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+                runDb,
                 new FixedTimeProvider(february20),
                 new FixedTimeZoneProvider(TimeZoneInfo.Utc),
                 new ScheduledAutomationClaimStore(runDb),
@@ -750,7 +808,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         var taskId = await SeedRecurringMaintenanceAsync(_today.AddDays(-8));
         var claim = await ClaimMaintenanceAsync();
         var identity = new AtomicCommandIdentity(
-            "scheduled-automation.recurring-maintenance.apply", claim.ClaimToken.ToString("N"));
+            "scheduled-automation.recurring-maintenance.apply", $"{claim.ClaimToken:N}:{claim.Id}");
         var command = new ApplyClaimedRecurringMaintenanceBatchCommand(
             [claim.Id], claim.ClaimToken, _today, _today.AddMinutes(1), "America/New_York");
 
@@ -908,9 +966,55 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = _services!.CreateAsyncScope();
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var write = command switch
+        {
+            ApplyClaimedDebtServiceBatchCommand debt =>
+                (TransactionalWrite<TCommand, TResult>)(object)ScheduledFinanceWriteSupport.Write(
+                    debt,
+                    new ApplyClaimedDebtServiceBatchHandler(db).ExecuteAsync,
+                    new ApplyClaimedDebtServiceBatchHandler(db).AuthorizeAsync),
+            ApplyClaimedRecurringExpenseBatchCommand expense =>
+                (TransactionalWrite<TCommand, TResult>)(object)ScheduledFinanceWriteSupport.Write(
+                    expense,
+                    new ApplyClaimedRecurringExpenseBatchHandler(db).ExecuteAsync,
+                    new ApplyClaimedRecurringExpenseBatchHandler(db).AuthorizeAsync),
+            ApplyClaimedRecurringMaintenanceBatchCommand maintenance =>
+                (TransactionalWrite<TCommand, TResult>)(object)ScheduledFinanceWriteSupport.Write(
+                    maintenance,
+                    new ApplyClaimedRecurringMaintenanceBatchHandler(db).ExecuteAsync,
+                    new ApplyClaimedRecurringMaintenanceBatchHandler(db).AuthorizeAsync),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        write.OperationName.Should().Be(identity.CommandType);
+        write.ResultContract.Should().Be(codec.ContractName);
+        return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, write);
+    }
+
+    private async Task SeedLegacyReceiptAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec,
+        TResult result)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var db = NewContext();
+        db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+        {
+            Id = Guid.NewGuid(),
+            AttemptId = Guid.NewGuid(),
+            CommandType = identity.CommandType,
+            IdempotencyKey = identity.IdempotencyKey,
+            RequestFingerprint = AtomicCommandFingerprint.Create(command),
+            Status = AtomicCommandReceiptStatus.Completed,
+            ResultContract = codec.ContractName,
+            ResultJson = codec.Serialize(result),
+            StartedAt = _today,
+            CompletedAt = _today,
+        });
+        await db.SaveChangesAsync();
     }
 
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();

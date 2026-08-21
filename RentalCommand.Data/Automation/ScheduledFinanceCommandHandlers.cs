@@ -10,8 +10,36 @@ using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Automation;
 
+public static class ScheduledFinanceWriteSupport
+{
+    public static TransactionalWrite<TCommand, ApplyScheduledFinanceBatchResult> Write<TCommand>(
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<ApplyScheduledFinanceBatchResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData
+    {
+        var (operationName, resultContract) = command switch
+        {
+            ApplyClaimedDebtServiceBatchCommand =>
+                ("scheduled-finance.debt-service.apply", "scheduled-finance.debt-service.apply.v1"),
+            ApplyClaimedRecurringExpenseBatchCommand =>
+                ("scheduled-finance.recurring-expense.apply", "scheduled-finance.recurring-expense.apply.v1"),
+            ApplyClaimedRecurringMaintenanceBatchCommand =>
+                ("scheduled-automation.recurring-maintenance.apply", "scheduled-automation.recurring-maintenance.apply.v1"),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return new TransactionalWrite<TCommand, ApplyScheduledFinanceBatchResult>(
+            operationName,
+            WriteIdempotencyPolicy.Required,
+            command,
+            resultContract,
+            WriteLockPlan.None,
+            executeAsync,
+            authorizeReplayAsync);
+    }
+}
+
 public sealed class ApplyClaimedDebtServiceBatchHandler
-    : IAtomicCommandHandler<ApplyClaimedDebtServiceBatchCommand, ApplyScheduledFinanceBatchResult>
 {
     private readonly RentalCommandDbContext _db;
 
@@ -19,7 +47,7 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
 
     private const int MaxOccurrencesPerSchedule = 36;
 
-    public async Task<ApplyScheduledFinanceBatchResult> HandleAsync(
+    public async Task<ApplyScheduledFinanceBatchResult> ExecuteAsync(
         ApplyClaimedDebtServiceBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -149,7 +177,7 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
             generated.Count);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public async Task AuthorizeAsync(
         ApplyClaimedDebtServiceBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -248,7 +276,6 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
 }
 
 public sealed class ApplyClaimedRecurringExpenseBatchHandler
-    : IAtomicCommandHandler<ApplyClaimedRecurringExpenseBatchCommand, ApplyScheduledFinanceBatchResult>
 {
     private readonly RentalCommandDbContext _db;
 
@@ -256,7 +283,7 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
 
     private const int MaxOccurrencesPerSchedule = 36;
 
-    public async Task<ApplyScheduledFinanceBatchResult> HandleAsync(
+    public async Task<ApplyScheduledFinanceBatchResult> ExecuteAsync(
         ApplyClaimedRecurringExpenseBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -348,7 +375,7 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
             generated.Count);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public async Task AuthorizeAsync(
         ApplyClaimedRecurringExpenseBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -386,13 +413,12 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
 }
 
 public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
-    : IAtomicCommandHandler<ApplyClaimedRecurringMaintenanceBatchCommand, ApplyScheduledFinanceBatchResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ApplyClaimedRecurringMaintenanceBatchHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ApplyScheduledFinanceBatchResult> HandleAsync(
+    public async Task<ApplyScheduledFinanceBatchResult> ExecuteAsync(
         ApplyClaimedRecurringMaintenanceBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -515,7 +541,7 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
             generated.Count);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public async Task AuthorizeAsync(
         ApplyClaimedRecurringMaintenanceBatchCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
