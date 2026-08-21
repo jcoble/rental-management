@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -15,13 +16,13 @@ public class LoanService : ILoanService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
-    public LoanService(RentalCommandDbContext db, TimeProvider timeProvider, IAtomicUnitOfWork atomic)
+    public LoanService(RentalCommandDbContext db, TimeProvider timeProvider, IRequestWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<LoanResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -139,8 +140,7 @@ public class LoanService : ILoanService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, idempotencyKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         if (!outcome.Value.Found) return null;
         return ReadSnapshot<LoanResponse>(outcome.Value);
     }
@@ -151,8 +151,7 @@ public class LoanService : ILoanService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Loan, AtomicMoneyOperation.Update, id, idempotencyKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         if (!outcome.Value.Found) return null;
         return ReadSnapshot<LoanResponse>(outcome.Value);
     }
@@ -163,8 +162,7 @@ public class LoanService : ILoanService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, id, idempotencyKey, new object(),
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found;
     }
 
@@ -180,8 +178,7 @@ public class LoanService : ILoanService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Loan, AtomicMoneyOperation.PostPayment, paymentId, idempotencyKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         if (!outcome.Value.Found) return null;
         return ReadSnapshot<LoanPaymentResponse>(outcome.Value);
     }
@@ -191,6 +188,12 @@ public class LoanService : ILoanService
             ? System.Text.Json.JsonSerializer.Deserialize<TResponse>(json)
                 ?? throw new AtomicReceiptInvariantException("The money receipt snapshot is invalid.")
             : throw new AtomicReceiptInvariantException("The money receipt snapshot is missing.");
+
+    private Task<AtomicCommandOutcome<AtomicMoneyMutationResult>> ExecuteAsync(
+        AtomicMoneyMutationCommand command, CancellationToken ct) =>
+        _writes.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command).IdempotencyKey,
+            AtomicMoneyMutation.Write(command, _db), ct);
 
     public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
         int portfolioId, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default)

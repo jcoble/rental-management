@@ -7,6 +7,7 @@ using Moq;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -69,6 +70,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
         services.AddSingleton<ExpenseAtomicFailureInterceptor>();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             AtomicMoneyMutationCommand,
             AtomicMoneyMutationResult,
@@ -463,10 +465,8 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             ],
         };
         var command = Command("atomic-replay", request);
-        var first = await Atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
-        var replay = await Atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+        var first = await ExecuteAsync(command);
+        var replay = await ExecuteAsync(command);
         var auditIdempotencyKey = AtomicMoneyMutation.Identity(command).IdempotencyKey;
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -489,8 +489,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
         failure.Arm();
         request.Description = "Must roll back";
         var failedCommand = Command("atomic-injected-failure", request);
-        var act = async () => await Atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(failedCommand), failedCommand, AtomicMoneyMutation.Codec);
+        var act = async () => await ExecuteAsync(failedCommand);
         await act.Should().ThrowAsync<Exception>();
 
         await using var failed = NewContext();
@@ -531,8 +530,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
                 Notes = "Updated expense notes",
             },
             _now.AddMinutes(1));
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+        var outcome = await ExecuteAsync(command);
 
         outcome.Value.Found.Should().BeTrue();
         await using var verify = NewContext();
@@ -574,8 +572,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             "posted-expense-correction-update",
             update,
             _now.AddMinutes(1));
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+        var outcome = await ExecuteAsync(command);
 
         outcome.Value.Found.Should().BeTrue();
         await using var verify = NewContext();
@@ -634,8 +631,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             "posted-expense-delete",
             new object(),
             _now.AddMinutes(1));
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+        var outcome = await ExecuteAsync(command);
 
         outcome.Value.Found.Should().BeTrue();
         await using var verify = NewContext();
@@ -696,7 +692,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
                    set_config('app.access_revision', '1', false);
             """);
         var service = new ExpenseService(
-            db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
+            db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
         var page = await service.ListPageAsync(
             new WorkspaceReadScope(
                 _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 1),
@@ -795,9 +791,14 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
         CreateExpenseRequest request)
     {
         var command = Command(key, request);
-        return Atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+        return ExecuteAsync(command);
     }
+
+    private Task<AtomicCommandOutcome<AtomicMoneyMutationResult>> ExecuteAsync(
+        AtomicMoneyMutationCommand command) =>
+        Writes.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command).IdempotencyKey,
+            AtomicMoneyMutation.Write(command, ServiceScope.GetRequiredService<RentalCommandDbContext>()));
 
     private AtomicMoneyMutationCommand Command(string key, CreateExpenseRequest request) =>
         AtomicMoneyMutation.Command(
@@ -989,8 +990,8 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             .UseNpgsql(_connectionString)
             .Options);
 
-    private IAtomicUnitOfWork Atomic =>
-        ServiceScope.GetRequiredService<IAtomicUnitOfWork>();
+    private IRequestWriteExecutor Writes =>
+        ServiceScope.GetRequiredService<IRequestWriteExecutor>();
 
     private IServiceProvider ServiceScope =>
         _serviceScope?.ServiceProvider

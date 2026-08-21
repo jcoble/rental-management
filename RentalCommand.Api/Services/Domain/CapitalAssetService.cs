@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -20,16 +21,16 @@ public class CapitalAssetService : ICapitalAssetService
 
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public CapitalAssetService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<CapitalAssetResponse>> ListAsync(
@@ -117,8 +118,7 @@ public class CapitalAssetService : ICapitalAssetService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Create, 0, operationKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found
             ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct: ct)
             : null;
@@ -134,8 +134,7 @@ public class CapitalAssetService : ICapitalAssetService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Update, id, operationKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found
             ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct: ct)
             : null;
@@ -151,8 +150,7 @@ public class CapitalAssetService : ICapitalAssetService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.CapitalizeExpense,
             expenseId, operationKey, request, _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found
             ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct: ct)
             : null;
@@ -167,10 +165,15 @@ public class CapitalAssetService : ICapitalAssetService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Delete, id, operationKey, new object(),
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found;
     }
+
+    private Task<AtomicCommandOutcome<AtomicMoneyMutationResult>> ExecuteAsync(
+        AtomicMoneyMutationCommand command, CancellationToken ct) =>
+        _writes.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command).IdempotencyKey,
+            AtomicMoneyMutation.Write(command, _db), ct);
 
     public DepreciationResult AnnualDepreciationForYear(CapitalAsset asset, int year)
     {

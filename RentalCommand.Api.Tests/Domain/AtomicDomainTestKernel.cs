@@ -95,6 +95,7 @@ internal static class AtomicDomainTestKernel
         IEnumerable<IInterceptor>? interceptors = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             DispatchWorkOrderToVendorCommand,
             DispatchWorkOrderToVendorResult,
@@ -226,6 +227,7 @@ internal static class AtomicDomainTestKernel
         TimeProvider? timeProvider = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             AtomicMoneyMutationCommand,
             AtomicMoneyMutationResult,

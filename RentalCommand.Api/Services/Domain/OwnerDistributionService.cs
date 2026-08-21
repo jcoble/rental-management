@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -16,16 +17,16 @@ public class OwnerDistributionService : IOwnerDistributionService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public OwnerDistributionService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<OwnerDistributionResponse>> ListAsync(
@@ -101,8 +102,7 @@ public class OwnerDistributionService : IOwnerDistributionService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
             AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Create, 0, idempotencyKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
     }
 
@@ -112,8 +112,7 @@ public class OwnerDistributionService : IOwnerDistributionService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
             AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Update, id, idempotencyKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
     }
 
@@ -123,8 +122,7 @@ public class OwnerDistributionService : IOwnerDistributionService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
             AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Approve, id, idempotencyKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
     }
 
@@ -134,8 +132,7 @@ public class OwnerDistributionService : IOwnerDistributionService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
             AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Reject, id, idempotencyKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
     }
 
@@ -145,14 +142,19 @@ public class OwnerDistributionService : IOwnerDistributionService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
             AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Delete, id, idempotencyKey, new object(),
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found;
     }
 
     private static OwnerDistributionResponse ReadSnapshot(AtomicMoneyMutationResult result) =>
         System.Text.Json.JsonSerializer.Deserialize<OwnerDistributionResponse>(result.ResponseJson!)
         ?? throw new InvalidOperationException("Atomic owner-distribution receipt did not contain a response snapshot.");
+
+    private Task<AtomicCommandOutcome<AtomicMoneyMutationResult>> ExecuteAsync(
+        AtomicMoneyMutationCommand command, CancellationToken ct) =>
+        _writes.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command).IdempotencyKey,
+            AtomicMoneyMutation.Write(command, _db), ct);
 
     private IQueryable<OwnerDistribution> BuildListQuery(int portfolioId, OwnerDistributionListQuery query)
         => BuildListQuery(_db.OwnerDistributions.AsNoTracking(), portfolioId, query);
