@@ -21,16 +21,14 @@ public sealed class AtomicMoneyMutationHandler
 
     public AtomicMoneyMutationHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AtomicMoneyMutationResult> HandleAsync(
+    public Task<AtomicMoneyMutationResult> HandleAsync(
+        AtomicMoneyMutationCommand command, IAtomicCommandContext attempt, CancellationToken ct) =>
+        throw AtomicMoneyMutation.RetiredPath();
+
+    public async Task<AtomicMoneyMutationResult> ExecuteAsync(
         AtomicMoneyMutationCommand command, IAtomicCommandContext attempt, CancellationToken ct)
     {
         Validate(command);
-        // Authority mutations use this same lock. Once acquired, the exact revision proven below
-        // cannot change before this transaction's business write commits or rolls back.
-        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await attempt.AcquireLockAsync(
-            "WorkspaceAccessContext", command.AccessContextId, ct);
-        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         await AcquireProgressionWorkOrderLockAsync(command, attempt, ct);
         var times = await AtomicCommandDbClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var securityNowUtc = times.WallClockUtc;
@@ -1720,6 +1718,29 @@ public static class AtomicMoneyMutation
 {
     public static readonly AtomicJsonResultCodec<AtomicMoneyMutationResult> Codec =
         new("money.scoped-mutation.v2");
+
+    public static TransactionalWrite<AtomicMoneyMutationCommand, AtomicMoneyMutationResult> Write(
+        AtomicMoneyMutationCommand command,
+        RentalCommandDbContext db)
+    {
+        var identity = Identity(command);
+        var handler = new AtomicMoneyMutationHandler(db);
+        return new(
+            identity.CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            Codec.ContractName,
+            new WriteLockPlan(
+                WriteLockProtocol.AuthorizationScope,
+                WriteLock.For("AuthSession", command.AuthSessionId),
+                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
+                WriteLock.For("Portfolio", command.PortfolioId)),
+            handler.ExecuteAsync,
+            handler.AuthorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Atomic money mutations no longer use the legacy atomic handler.");
 
     public static AtomicMoneyMutationCommand Command<TRequest>(
         WorkspaceReadScope scope, string capability, AtomicMoneyDomain domain,

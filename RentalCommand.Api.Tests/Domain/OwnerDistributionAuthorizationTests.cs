@@ -9,11 +9,13 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
+using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.TestCommon;
 
@@ -39,9 +41,9 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         _ctx = await _fixture.CreateContextAsync();
         _atomicServices = AtomicDomainTestKernel.CreateForMoneyPostgreSql(_ctx.ConnectionString);
         _service = new OwnerDistributionService(
-            _ctx.Db,
+            _atomicServices.GetRequiredService<RentalCommandDbContext>(),
             TimeProvider.System,
-            _atomicServices.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            _atomicServices.GetRequiredService<IRequestWriteExecutor>());
         SeedPortfolio();
         await new ChartOfAccountsSeedService(_ctx.Db).SeedAsync(_portfolioId);
         await _ctx.Db.SaveChangesAsync();
@@ -169,9 +171,9 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
             _ctx.ConnectionString,
             timeProvider: clock);
         var service = new OwnerDistributionService(
-            _ctx.Db,
+            frozenServices.GetRequiredService<RentalCommandDbContext>(),
             clock,
-            frozenServices.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            frozenServices.GetRequiredService<IRequestWriteExecutor>());
         var owner = SeedOwner("Frozen Lifecycle Owner");
         var property = SeedProperty(owner.Id, "Frozen Lifecycle Property");
         var scope = _ctx.Db.SeedAdministratorScope(
@@ -365,9 +367,9 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
             _ctx.ConnectionString,
             timeProvider: clock);
         var service = new OwnerDistributionService(
-            _ctx.Db,
+            frozenServices.GetRequiredService<RentalCommandDbContext>(),
             clock,
-            frozenServices.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            frozenServices.GetRequiredService<IRequestWriteExecutor>());
         var owner = SeedOwner("Rollback Owner");
         var property = SeedProperty(owner.Id, "Rollback Property");
         var scope = _ctx.Db.SeedAdministratorScope(
@@ -386,9 +388,9 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
             [new ThrowOnOwnerDistributionOutboxInterceptor()],
             clock);
         var failingService = new OwnerDistributionService(
-            _ctx.Db,
+            failingServices.GetRequiredService<RentalCommandDbContext>(),
             clock,
-            failingServices.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            failingServices.GetRequiredService<IRequestWriteExecutor>());
 
         var approve = async () => await failingService.ApproveAsync(scope, draft!.Id,
             new ApproveOwnerDistributionRequest { BankReference = "DIST-202701-O02", ExportReference = "DIST-202701-O02" },

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -15,14 +16,14 @@ public class RecurringExpenseService : IRecurringExpenseService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public RecurringExpenseService(
-        RentalCommandDbContext db, TimeProvider timeProvider, IAtomicUnitOfWork atomic)
+        RentalCommandDbContext db, TimeProvider timeProvider, IRequestWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<RecurringExpenseResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -139,8 +140,7 @@ public class RecurringExpenseService : IRecurringExpenseService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.RecurringExpense, AtomicMoneyOperation.Create, 0, idempotencyKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         if (!outcome.Value.Found) return null;
         return ReadSnapshot<RecurringExpenseResponse>(outcome.Value);
     }
@@ -151,8 +151,7 @@ public class RecurringExpenseService : IRecurringExpenseService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.RecurringExpense, AtomicMoneyOperation.Update, id, idempotencyKey, request,
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         if (!outcome.Value.Found) return null;
         return ReadSnapshot<RecurringExpenseResponse>(outcome.Value);
     }
@@ -163,10 +162,15 @@ public class RecurringExpenseService : IRecurringExpenseService
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.RecurringExpense, AtomicMoneyOperation.Delete, id, idempotencyKey, new object(),
             _timeProvider.UtcNow());
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        var outcome = await ExecuteAsync(command, ct);
         return outcome.Value.Found;
     }
+
+    private Task<AtomicCommandOutcome<AtomicMoneyMutationResult>> ExecuteAsync(
+        AtomicMoneyMutationCommand command, CancellationToken ct) =>
+        _writes.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command).IdempotencyKey,
+            AtomicMoneyMutation.Write(command, _db), ct);
 
     private static TResponse ReadSnapshot<TResponse>(AtomicMoneyMutationResult result) where TResponse : class =>
         result.ResponseJson is { Length: > 0 } json
