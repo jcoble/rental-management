@@ -217,18 +217,17 @@ public sealed class LeaseManagementControllerTests
                 "Drafts, signatures, payments, and autopay must be resolved."),
             CloseOutcome(CloseTenantAccountOutcome.Closed, null, closedAt),
         ]);
-        var atomic = new Mock<IAtomicUnitOfWork>(MockBehavior.Strict);
-        atomic.Setup(service => service.ExecuteAsync<
+        var writes = new Mock<IRequestWriteExecutor>(MockBehavior.Strict);
+        writes.Setup(service => service.ExecuteAsync<
                 CloseTenantAccountCommand, CloseTenantAccountResult>(
-                It.IsAny<AtomicCommandIdentity>(),
-                It.IsAny<CloseTenantAccountCommand>(),
-                It.IsAny<AtomicJsonResultCodec<CloseTenantAccountResult>>(),
+                It.IsAny<string>(),
+                It.IsAny<TransactionalWrite<CloseTenantAccountCommand, CloseTenantAccountResult>>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<AtomicCommandIdentity, CloseTenantAccountCommand,
-                AtomicJsonResultCodec<CloseTenantAccountResult>, CancellationToken>(
-                (_, command, _, _) => capturedCommand = command)
+            .Callback<string, TransactionalWrite<CloseTenantAccountCommand,
+                CloseTenantAccountResult>, CancellationToken>(
+                (_, write, _) => capturedCommand = write.Request)
             .ReturnsAsync(() => outcomes.Dequeue());
-        var controller = CreateCloseController(atomic.Object);
+        var controller = CreateCloseController(writes.Object);
         var request = new CloseTenantAccountRequest
         {
             TenantAccountId = 149,
@@ -263,11 +262,10 @@ public sealed class LeaseManagementControllerTests
         capturedCommand.AuthSessionId.Should().Be(SessionId);
         capturedCommand.AccessContextId.Should().Be(AccessContextId);
         capturedCommand.ExpectedAccessRevision.Should().Be(AccessRevision);
-        atomic.Verify(service => service.ExecuteAsync<
+        writes.Verify(service => service.ExecuteAsync<
             CloseTenantAccountCommand, CloseTenantAccountResult>(
-            It.IsAny<AtomicCommandIdentity>(),
-            It.IsAny<CloseTenantAccountCommand>(),
-            It.IsAny<AtomicJsonResultCodec<CloseTenantAccountResult>>(),
+            It.IsAny<string>(),
+            It.IsAny<TransactionalWrite<CloseTenantAccountCommand, CloseTenantAccountResult>>(),
             It.IsAny<CancellationToken>()), Times.Exactly(5));
     }
 
@@ -281,7 +279,6 @@ public sealed class LeaseManagementControllerTests
 
     private static LeaseManagementController CreateLeaseController(IRequestWriteExecutor writes) =>
         WithAccess(new LeaseManagementController(
-            Mock.Of<IAtomicUnitOfWork>(),
             Mock.Of<ILeaseManagementQueryService>(),
             Mock.Of<ILeaseQaService>(),
             new ConfigurationBuilder().Build(),
@@ -291,8 +288,11 @@ public sealed class LeaseManagementControllerTests
                 new DbContextOptionsBuilder<RentalCommandDbContext>().Options)));
 
     private static TenantAccountLifecycleController CreateCloseController(
-        IAtomicUnitOfWork atomic) =>
-        WithAccess(new TenantAccountLifecycleController(atomic));
+        IRequestWriteExecutor writes) =>
+        WithAccess(new TenantAccountLifecycleController(
+            writes,
+            new RentalCommandDbContext(
+                new DbContextOptionsBuilder<RentalCommandDbContext>().Options)));
 
     private static TController WithAccess<TController>(TController controller)
         where TController : ControllerBase

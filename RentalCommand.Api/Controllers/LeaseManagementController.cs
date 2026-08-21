@@ -17,17 +17,6 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class LeaseManagementController : ManagementControllerBase
 {
-    private static readonly AtomicJsonResultCodec<GivePossessionResult> GivePossessionCodec =
-        new("lease-management.give-possession.v1");
-    private static readonly AtomicJsonResultCodec<ReconcileHistoricalPossessionResult>
-        ReconcileHistoricalPossessionCodec =
-            new("lease-management.reconcile-historical-possession.v1");
-    private static readonly AtomicJsonResultCodec<ConfirmMoveInResult> ConfirmMoveInCodec =
-        new("lease-management.confirm-move-in.v1");
-    private static readonly AtomicJsonResultCodec<ReturnPossessionResult> ReturnPossessionCodec =
-        new("lease-management.return-possession.v1");
-
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly ILeaseManagementQueryService _queryService;
@@ -36,7 +25,6 @@ public sealed class LeaseManagementController : ManagementControllerBase
     private readonly string _webBaseUrl;
 
     public LeaseManagementController(
-        IAtomicUnitOfWork atomic,
         ILeaseManagementQueryService queryService,
         ILeaseQaService qa,
         IConfiguration configuration,
@@ -44,7 +32,6 @@ public sealed class LeaseManagementController : ManagementControllerBase
         IRequestWriteExecutor writes,
         RentalCommandDbContext db)
     {
-        _atomic = atomic;
         _queryService = queryService;
         _qa = qa;
         _timeProvider = timeProvider;
@@ -667,13 +654,13 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var businessNowUtc = _timeProvider.GetUtcNow().UtcDateTime;
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("lease-management.give-possession",
-                    $"{portfolioId}:{leaseManagementId}:{digest}"),
-                new GivePossessionCommand(portfolioId, leaseManagementId, request.UnitId, userId,
+            var command = new GivePossessionCommand(
+                    portfolioId, leaseManagementId, request.UnitId, userId,
                     sessionId, accessContextId, accessRevision, businessNowUtc,
-                    $"give-possession:{portfolioId}:{leaseManagementId}:{digest}"),
-                GivePossessionCodec, ct);
+                    $"give-possession:{portfolioId}:{leaseManagementId}:{digest}");
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{leaseManagementId}:{digest}",
+                LeasingWriteSupport.Write<GivePossessionCommand, GivePossessionResult>(_db, command), ct);
             return outcome.Value.Outcome switch
             {
                 GivePossessionOutcome.Given or GivePossessionOutcome.AlreadyGiven
@@ -717,11 +704,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var businessNowUtc = _timeProvider.GetUtcNow().UtcDateTime;
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "lease-management.reconcile-historical-possession",
-                    $"{portfolioId}:{leaseManagementId}:{digest}"),
-                new ReconcileHistoricalPossessionCommand(
+            var command = new ReconcileHistoricalPossessionCommand(
                     portfolioId,
                     leaseManagementId,
                     request.UnitId,
@@ -731,9 +714,11 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     accessContextId,
                     accessRevision,
                     businessNowUtc,
-                    $"reconcile-historical-possession:{portfolioId}:{leaseManagementId}:{digest}"),
-                ReconcileHistoricalPossessionCodec,
-                ct);
+                    $"reconcile-historical-possession:{portfolioId}:{leaseManagementId}:{digest}");
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{leaseManagementId}:{digest}",
+                LeasingWriteSupport.Write<ReconcileHistoricalPossessionCommand,
+                    ReconcileHistoricalPossessionResult>(_db, command), ct);
 
             return outcome.Value.Outcome switch
             {
@@ -784,11 +769,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var businessNowUtc = _timeProvider.GetUtcNow().UtcDateTime;
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "lease-management.confirm-move-in",
-                    $"{portfolioId}:{leaseManagementId}:{digest}"),
-                new ConfirmMoveInCommand(
+            var command = new ConfirmMoveInCommand(
                     portfolioId,
                     leaseManagementId,
                     request.UnitId,
@@ -801,9 +782,10 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     accessContextId,
                     accessRevision,
                     businessNowUtc,
-                    $"confirm-move-in:{portfolioId}:{leaseManagementId}:{digest}"),
-                ConfirmMoveInCodec,
-                ct);
+                    $"confirm-move-in:{portfolioId}:{leaseManagementId}:{digest}");
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{leaseManagementId}:{digest}",
+                LeasingWriteSupport.Write<ConfirmMoveInCommand, ConfirmMoveInResult>(_db, command), ct);
 
             return outcome.Value.Outcome switch
             {
@@ -863,18 +845,18 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var businessNowUtc = _timeProvider.GetUtcNow().UtcDateTime;
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("lease-management.return-possession",
-                    $"{portfolioId}:{leaseManagementId}:{digest}"),
-                new ReturnPossessionCommand(portfolioId, leaseManagementId, request.UnitId, userId,
+            var command = new ReturnPossessionCommand(
+                    portfolioId, leaseManagementId, request.UnitId, userId,
                     sessionId, accessContextId, accessRevision, businessNowUtc,
                     request.Parties.Select(item => new ReturnPossessionParty(
                         item.LeaseManagementPartyId, item.Disposition!.Value)).ToArray(),
                     request.Accesses.Select(item => new ReturnPossessionAccess(
                         item.TenantUserAccessId, item.Disposition!.Value)).ToArray(),
                     request.TurnoverReason,
-                    $"return-possession:{portfolioId}:{leaseManagementId}:{digest}"),
-                ReturnPossessionCodec, ct);
+                    $"return-possession:{portfolioId}:{leaseManagementId}:{digest}");
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{leaseManagementId}:{digest}",
+                LeasingWriteSupport.Write<ReturnPossessionCommand, ReturnPossessionResult>(_db, command), ct);
             return outcome.Value.Outcome switch
             {
                 ReturnPossessionOutcome.Returned

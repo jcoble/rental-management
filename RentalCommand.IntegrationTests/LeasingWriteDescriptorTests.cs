@@ -17,7 +17,7 @@ public sealed class LeasingWriteDescriptorTests
         new DbContextOptionsBuilder<RentalCommandDbContext>().Options);
 
     [Fact]
-    public void AllTwelveOperations_PreserveLegacyOperationsContractsAndLockPrefixes()
+    public void AllTwentyOperationsIncludingPossession_PreserveLegacyOperationsContractsAndLockPrefixes()
     {
         Describe<PrepareMoveInCommand, PrepareMoveInResult>(Prepare()).Should().BeEquivalentTo(
             new Descriptor("lease-management.prepare-move-in", "lease-management.prepare-move-in.v2",
@@ -59,11 +59,34 @@ public sealed class LeasingWriteDescriptorTests
         Describe<CreatePropertyDispositionCommand, CreatePropertyDispositionResult>(Disposition()).Should()
             .BeEquivalentTo(new Descriptor("property-disposition.create", "property-disposition.create.v1",
                 WriteLockProtocol.PropertyDisposition, ["Property"], []));
-
+        Describe<GivePossessionCommand, GivePossessionResult>(Give()).Should().BeEquivalentTo(
+            new Descriptor("lease-management.give-possession", "lease-management.give-possession.v1",
+                WriteLockProtocol.Possession, ["Unit", "LeaseManagement"], []));
+        Describe<ReconcileHistoricalPossessionCommand,
+            ReconcileHistoricalPossessionResult>(Reconcile()).Should().BeEquivalentTo(
+            new Descriptor("lease-management.reconcile-historical-possession",
+                "lease-management.reconcile-historical-possession.v1", WriteLockProtocol.Possession,
+                ["Unit", "LeaseManagement"], []));
+        Describe<ConfirmMoveInCommand, ConfirmMoveInResult>(Confirm()).Should().BeEquivalentTo(
+            new Descriptor("lease-management.confirm-move-in", "lease-management.confirm-move-in.v1",
+                null, [], []));
+        Describe<ReturnPossessionCommand, ReturnPossessionResult>(Return()).Should().BeEquivalentTo(
+            new Descriptor("lease-management.return-possession", "lease-management.return-possession.v1",
+                WriteLockProtocol.Possession, ["Unit", "LeaseManagement"], []));
+        Describe<CompleteTurnoverCommand, CompleteTurnoverResult>(Turnover()).Should().BeEquivalentTo(
+            new Descriptor("unit.complete-turnover", "unit.complete-turnover.v1", null, [], []));
+        Describe<VoidLeaseAgreementCommand, VoidLegalArtifactResult>(VoidAgreement()).Should().BeEquivalentTo(
+            new Descriptor("lease-agreement.void", "lease-agreement.void.v1",
+                WriteLockProtocol.LeaseManagement, ["LeaseManagement"], []));
+        Describe<VoidLeaseAddendumCommand, VoidLegalArtifactResult>(VoidAddendum()).Should().BeEquivalentTo(
+            new Descriptor("lease-addendum.void", "lease-addendum.void.v1",
+                WriteLockProtocol.LeaseManagement, ["LeaseManagement"], []));
+        Describe<CloseTenantAccountCommand, CloseTenantAccountResult>(CloseAccount()).Should().BeEquivalentTo(
+            new Descriptor("tenant-account.close", "tenant-account.close.v1", null, [], []));
     }
 
     [Fact]
-    public void Fingerprints_StillExcludeExactlyTheLegacyReplayAuthorizationAndClockFields()
+    public void PossessionFamilyFingerprints_StillExcludeExactlyTheLegacyReplayAuthorizationAndClockFields()
     {
         var common = new[] { "AuthSessionId", "AccessContextId", "ExpectedAccessRevision",
             "DeliveryIdempotencyKey" };
@@ -86,10 +109,24 @@ public sealed class LeasingWriteDescriptorTests
         Ignored(typeof(CancelPlannedRelationshipCommand)).Should().Equal(
             "AuthSessionId", "AccessContextId", "ExpectedAccessRevision", "BusinessNowUtc",
             "DeliveryIdempotencyKey");
+        var possessionTypes = new[]
+        {
+            typeof(GivePossessionCommand), typeof(ReconcileHistoricalPossessionCommand),
+            typeof(ConfirmMoveInCommand), typeof(ReturnPossessionCommand),
+            typeof(CompleteTurnoverCommand),
+        };
+        foreach (var type in possessionTypes)
+        {
+            Ignored(type).Should().Equal("AuthSessionId", "AccessContextId", "ExpectedAccessRevision",
+                "BusinessNowUtc", "DeliveryIdempotencyKey");
+        }
+        Ignored(typeof(VoidLeaseAgreementCommand)).Should().Equal(common);
+        Ignored(typeof(VoidLeaseAddendumCommand)).Should().Equal(common);
+        Ignored(typeof(CloseTenantAccountCommand)).Should().Equal(common);
     }
 
     [Fact]
-    public void FrozenStoredResults_DecodeWithEveryDistinctLegacyContractAndJsonShape()
+    public void PossessionFamilyFrozenStoredResults_DecodeWithEveryDistinctLegacyContractAndJsonShape()
     {
         AssertFrozen<PrepareMoveInResult>("lease-management.prepare-move-in.v2", """
             {"Outcome":0,"ApplicationId":2,"LeaseManagementId":3,"TenantAccountId":4,"LeaseAgreementId":5,"OpeningBalanceLedgerEntryId":6,"SecurityDepositAccountId":7,"TenantIds":[8],"LeaseManagementPartyIds":[9],"LeaseAgreementSignerIds":[10],"Error":null}
@@ -145,6 +182,35 @@ public sealed class LeasingWriteDescriptorTests
             {"Outcome":0,"DispositionId":2,"LeaseManagementCount":3,"TenantAccountCount":4}
             """,
             "Outcome", "DispositionId", "LeaseManagementCount", "TenantAccountCount");
+        AssertFrozen<GivePossessionResult>("lease-management.give-possession.v1", """
+            {"Outcome":0,"LeaseManagementId":2,"UnitId":3,"PossessionGivenAtUtc":"2026-08-22T12:00:00Z","Error":null}
+            """, "Outcome", "LeaseManagementId", "UnitId", "PossessionGivenAtUtc", "Error");
+        AssertFrozen<ReconcileHistoricalPossessionResult>(
+            "lease-management.reconcile-historical-possession.v1", """
+            {"Outcome":0,"LeaseManagementId":2,"UnitId":3,"PossessionGivenAtUtc":"2026-08-22T00:00:00Z","Error":null}
+            """, "Outcome", "LeaseManagementId", "UnitId", "PossessionGivenAtUtc", "Error");
+        AssertFrozen<ConfirmMoveInResult>("lease-management.confirm-move-in.v1", """
+            {"Outcome":0,"LeaseManagementId":2,"UnitId":3,"PossessionGivenAtUtc":"2026-08-22T12:00:00Z","SecurityDepositEntryId":4,"TenantLedgerEntryId":5,"CompletedAppointmentId":6,"Error":null}
+            """, "Outcome", "LeaseManagementId", "UnitId", "PossessionGivenAtUtc",
+            "SecurityDepositEntryId", "TenantLedgerEntryId", "CompletedAppointmentId", "Error");
+        AssertFrozen<ReturnPossessionResult>("lease-management.return-possession.v1", """
+            {"Outcome":0,"LeaseManagementId":2,"UnitId":3,"TurnoverPeriodId":4,"PossessionReturnedAtUtc":"2026-08-22T12:00:00Z","Error":null}
+            """, "Outcome", "LeaseManagementId", "UnitId", "TurnoverPeriodId",
+            "PossessionReturnedAtUtc", "Error");
+        AssertFrozen<CompleteTurnoverResult>("unit.complete-turnover.v1", """
+            {"Outcome":0,"UnitId":3,"TurnoverPeriodId":4,"CompletedAtUtc":"2026-08-22T12:00:00Z","Error":null}
+            """, "Outcome", "UnitId", "TurnoverPeriodId", "CompletedAtUtc", "Error");
+        AssertFrozen<VoidLegalArtifactResult>("lease-agreement.void.v1", """
+            {"Outcome":0,"LeaseManagementId":2,"LeaseAgreementId":3,"LeaseAddendumId":null,"VoidedAtUtc":"2026-08-22T12:00:00Z","Error":null}
+            """, "Outcome", "LeaseManagementId", "LeaseAgreementId", "LeaseAddendumId",
+            "VoidedAtUtc", "Error");
+        AssertFrozen<VoidLegalArtifactResult>("lease-addendum.void.v1", """
+            {"Outcome":0,"LeaseManagementId":2,"LeaseAgreementId":null,"LeaseAddendumId":3,"VoidedAtUtc":"2026-08-22T12:00:00Z","Error":null}
+            """, "Outcome", "LeaseManagementId", "LeaseAgreementId", "LeaseAddendumId",
+            "VoidedAtUtc", "Error");
+        AssertFrozen<CloseTenantAccountResult>("tenant-account.close.v1", """
+            {"Outcome":0,"LeaseManagementId":2,"TenantAccountId":3,"ClosedAtUtc":"2026-08-22T12:00:00Z","Error":null}
+            """, "Outcome", "LeaseManagementId", "TenantAccountId", "ClosedAtUtc", "Error");
     }
 
     private Descriptor Describe<TCommand, TResult>(TCommand command)
@@ -224,6 +290,30 @@ public sealed class LeasingWriteDescriptorTests
 
     private static CreatePropertyDispositionCommand Disposition() => new(1, 2, DateTime.UtcNow,
         100000m, 5000m, "buyer", "memo", 4, SessionId, 5, 6, "delivery");
+
+    private static GivePossessionCommand Give() => new(
+        1, 2, 3, 4, SessionId, 5, 6, DateTime.UtcNow, "delivery");
+
+    private static ReconcileHistoricalPossessionCommand Reconcile() => new(
+        1, 2, 3, new DateOnly(2026, 8, 22), 4, SessionId, 5, 6, DateTime.UtcNow, "delivery");
+
+    private static ConfirmMoveInCommand Confirm() => new(
+        1, 2, 3, null, null, null, null, 4, SessionId, 5, 6, DateTime.UtcNow, "delivery");
+
+    private static ReturnPossessionCommand Return() => new(
+        1, 2, 3, 4, SessionId, 5, 6, DateTime.UtcNow, [], [], "reason", "delivery");
+
+    private static CompleteTurnoverCommand Turnover() => new(
+        1, 3, 7, 4, SessionId, 5, 6, DateTime.UtcNow, "delivery");
+
+    private static VoidLeaseAgreementCommand VoidAgreement() => new(
+        1, 2, 3, "reason", null, 4, SessionId, 5, 6, "delivery");
+
+    private static VoidLeaseAddendumCommand VoidAddendum() => new(
+        1, 2, 3, "reason", null, 4, SessionId, 5, 6, "delivery");
+
+    private static CloseTenantAccountCommand CloseAccount() => new(
+        1, 2, 3, "reason", null, 4, SessionId, 5, 6, "delivery");
 
     private sealed record Descriptor(string Operation, string Contract, WriteLockProtocol? Protocol,
         string[] Locks, string[] DeferredLocks);
