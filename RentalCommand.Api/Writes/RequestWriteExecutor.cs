@@ -11,6 +11,14 @@ public interface IRequestWriteExecutor
         CancellationToken ct = default)
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull;
+
+    Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
+        string idempotencyKey,
+        TransactionalWrite<TCommand, TResult> write,
+        CancellationToken ct = default)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => throw new NotSupportedException(
+            "This request executor does not support exact legacy keys.");
 }
 
 [WriteEntryPoint(WriteEntryPointKind.Transactional)]
@@ -33,4 +41,11 @@ internal sealed class RequestWriteExecutor(IWriteExecutor executor) : IRequestWr
 
         return executor.ExecuteAsync(normalizedKey, write, ct);
     }
+
+    public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
+        string idempotencyKey,
+        TransactionalWrite<TCommand, TResult> write,
+        CancellationToken ct = default)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => executor.ExecuteAsync(idempotencyKey, write, ct);
 }

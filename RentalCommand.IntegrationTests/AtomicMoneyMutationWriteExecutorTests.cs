@@ -1,10 +1,21 @@
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Money;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
+using System.Reflection;
+using System.Text.Json;
 
 namespace RentalCommand.IntegrationTests;
 
@@ -86,24 +97,72 @@ public sealed class AtomicMoneyMutationWriteExecutorTests
     }
 
     [Fact]
-    public void ConditionalLockCodeRetainsTheThreeRequiredOrders()
+    public async Task ConditionalLockRulesAcquireResolvedIdsInOrder()
     {
-        var sourcePath = Path.Combine(
-            FindRepositoryRoot(), "RentalCommand.Api", "Services", "Domain", "AtomicMoneyMutation.cs");
-        var source = File.ReadAllText(sourcePath);
+        await using var fixture = await ConditionalLockFixture.CreateAsync();
 
-        AssertOrdered(source,
-            "if (command.Domain == AtomicMoneyDomain.Expense)",
-            "await context.AcquireLockAsync(\"Expense\", command.EntityId, ct);",
-            "await WorkOrderProgressionLock.AcquireAsync(");
-        AssertOrdered(source,
-            "command.Operation == AtomicMoneyOperation.Delete)",
-            "await context.AcquireLockAsync(\"CapitalAsset\", command.EntityId, ct);",
-            "await context.AcquireLockAsync(\"Expense\", sourceExpenseId.Value, ct);",
-            "await WorkOrderProgressionLock.AcquireAsync(");
-        AssertOrdered(source,
-            "await attempt.AcquireLockAsync(\n                \"OwnerDistribution\", command.EntityId, ct);",
-            "await attempt.AcquireLockAsync(\"OwnerEntity\", ownerId, ct);");
+        await fixture.AssertProgressionAsync(
+            new AtomicMoneyMutationCommand(7, 8, SessionId, 9, 10, "money.test",
+                AtomicMoneyDomain.Expense, AtomicMoneyOperation.Update, 41, "expense-rule",
+                JsonSerializer.Serialize(new UpdateExpenseRequest { WorkOrderId = 52 }), BusinessNow),
+            "Expense:41", "WorkOrder:51", "WorkOrder:52");
+        await fixture.AssertProgressionAsync(
+            Command(AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Delete, 42, "capital-rule"),
+            "CapitalAsset:42", "Expense:53", "WorkOrder:54");
+        await fixture.AssertDistributionAsync(
+            DistributionCommand(43, 72),
+            "OwnerDistribution:43", "OwnerEntity:72");
+    }
+
+    [Fact]
+    public async Task FrozenLegacyExpenseReceiptWithTrailingWhitespaceReplaysWithoutDuplicate()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = new SqliteCompatibleRentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>().UseSqlite(connection).Options);
+        await db.Database.EnsureCreatedAsync();
+        db.Portfolios.Add(Portfolio());
+        db.Expenses.Add(Expense(81, null));
+        await db.SaveChangesAsync();
+
+        const string rawKey = "assistant-expense ";
+        var command = AtomicMoneyMutation.Command(
+            new WorkspaceReadScope(7, 8, SessionId, 9, 10), CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Create, 0, rawKey,
+            new CreateExpenseRequest { Description = "Should replay", Amount = 25m, IncurredAt = BusinessNow },
+            BusinessNow);
+        var identity = AtomicMoneyMutation.Identity(command);
+        var stored = new AtomicMoneyMutationResult(true, true, 81,
+            JsonSerializer.Serialize(new ExpenseResponse { Id = 81, PortfolioId = 7, Description = "Stored" }));
+        db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+        {
+            Id = Guid.NewGuid(), AttemptId = Guid.NewGuid(), CommandType = identity.CommandType,
+            IdempotencyKey = identity.IdempotencyKey,
+            RequestFingerprint = AtomicCommandFingerprint.Create(command),
+            Status = AtomicCommandReceiptStatus.Completed, ResultContract = AtomicMoneyMutation.Codec.ContractName,
+            ResultJson = AtomicMoneyMutation.Codec.Serialize(stored), StartedAt = BusinessNow, CompletedAt = BusinessNow,
+        });
+        await db.SaveChangesAsync();
+        var before = await db.Expenses.CountAsync();
+
+        var executor = new Mock<IWriteExecutor>(MockBehavior.Strict);
+        executor.Setup(item => item.ExecuteAsync(
+                identity.IdempotencyKey,
+                It.IsAny<TransactionalWrite<AtomicMoneyMutationCommand, AtomicMoneyMutationResult>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AtomicCommandOutcome<AtomicMoneyMutationResult>(
+                stored, AtomicCommandDisposition.Replayed, Guid.NewGuid()));
+        var service = new ExpenseService(
+            db, Mock.Of<IFileStorage>(), TimeProvider.System, new RequestWriteExecutor(executor.Object));
+
+        var replay = await service.CreateAsync(
+            new WorkspaceReadScope(7, 8, SessionId, 9, 10),
+            new CreateExpenseRequest { Description = "Should replay", Amount = 25m, IncurredAt = BusinessNow }, rawKey);
+
+        replay!.Id.Should().Be(81);
+        replay.Description.Should().Be("Stored");
+        (await db.Expenses.CountAsync()).Should().Be(before);
     }
 
     [Fact]
@@ -124,23 +183,153 @@ public sealed class AtomicMoneyMutationWriteExecutorTests
     private static RentalCommandDbContext NewDb() =>
         new(new DbContextOptionsBuilder<RentalCommandDbContext>().Options);
 
-    private static void AssertOrdered(string source, params string[] values)
-    {
-        var cursor = 0;
-        foreach (var value in values)
-        {
-            var next = source.IndexOf(value, cursor, StringComparison.Ordinal);
-            next.Should().BeGreaterThanOrEqualTo(0, $"'{value}' must remain in the lock sequence");
-            cursor = next + value.Length;
-        }
-    }
+    private static AtomicMoneyMutationCommand DistributionCommand(int entityId, int ownerId) =>
+        new(7, 8, SessionId, 9, 1, CapabilityKeys.MoneyDisbursementsManage,
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Update, entityId, "owner-rule",
+            JsonSerializer.Serialize(new UpdateOwnerDistributionRequest { OwnerEntityId = ownerId, Amount = 125m }),
+            BusinessNow);
 
-    private static string FindRepositoryRoot()
+    private static Portfolio Portfolio() => new()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RentalCommand.sln")))
-            directory = directory.Parent;
-        return directory?.FullName
-            ?? throw new InvalidOperationException("Repository root was not found.");
+        Id = 7, Name = "Lock recorder", ManagementCompanyName = "Test", TimeZone = "UTC",
+        CreatedAt = BusinessNow, UpdatedAt = BusinessNow,
+    };
+
+    private static Expense Expense(int id, int? workOrderId) => new()
+    {
+        Id = id, PortfolioId = 7, Description = $"Expense {id}", Amount = 100m,
+        IncurredAt = BusinessNow, WorkOrderId = workOrderId, CreatedAt = BusinessNow, UpdatedAt = BusinessNow,
+    };
+
+    private sealed class ConditionalLockFixture : IAsyncDisposable
+    {
+        private readonly SqliteConnection _connection;
+        private readonly RentalCommandDbContext _db;
+
+        private ConditionalLockFixture(SqliteConnection connection, RentalCommandDbContext db)
+        {
+            _connection = connection;
+            _db = db;
+        }
+
+        public static async Task<ConditionalLockFixture> CreateAsync()
+        {
+            var connection = new SqliteConnection("Data Source=:memory:");
+            await connection.OpenAsync();
+            var db = new SqliteCompatibleRentalCommandDbContext(
+                new DbContextOptionsBuilder<RentalCommandDbContext>().UseSqlite(connection).Options);
+            await db.Database.EnsureCreatedAsync();
+            db.Portfolios.Add(Portfolio());
+            db.Properties.Add(new Property
+            {
+                Id = 11, PortfolioId = 7, Name = "Lock property", AddressLine1 = "1 Main",
+                City = "Columbus", State = "OH", PostalCode = "43215",
+                CreatedAt = BusinessNow, UpdatedAt = BusinessNow,
+            });
+            db.WorkOrders.AddRange(new[] { 51, 52, 54 }.Select(id => new WorkOrder
+            {
+                Id = id, PortfolioId = 7, PropertyId = 11, Title = $"Work {id}",
+                Description = "Recorder", RequestedAt = BusinessNow, UpdatedAt = BusinessNow,
+            }));
+            db.Expenses.AddRange(Expense(41, 51), Expense(53, 54));
+            db.CapitalAssets.Add(new CapitalAsset
+            {
+                Id = 42, PortfolioId = 7, PropertyId = 11, SourceExpenseId = 53,
+                Description = "Asset", CostBasis = 100m, InServiceDate = BusinessNow,
+                CreatedAt = BusinessNow, UpdatedAt = BusinessNow,
+            });
+            db.OwnerEntities.AddRange(
+                new OwnerEntity { Id = 71, PortfolioId = 7, Name = "Current", CreatedAt = BusinessNow, UpdatedAt = BusinessNow },
+                new OwnerEntity { Id = 72, PortfolioId = 7, Name = "Effective", CreatedAt = BusinessNow, UpdatedAt = BusinessNow });
+            db.OwnerDistributions.Add(new OwnerDistribution
+            {
+                Id = 43, PortfolioId = 7, OwnerEntityId = 71, Date = BusinessNow, Amount = 100m,
+                Status = OwnerDistributionStatus.Draft, CreatedAt = BusinessNow, UpdatedAt = BusinessNow,
+            });
+            SeedAuthority(db);
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+            return new ConditionalLockFixture(connection, db);
+        }
+
+        public async Task AssertProgressionAsync(AtomicMoneyMutationCommand command, params string[] conditional)
+        {
+            var (context, acquired) = Recorder();
+            await AcquirePrefixAsync(command, context);
+            await InvokeAsync(new AtomicMoneyMutationHandler(_db), "AcquireProgressionWorkOrderLockAsync",
+                command, context, CancellationToken.None);
+            acquired.Should().Equal(Prefix().Concat(conditional));
+        }
+
+        public async Task AssertDistributionAsync(AtomicMoneyMutationCommand command, params string[] conditional)
+        {
+            var (context, acquired) = Recorder();
+            await AcquirePrefixAsync(command, context);
+            await InvokeAsync(new AtomicMoneyMutationHandler(_db), "MutateDistributionAsync",
+                command, context, BusinessNow, BusinessNow, BusinessNow.Date, CancellationToken.None);
+            acquired.Should().Equal(Prefix().Concat(conditional));
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _db.DisposeAsync();
+            await _connection.DisposeAsync();
+        }
+
+        private static void SeedAuthority(RentalCommandDbContext db)
+        {
+            db.Users.Add(new ApplicationUser { Id = 8, UserName = "recorder@test", DisplayName = "Recorder", CreatedAt = BusinessNow });
+            db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
+            {
+                Id = 9, UserId = 8, PortfolioId = 7, CreatedAtUtc = BusinessNow, UpdatedAtUtc = BusinessNow,
+            });
+            db.WorkspaceMemberships.Add(new WorkspaceMembership
+            {
+                Id = 91, AccessContextId = 9, PortfolioId = 7, EffectiveFromUtc = BusinessNow.AddDays(-1),
+                CreatedAtUtc = BusinessNow, UpdatedAtUtc = BusinessNow,
+            });
+            db.MembershipRoleAssignments.Add(new MembershipRoleAssignment
+            {
+                Id = 92, WorkspaceMembershipId = 91, PortfolioId = 7, RoleProfileId = 1,
+                ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+                EffectiveFromUtc = BusinessNow.AddDays(-1), CreatedAtUtc = BusinessNow, UpdatedAtUtc = BusinessNow,
+            });
+            db.AuthSessions.Add(new AuthSession
+            {
+                Id = SessionId, UserId = 8, ActiveAccessContextId = 9,
+                CreatedAtUtc = BusinessNow, LastSeenAtUtc = BusinessNow, ExpiresAtUtc = BusinessNow.AddDays(1),
+            });
+        }
+
+        private static (IAtomicCommandContext Context, List<string> Acquired) Recorder()
+        {
+            var acquired = new List<string>();
+            var recorder = new Mock<IAtomicCommandContext>();
+            recorder.Setup(item => item.AcquireLockAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .Callback<string, int, CancellationToken>((name, id, _) => acquired.Add($"{name}:{id}"))
+                .Returns(Task.CompletedTask);
+            recorder.Setup(item => item.AcquireLockAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+                .Callback<string, Guid, CancellationToken>((name, id, _) => acquired.Add($"{name}:{id}"))
+                .Returns(Task.CompletedTask);
+            recorder.Setup(item => item.FlushBusinessAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AtomicBusinessFlush(0, []));
+            return (recorder.Object, acquired);
+        }
+
+        private static async Task AcquirePrefixAsync(AtomicMoneyMutationCommand command, IAtomicCommandContext context)
+        {
+            foreach (var writeLock in AtomicMoneyMutation.Write(command, null!).LockPlan.Locks)
+                await writeLock.AcquireAsync(context);
+        }
+
+        private static string[] Prefix() =>
+            [$"AuthSession:{SessionId}", "WorkspaceAccessContext:9", "Portfolio:7"];
+
+        private static async Task InvokeAsync(object target, string methodName, params object[] args)
+        {
+            var method = target.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new MissingMethodException(target.GetType().Name, methodName);
+            await (Task)method.Invoke(target, args)!;
+        }
     }
 }

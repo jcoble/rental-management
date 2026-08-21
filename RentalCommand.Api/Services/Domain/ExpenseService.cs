@@ -326,7 +326,7 @@ public class ExpenseService : IExpenseService
 
     private Task<AtomicCommandOutcome<AtomicMoneyMutationResult>> ExecuteAsync(
         AtomicMoneyMutationCommand command, CancellationToken ct) =>
-        _writes.ExecuteAsync(
+        _writes.ExecuteExactAsync(
             AtomicMoneyMutation.Identity(command).IdempotencyKey,
             AtomicMoneyMutation.Write(command, _db), ct);
 

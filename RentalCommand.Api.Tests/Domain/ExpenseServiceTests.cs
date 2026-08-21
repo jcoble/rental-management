@@ -332,7 +332,7 @@ public class ExpenseServiceTests : IDisposable
         var businessNowUtc = new DateTime(2027, 1, 31, 5, 0, 0, DateTimeKind.Utc);
         var captured = new List<AtomicMoneyMutationCommand>();
         var writes = new Mock<IRequestWriteExecutor>(MockBehavior.Strict);
-        writes.Setup(service => service.ExecuteAsync<
+        writes.Setup(service => service.ExecuteExactAsync<
                 AtomicMoneyMutationCommand, AtomicMoneyMutationResult>(
                 It.IsAny<string>(),
                 It.IsAny<TransactionalWrite<AtomicMoneyMutationCommand, AtomicMoneyMutationResult>>(),
