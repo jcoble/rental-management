@@ -155,14 +155,15 @@ public sealed class ApplicationWriteExecutorTests : IAsyncLifetime
     {
         var scope = await SeedScopeAndApplicationAsync();
         var application = await _context.Db.RentalApplications.AsNoTracking().SingleAsync();
+        var scopedRequest = new UpdateApplicationRequest { FirstName = "Stored" };
         var scoped = AtomicRentalMutation.Command(
             scope, AtomicRentalMutationDomain.Application, AtomicRentalMutationOperation.Update,
-            application.Id, "legacy-application", new UpdateApplicationRequest { FirstName = "Stored" });
+            application.Id, "legacy-application ", scopedRequest);
+        var publicRequest = new SubmitApplicationRequest
+            { FirstName = "Stored", LastName = "Public", ConsentGiven = true };
         var submitted = new AtomicPublicApplicationSubmissionCommand(
-            "executor-public-token",
-            JsonSerializer.Serialize(new SubmitApplicationRequest
-                { FirstName = "Stored", LastName = "Public", ConsentGiven = true }),
-            "198.51.100.10", "legacy-public");
+            "executor-public-token", JsonSerializer.Serialize(publicRequest),
+            "198.51.100.10", "legacy-public ");
         var record = RecordFee(scope, application.Id, "legacy-record");
         var refund = RefundFee(scope, application.Id, 991, "legacy-refund");
 
@@ -189,16 +190,24 @@ public sealed class ApplicationWriteExecutorTests : IAsyncLifetime
         var applicationsBefore = await _context.Db.RentalApplications.CountAsync();
         var entriesBefore = await _context.Db.ApplicationFinancialEntries.CountAsync();
         var outboxBefore = await _context.Db.OutboxMessages.CountAsync();
+        var receiptsBefore = await _context.Db.AtomicCommandReceipts.CountAsync();
+        var auditsBefore = await _context.Db.AtomicAuditLogs.CountAsync();
 
         await using var services = BuildServices();
         await using var serviceScope = services.CreateAsyncScope();
         var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var service = serviceScope.ServiceProvider.GetRequiredService<ApplicationService>();
         var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
 
-        (await writes.ExecuteAsync(AtomicRentalMutation.Identity(scoped).IdempotencyKey,
-            AtomicRentalMutation.Write(scoped, db))).Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        (await writes.ExecuteAsync(AtomicPublicApplicationSubmission.Identity(submitted).IdempotencyKey,
-            AtomicPublicApplicationSubmission.Write(submitted, db))).Value.Should().BeEquivalentTo(publicStored);
+        (await service.UpdateAuthorizedAsync(scope, application.Id, scopedRequest,
+            scope.UserId, "legacy-application ")).Should().NotBeNull();
+        (await service.SubmitAsync("executor-public-token", publicRequest,
+            "198.51.100.10", "legacy-public ")).Should().BeEquivalentTo(new SubmitApplicationResult
+            {
+                ApplicationId = publicStored.ApplicationId,
+                Status = publicStored.Status,
+                Message = publicStored.Message,
+            });
         (await writes.ExecuteAsync(record.IdempotencyKey,
             ApplicationFinanceWriteSupport.Write(record, db))).Value.Should().BeEquivalentTo(feeStored);
         (await writes.ExecuteAsync(refund.IdempotencyKey,
@@ -206,8 +215,12 @@ public sealed class ApplicationWriteExecutorTests : IAsyncLifetime
 
         _context.Db.ChangeTracker.Clear();
         (await _context.Db.RentalApplications.CountAsync()).Should().Be(applicationsBefore);
+        (await _context.Db.RentalApplications.SingleAsync(row => row.Id == application.Id))
+            .FirstName.Should().Be("Existing");
         (await _context.Db.ApplicationFinancialEntries.CountAsync()).Should().Be(entriesBefore);
         (await _context.Db.OutboxMessages.CountAsync()).Should().Be(outboxBefore);
+        (await _context.Db.AtomicCommandReceipts.CountAsync()).Should().Be(receiptsBefore);
+        (await _context.Db.AtomicAuditLogs.CountAsync()).Should().Be(auditsBefore);
     }
 
     [Fact]

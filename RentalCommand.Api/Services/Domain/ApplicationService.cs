@@ -149,7 +149,7 @@ public sealed class ApplicationService : IApplicationService
     {
         var command = new AtomicPublicApplicationSubmissionCommand(
             token, JsonSerializer.Serialize(request), ipAddress, operationKey);
-        var outcome = await _writes.ExecuteAsync(
+        var outcome = await _writes.ExecuteExactAsync(
             AtomicPublicApplicationSubmission.Identity(command).IdempotencyKey,
             AtomicPublicApplicationSubmission.Write(command, _db), ct);
         return outcome.Value.Found
@@ -542,7 +542,7 @@ public sealed class ApplicationService : IApplicationService
 
     private Task<AtomicCommandOutcome<AtomicRentalMutationResult>> ExecuteApplicationWriteAsync(
         AtomicRentalMutationCommand command,
-        CancellationToken ct) => _writes.ExecuteAsync(
+        CancellationToken ct) => _writes.ExecuteExactAsync(
             AtomicRentalMutation.Identity(command).IdempotencyKey,
             AtomicRentalMutation.Write(command, _db), ct);
 }

@@ -174,6 +174,13 @@ public class PublicApplicationsControllerTests : IDisposable
 
     private sealed class PublicSubmissionWriteExecutor(RentalCommandDbContext db) : IRequestWriteExecutor
     {
+        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull => ExecuteAsync(idempotencyKey, write, ct);
+
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey,
             TransactionalWrite<TCommand, TResult> write,
