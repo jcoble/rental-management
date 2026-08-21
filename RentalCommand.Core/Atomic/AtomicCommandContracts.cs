@@ -127,6 +127,8 @@ public enum WriteLockProtocol
     AuthorizationScopeTenantAccount,
     AuthorizationScopeAccountingConnection,
     AccountingConnection,
+    NativeEsignLeaseManagement,
+    NativeEsignRequest,
 }
 
 public sealed class WriteLockPlan
@@ -172,6 +174,8 @@ public sealed class WriteLockPlan
             [WriteLockProtocol.AuthorizationScopeAccountingConnection] =
                 ["AuthSession", "WorkspaceAccessContext", "AccountingConnection"],
             [WriteLockProtocol.AccountingConnection] = ["AccountingConnection"],
+            [WriteLockProtocol.NativeEsignLeaseManagement] = ["LeaseManagement"],
+            [WriteLockProtocol.NativeEsignRequest] = ["SignatureRequest"],
         };
 
     public static WriteLockPlan None { get; } = new();
@@ -214,6 +218,7 @@ public sealed class WriteLockPlan
             WriteLockProtocol.LeasePartyAccessGrant =>
                 ["TenantIdentityEmail", "WorkspaceAccessContext"],
             WriteLockProtocol.LeasePartyAccessRevoke => ["WorkspaceAccessContext"],
+            WriteLockProtocol.NativeEsignRequest => ["LeaseManagement"],
             _ => [],
         };
 }

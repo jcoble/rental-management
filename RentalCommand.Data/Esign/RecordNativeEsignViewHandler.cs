@@ -18,6 +18,11 @@ public sealed class RecordNativeEsignViewHandler
     public async Task<RecordNativeEsignViewResult> HandleAsync(
         RecordNativeEsignViewCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task<RecordNativeEsignViewResult> ExecuteAsync(
+        RecordNativeEsignViewCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var target = await _db.Set<SignatureSigner>()
@@ -131,6 +136,11 @@ public sealed class RecordNativeEsignViewHandler
     }
 
     public async Task AuthorizeReplayAsync(
+        RecordNativeEsignViewCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         RecordNativeEsignViewCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
