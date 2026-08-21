@@ -1,7 +1,12 @@
 using System.Data;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Data.Scanning;
 
@@ -22,18 +27,24 @@ public sealed record ScanProcessingResult(
     string TargetEntityType,
     DateTime ReviewedAtUtc);
 
+public sealed record ScanProcessingTerminalCommand(
+    int DraftId,
+    int PortfolioId,
+    string ClaimOwner,
+    Guid ClaimToken,
+    string Status,
+    DateTime ReviewedAtUtc,
+    ScanProcessingResult? ReviewingResult = null,
+    string? FailureReason = null) : IAtomicCommandData;
+
+public sealed record ScanProcessingTerminalResult(bool Applied, int DraftId, string Status);
+
 public interface IScanProcessingClaimStore
 {
     Task<IReadOnlyList<ScanProcessingClaim>> ClaimAsync(
         string claimOwner, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default);
 
-    Task<int> MarkReviewingAsync(
-        int id, string claimOwner, Guid claimToken, ScanProcessingResult result, CancellationToken ct = default);
-
-    Task<int> MarkFailedAsync(
-        int id, string claimOwner, Guid claimToken, DateTime reviewedAtUtc, string? failureReason,
-        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -72,45 +83,6 @@ public sealed class ScanProcessingClaimStore : IScanProcessingClaimStore
         RETURNING draft."Id", draft."PortfolioId", draft."FilePath",
                   draft."SourceStoredFileId", draft."TargetEntityType",
                   draft."ProcessingClaimOwner", draft."ProcessingClaimToken";
-        """;
-
-    private const string MarkReviewingSql = """
-        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
-        UPDATE "ScanDrafts" AS draft
-        SET "ExtractedFields" = CAST(@extractedFields AS jsonb),
-            "FailureReason" = NULL,
-            "ModelId" = @modelId,
-            "TokensUsed" = @tokensUsed,
-            "CostUsd" = @costUsd,
-            "TargetEntityType" = @targetEntityType,
-            "Status" = 'Reviewing',
-            "ReviewedAt" = @reviewedAtUtc,
-            "ProcessingClaimOwner" = NULL,
-            "ProcessingClaimToken" = NULL,
-            "ProcessingClaimExpiresAtUtc" = NULL
-        FROM clock
-        WHERE draft."Id" = @id
-          AND draft."Status" = 'Processing'
-          AND draft."ProcessingClaimOwner" = @claimOwner
-          AND draft."ProcessingClaimToken" = @claimToken
-          AND draft."ProcessingClaimExpiresAtUtc" > clock.now_utc;
-        """;
-
-    private const string MarkFailedSql = """
-        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
-        UPDATE "ScanDrafts" AS draft
-        SET "Status" = 'Failed',
-            "FailureReason" = @failureReason,
-            "ReviewedAt" = @reviewedAtUtc,
-            "ProcessingClaimOwner" = NULL,
-            "ProcessingClaimToken" = NULL,
-            "ProcessingClaimExpiresAtUtc" = NULL
-        FROM clock
-        WHERE draft."Id" = @id
-          AND draft."Status" = 'Processing'
-          AND draft."ProcessingClaimOwner" = @claimOwner
-          AND draft."ProcessingClaimToken" = @claimToken
-          AND draft."ProcessingClaimExpiresAtUtc" > clock.now_utc;
         """;
 
     private readonly RentalCommandDbContext _db;
@@ -165,50 +137,72 @@ public sealed class ScanProcessingClaimStore : IScanProcessingClaimStore
         }
     }
 
-    public Task<int> MarkReviewingAsync(
-        int id, string claimOwner, Guid claimToken, ScanProcessingResult result,
-        CancellationToken ct = default) =>
-        ExecuteMutationAsync(MarkReviewingSql, id, claimOwner, claimToken, ct,
-            new NpgsqlParameter("extractedFields", NpgsqlDbType.Jsonb) { Value = result.ExtractedFields },
-            Nullable("modelId", NpgsqlDbType.Text, result.ModelId),
-            Nullable("tokensUsed", NpgsqlDbType.Integer, result.TokensUsed),
-            Nullable("costUsd", NpgsqlDbType.Numeric, result.CostUsd),
-            new NpgsqlParameter("targetEntityType", NpgsqlDbType.Text) { Value = result.TargetEntityType },
-            new NpgsqlParameter("reviewedAtUtc", NpgsqlDbType.TimestampTz) { Value = AsUtc(result.ReviewedAtUtc) });
+}
 
-    public Task<int> MarkFailedAsync(
-        int id, string claimOwner, Guid claimToken, DateTime reviewedAtUtc, string? failureReason,
-        CancellationToken ct = default) =>
-        ExecuteMutationAsync(MarkFailedSql, id, claimOwner, claimToken, ct,
-            Nullable("failureReason", NpgsqlDbType.Text, LimitError(failureReason)),
-            new NpgsqlParameter("reviewedAtUtc", NpgsqlDbType.TimestampTz) { Value = AsUtc(reviewedAtUtc) });
+public static class ScanProcessingTerminalWrite
+{
+    public const string ResultContract = "scan-processing.terminal.v1";
+    private const string OperationName = "scan-processing.terminal";
 
-    private async Task<int> ExecuteMutationAsync(
-        string sql, int id, string claimOwner, Guid claimToken, CancellationToken ct,
-        params NpgsqlParameter[] parameters)
+    public static string StepKey(ScanProcessingTerminalCommand command) =>
+        $"scan-terminal:{command.DraftId}:{command.ClaimToken:N}:{command.Status.ToLowerInvariant()}";
+
+    public static TransactionalWrite<ScanProcessingTerminalCommand, ScanProcessingTerminalResult> Write(
+        RentalCommandDbContext db,
+        ScanProcessingTerminalCommand command)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(claimOwner);
-        var connection = _db.Database.GetDbConnection();
-        var closeWhenDone = connection.State != ConnectionState.Open;
-        if (closeWhenDone) await _db.Database.OpenConnectionAsync(ct);
-        try
-        {
-            await using var command = connection.CreateCommand();
-            command.CommandText = sql;
-            command.Parameters.Add(new NpgsqlParameter("id", NpgsqlDbType.Integer) { Value = id });
-            command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
-            command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = claimToken });
-            foreach (var parameter in parameters) command.Parameters.Add(parameter);
-            return await command.ExecuteNonQueryAsync(ct);
-        }
-        finally
-        {
-            if (closeWhenDone) await _db.Database.CloseConnectionAsync();
-        }
+        Validate(command);
+        return new TransactionalWrite<ScanProcessingTerminalCommand, ScanProcessingTerminalResult>(
+            OperationName,
+            WriteIdempotencyPolicy.Required,
+            command,
+            ResultContract,
+            WriteLockPlan.None,
+            (request, context, ct) => ExecuteAsync(db, request, context, ct),
+            static (_, _, _) => Task.CompletedTask);
     }
 
-    private static NpgsqlParameter Nullable(string name, NpgsqlDbType type, object? value) =>
-        new(name, type) { Value = value ?? DBNull.Value };
+    private static async Task<ScanProcessingTerminalResult> ExecuteAsync(
+        RentalCommandDbContext db,
+        ScanProcessingTerminalCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        await context.AcquireLockAsync("ScanDraft", command.DraftId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var reviewing = command.Status == "Reviewing";
+        var rows = await db.ExecuteAtomicSqlMutationAsync<int>(
+            context,
+            reviewing ? ReviewingSql(command) : FailedSql(command),
+            [new AtomicSqlMutationTarget("ScanDrafts", AtomicSqlMutationOperation.Update)],
+            ct);
+        var applied = rows.Count == 1;
+        if (!applied)
+            return new ScanProcessingTerminalResult(false, command.DraftId, command.Status);
+
+        context.StageSemanticEvent(new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(ScanDraft),
+            command.DraftId,
+            AuditLogOperation.Updated,
+            ActorLabel: "ScanProcessingWorker",
+            NewValues: JsonSerializer.Serialize(new { command.Status, command.FailureReason }),
+            ChangeReason: reviewing ? "Scan extraction completed for review." : "Scan extraction failed."), now);
+        context.StageOutbox(ScanDraftMutationResults.DataUpdate(
+            command.PortfolioId, command.DraftId, "update", StepKey(command), now));
+        return new ScanProcessingTerminalResult(true, command.DraftId, command.Status);
+    }
+
+    private static void Validate(ScanProcessingTerminalCommand command)
+    {
+        if (command.DraftId <= 0 || command.PortfolioId <= 0 || command.ClaimToken == Guid.Empty)
+            throw new ArgumentOutOfRangeException(nameof(command));
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.ClaimOwner);
+        if (command.Status == "Reviewing" && command.ReviewingResult is null
+            || command.Status == "Failed" && command.ReviewingResult is not null
+            || command.Status is not ("Reviewing" or "Failed"))
+            throw new ArgumentException("A valid scan terminal transition is required.", nameof(command));
+    }
 
     private static string? LimitError(string? value) => value is null || value.Length <= 500 ? value : value[..500];
 
@@ -218,4 +212,38 @@ public sealed class ScanProcessingClaimStore : IScanProcessingClaimStore
         DateTimeKind.Local => value.ToUniversalTime(),
         _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
     };
+
+    private static FormattableString ReviewingSql(ScanProcessingTerminalCommand command)
+    {
+        var result = command.ReviewingResult!;
+        return $"""
+        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+        UPDATE "ScanDrafts" AS draft
+        SET "ExtractedFields" = CAST({result.ExtractedFields} AS jsonb), "FailureReason" = NULL,
+            "ModelId" = {result.ModelId}, "TokensUsed" = {result.TokensUsed}, "CostUsd" = {result.CostUsd},
+            "TargetEntityType" = {result.TargetEntityType}, "Status" = 'Reviewing',
+            "ReviewedAt" = {AsUtc(command.ReviewedAtUtc)},
+            "ProcessingClaimOwner" = NULL, "ProcessingClaimToken" = NULL, "ProcessingClaimExpiresAtUtc" = NULL
+        FROM clock
+        WHERE draft."Id" = {command.DraftId} AND draft."Status" = 'Processing'
+          AND draft."ProcessingClaimOwner" = {command.ClaimOwner}
+          AND draft."ProcessingClaimToken" = {command.ClaimToken}
+          AND draft."ProcessingClaimExpiresAtUtc" > clock.now_utc
+        RETURNING 1 AS "Value";
+        """;
+    }
+
+    private static FormattableString FailedSql(ScanProcessingTerminalCommand command) => $"""
+        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+        UPDATE "ScanDrafts" AS draft
+        SET "Status" = 'Failed', "FailureReason" = {LimitError(command.FailureReason)},
+            "ReviewedAt" = {AsUtc(command.ReviewedAtUtc)},
+            "ProcessingClaimOwner" = NULL, "ProcessingClaimToken" = NULL, "ProcessingClaimExpiresAtUtc" = NULL
+        FROM clock
+        WHERE draft."Id" = {command.DraftId} AND draft."Status" = 'Processing'
+          AND draft."ProcessingClaimOwner" = {command.ClaimOwner}
+          AND draft."ProcessingClaimToken" = {command.ClaimToken}
+          AND draft."ProcessingClaimExpiresAtUtc" > clock.now_utc
+        RETURNING 1 AS "Value";
+        """;
 }

@@ -13,6 +13,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Scanning;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Workers;
 
@@ -121,7 +122,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
         var workspaceProviders = scoped.GetServices<IWorkspaceLlmExtractionProvider>()
             .ToDictionary(provider => provider.ProviderKey, StringComparer.OrdinalIgnoreCase);
         var storage = scoped.GetRequiredService<IFileStorage>();
-        var dataUpdate = scoped.GetRequiredService<IDataUpdateService>();
+        var writes = scoped.GetRequiredService<IJobStepWriteExecutor>();
         var timeProvider = scoped.GetRequiredService<TimeProvider>();
         var logger = scoped.GetRequiredService<ILogger<ScanProcessingWorker>>();
         var claimStore = scoped.GetRequiredService<IScanProcessingClaimStore>();
@@ -154,7 +155,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                     if (credential is null)
                     {
                         await MarkFailedAsync(
-                            scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                            scoped, draft.PortfolioId, draft.Id,
                             draft.ClaimOwner, draft.ClaimToken, logger,
                             "AI extraction unavailable: configure a workspace OpenAI or Anthropic credential in Settings");
                         continue;
@@ -165,7 +166,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                             out workspaceProvider))
                     {
                         await MarkFailedAsync(
-                            scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                            scoped, draft.PortfolioId, draft.Id,
                             draft.ClaimOwner, draft.ClaimToken, logger,
                             "AI extraction unavailable: the configured workspace provider is not supported");
                         continue;
@@ -256,7 +257,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                         || !SupportedTargets.Contains(targetField.Value))
                     {
                         await MarkFailedAsync(
-                            scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                            scoped, draft.PortfolioId, draft.Id,
                             draft.ClaimOwner, draft.ClaimToken, logger,
                             classificationFailure ?? "document destination could not be classified");
                         continue;
@@ -338,7 +339,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                         "(model {ModelId}): {Reason}; marking Failed",
                         draft.Id, extracted.ModelId, failureReason);
                     await MarkFailedAsync(
-                        scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                        scoped, draft.PortfolioId, draft.Id,
                         draft.ClaimOwner, draft.ClaimToken, logger, failureReason);
                     continue;
                 }
@@ -349,19 +350,26 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                     kv => new { value = kv.Value.Value, confidence = kv.Value.Confidence }));
                 var targetEntityType = resolvedTargetEntityType;
 
-                var completed = await claimStore.MarkReviewingAsync(
+                var reviewedAt = timeProvider.UtcNow();
+                var command = new ScanProcessingTerminalCommand(
                     draft.Id,
+                    draft.PortfolioId,
                     draft.ClaimOwner,
                     draft.ClaimToken,
+                    "Reviewing",
+                    reviewedAt,
                     new ScanProcessingResult(
                         fieldJson,
                         extracted.ModelId,
                         extracted.TokensUsed,
                         EstimateCost(extracted.ModelId, extracted.InputTokens, extracted.OutputTokens),
                         targetEntityType,
-                        timeProvider.UtcNow()),
+                        reviewedAt));
+                var completed = await writes.ExecuteAsync(
+                    ScanProcessingTerminalWrite.StepKey(command),
+                    ScanProcessingTerminalWrite.Write(db, command),
                     ct);
-                if (completed == 0)
+                if (!completed.Value.Applied)
                 {
                     logger.LogWarning(
                         "Discarded stale scan extraction completion for draft {DraftId}; its claim lease was lost",
@@ -375,19 +383,6 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                     draft.Id, extracted.ModelId,
                     CountNonEmptyDataFields(extracted, schema.Fields), targetEntityType);
 
-                try
-                {
-                    await dataUpdate.BroadcastEntityUpdateAsync(
-                        draft.PortfolioId, "ScanDraft", draft.Id,
-                        new { draft.Id, Status = "Reviewing", TargetEntityType = targetEntityType }, ct);
-                }
-                catch (Exception ex)
-                {
-                    // Extraction is already durably complete. Realtime invalidation is best-effort and
-                    // must not turn a committed Reviewing draft into a false processing failure.
-                    logger.LogWarning(ex,
-                        "Scan draft {DraftId} completed but realtime invalidation failed", draft.Id);
-                }
                 processed++;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -401,7 +396,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                 logger.LogWarning(
                     "Scan extraction interrupted (cancellation) for draft {DraftId}; marking Failed", draft.Id);
                 await MarkFailedAsync(
-                    scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                    scoped, draft.PortfolioId, draft.Id,
                     draft.ClaimOwner, draft.ClaimToken, logger,
                     "extraction interrupted (timeout or shutdown)");
                 break;
@@ -412,7 +407,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                 // Use a fresh, non-cancelled save: if the failure rode in on an already-cancelled
                 // token (e.g. a timeout surfaced as a DB/HTTP cancellation), reusing it here would
                 // throw again and leave the draft stuck in 'Processing'.
-                await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                await MarkFailedAsync(scoped, draft.PortfolioId, draft.Id,
                     draft.ClaimOwner, draft.ClaimToken, logger,
                     "extraction failed (provider or processing error)");
             }
@@ -527,7 +522,6 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
     /// </summary>
     private static async Task MarkFailedAsync(
         IServiceProvider scoped,
-        IDataUpdateService dataUpdate,
         int portfolioId,
         int draftId,
         string claimOwner,
@@ -542,32 +536,23 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
         try
         {
             using var failScope = scoped.GetRequiredService<IServiceScopeFactory>().CreateScope();
-            var failStore = failScope.ServiceProvider.GetRequiredService<IScanProcessingClaimStore>();
-            // Hoist "now" to a local: an injected TimeProvider call can't be translated inside the
-            // ExecuteUpdate expression tree (it would try to compile to SQL).
+            var failDb = failScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var failWrites = failScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>();
+            // Hoist "now" so the command fingerprint and stored terminal timestamp are stable.
             var reviewedAt = failScope.ServiceProvider.GetRequiredService<TimeProvider>().UtcNow();
-            var completed = await failStore.MarkFailedAsync(
-                draftId, claimOwner, claimToken, reviewedAt, reason, CancellationToken.None);
-            if (completed == 0)
+            var command = new ScanProcessingTerminalCommand(
+                draftId, portfolioId, claimOwner, claimToken, "Failed", reviewedAt,
+                FailureReason: reason);
+            var completed = await failWrites.ExecuteAsync(
+                ScanProcessingTerminalWrite.StepKey(command),
+                ScanProcessingTerminalWrite.Write(failDb, command),
+                CancellationToken.None);
+            if (!completed.Value.Applied)
             {
                 logger.LogWarning(
                     "Discarded stale scan failure completion for draft {DraftId}; its claim lease was lost",
                     draftId);
                 return;
-            }
-
-            try
-            {
-                await dataUpdate.BroadcastEntityUpdateAsync(
-                    portfolioId, "ScanDraft", draftId,
-                    new { Id = draftId, Status = "Failed", FailureReason = reason }, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                // The fenced failure is already durable. Realtime invalidation is best-effort and
-                // must not be reported as a database finalization failure.
-                logger.LogWarning(ex,
-                    "Scan draft {DraftId} failed durably but realtime invalidation failed", draftId);
             }
         }
         catch (Exception ex)
