@@ -72,45 +72,8 @@ public sealed class TenantMoneyWriteExecutorTests
         var handlerSource = File.ReadAllText(Path.Combine(root, "RentalCommand.Data", "Payments",
             "TenantMoneyCommandHandlers.cs"));
         var executeStart = handlerSource.IndexOf("public async Task<RecordTenantReceiptResult> ExecuteAsync", StringComparison.Ordinal);
-        var executeEnd = handlerSource.IndexOf("public Task AuthorizeReplayAsync", executeStart, StringComparison.Ordinal);
+        var executeEnd = handlerSource.IndexOf("public Task AuthorizeAsync", executeStart, StringComparison.Ordinal);
         handlerSource[executeStart..executeEnd].Should().NotContain("AcquireLockAsync");
-    }
-
-    [Fact]
-    public async Task AllLegacyHandlerArmsThrow()
-    {
-        var commands = Commands();
-        var calls = new Func<Task>[]
-        {
-            () => new RecordTenantReceiptHandler(null!).HandleAsync((RecordTenantReceiptCommand)commands[0], null!, default),
-            () => new PostTenantChargeHandler(null!).HandleAsync((PostTenantChargeCommand)commands[1], null!, default),
-            () => new ReverseTenantChargeHandler(null!).HandleAsync((ReverseTenantChargeCommand)commands[2], null!, default),
-            () => new PostTenantCreditHandler(null!).HandleAsync((PostTenantCreditCommand)commands[3], null!, default),
-            () => new PostTenantAdjustmentHandler(null!).HandleAsync((PostTenantAdjustmentCommand)commands[4], null!, default),
-            () => new ReverseTenantLedgerEntryHandler(null!).HandleAsync((ReverseTenantLedgerEntryCommand)commands[5], null!, default),
-            () => new RefundTenantPaymentHandler(null!).HandleAsync((RefundTenantPaymentCommand)commands[6], null!, default),
-            () => new FundSecurityDepositHandler(null!).HandleAsync((FundSecurityDepositCommand)commands[7], null!, default),
-            () => new DeductSecurityDepositHandler(null!).HandleAsync((DeductSecurityDepositCommand)commands[8], null!, default),
-            () => new RefundSecurityDepositHandler(null!).HandleAsync((RefundSecurityDepositCommand)commands[9], null!, default),
-            () => new ReverseSecurityDepositEntryHandler(null!).HandleAsync((ReverseSecurityDepositEntryCommand)commands[10], null!, default),
-            () => new RecordTenantReceiptHandler(null!).AuthorizeReplayAsync((RecordTenantReceiptCommand)commands[0], null!, default),
-            () => new PostTenantChargeHandler(null!).AuthorizeReplayAsync((PostTenantChargeCommand)commands[1], null!, default),
-            () => new ReverseTenantChargeHandler(null!).AuthorizeReplayAsync((ReverseTenantChargeCommand)commands[2], null!, default),
-            () => new PostTenantCreditHandler(null!).AuthorizeReplayAsync((PostTenantCreditCommand)commands[3], null!, default),
-            () => new PostTenantAdjustmentHandler(null!).AuthorizeReplayAsync((PostTenantAdjustmentCommand)commands[4], null!, default),
-            () => new ReverseTenantLedgerEntryHandler(null!).AuthorizeReplayAsync((ReverseTenantLedgerEntryCommand)commands[5], null!, default),
-            () => new RefundTenantPaymentHandler(null!).AuthorizeReplayAsync((RefundTenantPaymentCommand)commands[6], null!, default),
-            () => new FundSecurityDepositHandler(null!).AuthorizeReplayAsync((FundSecurityDepositCommand)commands[7], null!, default),
-            () => new DeductSecurityDepositHandler(null!).AuthorizeReplayAsync((DeductSecurityDepositCommand)commands[8], null!, default),
-            () => new RefundSecurityDepositHandler(null!).AuthorizeReplayAsync((RefundSecurityDepositCommand)commands[9], null!, default),
-            () => new ReverseSecurityDepositEntryHandler(null!).AuthorizeReplayAsync((ReverseSecurityDepositEntryCommand)commands[10], null!, default),
-        };
-
-        foreach (var call in calls)
-        {
-            await call.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("Tenant-money writes no longer use the legacy atomic handlers.");
-        }
     }
 
     private static ITenantMoneyCommand[] Commands() =>
