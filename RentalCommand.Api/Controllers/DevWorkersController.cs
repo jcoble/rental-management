@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Auth;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using Microsoft.EntityFrameworkCore;
@@ -11,6 +12,7 @@ using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Simulation;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -30,20 +32,18 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class DevWorkersController : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<EnqueueSimulationWorkerResult> EnqueueWorkerCodec =
-        new("simulation.worker.enqueue.v1");
     private static readonly TimeSpan LongPollTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan LongPollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public DevWorkersController(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     /// <summary>Enqueue one automation job and wait (long-poll) for it to finish.</summary>
@@ -102,11 +102,10 @@ public sealed class DevWorkersController : AuthenticatedPortfolioControllerBase
         EnqueueSimulationWorkerResult enqueue;
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("simulation.worker.enqueue", BuildIdentityKey(access, deliveryKey)),
-                command,
-                EnqueueWorkerCodec,
-                ct);
+            var outcome = await _writes.ExecuteExactAsync(
+                BuildIdentityKey(access, deliveryKey),
+                SimulationWriteSupport.Write<EnqueueSimulationWorkerCommand, EnqueueSimulationWorkerResult>(
+                    _db, command), ct);
             enqueue = outcome.Value;
         }
         catch (UnauthorizedAccessException)

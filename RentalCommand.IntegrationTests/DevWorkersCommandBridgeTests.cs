@@ -10,12 +10,14 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
+using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Simulation;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
+using RentalCommand.Engine.Writes;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -89,7 +91,11 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
         rentCharge.Setup(s => s.GenerateAsync(It.IsAny<CancellationToken>())).ReturnsAsync(3);
 
         var services = new ServiceCollection();
-        services.AddDbContext<RentalCommandDbContext>(o => o.UseNpgsql(_conn));
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseNpgsql(_conn).UseAtomicPersistenceKernel(provider));
         services.AddScoped<ISimWorkerCommandClaimStore, SimWorkerCommandClaimStore>();
         services.AddSingleton(rentCharge.Object);
         services.AddSingleton<SimWorkerRegistry>();
@@ -142,7 +148,11 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
         lateFee.Setup(s => s.AssessAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new InvalidOperationException("boom"));
 
         var services = new ServiceCollection();
-        services.AddDbContext<RentalCommandDbContext>(o => o.UseNpgsql(_conn));
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseNpgsql(_conn).UseAtomicPersistenceKernel(provider));
         services.AddScoped<ISimWorkerCommandClaimStore, SimWorkerCommandClaimStore>();
         services.AddSingleton(lateFee.Object);
         services.AddSingleton<SimWorkerRegistry>();
@@ -177,26 +187,25 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
             access.AccessRevision,
             commandId,
             SimWorkerKeys.RentCharge);
-        var identity = new AtomicCommandIdentity(
-            "simulation.worker.enqueue",
-            $"{access.PortfolioId}:{access.UserId}:worker-replay-proof");
-        var codec = new AtomicJsonResultCodec<EnqueueSimulationWorkerResult>("simulation.worker.enqueue.v1");
+        var key = $"{access.PortfolioId}:{access.UserId}:worker-replay-proof";
         await using var scope = provider.CreateAsyncScope();
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
 
-        var first = await atomic.ExecuteAsync(identity, command, codec);
-        var replay = await atomic.ExecuteAsync(identity, command, codec);
+        var first = await writes.ExecuteExactAsync(
+            key, SimulationWriteSupport.Write<EnqueueSimulationWorkerCommand, EnqueueSimulationWorkerResult>(db, command));
+        var replay = await writes.ExecuteExactAsync(
+            key, SimulationWriteSupport.Write<EnqueueSimulationWorkerCommand, EnqueueSimulationWorkerResult>(db, command));
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.CommandId.Should().Be(first.Value.CommandId);
         replay.Value.CommandId.Should().Be(commandId);
 
-        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         (await db.SimWorkerCommands.CountAsync(row => row.Id == commandId)).Should().Be(1);
         (await db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "simulation.worker.enqueue"
-            && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+            && receipt.IdempotencyKey == key)).Should().Be(1);
     }
 
     private static RentalCommandDbContext NewContext(string connString) =>
@@ -207,10 +216,7 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            EnqueueSimulationWorkerCommand,
-            EnqueueSimulationWorkerResult,
-            EnqueueSimulationWorkerCommandHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_conn)
                 .UseAtomicPersistenceKernel(provider));

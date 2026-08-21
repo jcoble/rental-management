@@ -269,23 +269,113 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Simulation_claim_is_exclusive_reclaimable_and_fenced()
+    public async Task Simulation_terminal_write_records_rule_body_lock()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
         var now = DateTime.UtcNow;
-        var id = Guid.NewGuid();
-        await using (var seed = NewContext())
-        {
-            seed.SimWorkerCommands.Add(new SimWorkerCommand
-            {
-                Id = id,
-                WorkerKey = "run-due",
-                RequestedSimUtc = now,
-                Status = SimWorkerCommandStatus.Pending,
-                CreatedRealUtc = now.AddMinutes(-1),
-            });
-            await seed.SaveChangesAsync();
-        }
+        var id = await SeedSimulationCommandAsync(now);
+        await using var claimDb = NewContext();
+        var claim = (await new SimWorkerCommandClaimStore(claimDb)
+            .ClaimOldestAsync("sim-lock", TimeSpan.FromMinutes(6)))!;
+        var command = DoneCommand(claim, now, "{\"created\":1}");
+        var locks = new LockRecorder();
+
+        var outcome = await ExecuteSimTerminalAsync(command, locks);
+
+        outcome.Value.Should().Be(new SimWorkerTerminalResult(true, id, SimWorkerCommandStatus.Done));
+        locks.Commands.Should().Contain(sql => sql.Contains("pg_advisory_xact_lock", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
+    public async Task Simulation_terminal_write_wrong_or_expired_token_fails_without_mutating()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var id = await SeedSimulationCommandAsync(now);
+        await using var claimDb = NewContext();
+        var claim = (await new SimWorkerCommandClaimStore(claimDb)
+            .ClaimOldestAsync("sim-fence", TimeSpan.FromMinutes(6)))!;
+
+        var wrong = ErrorCommand(claim with { ClaimToken = Guid.NewGuid() }, now, "wrong token");
+        (await ExecuteSimTerminalAsync(wrong)).Value.Applied.Should().BeFalse();
+        await ExpireSimulationClaimAsync(id);
+        var expired = ErrorCommand(claim, now, "expired");
+        (await ExecuteSimTerminalAsync(expired)).Value.Applied.Should().BeFalse();
+
+        await using var verify = NewContext();
+        var row = await verify.SimWorkerCommands.AsNoTracking().SingleAsync(item => item.Id == id);
+        row.Status.Should().Be(SimWorkerCommandStatus.Running);
+        row.ResultJson.Should().BeNull();
+        row.Error.Should().BeNull();
+    }
+
+    [SkippableFact]
+    public async Task Simulation_terminal_write_exact_retry_replays_without_duplicate_receipt()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        await SeedSimulationCommandAsync(now);
+        await using var claimDb = NewContext();
+        var claim = (await new SimWorkerCommandClaimStore(claimDb)
+            .ClaimOldestAsync("sim-replay", TimeSpan.FromMinutes(6)))!;
+        var command = DoneCommand(claim, now, "{\"created\":3}");
+
+        var first = await ExecuteSimTerminalAsync(command);
+        var replay = await ExecuteSimTerminalAsync(command);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        await using var verify = NewContext();
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == "sim-worker.terminal"
+            && row.IdempotencyKey == SimWorkerTerminalWrite.StepKey(command))).Should().Be(1);
+        (await verify.SimWorkerCommands.CountAsync(row =>
+            row.Id == claim.Id && row.Status == SimWorkerCommandStatus.Done)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Simulation_terminal_write_reclaim_uses_new_receipt_and_preserves_dead_attempt_receipt()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var id = await SeedSimulationCommandAsync(now);
+        await using var firstClaimDb = NewContext();
+        var first = (await new SimWorkerCommandClaimStore(firstClaimDb)
+            .ClaimOldestAsync("sim-dead", TimeSpan.FromMinutes(6)))!;
+        await ExpireSimulationClaimAsync(id);
+        var deadCommand = ErrorCommand(first, now, "dead attempt");
+        (await ExecuteSimTerminalAsync(deadCommand)).Value.Applied.Should().BeFalse();
+
+        await using var replacementClaimDb = NewContext();
+        var replacement = (await new SimWorkerCommandClaimStore(replacementClaimDb)
+            .ClaimOldestAsync("sim-replacement", TimeSpan.FromMinutes(6)))!;
+        var replacementCommand = DoneCommand(replacement, now, "{\"created\":2}");
+        SimWorkerTerminalWrite.StepKey(replacementCommand).Should()
+            .NotBe(SimWorkerTerminalWrite.StepKey(deadCommand));
+        (await ExecuteSimTerminalAsync(replacementCommand)).Value.Applied.Should().BeTrue();
+
+        await using var verify = NewContext();
+        var receipts = await verify.AtomicCommandReceipts.AsNoTracking()
+            .Where(row => row.CommandType == "sim-worker.terminal"
+                && (row.IdempotencyKey == SimWorkerTerminalWrite.StepKey(deadCommand)
+                    || row.IdempotencyKey == SimWorkerTerminalWrite.StepKey(replacementCommand)))
+            .ToListAsync();
+        receipts.Should().HaveCount(2);
+        JsonSerializer.Deserialize<JsonElement>(receipts.Single(row =>
+                row.IdempotencyKey == SimWorkerTerminalWrite.StepKey(deadCommand)).ResultJson!)
+            .GetProperty("Applied").GetBoolean().Should().BeFalse();
+        JsonSerializer.Deserialize<JsonElement>(receipts.Single(row =>
+                row.IdempotencyKey == SimWorkerTerminalWrite.StepKey(replacementCommand)).ResultJson!)
+            .GetProperty("Applied").GetBoolean().Should().BeTrue();
+    }
+
+    [SkippableFact]
+    public async Task Simulation_claim_is_exclusive_and_reclaimable()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var id = await SeedSimulationCommandAsync(now);
 
         await using var dbA = NewContext();
         await using var dbB = NewContext();
@@ -294,40 +384,12 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         first.Should().NotBeNull();
         (await new SimWorkerCommandClaimStore(dbB)
             .ClaimOldestAsync("sim-b", TimeSpan.FromMinutes(6))).Should().BeNull();
-
-        await using (var wrongOwnerDb = NewContext())
-        {
-            var wrongOwner = new SimWorkerCommandClaimStore(wrongOwnerDb);
-            (await wrongOwner.MarkDoneAsync(
-                id, "not-the-owner", first!.ClaimToken, "{}", now)).Should().Be(0);
-        }
-
-        await using (var expire = NewContext())
-        {
-            await expire.Database.ExecuteSqlInterpolatedAsync($$"""
-                UPDATE "SimWorkerCommands"
-                SET "ClaimExpiresAtUtc" = clock_timestamp() - interval '1 second'
-                WHERE "Id" = {{id}}
-                """);
-        }
-        await using (var expiredDb = NewContext())
-        {
-            var expired = new SimWorkerCommandClaimStore(expiredDb);
-            (await expired.MarkDoneAsync(
-                id, first!.ClaimOwner, first.ClaimToken, "{}", now)).Should().Be(0);
-        }
+        await ExpireSimulationClaimAsync(id);
         await using var reclaimDb = NewContext();
         var replacement = await new SimWorkerCommandClaimStore(reclaimDb)
             .ClaimOldestAsync("sim-b", TimeSpan.FromMinutes(6));
         replacement.Should().NotBeNull();
         replacement!.ClaimToken.Should().NotBe(first!.ClaimToken);
-
-        await using var completeDb = NewContext();
-        var completion = new SimWorkerCommandClaimStore(completeDb);
-        (await completion.MarkDoneAsync(
-            id, first!.ClaimOwner, first.ClaimToken, "{}", now)).Should().Be(0);
-        (await completion.MarkDoneAsync(
-            id, replacement!.ClaimOwner, replacement.ClaimToken, "{\"created\":1}", now)).Should().Be(1);
     }
 
     private async Task<int> SeedPortfolioAsync(DateTime now)
@@ -384,6 +446,54 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
             ScanProcessingTerminalWrite.StepKey(command),
             ScanProcessingTerminalWrite.Write(db, command));
     }
+
+    private async Task<AtomicCommandOutcome<SimWorkerTerminalResult>> ExecuteSimTerminalAsync(
+        SimWorkerTerminalCommand command,
+        DbCommandInterceptor? recorder = null)
+    {
+        await using var services = BuildExecutorServices(recorder);
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>().ExecuteAsync(
+            SimWorkerTerminalWrite.StepKey(command),
+            SimWorkerTerminalWrite.Write(db, command));
+    }
+
+    private async Task<Guid> SeedSimulationCommandAsync(DateTime now)
+    {
+        var id = Guid.NewGuid();
+        await using var seed = NewContext();
+        seed.SimWorkerCommands.Add(new SimWorkerCommand
+        {
+            Id = id,
+            WorkerKey = "run-due",
+            RequestedSimUtc = now,
+            Status = SimWorkerCommandStatus.Pending,
+            CreatedRealUtc = now.AddMinutes(-1),
+        });
+        await seed.SaveChangesAsync();
+        return id;
+    }
+
+    private async Task ExpireSimulationClaimAsync(Guid id)
+    {
+        await using var expire = NewContext();
+        await expire.Database.ExecuteSqlInterpolatedAsync($$"""
+            UPDATE "SimWorkerCommands"
+            SET "ClaimExpiresAtUtc" = clock_timestamp() - interval '1 second'
+            WHERE "Id" = {{id}}
+            """);
+    }
+
+    private static SimWorkerTerminalCommand DoneCommand(
+        SimWorkerCommandClaim claim, DateTime now, string resultJson) => new(
+        claim.Id, claim.ClaimOwner, claim.ClaimToken, SimWorkerCommandStatus.Done, now,
+        ResultJson: resultJson);
+
+    private static SimWorkerTerminalCommand ErrorCommand(
+        SimWorkerCommandClaim claim, DateTime now, string error) => new(
+        claim.Id, claim.ClaimOwner, claim.ClaimToken, SimWorkerCommandStatus.Error, now,
+        Error: error);
 
     private ServiceProvider BuildExecutorServices(DbCommandInterceptor? recorder)
     {

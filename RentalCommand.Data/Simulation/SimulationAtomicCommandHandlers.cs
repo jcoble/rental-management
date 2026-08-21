@@ -8,6 +8,60 @@ using RentalCommand.Core.Time;
 
 namespace RentalCommand.Data.Simulation;
 
+public static class SimulationWriteSupport
+{
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        RentalCommandDbContext db,
+        TCommand command)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        object write = command switch
+        {
+            SetSimulationClockCommand value => Build(
+                "simulation.clock.set", "simulation.clock.mutation.v1", value,
+                new SetSimulationClockHandler(db).ExecuteAsync,
+                new SetSimulationClockHandler(db).AuthorizeReplayAsync),
+            AdvanceSimulationClockCommand value => Build(
+                "simulation.clock.advance", "simulation.clock.mutation.v1", value,
+                new AdvanceSimulationClockHandler(db).ExecuteAsync,
+                new AdvanceSimulationClockHandler(db).AuthorizeReplayAsync),
+            FreezeSimulationClockCommand value => Build(
+                "simulation.clock.freeze", "simulation.clock.mutation.v1", value,
+                new FreezeSimulationClockHandler(db).ExecuteAsync,
+                new FreezeSimulationClockHandler(db).AuthorizeReplayAsync),
+            UnfreezeSimulationClockCommand value => Build(
+                "simulation.clock.unfreeze", "simulation.clock.mutation.v1", value,
+                new UnfreezeSimulationClockHandler(db).ExecuteAsync,
+                new UnfreezeSimulationClockHandler(db).AuthorizeReplayAsync),
+            ResetSimulationClockCommand value => Build(
+                "simulation.clock.reset", "simulation.clock.mutation.v1", value,
+                new ResetSimulationClockHandler(db).ExecuteAsync,
+                new ResetSimulationClockHandler(db).AuthorizeReplayAsync),
+            EnqueueSimulationWorkerCommand value => Build(
+                "simulation.worker.enqueue", "simulation.worker.enqueue.v1", value,
+                new EnqueueSimulationWorkerCommandHandler(db).ExecuteAsync,
+                new EnqueueSimulationWorkerCommandHandler(db).AuthorizeReplayAsync),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return (TransactionalWrite<TCommand, TResult>)write;
+    }
+
+    private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
+        string operationName,
+        string resultContract,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => new(
+            operationName, WriteIdempotencyPolicy.Required, command, resultContract,
+            WriteLockPlan.None, executeAsync, authorizeReplayAsync);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy simulation writes are retired; use the shared write executor.");
+}
+
 public sealed class SetSimulationClockHandler
     : IAtomicCommandHandler<SetSimulationClockCommand, SimulationClockMutationResult>
 {
@@ -16,6 +70,11 @@ public sealed class SetSimulationClockHandler
     public SetSimulationClockHandler(RentalCommandDbContext db) => _db = db;
 
     public Task<SimulationClockMutationResult> HandleAsync(
+        SetSimulationClockCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
+
+    public Task<SimulationClockMutationResult> ExecuteAsync(
         SetSimulationClockCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -77,6 +136,11 @@ public sealed class AdvanceSimulationClockHandler
     public Task<SimulationClockMutationResult> HandleAsync(
         AdvanceSimulationClockCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
+
+    public Task<SimulationClockMutationResult> ExecuteAsync(
+        AdvanceSimulationClockCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
         SimulationAtomicCommandSupport.MutateClockAsync(
             command,
@@ -114,6 +178,11 @@ public sealed class FreezeSimulationClockHandler
     public Task<SimulationClockMutationResult> HandleAsync(
         FreezeSimulationClockCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
+
+    public Task<SimulationClockMutationResult> ExecuteAsync(
+        FreezeSimulationClockCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
         SimulationAtomicCommandSupport.MutateClockAsync(
             command,
@@ -144,6 +213,11 @@ public sealed class UnfreezeSimulationClockHandler
     public UnfreezeSimulationClockHandler(RentalCommandDbContext db) => _db = db;
 
     public Task<SimulationClockMutationResult> HandleAsync(
+        UnfreezeSimulationClockCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
+
+    public Task<SimulationClockMutationResult> ExecuteAsync(
         UnfreezeSimulationClockCommand command,
         IAtomicCommandContext context,
         CancellationToken ct) =>
@@ -178,6 +252,11 @@ public sealed class ResetSimulationClockHandler
     public Task<SimulationClockMutationResult> HandleAsync(
         ResetSimulationClockCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
+
+    public Task<SimulationClockMutationResult> ExecuteAsync(
+        ResetSimulationClockCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
         SimulationAtomicCommandSupport.MutateClockAsync(
             command,
@@ -206,6 +285,11 @@ public sealed class EnqueueSimulationWorkerCommandHandler
     public EnqueueSimulationWorkerCommandHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<EnqueueSimulationWorkerResult> HandleAsync(
+        EnqueueSimulationWorkerCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
+
+    public async Task<EnqueueSimulationWorkerResult> ExecuteAsync(
         EnqueueSimulationWorkerCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
