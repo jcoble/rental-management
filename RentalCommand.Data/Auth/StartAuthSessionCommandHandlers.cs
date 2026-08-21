@@ -15,7 +15,11 @@ public sealed class IssueLoginContextSelectionChallengeHandler
 
     public IssueLoginContextSelectionChallengeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<LoginContextSelectionChallengeResult> HandleAsync(
+    public Task<LoginContextSelectionChallengeResult> HandleAsync(
+        IssueLoginContextSelectionChallengeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<LoginContextSelectionChallengeResult> ExecuteAsync(
         IssueLoginContextSelectionChallengeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -78,7 +82,11 @@ public sealed class IssueLoginContextSelectionChallengeHandler
             command.ExpiresAtUtc);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        IssueLoginContextSelectionChallengeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         IssueLoginContextSelectionChallengeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -142,7 +150,11 @@ public sealed class StartAuthSessionHandler
 
     public StartAuthSessionHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<StartAuthSessionResult> HandleAsync(
+    public Task<StartAuthSessionResult> HandleAsync(
+        StartAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<StartAuthSessionResult> ExecuteAsync(
         StartAuthSessionCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -263,7 +275,11 @@ public sealed class StartAuthSessionHandler
             command.CredentialId);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        StartAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         StartAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);

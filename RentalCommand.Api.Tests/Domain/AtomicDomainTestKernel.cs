@@ -225,36 +225,14 @@ internal static class AtomicDomainTestKernel
     internal static ServiceProvider CreateForAccountBootstrapPostgreSql(NpgsqlConnection connection)
     {
         var services = CorePostgreSql(connection);
-        services.AddAtomicCommandHandler<
-            BootstrapAccountCommand,
-            BootstrapAccountResult,
-            BootstrapAccountHandler>();
-        services.AddAtomicCommandHandler<
-            ConfirmAccountEmailCommand,
-            ConfirmAccountEmailResult,
-            ConfirmAccountEmailHandler>();
-        services.AddAtomicCommandHandler<
-            StartAuthSessionCommand,
-            StartAuthSessionResult,
-            StartAuthSessionHandler>();
-        services.AddAtomicCommandHandler<
-            RotateSessionRefreshCredentialCommand,
-            SessionRefreshMutationResult,
-            RotateSessionRefreshCredentialHandler>();
-        services.AddAtomicCommandHandler<
-            RevokeAuthSessionCommand,
-            RevokeAuthSessionResult,
-            RevokeAuthSessionHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
     internal static ServiceProvider CreateForPasswordResetPostgreSql(string connectionString)
     {
         var services = CorePostgreSql(connectionString);
-        services.AddAtomicCommandHandler<
-            ResetAccountPasswordCommand,
-            ResetAccountPasswordResult,
-            ResetAccountPasswordHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 

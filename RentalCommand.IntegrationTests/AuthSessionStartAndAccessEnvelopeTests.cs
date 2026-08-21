@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Authorization;
@@ -111,34 +112,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         services.AddSingleton(_queryCapture!);
         services.AddScoped<ICurrentActor, AuthStartTestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            IssueLoginContextSelectionChallengeCommand,
-            LoginContextSelectionChallengeResult,
-            IssueLoginContextSelectionChallengeHandler>();
-        services.AddAtomicCommandHandler<
-            StartAuthSessionCommand,
-            StartAuthSessionResult,
-            StartAuthSessionHandler>();
-        services.AddAtomicCommandHandler<
-            AuthEmailOutboxCommand,
-            AuthEmailOutboxResult,
-            AuthEmailOutboxHandler>();
-        services.AddAtomicCommandHandler<
-            ConfirmAccountEmailCommand,
-            ConfirmAccountEmailResult,
-            ConfirmAccountEmailHandler>();
-        services.AddAtomicCommandHandler<
-            ResetAccountPasswordCommand,
-            ResetAccountPasswordResult,
-            ResetAccountPasswordHandler>();
-        services.AddAtomicCommandHandler<
-            ChangePasswordCommand,
-            ChangePasswordResult,
-            ChangePasswordHandler>();
-        services.AddAtomicCommandHandler<
-            ConfirmGoogleAccountEmailCommand,
-            ConfirmAccountEmailResult,
-            ConfirmGoogleAccountEmailHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -1449,10 +1423,49 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = services.CreateAsyncScope();
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        object write = command switch
+        {
+            IssueLoginContextSelectionChallengeCommand value => Build(value, new IssueLoginContextSelectionChallengeHandler(db)),
+            StartAuthSessionCommand value => Build(value, new StartAuthSessionHandler(db)),
+            AuthEmailOutboxCommand value => Build(value, new AuthEmailOutboxHandler(db)),
+            ConfirmAccountEmailCommand value => Build(value, new ConfirmAccountEmailHandler(db)),
+            ResetAccountPasswordCommand value => Build(value, new ResetAccountPasswordHandler(db)),
+            ChangePasswordCommand value => Build(value, new ChangePasswordHandler(db)),
+            ConfirmGoogleAccountEmailCommand value => Build(value, new ConfirmGoogleAccountEmailHandler(db)),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, (TransactionalWrite<TCommand, TResult>)write);
     }
+
+    private static TransactionalWrite<IssueLoginContextSelectionChallengeCommand, LoginContextSelectionChallengeResult> Build(
+        IssueLoginContextSelectionChallengeCommand command, IssueLoginContextSelectionChallengeHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
+
+    private static TransactionalWrite<StartAuthSessionCommand, StartAuthSessionResult> Build(
+        StartAuthSessionCommand command, StartAuthSessionHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
+
+    private static TransactionalWrite<AuthEmailOutboxCommand, AuthEmailOutboxResult> Build(
+        AuthEmailOutboxCommand command, AuthEmailOutboxHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
+
+    private static TransactionalWrite<ConfirmAccountEmailCommand, ConfirmAccountEmailResult> Build(
+        ConfirmAccountEmailCommand command, ConfirmAccountEmailHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
+
+    private static TransactionalWrite<ResetAccountPasswordCommand, ResetAccountPasswordResult> Build(
+        ResetAccountPasswordCommand command, ResetAccountPasswordHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
+
+    private static TransactionalWrite<ChangePasswordCommand, ChangePasswordResult> Build(
+        ChangePasswordCommand command, ChangePasswordHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
+
+    private static TransactionalWrite<ConfirmGoogleAccountEmailCommand, ConfirmAccountEmailResult> Build(
+        ConfirmGoogleAccountEmailCommand command, ConfirmGoogleAccountEmailHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private ServiceProvider RuntimeServices =>
         _runtimeServices ?? throw new InvalidOperationException("Runtime auth-start services are unavailable.");

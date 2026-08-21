@@ -15,7 +15,11 @@ public sealed class RevokeAuthSessionHandler
 
     public RevokeAuthSessionHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RevokeAuthSessionResult> HandleAsync(
+    public Task<RevokeAuthSessionResult> HandleAsync(
+        RevokeAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<RevokeAuthSessionResult> ExecuteAsync(
         RevokeAuthSessionCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -86,7 +90,11 @@ public sealed class RevokeAuthSessionHandler
         return new RevokeAuthSessionResult(true, command.AuthSessionId);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        RevokeAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         RevokeAuthSessionCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

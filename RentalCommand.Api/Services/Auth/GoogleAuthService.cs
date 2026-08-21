@@ -2,10 +2,13 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
+using RentalCommand.Data;
+using RentalCommand.Data.Auth;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -52,34 +55,35 @@ public interface IGoogleAuthService
 /// </summary>
 public sealed class GoogleAuthService : IGoogleAuthService
 {
-    private static readonly AtomicJsonResultCodec<ConfirmAccountEmailResult> ConfirmEmailCodec =
-        new("auth-email-confirm-result:v1");
+    private readonly RentalCommandDbContext _db;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GoogleAuthOptions _options;
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly IAuthService _authService;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly ILogger<GoogleAuthService> _logger;
 
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
     private const string TokenInfoEndpoint = "https://oauth2.googleapis.com/tokeninfo";
 
     public GoogleAuthService(
+        RentalCommandDbContext db,
         UserManager<ApplicationUser> userManager,
         IHttpClientFactory httpClientFactory,
         IOptions<GoogleAuthOptions> options,
         ICanonicalAccountBootstrapService accountBootstrap,
         IAuthService authService,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         ILogger<GoogleAuthService> logger)
     {
+        _db = db;
         _userManager = userManager;
         _httpClientFactory = httpClientFactory;
         _options = options.Value;
         _accountBootstrap = accountBootstrap;
         _authService = authService;
-        _atomic = atomic;
+        _writes = writes;
         _logger = logger;
     }
 
@@ -194,14 +198,13 @@ public sealed class GoogleAuthService : IGoogleAuthService
         }
         else if (!user.EmailConfirmed)
         {
-            var confirmed = (await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("auth.email.google-confirm", $"{user.Id}:{subjectHash}"),
-                new ConfirmGoogleAccountEmailCommand(
-                    user.Id,
-                    user.SecurityStamp ?? string.Empty,
-                    subjectHash),
-                ConfirmEmailCodec,
-                ct)).Value;
+            var command = new ConfirmGoogleAccountEmailCommand(
+                user.Id,
+                user.SecurityStamp ?? string.Empty,
+                subjectHash);
+            var handler = new ConfirmGoogleAccountEmailHandler(_db);
+            var confirmed = (await _writes.ExecuteAsync($"{user.Id}:{subjectHash}",
+                AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct)).Value;
             if (confirmed.Outcome is ConfirmAccountEmailOutcome.UserNotFound)
             {
                 _logger.LogWarning(
