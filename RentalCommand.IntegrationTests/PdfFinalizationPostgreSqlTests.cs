@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -50,10 +51,8 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
         var seeded = await SeedDeclinedCaseAsync();
         await using var serviceScope = _services.CreateAsyncScope();
         var provider = serviceScope.ServiceProvider;
-        var atomic = provider.GetRequiredService<IAtomicUnitOfWork>();
-        var prepared = await atomic.ExecuteAsync(
-            new AtomicCommandIdentity("integration.adverse.prepare", "integration-prepare"),
-            new PrepareAdverseActionNoticeCommand(
+        var writes = provider.GetRequiredService<IRequestWriteExecutor>();
+        var prepareCommand = new PrepareAdverseActionNoticeCommand(
                 PortfolioId,
                 seeded.Application.Id,
                 _scope.UserId,
@@ -62,8 +61,11 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
                 _scope.AccessRevision,
                 "integration-prepare",
                 null,
-                false),
-            new AtomicJsonResultCodec<PrepareAdverseActionNoticeResult>("integration.adverse.prepare.v1"));
+                false);
+        var prepareHandler = new PrepareAdverseActionNoticeHandler(provider.GetRequiredService<RentalCommandDbContext>());
+        var prepared = await writes.ExecuteAsync("integration-prepare",
+            ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
+                prepareHandler.AuthorizeAsync));
 
         var pending = await provider.GetRequiredService<IPendingFileUploadStore>().PrepareAsync(
             PortfolioId,
@@ -105,10 +107,10 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
             "integration-delivery",
             prepared.Value.GeneratedAtUtc);
 
-        var act = () => atomic.ExecuteAsync(
-            new AtomicCommandIdentity("integration.adverse.finalize", "integration-finalize"),
-            command,
-            new AtomicJsonResultCodec<CreateAdverseActionNoticeResult>("integration.adverse.finalize.v1"));
+        var finalizeHandler = new CreateAdverseActionNoticeHandler(provider.GetRequiredService<RentalCommandDbContext>());
+        var act = () => writes.ExecuteAsync("integration-finalize",
+            ScreeningWriteSupport.Write(command, finalizeHandler.ExecuteAsync,
+                finalizeHandler.AuthorizeAsync));
 
         var error = await act.Should().ThrowAsync<InvalidOperationException>();
         error.Which.Message.Should().Contain("decision");
@@ -238,14 +240,7 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddPendingFileUploadStore();
-        services.AddAtomicCommandHandler<
-            PrepareAdverseActionNoticeCommand,
-            PrepareAdverseActionNoticeResult,
-            PrepareAdverseActionNoticeHandler>();
-        services.AddAtomicCommandHandler<
-            CreateAdverseActionNoticeCommand,
-            CreateAdverseActionNoticeResult,
-            CreateAdverseActionNoticeHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             AtomicInspectionMutationCommand,
             AtomicInspectionMutationResult,
