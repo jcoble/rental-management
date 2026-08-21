@@ -3,10 +3,13 @@ using System.Text;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
+using RentalCommand.Data;
+using RentalCommand.Data.Auth;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -42,20 +45,20 @@ public interface ICanonicalAccountBootstrapService
 /// </summary>
 public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstrapService
 {
-    private static readonly AtomicJsonResultCodec<BootstrapAccountResult> ResultCodec =
-        new("auth-account-bootstrap-result:v1");
-
+    private readonly RentalCommandDbContext _db;
     private readonly UserManager<ApplicationUser> _users;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly byte[] _intentKey;
 
     public CanonicalAccountBootstrapService(
+        RentalCommandDbContext db,
         UserManager<ApplicationUser> users,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         IOptions<AtomicAuthSessionCredentialOptions> credentialOptions)
     {
+        _db = db;
         _users = users;
-        _atomic = atomic;
+        _writes = writes;
         _intentKey = Convert.FromBase64String(credentialOptions.Value.SigningKey);
     }
 
@@ -139,11 +142,9 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
             CreateLockId(normalizedEmail));
         var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey)))
             .ToLowerInvariant();
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("auth.account.bootstrap", $"email:{keyDigest}"),
-            command,
-            ResultCodec,
-            ct);
+        var handler = new BootstrapAccountHandler(_db);
+        var outcome = await _writes.ExecuteAsync($"email:{keyDigest}",
+            AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         if (outcome.Value.Outcome == BootstrapAccountOutcome.DuplicateEmail)
         {
             return Failure("Email is already registered");

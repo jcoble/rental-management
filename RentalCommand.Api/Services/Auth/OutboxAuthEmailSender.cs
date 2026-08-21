@@ -3,8 +3,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Entities;
+using RentalCommand.Data;
+using RentalCommand.Data.Auth;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -15,18 +18,19 @@ namespace RentalCommand.Api.Services.Auth;
 /// </summary>
 public sealed class OutboxAuthEmailSender : IAuthEmailSender
 {
-    private static readonly AtomicJsonResultCodec<AuthEmailOutboxResult> ResultCodec =
-        new("auth-email-outbox-result:v1");
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
     private readonly IConfiguration _configuration;
     private readonly ILogger<OutboxAuthEmailSender> _logger;
 
     public OutboxAuthEmailSender(
-        IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes,
         IConfiguration configuration,
         ILogger<OutboxAuthEmailSender> logger)
     {
-        _atomic = atomic;
+        _db = db;
+        _writes = writes;
         _configuration = configuration;
         _logger = logger;
     }
@@ -133,11 +137,9 @@ This link expires in 1 hour. If you didn't request a password reset, you can saf
             payload,
             intentHash,
             $"auth:{kind}:{user.Id}:{operationDigest}");
-        _ = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity($"auth.email.{kind}", $"{user.Id}:{operationDigest}"),
-            command,
-            ResultCodec,
-            ct);
+        var handler = new AuthEmailOutboxHandler(_db);
+        _ = await _writes.ExecuteAsync($"{user.Id}:{operationDigest}",
+            AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
     }
 
     /// <summary>

@@ -15,7 +15,11 @@ public sealed class IssueSessionRefreshCredentialHandler
 
     public IssueSessionRefreshCredentialHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SessionRefreshMutationResult> HandleAsync(
+    public Task<SessionRefreshMutationResult> HandleAsync(
+        IssueSessionRefreshCredentialCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<SessionRefreshMutationResult> ExecuteAsync(
         IssueSessionRefreshCredentialCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -90,7 +94,11 @@ public sealed class IssueSessionRefreshCredentialHandler
             command.CredentialId);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        IssueSessionRefreshCredentialCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         IssueSessionRefreshCredentialCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -196,7 +204,11 @@ public sealed class RotateSessionRefreshCredentialHandler
 
     private const string ReuseReason = "Refresh credential reuse detected";
 
-    public async Task<SessionRefreshMutationResult> HandleAsync(
+    public Task<SessionRefreshMutationResult> HandleAsync(
+        RotateSessionRefreshCredentialCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task<SessionRefreshMutationResult> ExecuteAsync(
         RotateSessionRefreshCredentialCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -372,7 +384,11 @@ public sealed class RotateSessionRefreshCredentialHandler
             authority.AccessRevision);
     }
 
-    public async Task AuthorizeReplayAsync(
+    public Task AuthorizeReplayAsync(
+        RotateSessionRefreshCredentialCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw AuthSessionWriteSupport.RetiredPath();
+
+    public async Task AuthorizeAsync(
         RotateSessionRefreshCredentialCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

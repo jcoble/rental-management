@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
@@ -77,18 +78,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, RefreshTestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            IssueSessionRefreshCredentialCommand,
-            SessionRefreshMutationResult,
-            IssueSessionRefreshCredentialHandler>();
-        services.AddAtomicCommandHandler<
-            RotateSessionRefreshCredentialCommand,
-            SessionRefreshMutationResult,
-            RotateSessionRefreshCredentialHandler>();
-        services.AddAtomicCommandHandler<
-            RevokeAuthSessionCommand,
-            RevokeAuthSessionResult,
-            RevokeAuthSessionHandler>();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddSingleton(new RefreshCredentialTokenFactory(SigningKey));
         services.AddSingleton<IAuthSecurityClock>(new FixedAuthSecurityClock(_now));
         services.Configure<AtomicAuthSessionCredentialOptions>(options =>
@@ -145,6 +135,28 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         (await db.AuthSessionRefreshCredentials.CountAsync(item => item.Id == credentialId)).Should().Be(1);
         (await db.AtomicAuditLogs.CountAsync(item => item.ChangeReason == "Refresh credential family issued"))
             .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Issue_ExecutorAcquiresFamilyLockBeforeReadingSessionEligibility()
+    {
+        SkipIfNoDocker();
+        _sqlCapture!.Clear();
+        var familyId = Guid.NewGuid();
+        var credentialId = Guid.NewGuid();
+
+        await ExecuteAtomicAsync(
+            Identity("issue", Guid.NewGuid()),
+            Issue(familyId, credentialId, Hash("issue-lock-order")),
+            Codec);
+
+        var commands = _sqlCapture.Snapshot();
+        var lockIndex = Array.FindIndex(commands, command => command.Contains("pg_advisory_xact_lock"));
+        var sessionReadIndex = Array.FindIndex(commands, command =>
+            command.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("\"AuthSessions\""));
+        lockIndex.Should().BeGreaterThanOrEqualTo(0);
+        sessionReadIndex.Should().BeGreaterThan(lockIndex);
     }
 
     [SkippableFact]
@@ -369,10 +381,41 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         await using var db = NewPlainContext();
         (await db.AuthSessionRefreshCredentials.CountAsync(item =>
             item.RefreshTokenFamilyId == issued.FamilyId)).Should().Be(2);
+        var original = await db.AuthSessionRefreshCredentials
+            .SingleAsync(item => item.Id == issued.CredentialId);
+        original.ConsumedAtUtc.Should().Be(command.PresentedAtUtc);
+        original.ConsumedByOperationId.Should().Be(operation);
+        original.ReplacedByCredentialId.Should().Be(replacementId);
         (await db.AuthSessionRefreshTokenFamilies.SingleAsync(item => item.Id == issued.FamilyId))
             .ReuseDetectedAtUtc.Should().BeNull();
         (await db.AuthSessions.SingleAsync(item => item.Id == _sessionId))
             .Status.Should().Be(AuthSessionStatus.Active);
+    }
+
+    [SkippableFact]
+    public async Task Rotation_ExecutorPreservesDiscoveryLockAndProtectedRereadOrder()
+    {
+        SkipIfNoDocker();
+        var issued = await IssueCredentialAsync();
+        _sqlCapture!.Clear();
+        var operation = Guid.NewGuid();
+
+        await ExecuteAtomicAsync(
+            Identity("rotate", operation),
+            Rotate(operation, issued.TokenHash, Guid.NewGuid(), Hash("rotation-lock-order")),
+            Codec);
+
+        var commands = _sqlCapture.Snapshot();
+        var credentialReads = commands
+            .Select((command, index) => (command, index))
+            .Where(item => item.command.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) &&
+                item.command.Contains("\"AuthSessionRefreshCredentials\""))
+            .Select(item => item.index)
+            .ToArray();
+        var lockIndex = Array.FindIndex(commands, command => command.Contains("pg_advisory_xact_lock"));
+        credentialReads.Should().HaveCountGreaterThanOrEqualTo(2);
+        credentialReads.First().Should().BeLessThan(lockIndex);
+        credentialReads.Last().Should().BeGreaterThan(lockIndex);
     }
 
     [SkippableFact]
@@ -683,10 +726,29 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var services = _services
             ?? throw new InvalidOperationException("Atomic refresh services are unavailable.");
         await using var scope = services.CreateAsyncScope();
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        object write = command switch
+        {
+            IssueSessionRefreshCredentialCommand value => Build(value, new IssueSessionRefreshCredentialHandler(db)),
+            RotateSessionRefreshCredentialCommand value => Build(value, new RotateSessionRefreshCredentialHandler(db)),
+            RevokeAuthSessionCommand value => Build(value, new RevokeAuthSessionHandler(db)),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, (TransactionalWrite<TCommand, TResult>)write);
     }
+
+    private static TransactionalWrite<IssueSessionRefreshCredentialCommand, SessionRefreshMutationResult> Build(
+        IssueSessionRefreshCredentialCommand command, IssueSessionRefreshCredentialHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
+
+    private static TransactionalWrite<RotateSessionRefreshCredentialCommand, SessionRefreshMutationResult> Build(
+        RotateSessionRefreshCredentialCommand command, RotateSessionRefreshCredentialHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
+
+    private static TransactionalWrite<RevokeAuthSessionCommand, RevokeAuthSessionResult> Build(
+        RevokeAuthSessionCommand command, RevokeAuthSessionHandler handler) =>
+        AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; session refresh kernel test skipped.");

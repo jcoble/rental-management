@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
@@ -18,7 +19,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
     public async Task StartAsync_ReconstructsReceiptCredentialWithoutPersistingBearer()
     {
         var receiptCredentialId = Guid.NewGuid();
-        var atomic = new CapturingAtomicUnitOfWork((_, resultType) =>
+        var atomic = new CapturingWriteExecutor((_, resultType) =>
         {
             resultType.Should().Be(typeof(StartAuthSessionResult));
             return new StartAuthSessionResult(
@@ -61,7 +62,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
     [Fact]
     public async Task StartAsync_SameOperationProducesReplayCompatibleCommand()
     {
-        var atomic = new CapturingAtomicUnitOfWork((command, resultType) =>
+        var atomic = new CapturingWriteExecutor((command, resultType) =>
         {
             resultType.Should().Be(typeof(StartAuthSessionResult));
             var start = command.Should().BeOfType<StartAuthSessionCommand>().Subject;
@@ -106,7 +107,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
         var tokens = new RefreshCredentialTokenFactory(SigningKey);
         var presentedBearer = tokens.CreateBearer(Guid.NewGuid());
         var receiptReplacementId = Guid.NewGuid();
-        var atomic = new CapturingAtomicUnitOfWork((_, resultType) =>
+        var atomic = new CapturingWriteExecutor((_, resultType) =>
         {
             resultType.Should().Be(typeof(SessionRefreshMutationResult));
             return new SessionRefreshMutationResult(
@@ -139,7 +140,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
     [Fact]
     public async Task RotateAsync_RejectsInvalidBearerBeforeAtomicPersistence()
     {
-        var atomic = new CapturingAtomicUnitOfWork(
+        var atomic = new CapturingWriteExecutor(
             (_, _) => throw new InvalidOperationException("Persistence must not be called."),
             AtomicCommandDisposition.Executed);
         var service = CreateService(atomic, new RefreshCredentialTokenFactory(SigningKey));
@@ -160,7 +161,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
         var tokens = new RefreshCredentialTokenFactory(SigningKey);
         var operationId = Guid.NewGuid();
         var presentedBearer = tokens.CreateBearer(Guid.NewGuid());
-        var atomic = new CapturingAtomicUnitOfWork((command, resultType) =>
+        var atomic = new CapturingWriteExecutor((command, resultType) =>
         {
             resultType.Should().Be(typeof(SessionRefreshMutationResult));
             var rotation = command.Should().BeOfType<RotateSessionRefreshCredentialCommand>().Subject;
@@ -175,18 +176,18 @@ public sealed class AtomicAuthSessionCredentialServiceTests
 
         await service.RotateAsync(new AtomicAuthSessionRotationRequest(operationId, presentedBearer));
 
-        var identity = atomic.Identities.Single();
-        identity.CommandType.Should().Be("session-refresh:rotate");
-        identity.IdempotencyKey.Should().Be($"operation:{operationId:N}");
+        atomic.Operations.Single().Should().Be("session-refresh:rotate");
+        atomic.IdempotencyKeys.Single().Should().Be($"operation:{operationId:N}");
         atomic.LastCommand.Should().BeOfType<RotateSessionRefreshCredentialCommand>().Subject
             .OperationId.Should().Be(operationId);
     }
 
     private static AtomicAuthSessionCredentialService CreateService(
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor atomic,
         RefreshCredentialTokenFactory tokens,
         IAuthSecurityClock? securityClock = null) =>
         new(
+            null!,
             atomic,
             tokens,
             Options.Create(new AtomicAuthSessionCredentialOptions
@@ -210,12 +211,12 @@ public sealed class AtomicAuthSessionCredentialServiceTests
         }
     }
 
-    private sealed class CapturingAtomicUnitOfWork : IAtomicUnitOfWork
+    private sealed class CapturingWriteExecutor : IRequestWriteExecutor
     {
         private readonly Func<object, Type, object> _resultFactory;
         private readonly AtomicCommandDisposition _disposition;
 
-        public CapturingAtomicUnitOfWork(
+        public CapturingWriteExecutor(
             Func<object, Type, object> resultFactory,
             AtomicCommandDisposition disposition)
         {
@@ -225,22 +226,23 @@ public sealed class AtomicAuthSessionCredentialServiceTests
 
         public object? LastCommand { get; private set; }
         public List<object> Commands { get; } = [];
-        public List<AtomicCommandIdentity> Identities { get; } = [];
+        public List<string> IdempotencyKeys { get; } = [];
+        public List<string> Operations { get; } = [];
         public int CallCount { get; private set; }
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity,
-            TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec,
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
             CallCount++;
-            LastCommand = command;
-            Commands.Add(command);
-            Identities.Add(identity);
-            var value = (TResult)_resultFactory(command, typeof(TResult));
+            LastCommand = write.Request;
+            Commands.Add(write.Request);
+            IdempotencyKeys.Add(idempotencyKey);
+            Operations.Add(write.OperationName);
+            var value = (TResult)_resultFactory(write.Request, typeof(TResult));
             return Task.FromResult(new AtomicCommandOutcome<TResult>(
                 value,
                 _disposition,
