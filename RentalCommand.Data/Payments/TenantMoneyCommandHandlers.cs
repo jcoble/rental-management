@@ -13,6 +13,57 @@ using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Payments;
 
+public static class TenantMoneyWriteSupport
+{
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, ITenantMoneyCommand
+        where TResult : notnull
+    {
+        var (operationName, resultContract) = command switch
+        {
+            RecordTenantReceiptCommand =>
+                ("tenant-account.receipt.record", "tenant-account.receipt.record.v1"),
+            PostTenantChargeCommand =>
+                ("tenant-account.charge.post", "tenant-account.charge.mutation.v1"),
+            ReverseTenantChargeCommand =>
+                ("tenant-account.charge.reverse", "tenant-account.charge.mutation.v1"),
+            PostTenantCreditCommand =>
+                ("tenant-account.credit.post", "tenant-account.ledger.mutation.v1"),
+            PostTenantAdjustmentCommand =>
+                ("tenant-account.adjustment.post", "tenant-account.ledger.mutation.v1"),
+            ReverseTenantLedgerEntryCommand =>
+                ("tenant-account.ledger.reverse", "tenant-account.ledger.mutation.v1"),
+            RefundTenantPaymentCommand =>
+                ("tenant-account.payment.refund", "tenant-account.payment.refund.v1"),
+            FundSecurityDepositCommand =>
+                ("tenant-account.deposit.fund", "tenant-account.deposit.mutation.v1"),
+            DeductSecurityDepositCommand =>
+                ("tenant-account.deposit.deduct", "tenant-account.deposit.mutation.v1"),
+            RefundSecurityDepositCommand =>
+                ("tenant-account.deposit.refund", "tenant-account.deposit.mutation.v1"),
+            ReverseSecurityDepositEntryCommand =>
+                ("tenant-account.deposit.reverse", "tenant-account.deposit.mutation.v1"),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return new(
+            operationName,
+            WriteIdempotencyPolicy.Required,
+            command,
+            resultContract,
+            new WriteLockPlan(
+                WriteLockProtocol.TenantAccount,
+                WriteLock.For("TenantAccount", command.TenantAccountId)),
+            executeAsync,
+            authorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Tenant-money writes no longer use the legacy atomic handlers.");
+}
+
 public sealed class RecordTenantReceiptHandler
     : IAtomicCommandHandler<RecordTenantReceiptCommand, RecordTenantReceiptResult>
 {
@@ -20,11 +71,14 @@ public sealed class RecordTenantReceiptHandler
 
     public RecordTenantReceiptHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecordTenantReceiptResult> HandleAsync(
+    public Task<RecordTenantReceiptResult> HandleAsync(
+        RecordTenantReceiptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<RecordTenantReceiptResult> ExecuteAsync(
         RecordTenantReceiptCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var account = await TenantMoneyCommandSupport.AuthorizedAccounts(command, _db, times.WallClockUtc)
             .Select(row => new
@@ -165,6 +219,9 @@ public sealed class RecordTenantReceiptHandler
     }
 
     public Task AuthorizeReplayAsync(RecordTenantReceiptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(RecordTenantReceiptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
@@ -567,11 +624,14 @@ public sealed class PostTenantChargeHandler
 
     public PostTenantChargeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<TenantChargeMutationResult> HandleAsync(
+    public Task<TenantChargeMutationResult> HandleAsync(
+        PostTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<TenantChargeMutationResult> ExecuteAsync(
         PostTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var account = await TenantMoneyCommandSupport
             .AuthorizedAccounts(command, _db, times.WallClockUtc)
@@ -620,6 +680,9 @@ public sealed class PostTenantChargeHandler
     }
 
     public Task AuthorizeReplayAsync(PostTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(PostTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
@@ -630,11 +693,14 @@ public sealed class ReverseTenantChargeHandler
 
     public ReverseTenantChargeHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<TenantChargeMutationResult> HandleAsync(
+    public Task<TenantChargeMutationResult> HandleAsync(
+        ReverseTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<TenantChargeMutationResult> ExecuteAsync(
         ReverseTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var target = await (
             from account in TenantMoneyCommandSupport.AuthorizedAccounts(
@@ -715,6 +781,9 @@ public sealed class ReverseTenantChargeHandler
     }
 
     public Task AuthorizeReplayAsync(ReverseTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(ReverseTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
@@ -725,12 +794,14 @@ public sealed class PostTenantCreditHandler
 
     public PostTenantCreditHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<TenantLedgerMutationResult> HandleAsync(
+    public Task<TenantLedgerMutationResult> HandleAsync(
+        PostTenantCreditCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<TenantLedgerMutationResult> ExecuteAsync(
         PostTenantCreditCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync(
-            "TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var account = await TenantMoneyCommandSupport
             .AuthorizedAccounts(command, _db, times.WallClockUtc)
@@ -834,6 +905,9 @@ public sealed class PostTenantCreditHandler
     }
 
     public Task AuthorizeReplayAsync(PostTenantCreditCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(PostTenantCreditCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
@@ -844,12 +918,14 @@ public sealed class PostTenantAdjustmentHandler
 
     public PostTenantAdjustmentHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<TenantLedgerMutationResult> HandleAsync(
+    public Task<TenantLedgerMutationResult> HandleAsync(
+        PostTenantAdjustmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<TenantLedgerMutationResult> ExecuteAsync(
         PostTenantAdjustmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync(
-            "TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var account = await TenantMoneyCommandSupport
             .AuthorizedAccounts(command, _db, times.WallClockUtc)
@@ -892,6 +968,9 @@ public sealed class PostTenantAdjustmentHandler
     }
 
     public Task AuthorizeReplayAsync(PostTenantAdjustmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(PostTenantAdjustmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
@@ -902,12 +981,14 @@ public sealed class ReverseTenantLedgerEntryHandler
 
     public ReverseTenantLedgerEntryHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<TenantLedgerMutationResult> HandleAsync(
+    public Task<TenantLedgerMutationResult> HandleAsync(
+        ReverseTenantLedgerEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<TenantLedgerMutationResult> ExecuteAsync(
         ReverseTenantLedgerEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync(
-            "TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var target = await (
             from account in TenantMoneyCommandSupport.AuthorizedAccounts(
@@ -1032,6 +1113,9 @@ public sealed class ReverseTenantLedgerEntryHandler
     }
 
     public Task AuthorizeReplayAsync(ReverseTenantLedgerEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(ReverseTenantLedgerEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
@@ -1042,12 +1126,14 @@ public sealed class RefundTenantPaymentHandler
 
     public RefundTenantPaymentHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<TenantPaymentRefundResult> HandleAsync(
+    public Task<TenantPaymentRefundResult> HandleAsync(
+        RefundTenantPaymentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<TenantPaymentRefundResult> ExecuteAsync(
         RefundTenantPaymentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync(
-            "TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var target = await (
             from account in TenantMoneyCommandSupport.AuthorizedAccounts(
@@ -1222,6 +1308,9 @@ public sealed class RefundTenantPaymentHandler
     }
 
     public Task AuthorizeReplayAsync(RefundTenantPaymentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(RefundTenantPaymentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
@@ -1654,11 +1743,14 @@ public sealed class FundSecurityDepositHandler
 
     public FundSecurityDepositHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SecurityDepositMutationResult> HandleAsync(
+    public Task<SecurityDepositMutationResult> HandleAsync(
+        FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<SecurityDepositMutationResult> ExecuteAsync(
         FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var target = await TenantMoneyCommandSupport.AuthorizedDepositAccounts(command, _db, times.WallClockUtc)
             .Select(row => new
@@ -1731,6 +1823,9 @@ public sealed class FundSecurityDepositHandler
     }
 
     public Task AuthorizeReplayAsync(FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 
@@ -1741,11 +1836,14 @@ public sealed class DeductSecurityDepositHandler
 
     public DeductSecurityDepositHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SecurityDepositMutationResult> HandleAsync(
+    public Task<SecurityDepositMutationResult> HandleAsync(
+        DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<SecurityDepositMutationResult> ExecuteAsync(
         DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var target = await TenantMoneyCommandSupport.AuthorizedDepositAccounts(command, _db, times.WallClockUtc)
             .Select(account => new
@@ -1805,6 +1903,9 @@ public sealed class DeductSecurityDepositHandler
     }
 
     public Task AuthorizeReplayAsync(DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 
@@ -1815,11 +1916,14 @@ public sealed class RefundSecurityDepositHandler
 
     public RefundSecurityDepositHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SecurityDepositMutationResult> HandleAsync(
+    public Task<SecurityDepositMutationResult> HandleAsync(
+        RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<SecurityDepositMutationResult> ExecuteAsync(
         RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var target = await TenantMoneyCommandSupport.AuthorizedDepositAccounts(command, _db, times.WallClockUtc)
             .Select(account => new
@@ -1856,6 +1960,9 @@ public sealed class RefundSecurityDepositHandler
     }
 
     public Task AuthorizeReplayAsync(RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 
@@ -1866,14 +1973,17 @@ public sealed class ReverseSecurityDepositEntryHandler
 
     public ReverseSecurityDepositEntryHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SecurityDepositMutationResult> HandleAsync(
+    public Task<SecurityDepositMutationResult> HandleAsync(
+        ReverseSecurityDepositEntryCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw TenantMoneyWriteSupport.RetiredPath();
+
+    public async Task<SecurityDepositMutationResult> ExecuteAsync(
         ReverseSecurityDepositEntryCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
     {
         TenantMoneyCommandSupport.Validate(command);
-        await context.AcquireLockAsync(
-            "TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var target = await (
             from depositAccount in TenantMoneyCommandSupport.AuthorizedDepositAccounts(
@@ -2028,6 +2138,9 @@ public sealed class ReverseSecurityDepositEntryHandler
     }
 
     public Task AuthorizeReplayAsync(ReverseSecurityDepositEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw TenantMoneyWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(ReverseSecurityDepositEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 

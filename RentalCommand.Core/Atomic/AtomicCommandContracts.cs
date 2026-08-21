@@ -121,6 +121,7 @@ public enum WriteLockProtocol
     LeaseParty,
     LeasePartyAccessGrant,
     LeasePartyAccessRevoke,
+    TenantAccount,
 }
 
 public sealed class WriteLockPlan
@@ -156,6 +157,7 @@ public sealed class WriteLockPlan
             [WriteLockProtocol.LeaseParty] = ["LeaseManagement"],
             [WriteLockProtocol.LeasePartyAccessGrant] = ["LeaseManagement"],
             [WriteLockProtocol.LeasePartyAccessRevoke] = ["LeaseManagement"],
+            [WriteLockProtocol.TenantAccount] = ["TenantAccount"],
         };
 
     public static WriteLockPlan None { get; } = new();
