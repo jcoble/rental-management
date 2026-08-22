@@ -48,16 +48,6 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult,
-            UpdateAssignedWorkOrderHandler>();
-        services.AddAtomicCommandHandler<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult,
-            AssignWorkOrderResponsibilityHandler>();
-        services.AddAtomicCommandHandler<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult,
-            RecordTechnicianWorkEntryHandler>();
-        services.AddAtomicCommandHandler<SendTechnicianAssignmentMessageCommand,
-            SendTechnicianAssignmentMessageResult, SendTechnicianAssignmentMessageHandler>();
-        services.AddAtomicCommandHandler<MarkTechnicianAssignmentConversationReadCommand,
-            MarkTechnicianAssignmentConversationReadResult, MarkTechnicianAssignmentConversationReadHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider(new ServiceProviderOptions
@@ -965,10 +955,6 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult,
-            AssignWorkOrderResponsibilityHandler>();
-        services.AddAtomicCommandHandler<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult,
-            CloseWorkOrderResponsibilityHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(_context.ConnectionString)

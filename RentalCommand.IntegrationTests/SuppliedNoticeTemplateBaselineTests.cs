@@ -1261,7 +1261,6 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         return new RentalCommandDbContext(options);
     }
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
     private IRequestWriteExecutor Writes => _services!.GetRequiredService<IRequestWriteExecutor>();
 
     private static async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(

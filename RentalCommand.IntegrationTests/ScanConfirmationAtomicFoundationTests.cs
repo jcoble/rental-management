@@ -883,9 +883,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
                             writer, request, context, token)));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        throw new InvalidOperationException($"No executor rule exists for {typeof(TCommand).Name}.");
     }
 
     private IServiceProvider Services => _services ?? throw new InvalidOperationException();

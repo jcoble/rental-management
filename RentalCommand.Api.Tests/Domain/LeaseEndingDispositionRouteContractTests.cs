@@ -22,8 +22,8 @@ public sealed class LeaseEndingDispositionRouteContractTests
         method.GetParameters().Should().Contain(parameter =>
             parameter.GetCustomAttributes<FromHeaderAttribute>()
                 .Any(attribute => attribute.Name == "Idempotency-Key"));
-        typeof(RecordLeaseEndingDispositionHandler).Should()
-            .Implement<IAtomicCommandHandler<RecordLeaseEndingDispositionCommand, RecordLeaseEndingDispositionResult>>();
+        typeof(RecordLeaseEndingDispositionHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(RecordLeaseEndingDispositionHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
     }
 
     [Fact]

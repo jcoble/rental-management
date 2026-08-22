@@ -223,28 +223,6 @@ public sealed class ApplicationWriteExecutorTests : IAsyncLifetime
         (await _context.Db.AtomicAuditLogs.CountAsync()).Should().Be(auditsBefore);
     }
 
-    [Fact]
-    public async Task AllFourLegacyHandlerArmsThrow()
-    {
-        var scope = await SeedScopeAndApplicationAsync();
-        var application = await _context.Db.RentalApplications.AsNoTracking().SingleAsync();
-        var context = Mock.Of<IAtomicCommandContext>();
-
-        await new AtomicRentalMutationHandler(_context.Db).Invoking(handler => handler.HandleAsync(
-            AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
-                AtomicRentalMutationOperation.Update, application.Id, "retired-rental", new object()),
-            context, default)).Should().ThrowAsync<InvalidOperationException>();
-        await new AtomicPublicApplicationSubmissionHandler(_context.Db).Invoking(handler => handler.HandleAsync(
-            new("executor-public-token", "{}", null, "retired-public"), context, default))
-            .Should().ThrowAsync<InvalidOperationException>();
-        await new RecordApplicationFeeHandler(_context.Db).Invoking(handler => handler.HandleAsync(
-            RecordFee(scope, application.Id, "retired-record"), context, default))
-            .Should().ThrowAsync<InvalidOperationException>();
-        await new RefundApplicationFeeHandler(_context.Db).Invoking(handler => handler.HandleAsync(
-            RefundFee(scope, application.Id, 1, "retired-refund"), context, default))
-            .Should().ThrowAsync<InvalidOperationException>();
-    }
-
     private ServiceProvider BuildServices()
     {
         var services = new ServiceCollection();

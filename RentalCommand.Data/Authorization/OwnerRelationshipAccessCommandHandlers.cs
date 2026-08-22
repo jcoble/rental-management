@@ -40,16 +40,10 @@ public static class OwnerRelationshipAccessWriteSupport
 }
 
 public sealed class ActivateOwnerPortalAccessHandler
-    : IAtomicCommandHandler<ActivateOwnerPortalAccessCommand, ActivateOwnerPortalAccessMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ActivateOwnerPortalAccessHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ActivateOwnerPortalAccessMutationResult> HandleAsync(
-        ActivateOwnerPortalAccessCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw OwnerRelationshipAccessWriteSupport.RetiredPath();
 
     public async Task<ActivateOwnerPortalAccessMutationResult> ExecuteAsync(
         ActivateOwnerPortalAccessCommand command,
@@ -532,16 +526,10 @@ public sealed class ActivateOwnerPortalAccessHandler
 }
 
 public sealed class RevokeOwnerPortalAccessHandler
-    : IAtomicCommandHandler<RevokeOwnerPortalAccessCommand, RevokeOwnerPortalAccessMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RevokeOwnerPortalAccessHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RevokeOwnerPortalAccessMutationResult> HandleAsync(
-        RevokeOwnerPortalAccessCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw OwnerRelationshipAccessWriteSupport.RetiredPath();
 
     public async Task<RevokeOwnerPortalAccessMutationResult> ExecuteAsync(
         RevokeOwnerPortalAccessCommand command,

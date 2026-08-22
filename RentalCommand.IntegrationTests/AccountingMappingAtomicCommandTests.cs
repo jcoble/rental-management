@@ -73,14 +73,6 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            ConfirmAccountingMappingCommand,
-            ConfirmAccountingMappingResult,
-            ConfirmAccountingMappingHandler>();
-        services.AddAtomicCommandHandler<
-            ContinueAccountingMappingPromotionCommand,
-            ContinueAccountingMappingPromotionResult,
-            ContinueAccountingMappingPromotionHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)

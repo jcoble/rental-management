@@ -1,5 +1,4 @@
 using System.Data.Common;
-using System.Reflection;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -68,10 +67,6 @@ builder.Services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
 // receives or sets a mutable administrator/bypass flag.
 builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
 builder.Services.AddAtomicPersistenceKernel();
-builder.Services.AddAtomicCommandHandlersFrom(
-    typeof(RentalCommandDbContext).Assembly,
-    typeof(RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryHandler).Assembly,
-    Assembly.GetExecutingAssembly());
 builder.Services.AddScoped<RentalCommand.Engine.Writes.IJobStepWriteExecutor,
     RentalCommand.Engine.Writes.JobStepWriteExecutor>();
 builder.Services.AddGeneratedInfrastructureStores();

@@ -72,18 +72,19 @@ public sealed class SimulationAtomicContractTests
     [Fact]
     public void SimulationHandlersUseReceiptReplayAuthorizationAndDatabaseClockedWorkspaceCapabilityChecks()
     {
-        typeof(SetSimulationClockHandler)
-            .Should().Implement<IAtomicCommandHandler<SetSimulationClockCommand, SimulationClockMutationResult>>();
-        typeof(AdvanceSimulationClockHandler)
-            .Should().Implement<IAtomicCommandHandler<AdvanceSimulationClockCommand, SimulationClockMutationResult>>();
-        typeof(FreezeSimulationClockHandler)
-            .Should().Implement<IAtomicCommandHandler<FreezeSimulationClockCommand, SimulationClockMutationResult>>();
-        typeof(UnfreezeSimulationClockHandler)
-            .Should().Implement<IAtomicCommandHandler<UnfreezeSimulationClockCommand, SimulationClockMutationResult>>();
-        typeof(ResetSimulationClockHandler)
-            .Should().Implement<IAtomicCommandHandler<ResetSimulationClockCommand, SimulationClockMutationResult>>();
-        typeof(EnqueueSimulationWorkerCommandHandler)
-            .Should().Implement<IAtomicCommandHandler<EnqueueSimulationWorkerCommand, EnqueueSimulationWorkerResult>>();
+        var handlers = new[]
+        {
+            typeof(SetSimulationClockHandler),
+            typeof(AdvanceSimulationClockHandler),
+            typeof(FreezeSimulationClockHandler),
+            typeof(UnfreezeSimulationClockHandler),
+            typeof(ResetSimulationClockHandler),
+            typeof(EnqueueSimulationWorkerCommandHandler),
+        };
+        handlers.All(handler =>
+            handler.GetMethod("ExecuteAsync") is not null
+            && handler.GetMethod("AuthorizeReplayAsync") is not null)
+            .Should().BeTrue();
 
         var source = ReadSource("RentalCommand.Data", "Simulation", "SimulationAtomicCommandHandlers.cs");
         source.Should().Contain("ReadDatabaseClockUtcAsync");

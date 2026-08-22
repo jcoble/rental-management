@@ -8,16 +8,10 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class TransferLeaseManagementHandler
-    : IAtomicCommandHandler<TransferLeaseManagementCommand, TransferLeaseManagementResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public TransferLeaseManagementHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<TransferLeaseManagementResult> HandleAsync(
-        TransferLeaseManagementCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
 
     public async Task<TransferLeaseManagementResult> ExecuteAsync(
         TransferLeaseManagementCommand command,

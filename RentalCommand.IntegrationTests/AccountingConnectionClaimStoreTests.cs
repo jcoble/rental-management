@@ -892,22 +892,6 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            RentalCommand.Core.Accounting.ApplyAccountingPullResultCommand,
-            RentalCommand.Core.Accounting.ApplyAccountingPullResult,
-            ApplyAccountingPullResultHandler>();
-        services.AddAtomicCommandHandler<
-            PrepareAccountingDisconnectCommand,
-            PrepareAccountingDisconnectResult,
-            PrepareAccountingDisconnectHandler>();
-        services.AddAtomicCommandHandler<
-            FinalizeAccountingDisconnectCommand,
-            FinalizeAccountingDisconnectResult,
-            FinalizeAccountingDisconnectHandler>();
-        services.AddAtomicCommandHandler<
-            SetAccountingDirectionCommand,
-            SetAccountingDirectionResult,
-            SetAccountingDirectionHandler>();
         services.AddDbContext<RentalCommandDbContext>((sp, options) =>
         {
             options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(sp);

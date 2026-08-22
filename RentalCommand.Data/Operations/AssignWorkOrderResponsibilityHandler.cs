@@ -11,7 +11,6 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Operations;
 
 public sealed class AssignWorkOrderResponsibilityHandler
-    : IAtomicCommandHandler<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult>
 {
     public const string ResultContract = "work-order-responsibility.assign.v1";
 
@@ -37,11 +36,6 @@ public sealed class AssignWorkOrderResponsibilityHandler
             ResultContract, new WriteLockPlan(WriteLockProtocol.WorkOrderResponsibility),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<AssignWorkOrderResponsibilityResult> HandleAsync(
-        AssignWorkOrderResponsibilityCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<AssignWorkOrderResponsibilityResult> ExecuteAsync(
         AssignWorkOrderResponsibilityCommand command,

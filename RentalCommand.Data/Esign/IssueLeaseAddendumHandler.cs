@@ -15,15 +15,10 @@ namespace RentalCommand.Data.Esign;
 
 /// <summary>Canonical Addendum issuance through the shared immutable native e-sign workflow.</summary>
 public sealed class IssueLeaseAddendumHandler
-    : IAtomicCommandHandler<IssueLeaseAddendumCommand, IssueLeaseAddendumResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public IssueLeaseAddendumHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<IssueLeaseAddendumResult> HandleAsync(
-        IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task<IssueLeaseAddendumResult> ExecuteAsync(
         IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)

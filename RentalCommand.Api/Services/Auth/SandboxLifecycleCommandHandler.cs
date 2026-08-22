@@ -35,16 +35,10 @@ public static class SandboxLifecycleWriteSupport
 }
 
 public sealed class SandboxLifecycleCommandHandler
-    : IAtomicCommandHandler<SandboxLifecycleCommand, SandboxLifecycleResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public SandboxLifecycleCommandHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<SandboxLifecycleResult> HandleAsync(
-        SandboxLifecycleCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw SandboxLifecycleWriteSupport.RetiredPath();
 
     public async Task<SandboxLifecycleResult> ExecuteAsync(
         SandboxLifecycleCommand command,

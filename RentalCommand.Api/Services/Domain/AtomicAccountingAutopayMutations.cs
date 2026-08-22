@@ -31,18 +31,12 @@ public sealed record PrepareAccountingConnectResult(
     DateTime ExpiresAtUtc);
 
 public sealed class PrepareAccountingConnectHandler
-    : IAtomicCommandHandler<PrepareAccountingConnectCommand, PrepareAccountingConnectResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PrepareAccountingConnectHandler(RentalCommandDbContext db) => _db = db;
 
     private readonly TimeSpan StateTtl = TimeSpan.FromMinutes(10);
-
-    public Task<PrepareAccountingConnectResult> HandleAsync(
-        PrepareAccountingConnectCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
 
     public async Task<PrepareAccountingConnectResult> ExecuteAsync(
         PrepareAccountingConnectCommand command,
@@ -199,16 +193,10 @@ public sealed record CancelTenantAutopayResult(
     int TenantAccountId);
 
 public sealed class CancelTenantAutopayHandler
-    : IAtomicCommandHandler<CancelTenantAutopayCommand, CancelTenantAutopayResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public CancelTenantAutopayHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<CancelTenantAutopayResult> HandleAsync(
-        CancelTenantAutopayCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
 
     public async Task<CancelTenantAutopayResult> ExecuteAsync(
         CancelTenantAutopayCommand command,

@@ -11,16 +11,10 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Data.Accounting;
 
 public sealed class CreateLedgerAccountHandler
-    : IAtomicCommandHandler<CreateLedgerAccountCommand, LedgerAccountMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public CreateLedgerAccountHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<LedgerAccountMutationResult> HandleAsync(
-        CreateLedgerAccountCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<LedgerAccountMutationResult> ExecuteAsync(
         CreateLedgerAccountCommand command,
@@ -108,16 +102,10 @@ public sealed class CreateLedgerAccountHandler
 }
 
 public sealed class UpdateLedgerAccountHandler
-    : IAtomicCommandHandler<UpdateLedgerAccountCommand, LedgerAccountMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public UpdateLedgerAccountHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<LedgerAccountMutationResult> HandleAsync(
-        UpdateLedgerAccountCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<LedgerAccountMutationResult> ExecuteAsync(
         UpdateLedgerAccountCommand command,

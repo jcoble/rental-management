@@ -8,16 +8,10 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Data.Accounting;
 
 public sealed class ApplyAccountingPullResultHandler
-    : IAtomicCommandHandler<ApplyAccountingPullResultCommand, ApplyAccountingPullResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ApplyAccountingPullResultHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ApplyAccountingPullResult> HandleAsync(
-        ApplyAccountingPullResultCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<ApplyAccountingPullResult> ExecuteAsync(
         ApplyAccountingPullResultCommand command,

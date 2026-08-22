@@ -63,16 +63,10 @@ public static class AiIntegrationWriteSupport
 }
 
 public sealed class ActivateWorkspaceLlmCredentialHandler
-    : IAtomicCommandHandler<ActivateWorkspaceLlmCredentialCommand, AiIntegrationStatusResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ActivateWorkspaceLlmCredentialHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<AiIntegrationStatusResult> HandleAsync(
-        ActivateWorkspaceLlmCredentialCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
 
     public async Task<AiIntegrationStatusResult> ExecuteAsync(
         ActivateWorkspaceLlmCredentialCommand command,
@@ -132,16 +126,10 @@ public sealed class ActivateWorkspaceLlmCredentialHandler
 }
 
 public sealed class RotateWorkspaceLlmCredentialHandler
-    : IAtomicCommandHandler<RotateWorkspaceLlmCredentialCommand, AiIntegrationStatusResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RotateWorkspaceLlmCredentialHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<AiIntegrationStatusResult> HandleAsync(
-        RotateWorkspaceLlmCredentialCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
 
     public async Task<AiIntegrationStatusResult> ExecuteAsync(
         RotateWorkspaceLlmCredentialCommand command,
@@ -189,16 +177,10 @@ public sealed class RotateWorkspaceLlmCredentialHandler
 }
 
 public sealed class RemoveWorkspaceLlmCredentialHandler
-    : IAtomicCommandHandler<RemoveWorkspaceLlmCredentialCommand, RemoveWorkspaceLlmCredentialResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RemoveWorkspaceLlmCredentialHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RemoveWorkspaceLlmCredentialResult> HandleAsync(
-        RemoveWorkspaceLlmCredentialCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
 
     public async Task<RemoveWorkspaceLlmCredentialResult> ExecuteAsync(
         RemoveWorkspaceLlmCredentialCommand command,
@@ -243,16 +225,10 @@ public sealed class RemoveWorkspaceLlmCredentialHandler
 }
 
 public sealed class RecordLlmUsageEvidenceHandler
-    : IAtomicCommandHandler<RecordLlmUsageEvidenceCommand, RecordLlmUsageEvidenceResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecordLlmUsageEvidenceHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RecordLlmUsageEvidenceResult> HandleAsync(
-        RecordLlmUsageEvidenceCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
 
     public async Task<RecordLlmUsageEvidenceResult> ExecuteAsync(
         RecordLlmUsageEvidenceCommand command,
@@ -314,16 +290,10 @@ public sealed class RecordLlmUsageEvidenceHandler
 }
 
 public sealed class PortfolioQaDeliveryHandler
-    : IAtomicCommandHandler<PortfolioQaDeliveryCommand, PortfolioQaDeliveryResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PortfolioQaDeliveryHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<PortfolioQaDeliveryResult> HandleAsync(
-        PortfolioQaDeliveryCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
 
     public async Task<PortfolioQaDeliveryResult> ExecuteAsync(
         PortfolioQaDeliveryCommand command,

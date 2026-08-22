@@ -34,7 +34,6 @@ public class ScanBatchControllerTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private RentalCommandDbContext _db = null!;
-    private readonly IAtomicUnitOfWork _atomic = Mock.Of<IAtomicUnitOfWork>();
     private readonly List<string> _executedSql = [];
     private CanonicalScanTestAuthorization _authorization = null!;
 

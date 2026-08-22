@@ -852,9 +852,6 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         return new RentalCommandDbContext(options.Options);
     }
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
-    private IRequestWriteExecutor Writes => _services!.GetRequiredService<IRequestWriteExecutor>();
-
     private async Task<AtomicCommandOutcome<ApplyClaimedTenantNoticeDraftBatchResult>>
         ExecuteClaimedBatchAsync(ApplyClaimedTenantNoticeDraftBatchCommand command)
     {

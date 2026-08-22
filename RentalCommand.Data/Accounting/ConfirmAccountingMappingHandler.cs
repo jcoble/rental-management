@@ -22,7 +22,6 @@ internal sealed record AccountingPromotionContext(
 internal sealed record AccountingPromotionBatchResult(int PromotedCount, bool HasMore);
 
 public sealed class ConfirmAccountingMappingHandler
-    : IAtomicCommandHandler<ConfirmAccountingMappingCommand, ConfirmAccountingMappingResult>
 {
     private readonly RentalCommandDbContext _db;
 
@@ -33,11 +32,6 @@ public sealed class ConfirmAccountingMappingHandler
     private static readonly string[] ImportableCategoryNames = Enum.GetNames<ScheduleECategory>()
         .Where(name => name != nameof(ScheduleECategory.Depreciation))
         .ToArray();
-
-    public Task<ConfirmAccountingMappingResult> HandleAsync(
-        ConfirmAccountingMappingCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<ConfirmAccountingMappingResult> ExecuteAsync(
         ConfirmAccountingMappingCommand command,
@@ -644,16 +638,10 @@ public sealed class ConfirmAccountingMappingHandler
 }
 
 public sealed class ContinueAccountingMappingPromotionHandler
-    : IAtomicCommandHandler<ContinueAccountingMappingPromotionCommand, ContinueAccountingMappingPromotionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ContinueAccountingMappingPromotionHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ContinueAccountingMappingPromotionResult> HandleAsync(
-        ContinueAccountingMappingPromotionCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<ContinueAccountingMappingPromotionResult> ExecuteAsync(
         ContinueAccountingMappingPromotionCommand command,

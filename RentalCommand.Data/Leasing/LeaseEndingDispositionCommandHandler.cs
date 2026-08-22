@@ -150,16 +150,10 @@ public static class LeasingWriteSupport
 }
 
 public sealed class RecordLeaseEndingDispositionHandler
-    : IAtomicCommandHandler<RecordLeaseEndingDispositionCommand, RecordLeaseEndingDispositionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecordLeaseEndingDispositionHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<RecordLeaseEndingDispositionResult> HandleAsync(
-        RecordLeaseEndingDispositionCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
 
     public async Task<RecordLeaseEndingDispositionResult> ExecuteAsync(
         RecordLeaseEndingDispositionCommand command,

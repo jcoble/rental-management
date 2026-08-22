@@ -616,14 +616,6 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            CreateLedgerAccountCommand,
-            LedgerAccountMutationResult,
-            CreateLedgerAccountHandler>();
-        services.AddAtomicCommandHandler<
-            UpdateLedgerAccountCommand,
-            LedgerAccountMutationResult,
-            UpdateLedgerAccountHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider();

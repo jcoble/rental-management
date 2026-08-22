@@ -11,15 +11,10 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Esign;
 
 public sealed class FinalizeNativeEsignRequestHandler
-    : IAtomicCommandHandler<FinalizeNativeEsignRequestCommand, FinalizeNativeEsignRequestResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public FinalizeNativeEsignRequestHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<FinalizeNativeEsignRequestResult> HandleAsync(
-        FinalizeNativeEsignRequestCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task<FinalizeNativeEsignRequestResult> ExecuteAsync(
         FinalizeNativeEsignRequestCommand command, IAtomicCommandContext context, CancellationToken ct)

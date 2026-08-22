@@ -28,20 +28,18 @@ internal sealed class AtomicTransactionRunner
         _timeProvider = timeProvider;
     }
 
-    public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+    internal async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
         AtomicCommandIdentity identity,
-        TCommand command,
-        AtomicJsonResultCodec<TResult> resultCodec,
-        IAtomicCommandHandler<TCommand, TResult> handler,
+        TransactionalWrite<TCommand, TResult> write,
         CancellationToken ct = default)
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull
     {
         ArgumentNullException.ThrowIfNull(identity);
-        ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(handler);
+        ArgumentNullException.ThrowIfNull(write);
+        var resultCodec = new AtomicJsonResultCodec<TResult>(write.ResultContract);
         ValidateCodec(resultCodec);
-        identity = identity.BindRequest(command);
+        identity = identity.BindRequest(write.Request);
 
         if (_auditScope.IsActive)
         {
@@ -49,14 +47,13 @@ internal sealed class AtomicTransactionRunner
                 "Nested atomic commands are not supported. Compose the workflow inside its owning handler.");
         }
 
-        return await ExecuteAttemptAsync(identity, command, resultCodec, handler, ct);
+        return await ExecuteAttemptAsync(identity, write, resultCodec, ct);
     }
 
     private async Task<AtomicCommandOutcome<TResult>> ExecuteAttemptAsync<TCommand, TResult>(
         AtomicCommandIdentity identity,
-        TCommand command,
+        TransactionalWrite<TCommand, TResult> write,
         AtomicJsonResultCodec<TResult> resultCodec,
-        IAtomicCommandHandler<TCommand, TResult> handler,
         CancellationToken ct)
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull
@@ -122,7 +119,7 @@ internal sealed class AtomicTransactionRunner
             _context.BindReceipt(receipt.Id);
             if (claimed == 0)
             {
-                await handler.AuthorizeReplayAsync(command, _context, ct);
+                await write.AuthorizeReplayAsync(write.Request, _context, ct);
 
                 if (!string.Equals(
                         receipt.RequestFingerprint,
@@ -152,7 +149,12 @@ internal sealed class AtomicTransactionRunner
                     receipt.AttemptId);
             }
 
-            var value = await handler.HandleAsync(command, _context, ct);
+            foreach (var writeLock in write.LockPlan.Locks)
+            {
+                await writeLock.AcquireAsync(_context, ct);
+            }
+
+            var value = await write.ExecuteAsync(write.Request, _context, ct);
 
             ValidateResultValue(value);
             await _context.FlushBusinessAsync(ct);

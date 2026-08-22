@@ -9,16 +9,10 @@ namespace RentalCommand.Data.Esign;
 
 /// <summary>Atomically records at most one first-view fact for a native signing db.</summary>
 public sealed class RecordNativeEsignViewHandler
-    : IAtomicCommandHandler<RecordNativeEsignViewCommand, RecordNativeEsignViewResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecordNativeEsignViewHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<RecordNativeEsignViewResult> HandleAsync(
-        RecordNativeEsignViewCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task<RecordNativeEsignViewResult> ExecuteAsync(
         RecordNativeEsignViewCommand command,

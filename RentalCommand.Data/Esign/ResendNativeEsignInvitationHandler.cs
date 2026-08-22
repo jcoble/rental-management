@@ -9,16 +9,10 @@ using RentalCommand.Data.Leasing;
 namespace RentalCommand.Data.Esign;
 
 public sealed class ResendNativeEsignInvitationHandler
-    : IAtomicCommandHandler<ResendNativeEsignInvitationCommand, ResendNativeEsignInvitationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ResendNativeEsignInvitationHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ResendNativeEsignInvitationResult> HandleAsync(
-        ResendNativeEsignInvitationCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task<ResendNativeEsignInvitationResult> ExecuteAsync(
         ResendNativeEsignInvitationCommand command,
