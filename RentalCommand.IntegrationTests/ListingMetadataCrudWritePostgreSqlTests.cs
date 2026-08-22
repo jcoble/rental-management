@@ -410,6 +410,84 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PersistedPublishReplay_AppliesStoredResultWithoutCallingProviderAgain()
+    {
+        var (scope, unitId) = await SeedScopeAsync(DateTime.UtcNow.AddMinutes(-5));
+        var adapter = new RecordingListingAdapter();
+        await using var services = BuildServices(TimeProvider.System, adapter);
+        await using var serviceScope = services.CreateAsyncScope();
+        var sut = serviceScope.ServiceProvider.GetRequiredService<ListingWorkspaceService>();
+
+        await sut.GenerateAsync(scope, unitId, "persisted-replay-generate");
+        await sut.SaveAsync(scope, unitId, new SaveListingWorkspaceRequest
+        {
+            Headline = "Persisted replay listing",
+            Description = "A durable provider result resumes at the missing apply step.",
+            Rent = 2100m,
+        }, "persisted-replay-save");
+        var target = await _context.Db.RentalListings.AsNoTracking()
+            .Where(row => row.UnitId == unitId)
+            .Select(row => new
+            {
+                Listing = row,
+                Publication = row.Publications.Single(item => item.Mode == ListingPublicationMode.Connected),
+            })
+            .SingleAsync();
+        await sut.PrepareConnectedAsync(
+            scope, unitId, target.Publication.Id, "persisted-replay-prepare");
+
+        const string operationKey = "persisted-replay-publish";
+        var admissionKey = $"{scope.PortfolioId}:{unitId}:{Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(operationKey))).ToLowerInvariant()}";
+        var admissionAttempt = Guid.Parse("12121212-1212-1212-1212-121212121212");
+        var persistenceAttempt = Guid.Parse("34343434-3434-3434-3434-343434343434");
+        var admission = new AdmitConnectedListingIntentCommand(
+            scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
+            scope.AccessContextId, scope.AccessRevision, target.Publication.Id,
+            target.Listing.Id, target.Listing.ContentVersion, ConnectedListingIntentOperation.Publish);
+        var admissionResult = new ConnectedListingIntentResult(
+            ListingWorkspaceMutationOutcome.Applied, scope.PortfolioId, target.Listing.PropertyId,
+            unitId, target.Listing.Id, target.Publication.Id, target.Listing.ContentVersion);
+        var persistenceKey = $"{admissionAttempt:N}:persisted-provider-result";
+        var providerResult = new ConnectedListingPersistenceResult(
+            ListingWorkspaceMutationOutcome.Applied, scope.PortfolioId, target.Listing.PropertyId,
+            unitId, target.Listing.Id, target.Publication.Id, admissionAttempt,
+            AppliedToCurrentPublication: false, ReconciliationRequired: true,
+            ListingPublicationStatus.Published, "persisted-delivery", "Published", null,
+            "external-persisted", "https://provider.test/listing/external-persisted");
+        _context.Db.AtomicCommandReceipts.AddRange(
+            CompletedReceipt(admissionAttempt, "listing-workspace.connected.publish.intent",
+                admissionKey, "listing-workspace.connected-intent.result.v1",
+                JsonSerializer.Serialize(admissionResult), AtomicCommandFingerprint.Create(admission)),
+            CompletedReceipt(persistenceAttempt, "listing-workspace.connected.persist-result",
+                persistenceKey, "listing-workspace.connected-persistence.result.v1",
+                JsonSerializer.Serialize(providerResult)));
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+
+        var published = await sut.PublishConnectedAsync(
+            scope, unitId, target.Publication.Id, operationKey);
+        (await sut.PublishConnectedAsync(scope, unitId, target.Publication.Id, operationKey))
+            .Should().BeEquivalentTo(published);
+
+        adapter.PublishCalls.Should().Be(0);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == "listing-workspace.connected.apply-result"
+            && row.IdempotencyKey == persistenceAttempt.ToString("N"))).Should().Be(1);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == "listing-workspace.connected.persist-result"
+            && row.ResultJson == JsonSerializer.Serialize(providerResult))).Should().Be(1);
+        var publication = await _context.Db.ListingPublications.AsNoTracking()
+            .SingleAsync(row => row.Id == target.Publication.Id);
+        publication.Status.Should().Be(ListingPublicationStatus.Published);
+        publication.LastDeliveryKey.Should().Be(providerResult.DeliveryKey);
+        publication.ExternalListingId.Should().Be(providerResult.ExternalListingId);
+        publication.PublishedContentVersion.Should().Be(target.Listing.ContentVersion);
+        (await _context.Db.RentalListings.AsNoTracking().SingleAsync(row => row.Id == target.Listing.Id))
+            .Status.Should().Be(RentalListingStatus.Published);
+    }
+
+    [Fact]
     public async Task FiveConnectedRules_ExecuteThroughRecorderWithExactLegacyLockSequences()
     {
         var now = DateTime.UtcNow.AddMinutes(-5);
