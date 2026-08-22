@@ -207,7 +207,6 @@ public class AccountingConnectionServiceTests : IDisposable
             TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         var importService = new AccountingImportService(
             _ctx.Db, _dp, providerResolver, settingsResolver, tokenService, claims,
-            Moq.Mock.Of<IRequestWriteExecutor>(),
             TimeProvider.System,
             NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(

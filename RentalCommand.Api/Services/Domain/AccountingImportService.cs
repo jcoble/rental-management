@@ -9,7 +9,6 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
-using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 
@@ -29,7 +28,6 @@ public sealed class AccountingImportService
     private readonly AccountingAppSettingsResolver _settingsResolver;
     private readonly AccountingTokenService _tokenService;
     private readonly IAccountingConnectionClaimStore _claims;
-    private readonly IRequestWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingImportService> _logger;
 
@@ -40,7 +38,6 @@ public sealed class AccountingImportService
         AccountingAppSettingsResolver settingsResolver,
         AccountingTokenService tokenService,
         IAccountingConnectionClaimStore claims,
-        IRequestWriteExecutor writes,
         TimeProvider timeProvider,
         ILogger<AccountingImportService> logger)
     {
@@ -50,7 +47,6 @@ public sealed class AccountingImportService
         _settingsResolver = settingsResolver;
         _tokenService = tokenService;
         _claims = claims;
-        _writes = writes;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -63,7 +59,7 @@ public sealed class AccountingImportService
         int ExpensesImported,
         int NeedsReview);
 
-    public async Task<ImportSummary> ImportAsync(
+    public async Task<ApplyAccountingPullResultCommand> PullAsync(
         AccountingConnection connection,
         DateTime? since,
         CancellationToken ct,
@@ -137,20 +133,7 @@ public sealed class AccountingImportService
             expensePull?.Items ?? [],
             JsonSerializer.Serialize(cursors),
             appliedAt);
-        var identity = new AtomicCommandIdentity(
-                "accounting.pull.apply",
-                $"{connection.Id}:{workerFence.ClaimToken:N}:{batchIdentity}");
-        var handler = new ApplyAccountingPullResultHandler(_db);
-        var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
-            AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
-        var value = outcome.Value;
-        return new ImportSummary(
-            value.CustomersMapped,
-            value.VendorsMapped,
-            value.AccountsMapped,
-            value.PaymentsImported,
-            value.ExpensesImported,
-            value.NeedsReview);
+        return command;
 
         async Task<T> PullWithRefreshAsync<T>(
             AccountingConnection conn,
