@@ -84,7 +84,9 @@
 	// this state drives the API query instead of fetching a broad cap and sorting/paging in Svelte.
 	const initialParams = page.url.searchParams;
 	let search = $state(readGridParam(initialParams, 'q'));
-	let typeFilter = $state(readGridParam(initialParams, 'type'));
+	const ALL_TYPES = 'all';
+	let typeValue = $state(readGridParam(initialParams, 'type') || ALL_TYPES);
+	const typeFilter = $derived(typeValue === ALL_TYPES ? '' : typeValue);
 	let statusFilter = $state(readGridParam(initialParams, 'status'));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
@@ -490,12 +492,12 @@
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">
 				<SearchInput bind:value={search} placeholder="Search properties…" testid="property-search" />
-				<Select.Root type="single" bind:value={typeFilter}>
+				<Select.Root type="single" bind:value={typeValue}>
 					<Select.Trigger class="h-9 w-40 text-sm" data-testid="property-type-filter">
 						{typeFilter ? formatPropertyType(typeFilter) : 'All types'}
 					</Select.Trigger>
 					<Select.Content>
-						<Select.Item value="" label="All types">All types</Select.Item>
+						<Select.Item value={ALL_TYPES} label="All types">All types</Select.Item>
 						{#each propertyTypeOptions as option}
 							<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 						{/each}
