@@ -9,6 +9,7 @@ using Moq;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
@@ -1364,7 +1365,7 @@ public class AccountingServiceTests : IAsyncLifetime
             _db,
             new EphemeralDataProtectionProvider(),
             Mock.Of<IPlaidBankingProvider>(),
-            Mock.Of<IAtomicUnitOfWork>(),
+            Mock.Of<IRequestWriteExecutor>(),
             Options.Create(new PlaidOptions()),
             TimeProvider.System);
         _commands.Clear();

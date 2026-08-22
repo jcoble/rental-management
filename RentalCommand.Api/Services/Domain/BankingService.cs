@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -26,27 +27,10 @@ public class BankingService : IBankingService
     private const int MaxReviewQueueTake = 100;
     private const int MaxImportBatch = 500;
     private const int MaxSyncRetries = 3;
-    private static readonly AtomicJsonResultCodec<ApplyPlaidConnectionResult> PlaidConnectionCodec =
-        new("banking.plaid.connection.result.v1");
-    private static readonly AtomicJsonResultCodec<PreparePlaidTokenExchangeResult> PlaidExchangePrepareCodec =
-        new("banking.plaid.exchange.prepare.result.v1");
-    private static readonly AtomicJsonResultCodec<AdmitPlaidTokenExchangeResult> PlaidExchangeAdmitCodec =
-        new("banking.plaid.exchange.admit.result.v1");
-    private static readonly AtomicJsonResultCodec<RecordPlaidTokenExchangeReceiptResult> PlaidExchangeReceiptCodec =
-        new("banking.plaid.exchange.receipt.result.v1");
-    private static readonly AtomicJsonResultCodec<ApplyPlaidSyncResult> PlaidSyncCodec =
-        new("banking.plaid.sync.result.v1");
-    private static readonly AtomicJsonResultCodec<ImportBankTransactionsResult> ImportCodec =
-        new("banking.import.result.v1");
-    private static readonly AtomicJsonResultCodec<ReconcileBankTransactionResult> ReconciliationCodec =
-        new("banking.reconciliation.result.v1");
-    private static readonly AtomicJsonResultCodec<RouteBankTransactionResult> RoutingCodec =
-        new("banking.routing.result.v1");
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
     private readonly IPlaidBankingProvider _plaid;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly PlaidOptions _plaidOptions;
     private readonly TimeProvider _timeProvider;
 
@@ -54,14 +38,14 @@ public class BankingService : IBankingService
         RentalCommandDbContext db,
         IDataProtectionProvider dataProtection,
         IPlaidBankingProvider plaid,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         IOptions<PlaidOptions> plaidOptions,
         TimeProvider timeProvider)
     {
         _db = db;
         _protector = dataProtection.CreateProtector("RentalCommand.Banking.v1");
         _plaid = plaid;
-        _atomic = atomic;
+        _writes = writes;
         _plaidOptions = plaidOptions.Value;
         _timeProvider = timeProvider;
     }
@@ -179,11 +163,7 @@ public class BankingService : IBankingService
             Normalize(request.AccountMask),
             Normalize(request.AccountType),
             Normalize(request.AccountSubtype));
-        var prepared = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "banking.plaid.exchange.prepare",
-                $"{scope.PortfolioId}:{Digest(clientOperationId)}"),
-            new PreparePlaidTokenExchangeCommand(
+        var prepareCommand = new PreparePlaidTokenExchangeCommand(
                 scope.PortfolioId,
                 scope.UserId,
                 scope.SessionId,
@@ -200,9 +180,11 @@ public class BankingService : IBankingService
                 Normalize(request.AccountSubtype),
                 ProtectNullable(accountId)!,
                 accountIdHash,
-                now),
-            PlaidExchangePrepareCodec,
-            ct);
+                now);
+        var prepared = await _writes.ExecuteAsync(
+            $"{scope.PortfolioId}:{Digest(clientOperationId)}",
+            BankingWriteSupport.Write<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult>(
+                _db, prepareCommand), ct);
         var exchangeAttempt = await _db.PlaidTokenExchangeAttempts.AsNoTracking()
             .SingleAsync(row => row.Id == prepared.Value.ExchangeAttemptId
                 && row.PortfolioId == scope.PortfolioId, ct);
@@ -217,13 +199,12 @@ public class BankingService : IBankingService
                     "Plaid token exchange was admitted previously but no local receipt is available. " +
                     "The single-use public token will not be exchanged again; support must reconcile this attempt.");
             }
-            var admitted = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "banking.plaid.exchange.admit",
-                    $"{scope.PortfolioId}:{exchangeAttempt.Id:N}"),
-                new AdmitPlaidTokenExchangeCommand(scope.PortfolioId, exchangeAttempt.Id, _timeProvider.UtcNow()),
-                PlaidExchangeAdmitCodec,
-                ct);
+            var admitCommand = new AdmitPlaidTokenExchangeCommand(
+                scope.PortfolioId, exchangeAttempt.Id, _timeProvider.UtcNow());
+            var admitted = await _writes.ExecuteAsync(
+                $"{scope.PortfolioId}:{exchangeAttempt.Id:N}",
+                BankingWriteSupport.Write<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult>(
+                    _db, admitCommand), ct);
             if (admitted.Value.Outcome != AdmitPlaidTokenExchangeOutcome.Admitted
                 || admitted.Disposition != AtomicCommandDisposition.Executed)
             {
@@ -241,29 +222,26 @@ public class BankingService : IBankingService
                 ?? throw new InvalidOperationException("Plaid returned an empty access token.");
             var providerIdentity = Normalize(remote.RequestId)
                 ?? $"fallback-{Digest(itemId, accountId, accessToken)}";
-            await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "banking.plaid.exchange.receipt",
-                    $"{scope.PortfolioId}:{exchangeAttempt.Id:N}"),
-                new RecordPlaidTokenExchangeReceiptCommand(
+            var receiptCommand = new RecordPlaidTokenExchangeReceiptCommand(
                     scope.PortfolioId,
                     exchangeAttempt.Id,
                     providerIdentity,
                     ProtectNullable(itemId)!,
                     ExternalLookupHash(itemId)!,
                     ProtectNullable(accessToken)!,
-                    _timeProvider.UtcNow()),
-                PlaidExchangeReceiptCodec,
-                ct);
+                    _timeProvider.UtcNow());
+            await _writes.ExecuteAsync(
+                $"{scope.PortfolioId}:{exchangeAttempt.Id:N}",
+                BankingWriteSupport.Write<RecordPlaidTokenExchangeReceiptCommand,
+                    RecordPlaidTokenExchangeReceiptResult>(_db, receiptCommand), ct);
         }
 
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "banking.plaid.connection.apply",
-                $"{scope.PortfolioId}:{exchangeAttempt.Id:N}"),
-            new ApplyPlaidConnectionCommand(scope.PortfolioId, exchangeAttempt.Id, _timeProvider.UtcNow()),
-            PlaidConnectionCodec,
-            ct);
+        var applyCommand = new ApplyPlaidConnectionCommand(
+            scope.PortfolioId, exchangeAttempt.Id, _timeProvider.UtcNow());
+        var outcome = await _writes.ExecuteAsync(
+            $"{scope.PortfolioId}:{exchangeAttempt.Id:N}",
+            BankingWriteSupport.Write<ApplyPlaidConnectionCommand, ApplyPlaidConnectionResult>(
+                _db, applyCommand), ct);
 
         if (exchangeAttempt.CompletedAtUtc is null)
             await SyncPlaidConnectionAsync(scope.PortfolioId, outcome.Value.ConnectionId, ct);
@@ -310,9 +288,7 @@ public class BankingService : IBankingService
                 .ToArray();
             var providerIdentity = Normalize(synced.RequestId)
                 ?? $"fallback-{Digest(connectionId, cursor, synced.NextCursor, JsonSerializer.Serialize(added), JsonSerializer.Serialize(modified), JsonSerializer.Serialize(removed))}";
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("banking.plaid.sync.apply", $"{portfolioId}:{connectionId}:{Digest(providerIdentity)}"),
-                new ApplyPlaidSyncCommand(
+            var syncCommand = new ApplyPlaidSyncCommand(
                     portfolioId,
                     connectionId,
                     connection.SyncCursorCipherText,
@@ -323,9 +299,11 @@ public class BankingService : IBankingService
                     modified.InputCount,
                     removed,
                     providerIdentity,
-                    _timeProvider.UtcNow()),
-                PlaidSyncCodec,
-                ct);
+                    _timeProvider.UtcNow());
+            var outcome = await _writes.ExecuteAsync(
+                $"{portfolioId}:{connectionId}:{Digest(providerIdentity)}",
+                BankingWriteSupport.Write<ApplyPlaidSyncCommand, ApplyPlaidSyncResult>(
+                    _db, syncCommand), ct);
             if (outcome.Value.Outcome == ApplyPlaidSyncOutcome.StaleCursor) continue;
             if (outcome.Value.Outcome == ApplyPlaidSyncOutcome.ConnectionNotFound) return null;
 
@@ -416,9 +394,7 @@ public class BankingService : IBankingService
             request.Transactions.Count,
             JsonSerializer.Serialize(statement),
             JsonSerializer.Serialize(inputs));
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("banking.import.apply", $"{portfolioId}:{requestIdentity}"),
-            new ImportBankTransactionsCommand(
+        var importCommand = new ImportBankTransactionsCommand(
                 portfolioId,
                 provider,
                 institution,
@@ -430,9 +406,11 @@ public class BankingService : IBankingService
                 request.Transactions.Count,
                 requestIdentity,
                 now,
-                statement),
-            ImportCodec,
-            ct);
+                statement);
+        var outcome = await _writes.ExecuteAsync(
+            $"{portfolioId}:{requestIdentity}",
+            BankingWriteSupport.Write<ImportBankTransactionsCommand, ImportBankTransactionsResult>(
+                _db, importCommand), ct);
 
         var connection = await _db.BankConnections.AsNoTracking()
             .SingleAsync(row => row.PortfolioId == portfolioId && row.Id == outcome.Value.ConnectionId, ct);
@@ -520,15 +498,14 @@ public class BankingService : IBankingService
         CancellationToken ct = default)
     {
         ValidateOperation(request.OperationKey, request.ExpectedUpdatedAtUtc);
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("banking.transaction.route",
-                $"{scope.PortfolioId}:{scope.AccessContextId}:{transactionId}:{request.OperationKey}"),
-            new RouteBankTransactionCommand(
+        var command = new RouteBankTransactionCommand(
                 scope.PortfolioId, transactionId, request.PropertyId, request.ExpectedUpdatedAtUtc,
                 _timeProvider.UtcNow(), scope.UserId, scope.SessionId, scope.AccessContextId,
-                scope.AccessRevision, request.OperationKey),
-            RoutingCodec,
-            ct);
+                scope.AccessRevision, request.OperationKey);
+        var outcome = await _writes.ExecuteExactAsync(
+            $"{scope.PortfolioId}:{scope.AccessContextId}:{transactionId}:{request.OperationKey}",
+            BankingWriteSupport.Write<RouteBankTransactionCommand, RouteBankTransactionResult>(
+                _db, command), ct);
         return outcome.Value.Outcome switch
         {
             RouteBankTransactionOutcome.TransactionNotFound or RouteBankTransactionOutcome.PropertyNotFound => null,
@@ -992,10 +969,7 @@ public class BankingService : IBankingService
         DateTime? resolvedSuggestionTransferUpdatedAtUtc = null)
     {
         ValidateOperation(operationKey, expectedUpdatedAtUtc);
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("banking.transaction.reconcile",
-                $"{scope.PortfolioId}:{scope.AccessContextId}:{current.Id}:{operationKey}"),
-            new ReconcileBankTransactionCommand(
+        var command = new ReconcileBankTransactionCommand(
                 scope.PortfolioId,
                 current.Id,
                 action,
@@ -1014,9 +988,11 @@ public class BankingService : IBankingService
                 scope.AccessRevision,
                 requiredCapability,
                 operationKey,
-                resolvedSuggestionTransferUpdatedAtUtc),
-            ReconciliationCodec,
-            ct);
+                resolvedSuggestionTransferUpdatedAtUtc);
+        var outcome = await _writes.ExecuteExactAsync(
+            $"{scope.PortfolioId}:{scope.AccessContextId}:{current.Id}:{operationKey}",
+            BankingWriteSupport.Write<ReconcileBankTransactionCommand, ReconcileBankTransactionResult>(
+                _db, command), ct);
         if (outcome.Value.Outcome is ReconcileBankTransactionOutcome.TransactionNotFound
             or ReconcileBankTransactionOutcome.TargetNotFound
             or ReconcileBankTransactionOutcome.RouteRequired)

@@ -10,6 +10,7 @@ using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
@@ -65,6 +66,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<NotificationFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult, PreparePlaidTokenExchangeHandler>();
         services.AddAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult, AdmitPlaidTokenExchangeHandler>();
         services.AddAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult, RecordPlaidTokenExchangeReceiptHandler>();
@@ -1981,9 +1983,12 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = _services!.CreateAsyncScope();
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec, ct);
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var write = BankingWriteSupport.Write<TCommand, TResult>(db, command);
+        write.OperationName.Should().Be(identity.CommandType);
+        write.ResultContract.Should().Be(codec.ContractName);
+        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            .ExecuteExactAsync(identity.IdempotencyKey, write, ct);
     }
 
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();
