@@ -39,11 +39,11 @@ public static class ScheduledFinanceWriteSupport
     }
 }
 
-public sealed class ApplyClaimedDebtServiceBatchHandler
+public sealed class ApplyClaimedDebtServiceBatchRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ApplyClaimedDebtServiceBatchHandler(RentalCommandDbContext db) => _db = db;
+    public ApplyClaimedDebtServiceBatchRule(RentalCommandDbContext db) => _db = db;
 
     private const int MaxOccurrencesPerSchedule = 36;
 
@@ -275,11 +275,11 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
     }
 }
 
-public sealed class ApplyClaimedRecurringExpenseBatchHandler
+public sealed class ApplyClaimedRecurringExpenseBatchRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ApplyClaimedRecurringExpenseBatchHandler(RentalCommandDbContext db) => _db = db;
+    public ApplyClaimedRecurringExpenseBatchRule(RentalCommandDbContext db) => _db = db;
 
     private const int MaxOccurrencesPerSchedule = 36;
 
@@ -380,7 +380,7 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
         IAtomicCommandContext context,
         CancellationToken ct)
     {
-        ApplyClaimedDebtServiceBatchHandler.ValidateClaimedIds(
+        ApplyClaimedDebtServiceBatchRule.ValidateClaimedIds(
             command.RecurringExpenseIds,
             command.ClaimToken,
             command.BusinessDateUtc,
@@ -412,11 +412,11 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
     }
 }
 
-public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
+public sealed class ApplyClaimedRecurringMaintenanceBatchRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ApplyClaimedRecurringMaintenanceBatchHandler(RentalCommandDbContext db) => _db = db;
+    public ApplyClaimedRecurringMaintenanceBatchRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ApplyScheduledFinanceBatchResult> ExecuteAsync(
         ApplyClaimedRecurringMaintenanceBatchCommand command,
@@ -546,7 +546,7 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
         IAtomicCommandContext context,
         CancellationToken ct)
     {
-        ApplyClaimedDebtServiceBatchHandler.ValidateClaimedIds(
+        ApplyClaimedDebtServiceBatchRule.ValidateClaimedIds(
             command.RecurringMaintenanceTaskIds,
             command.ClaimToken,
             command.BusinessDateUtc,

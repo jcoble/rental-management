@@ -40,7 +40,7 @@ public sealed class RecurringTenantChargeWorkerPostgreSqlTests
             setup.ConnectionString);
         var db = services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>();
         var writes = services.GetRequiredService<IWriteExecutor>();
-        var handler = new ApplyRecurringTenantChargeBatchHandler(db);
+        var handler = new ApplyRecurringTenantChargeBatchRule(db);
 
         var januaryCommand = new ApplyRecurringTenantChargeBatchCommand(
                 Guid.Parse("6b4c66d1-6f41-4a6f-a0f5-0a1dbf11cb01"),
@@ -127,7 +127,7 @@ public sealed class RecurringTenantChargeWorkerPostgreSqlTests
         await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
             setup.ConnectionString);
         var db = services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>();
-        var handler = new ApplyRecurringTenantChargeBatchHandler(db);
+        var handler = new ApplyRecurringTenantChargeBatchRule(db);
         var replay = await services.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             token.ToString("N"),
             TenantMoneyWriteSupport.Write(

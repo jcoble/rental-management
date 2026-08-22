@@ -59,7 +59,7 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
         Task<AtomicCommandOutcome<RecoverOpeningSecurityDepositsResult>> Execute(
             RecoverOpeningSecurityDepositsCommand value)
         {
-            var handler = new RecoverOpeningSecurityDepositsHandler(db);
+            var handler = new RecoverOpeningSecurityDepositsRule(db);
             return writes.ExecuteAsync(
                 value.DeliveryIdempotencyKey,
                 TenantMoneyWriteSupport.Write(

@@ -20,28 +20,28 @@ public static class SimulationWriteSupport
         {
             SetSimulationClockCommand value => Build(
                 "simulation.clock.set", "simulation.clock.mutation.v1", value,
-                new SetSimulationClockHandler(db).ExecuteAsync,
-                new SetSimulationClockHandler(db).AuthorizeReplayAsync),
+                new SetSimulationClockRule(db).ExecuteAsync,
+                new SetSimulationClockRule(db).AuthorizeReplayAsync),
             AdvanceSimulationClockCommand value => Build(
                 "simulation.clock.advance", "simulation.clock.mutation.v1", value,
-                new AdvanceSimulationClockHandler(db).ExecuteAsync,
-                new AdvanceSimulationClockHandler(db).AuthorizeReplayAsync),
+                new AdvanceSimulationClockRule(db).ExecuteAsync,
+                new AdvanceSimulationClockRule(db).AuthorizeReplayAsync),
             FreezeSimulationClockCommand value => Build(
                 "simulation.clock.freeze", "simulation.clock.mutation.v1", value,
-                new FreezeSimulationClockHandler(db).ExecuteAsync,
-                new FreezeSimulationClockHandler(db).AuthorizeReplayAsync),
+                new FreezeSimulationClockRule(db).ExecuteAsync,
+                new FreezeSimulationClockRule(db).AuthorizeReplayAsync),
             UnfreezeSimulationClockCommand value => Build(
                 "simulation.clock.unfreeze", "simulation.clock.mutation.v1", value,
-                new UnfreezeSimulationClockHandler(db).ExecuteAsync,
-                new UnfreezeSimulationClockHandler(db).AuthorizeReplayAsync),
+                new UnfreezeSimulationClockRule(db).ExecuteAsync,
+                new UnfreezeSimulationClockRule(db).AuthorizeReplayAsync),
             ResetSimulationClockCommand value => Build(
                 "simulation.clock.reset", "simulation.clock.mutation.v1", value,
-                new ResetSimulationClockHandler(db).ExecuteAsync,
-                new ResetSimulationClockHandler(db).AuthorizeReplayAsync),
+                new ResetSimulationClockRule(db).ExecuteAsync,
+                new ResetSimulationClockRule(db).AuthorizeReplayAsync),
             EnqueueSimulationWorkerCommand value => Build(
                 "simulation.worker.enqueue", "simulation.worker.enqueue.v1", value,
-                new EnqueueSimulationWorkerCommandHandler(db).ExecuteAsync,
-                new EnqueueSimulationWorkerCommandHandler(db).AuthorizeReplayAsync),
+                new EnqueueSimulationWorkerCommandRule(db).ExecuteAsync,
+                new EnqueueSimulationWorkerCommandRule(db).AuthorizeReplayAsync),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return (TransactionalWrite<TCommand, TResult>)write;
@@ -62,11 +62,11 @@ public static class SimulationWriteSupport
         "Legacy simulation writes are retired; use the shared write executor.");
 }
 
-public sealed class SetSimulationClockHandler
+public sealed class SetSimulationClockRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public SetSimulationClockHandler(RentalCommandDbContext db) => _db = db;
+    public SetSimulationClockRule(RentalCommandDbContext db) => _db = db;
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         SetSimulationClockCommand command,
@@ -120,11 +120,11 @@ public sealed class SetSimulationClockHandler
             command, _db, CapabilityKeys.AccountDestructiveActions, ct);
 }
 
-public sealed class AdvanceSimulationClockHandler
+public sealed class AdvanceSimulationClockRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public AdvanceSimulationClockHandler(RentalCommandDbContext db) => _db = db;
+    public AdvanceSimulationClockRule(RentalCommandDbContext db) => _db = db;
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         AdvanceSimulationClockCommand command,
@@ -156,11 +156,11 @@ public sealed class AdvanceSimulationClockHandler
             command, _db, CapabilityKeys.AccountDestructiveActions, ct);
 }
 
-public sealed class FreezeSimulationClockHandler
+public sealed class FreezeSimulationClockRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public FreezeSimulationClockHandler(RentalCommandDbContext db) => _db = db;
+    public FreezeSimulationClockRule(RentalCommandDbContext db) => _db = db;
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         FreezeSimulationClockCommand command,
@@ -187,11 +187,11 @@ public sealed class FreezeSimulationClockHandler
             command, _db, CapabilityKeys.AccountDestructiveActions, ct);
 }
 
-public sealed class UnfreezeSimulationClockHandler
+public sealed class UnfreezeSimulationClockRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public UnfreezeSimulationClockHandler(RentalCommandDbContext db) => _db = db;
+    public UnfreezeSimulationClockRule(RentalCommandDbContext db) => _db = db;
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         UnfreezeSimulationClockCommand command,
@@ -218,11 +218,11 @@ public sealed class UnfreezeSimulationClockHandler
             command, _db, CapabilityKeys.AccountDestructiveActions, ct);
 }
 
-public sealed class ResetSimulationClockHandler
+public sealed class ResetSimulationClockRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ResetSimulationClockHandler(RentalCommandDbContext db) => _db = db;
+    public ResetSimulationClockRule(RentalCommandDbContext db) => _db = db;
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         ResetSimulationClockCommand command,
@@ -247,11 +247,11 @@ public sealed class ResetSimulationClockHandler
             command, _db, CapabilityKeys.AccountDestructiveActions, ct);
 }
 
-public sealed class EnqueueSimulationWorkerCommandHandler
+public sealed class EnqueueSimulationWorkerCommandRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public EnqueueSimulationWorkerCommandHandler(RentalCommandDbContext db) => _db = db;
+    public EnqueueSimulationWorkerCommandRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<EnqueueSimulationWorkerResult> ExecuteAsync(
         EnqueueSimulationWorkerCommand command,

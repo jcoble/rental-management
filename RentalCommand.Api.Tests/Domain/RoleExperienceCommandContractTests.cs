@@ -38,7 +38,7 @@ public sealed class RoleExperienceCommandContractTests
         units.Should().Contain("CapabilityKeys.LeasingListingsManage");
         units.Should().Contain("_listings.SaveAsync(");
 
-        var moveIn = Source("RentalCommand.Data", "Leasing", "PrepareMoveInHandler.cs");
+        var moveIn = Source("RentalCommand.Data", "Leasing", "PrepareMoveInRule.cs");
         moveIn.Should().Contain("CapabilityKeys.LeasingAgreementsPrepare");
         moveIn.Should().Contain("candidate.PropertyId == null || candidate.PropertyId == unit.PropertyId");
         moveIn.Should().Contain("candidate.UnitId == null || candidate.UnitId == unit.Id");
@@ -121,9 +121,9 @@ public sealed class RoleExperienceCommandContractTests
     public void StaffNotifications_UseTypedRecordRoutesWithoutQueryStringState()
     {
         var conversation = Source(
-            "RentalCommand.Data", "Conversations", "SendConversationMessageHandler.cs");
+            "RentalCommand.Data", "Conversations", "SendConversationMessageRule.cs");
         var vendorDispatch = Source(
-            "RentalCommand.Data", "Operations", "CompleteVendorDispatchFromInboundHandler.cs");
+            "RentalCommand.Data", "Operations", "CompleteVendorDispatchFromInboundRule.cs");
 
         conversation.Should().Contain("NavigationDestination = NavigationDestination.Message");
         conversation.Should().Contain("NavigationResourceKind = nameof(Conversation)");

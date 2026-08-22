@@ -250,7 +250,7 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
-                .ExecuteExactAsync(identity.IdempotencyKey, DemoSeedCommandHandler.Write(db, seed), ct);
+                .ExecuteExactAsync(identity.IdempotencyKey, DemoSeedCommandRule.Write(db, seed), ct);
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         throw new InvalidOperationException($"No executor rule exists for {typeof(TCommand).Name}.");

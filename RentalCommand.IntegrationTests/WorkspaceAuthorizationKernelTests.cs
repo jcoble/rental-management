@@ -1758,7 +1758,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var activated = await ActivateInvitationAsApiAsync(
             invitationId,
             created.Value.UserId,
-            CreateWorkspaceMembershipHandler.HashInvitationToken(invitationToken));
+            CreateWorkspaceMembershipRule.HashInvitationToken(invitationToken));
         var issuedAtUtc = DateTime.UtcNow;
         var started = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
@@ -2504,7 +2504,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         if (command is StartAuthSessionCommand start)
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var handler = new StartAuthSessionHandler(db);
+            var handler = new StartAuthSessionRule(db);
             var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey,
                     AuthSessionWriteSupport.Write(start, handler.ExecuteAsync, handler.AuthorizeAsync));

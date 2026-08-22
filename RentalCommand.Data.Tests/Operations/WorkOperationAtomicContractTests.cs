@@ -10,7 +10,7 @@ namespace RentalCommand.Data.Tests.Operations;
 public sealed class WorkOperationAtomicContractTests
 {
     [Theory]
-    [InlineData(typeof(CreateVendorRatingHandler), typeof(CreateVendorRatingCommand))]
+    [InlineData(typeof(CreateVendorRatingRule), typeof(CreateVendorRatingCommand))]
     public void Every_live_operation_handler_reauthorizes_receipt_replay(
         Type handlerType, Type commandType)
     {
@@ -54,7 +54,7 @@ public sealed class WorkOperationAtomicContractTests
             Path.Combine(
                 AppContext.BaseDirectory,
                 "../../../../RentalCommand.Data/Operations/" +
-                "RecoverVendorDispatchChronologyHandler.cs"));
+                "RecoverVendorDispatchChronologyRule.cs"));
         var compactSource = Regex.Replace(source, @"\s+", " ");
 
         source.Should().Contain(

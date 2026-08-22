@@ -192,10 +192,10 @@ public sealed class LeasePartyAccessWritePostgreSqlTests : IAsyncLifetime
         RentalCommandDbContext db, TCommand command, IAtomicCommandContext context, CancellationToken ct)
         where TCommand : notnull, ILeasePartyAccessCommand => command switch
         {
-            AddEffectivePartyCommand value => AddEffectivePartyHandler.ExecuteAsync(db, value, context, ct),
-            EndEffectivePartyCommand value => EndEffectivePartyHandler.ExecuteAsync(db, value, context, ct),
+            AddEffectivePartyCommand value => AddEffectivePartyRule.ExecuteAsync(db, value, context, ct),
+            EndEffectivePartyCommand value => EndEffectivePartyRule.ExecuteAsync(db, value, context, ct),
             ChangeEffectivePartyRoleCommand value =>
-                ChangeEffectivePartyRoleHandler.ExecuteAsync(db, value, context, ct),
+                ChangeEffectivePartyRoleRule.ExecuteAsync(db, value, context, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
 
@@ -203,10 +203,10 @@ public sealed class LeasePartyAccessWritePostgreSqlTests : IAsyncLifetime
         RentalCommandDbContext db, TCommand command, IAtomicCommandContext context, CancellationToken ct)
         where TCommand : notnull, ILeasePartyAccessCommand => command switch
         {
-            AddEffectivePartyCommand value => AddEffectivePartyHandler.AuthorizeAsync(db, value, context, ct),
-            EndEffectivePartyCommand value => EndEffectivePartyHandler.AuthorizeAsync(db, value, context, ct),
+            AddEffectivePartyCommand value => AddEffectivePartyRule.AuthorizeAsync(db, value, context, ct),
+            EndEffectivePartyCommand value => EndEffectivePartyRule.AuthorizeAsync(db, value, context, ct),
             ChangeEffectivePartyRoleCommand value =>
-                ChangeEffectivePartyRoleHandler.AuthorizeAsync(db, value, context, ct),
+                ChangeEffectivePartyRoleRule.AuthorizeAsync(db, value, context, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
 

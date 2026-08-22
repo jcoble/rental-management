@@ -93,7 +93,7 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         {
             var operationKey = $"{envelope.PortfolioId}:{workOrderId}:{digest}";
             var outcome = await _writes.ExecuteAsync(
-                operationKey, UpdateAssignedWorkOrderHandler.Write(command, _db), ct);
+                operationKey, UpdateAssignedWorkOrderRule.Write(command, _db), ct);
             return outcome.Value.Outcome == UpdateAssignedWorkOrderOutcome.Stale
                 ? Conflict(new
                 {
@@ -129,7 +129,7 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         {
             var operationKey = $"{envelope.PortfolioId}:{workOrderId}:{digest}";
             var outcome = await _writes.ExecuteAsync(
-                operationKey, RecordTechnicianWorkEntryHandler.Write(command, _db), ct);
+                operationKey, RecordTechnicianWorkEntryRule.Write(command, _db), ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -150,7 +150,7 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         {
             var operationKey = $"{envelope.PortfolioId}:{workOrderId}:{digest}";
             var outcome = await _writes.ExecuteAsync(
-                operationKey, SendTechnicianAssignmentMessageHandler.Write(command, _db), ct);
+                operationKey, SendTechnicianAssignmentMessageRule.Write(command, _db), ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -170,7 +170,7 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         {
             var operationKey = $"{envelope.PortfolioId}:{workOrderId}:{digest}";
             var outcome = await _writes.ExecuteAsync(operationKey,
-                MarkTechnicianAssignmentConversationReadHandler.Write(command, _db), ct);
+                MarkTechnicianAssignmentConversationReadRule.Write(command, _db), ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
         catch (UnauthorizedAccessException) { return Forbid(); }

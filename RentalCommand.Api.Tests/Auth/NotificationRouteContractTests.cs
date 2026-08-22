@@ -144,7 +144,7 @@ public sealed class NotificationRouteContractTests
     [Fact]
     public void TenantNoticeDelivery_UsesTenantLedgerEntryIntentForLedgerBackedPaymentNotices()
     {
-        var source = Read("RentalCommand.Api", "Services", "Domain", "AtomicNoticeDeliveryMutation.cs");
+        var source = Read("RentalCommand.Api", "Services", "Domain", "AtomicNoticeDeliveryRule.cs");
 
         source.Should().Contain("NoticeNavigationDestination(draft)");
         source.Should().Contain("NavigationDestination.TenantLedgerEntry");

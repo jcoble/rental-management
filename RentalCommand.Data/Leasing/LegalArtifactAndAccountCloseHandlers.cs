@@ -7,11 +7,11 @@ using RentalCommand.Core.Leasing;
 
 namespace RentalCommand.Data.Leasing;
 
-public sealed class VoidLeaseAgreementHandler
+public sealed class VoidLeaseAgreementRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public VoidLeaseAgreementHandler(RentalCommandDbContext db) => _db = db;
+    public VoidLeaseAgreementRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<VoidLegalArtifactResult> ExecuteAsync(
         VoidLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -76,11 +76,11 @@ public sealed class VoidLeaseAgreementHandler
         LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class VoidLeaseAddendumHandler
+public sealed class VoidLeaseAddendumRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public VoidLeaseAddendumHandler(RentalCommandDbContext db) => _db = db;
+    public VoidLeaseAddendumRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<VoidLegalArtifactResult> ExecuteAsync(
         VoidLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -131,11 +131,11 @@ public sealed class VoidLeaseAddendumHandler
         LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class CloseTenantAccountHandler
+public sealed class CloseTenantAccountRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CloseTenantAccountHandler(RentalCommandDbContext db) => _db = db;
+    public CloseTenantAccountRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<CloseTenantAccountResult> ExecuteAsync(
         CloseTenantAccountCommand command, IAtomicCommandContext context, CancellationToken ct)

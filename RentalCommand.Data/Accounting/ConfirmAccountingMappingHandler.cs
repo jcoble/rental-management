@@ -21,11 +21,11 @@ internal sealed record AccountingPromotionContext(
 
 internal sealed record AccountingPromotionBatchResult(int PromotedCount, bool HasMore);
 
-public sealed class ConfirmAccountingMappingHandler
+public sealed class ConfirmAccountingMappingRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ConfirmAccountingMappingHandler(RentalCommandDbContext db) => _db = db;
+    public ConfirmAccountingMappingRule(RentalCommandDbContext db) => _db = db;
 
     internal const int PromotionBatchSize = 256;
     private const int MaxPushDevices = 32;
@@ -637,11 +637,11 @@ public sealed class ConfirmAccountingMappingHandler
         new(outcome, mapping?.Id ?? 0, mapping?.Revision ?? 0, 0, null, false);
 }
 
-public sealed class ContinueAccountingMappingPromotionHandler
+public sealed class ContinueAccountingMappingPromotionRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ContinueAccountingMappingPromotionHandler(RentalCommandDbContext db) => _db = db;
+    public ContinueAccountingMappingPromotionRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ContinueAccountingMappingPromotionResult> ExecuteAsync(
         ContinueAccountingMappingPromotionCommand command,
@@ -682,7 +682,7 @@ public sealed class ContinueAccountingMappingPromotionHandler
             command.RequestedByUserId,
             command.ClientOperationId,
             command.AppliedAtUtc);
-        var promotion = await ConfirmAccountingMappingHandler.PromoteOneBatchAsync(
+        var promotion = await ConfirmAccountingMappingRule.PromoteOneBatchAsync(
             promotionContext, context, _db, ct);
         var promoted = promotion.PromotedCount;
         job.PromotedCount += promoted;

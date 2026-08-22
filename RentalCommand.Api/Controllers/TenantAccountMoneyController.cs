@@ -137,7 +137,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.NextRunDate,
             _timeProvider.GetUtcNow().UtcDateTime,
             $"recurring-charge-create:{envelope.KeyDigest}");
-        var handler = new CreateRecurringTenantChargeHandler(_db);
+        var handler = new CreateRecurringTenantChargeRule(_db);
         return await ExecuteRecurringCharge(
             command.DeliveryIdempotencyKey,
             command,
@@ -171,7 +171,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.NextRunDate,
             _timeProvider.GetUtcNow().UtcDateTime,
             $"recurring-charge-update:{envelope.KeyDigest}");
-        var handler = new UpdateRecurringTenantChargeHandler(_db);
+        var handler = new UpdateRecurringTenantChargeRule(_db);
         return await ExecuteRecurringCharge(
             command.DeliveryIdempotencyKey,
             command,
@@ -198,7 +198,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             id,
             _timeProvider.GetUtcNow().UtcDateTime,
             $"recurring-charge-deactivate:{envelope.KeyDigest}");
-        var handler = new DeactivateRecurringTenantChargeHandler(_db);
+        var handler = new DeactivateRecurringTenantChargeRule(_db);
         return await ExecuteRecurringCharge(
             command.DeliveryIdempotencyKey,
             command,
@@ -227,7 +227,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         {
             AllocateOldestCharges = request.AllocateOldestCharges,
         };
-        var handler = new RecordTenantReceiptHandler(_db);
+        var handler = new RecordTenantReceiptRule(_db);
         return await Execute(command.DeliveryIdempotencyKey, command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
@@ -247,7 +247,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             $"tenant-charge:{envelope.KeyDigest}",
             $"tenant-charge:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}",
             request.IncomeLedgerAccountId, request.ServicePeriodStartOn, request.ServicePeriodEndOn);
-        var handler = new PostTenantChargeHandler(_db);
+        var handler = new PostTenantChargeRule(_db);
         return await ExecuteCharge(command.DeliveryIdempotencyKey, command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
@@ -266,7 +266,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             envelope.AccessContextId, envelope.AccessRevision, CapabilityKeys.MoneyChargesManage,
             $"tenant-charge-reversal:{envelope.KeyDigest}",
             $"tenant-charge-reversal:{envelope.PortfolioId}:{tenantAccountId}:{chargeEntryId}:{envelope.KeyDigest}");
-        var handler = new ReverseTenantChargeHandler(_db);
+        var handler = new ReverseTenantChargeRule(_db);
         return await ExecuteCharge(command.DeliveryIdempotencyKey, command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
@@ -286,7 +286,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             CapabilityKeys.MoneyChargesManage, $"tenant-credit:{e.KeyDigest}",
             $"tenant-credit:{e.PortfolioId}:{tenantAccountId}:{e.KeyDigest}",
             request.TargetChargeEntryId, request.IncomeLedgerAccountId);
-        var handler = new PostTenantCreditHandler(_db);
+        var handler = new PostTenantCreditRule(_db);
         return await ExecuteLedger(command.DeliveryIdempotencyKey, command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
@@ -305,7 +305,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             e.AccessContextId, e.AccessRevision, CapabilityKeys.MoneyChargesManage,
             $"tenant-adjustment:{e.KeyDigest}",
             $"tenant-adjustment:{e.PortfolioId}:{tenantAccountId}:{e.KeyDigest}");
-        var handler = new PostTenantAdjustmentHandler(_db);
+        var handler = new PostTenantAdjustmentRule(_db);
         return await ExecuteLedger(command.DeliveryIdempotencyKey, command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
@@ -324,7 +324,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             e.AccessRevision, CapabilityKeys.MoneyChargesManage,
             $"tenant-ledger-reversal:{e.KeyDigest}",
             $"tenant-ledger-reversal:{e.PortfolioId}:{tenantAccountId}:{request.ReversesEntryId}:{e.KeyDigest}");
-        var handler = new ReverseTenantLedgerEntryHandler(_db);
+        var handler = new ReverseTenantLedgerEntryRule(_db);
         return await ExecuteLedger(command.DeliveryIdempotencyKey, command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
@@ -346,7 +346,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             $"tenant-payment-refund:{e.PortfolioId}:{tenantAccountId}:{request.PaymentEntryId}:{e.KeyDigest}");
         try
         {
-            var handler = new RefundTenantPaymentHandler(_db);
+            var handler = new RefundTenantPaymentRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 command.DeliveryIdempotencyKey,
                 TenantMoneyWriteSupport.Write(
@@ -375,7 +375,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.SourceStoredFileId, e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
             CapabilityKeys.MoneyDepositsManage, $"deposit-fund:{e.KeyDigest}",
             $"deposit-fund:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{e.KeyDigest}");
-        var handler = new FundSecurityDepositHandler(_db);
+        var handler = new FundSecurityDepositRule(_db);
         return await ExecuteDeposit(command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
@@ -392,7 +392,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.Notes, request.SourceStoredFileId, e.UserId, e.SessionId, e.AccessContextId,
             e.AccessRevision, CapabilityKeys.MoneyDepositsManage, $"deposit-deduction:{e.KeyDigest}",
             $"deposit-deduction:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{e.KeyDigest}");
-        var handler = new DeductSecurityDepositHandler(_db);
+        var handler = new DeductSecurityDepositRule(_db);
         return await ExecuteDeposit(command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
@@ -410,7 +410,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             e.AccessContextId, e.AccessRevision, CapabilityKeys.MoneyDepositsManage,
             $"deposit-refund:{e.KeyDigest}",
             $"deposit-refund:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{e.KeyDigest}");
-        var handler = new RefundSecurityDepositHandler(_db);
+        var handler = new RefundSecurityDepositRule(_db);
         return await ExecuteDeposit(command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }
@@ -433,7 +433,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
             CapabilityKeys.MoneyDepositsManage, $"deposit-reversal:{e.KeyDigest}",
             $"deposit-reversal:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{request.ReversesEntryId}:{e.KeyDigest}");
-        var handler = new ReverseSecurityDepositEntryHandler(_db);
+        var handler = new ReverseSecurityDepositEntryRule(_db);
         return await ExecuteDeposit(command,
             handler.ExecuteAsync, handler.AuthorizeAsync, ct);
     }

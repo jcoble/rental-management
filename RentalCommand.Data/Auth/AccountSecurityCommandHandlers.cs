@@ -49,11 +49,11 @@ public static class AuthSessionWriteSupport
         "Legacy auth/session writes are retired; use the shared write executor.");
 }
 
-public sealed class BootstrapAccountHandler
+public sealed class BootstrapAccountRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public BootstrapAccountHandler(RentalCommandDbContext db) => _db = db;
+    public BootstrapAccountRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<BootstrapAccountResult> ExecuteAsync(
         BootstrapAccountCommand command,
@@ -321,11 +321,11 @@ public sealed class BootstrapAccountHandler
     }
 }
 
-public sealed class ConfirmAccountEmailHandler
+public sealed class ConfirmAccountEmailRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ConfirmAccountEmailHandler(RentalCommandDbContext db) => _db = db;
+    public ConfirmAccountEmailRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ConfirmAccountEmailResult> ExecuteAsync(
         ConfirmAccountEmailCommand command,
@@ -378,7 +378,7 @@ public sealed class ConfirmAccountEmailHandler
     private static void Validate(ConfirmAccountEmailCommand command)
     {
         if (command.UserId <= 0) throw new ArgumentOutOfRangeException(nameof(command.UserId));
-        BootstrapAccountHandler.ValidateDigest(command.ConfirmationIntentHash, nameof(command.ConfirmationIntentHash));
+        BootstrapAccountRule.ValidateDigest(command.ConfirmationIntentHash, nameof(command.ConfirmationIntentHash));
     }
 
     internal static void EnsureStamp(ApplicationUser user, string expected)
@@ -419,11 +419,11 @@ public sealed class ConfirmAccountEmailHandler
         ChangeReason: reason);
 }
 
-public sealed class ResetAccountPasswordHandler
+public sealed class ResetAccountPasswordRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ResetAccountPasswordHandler(RentalCommandDbContext db) => _db = db;
+    public ResetAccountPasswordRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ResetAccountPasswordResult> ExecuteAsync(
         ResetAccountPasswordCommand command,
@@ -442,10 +442,10 @@ public sealed class ResetAccountPasswordHandler
         {
             return new ResetAccountPasswordResult(ResetAccountPasswordOutcome.InvalidToken, user.Id);
         }
-        ConfirmAccountEmailHandler.EnsureStamp(user, command.ExpectedSecurityStamp);
+        ConfirmAccountEmailRule.EnsureStamp(user, command.ExpectedSecurityStamp);
 
         var now = await context.ReadDatabaseClockUtcAsync(ct);
-        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(user.Id, _db, now, ct);
+        var root = await ConfirmAccountEmailRule.RequireAuditRootAsync(user.Id, _db, now, ct);
         user.PasswordHash = command.PasswordHash;
         user.SecurityStamp = Guid.NewGuid().ToString("N");
         user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
@@ -457,7 +457,7 @@ public sealed class ResetAccountPasswordHandler
             now,
             "Password reset completed",
             ct);
-        context.StageSemanticEvent(ConfirmAccountEmailHandler.SecurityAudit(
+        context.StageSemanticEvent(ConfirmAccountEmailRule.SecurityAudit(
             root,
             user.Id,
             "PasswordReset",
@@ -475,22 +475,22 @@ public sealed class ResetAccountPasswordHandler
     {
         Validate(command);
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
-        _ = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, _db, now, ct);
+        _ = await ConfirmAccountEmailRule.RequireAuditRootAsync(command.UserId, _db, now, ct);
     }
 
     private static void Validate(ResetAccountPasswordCommand command)
     {
         if (command.UserId <= 0) throw new ArgumentOutOfRangeException(nameof(command.UserId));
         ArgumentException.ThrowIfNullOrWhiteSpace(command.PasswordHash);
-        BootstrapAccountHandler.ValidateDigest(command.PasswordIntentHash, nameof(command.PasswordIntentHash));
+        BootstrapAccountRule.ValidateDigest(command.PasswordIntentHash, nameof(command.PasswordIntentHash));
     }
 }
 
-public sealed class ConfirmGoogleAccountEmailHandler
+public sealed class ConfirmGoogleAccountEmailRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ConfirmGoogleAccountEmailHandler(RentalCommandDbContext db) => _db = db;
+    public ConfirmGoogleAccountEmailRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ConfirmAccountEmailResult> ExecuteAsync(
         ConfirmGoogleAccountEmailCommand command,
@@ -498,18 +498,18 @@ public sealed class ConfirmGoogleAccountEmailHandler
         CancellationToken ct)
     {
         if (command.UserId <= 0) throw new ArgumentOutOfRangeException(nameof(command.UserId));
-        BootstrapAccountHandler.ValidateDigest(command.GoogleSubjectHash, nameof(command.GoogleSubjectHash));
+        BootstrapAccountRule.ValidateDigest(command.GoogleSubjectHash, nameof(command.GoogleSubjectHash));
         await context.AcquireLockAsync("ApplicationUser", command.UserId, ct);
         var user = await _db.Set<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.UserId, ct);
         if (user is null) return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.UserNotFound, command.UserId);
         if (user.EmailConfirmed) return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.AlreadyConfirmed, user.Id);
-        ConfirmAccountEmailHandler.EnsureStamp(user, command.ExpectedSecurityStamp);
+        ConfirmAccountEmailRule.EnsureStamp(user, command.ExpectedSecurityStamp);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
-        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(user.Id, _db, now, ct);
+        var root = await ConfirmAccountEmailRule.RequireAuditRootAsync(user.Id, _db, now, ct);
         user.EmailConfirmed = true;
         user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
-        context.StageSemanticEvent(ConfirmAccountEmailHandler.SecurityAudit(
+        context.StageSemanticEvent(ConfirmAccountEmailRule.SecurityAudit(
             root,
             user.Id,
             "GoogleEmailConfirmed",
@@ -526,17 +526,17 @@ public sealed class ConfirmGoogleAccountEmailHandler
         ConfirmGoogleAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         if (command.UserId <= 0) throw new ArgumentOutOfRangeException(nameof(command.UserId));
-        BootstrapAccountHandler.ValidateDigest(command.GoogleSubjectHash, nameof(command.GoogleSubjectHash));
+        BootstrapAccountRule.ValidateDigest(command.GoogleSubjectHash, nameof(command.GoogleSubjectHash));
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
-        _ = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, _db, now, ct);
+        _ = await ConfirmAccountEmailRule.RequireAuditRootAsync(command.UserId, _db, now, ct);
     }
 }
 
-public sealed class AuthEmailOutboxHandler
+public sealed class AuthEmailOutboxRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public AuthEmailOutboxHandler(RentalCommandDbContext db) => _db = db;
+    public AuthEmailOutboxRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<AuthEmailOutboxResult> ExecuteAsync(
         AuthEmailOutboxCommand command,
@@ -549,8 +549,8 @@ public sealed class AuthEmailOutboxHandler
         var user = await _db.Set<ApplicationUser>().AsNoTracking()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.UserId, ct)
             ?? throw new UnauthorizedAccessException("The account is unavailable.");
-        ConfirmAccountEmailHandler.EnsureStamp(user, command.ExpectedSecurityStamp);
-        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(user.Id, _db, now, ct);
+        ConfirmAccountEmailRule.EnsureStamp(user, command.ExpectedSecurityStamp);
+        var root = await ConfirmAccountEmailRule.RequireAuditRootAsync(user.Id, _db, now, ct);
         if (command.ExpectedPortfolioId is { } expectedPortfolioId &&
             root.PortfolioId != expectedPortfolioId)
         {
@@ -593,7 +593,7 @@ public sealed class AuthEmailOutboxHandler
     {
         Validate(command);
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
-        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, _db, now, ct);
+        var root = await ConfirmAccountEmailRule.RequireAuditRootAsync(command.UserId, _db, now, ct);
         if (command.ExpectedPortfolioId is { } expectedPortfolioId &&
             root.PortfolioId != expectedPortfolioId)
         {
@@ -610,6 +610,6 @@ public sealed class AuthEmailOutboxHandler
             throw new ArgumentOutOfRangeException(nameof(command.EmailKind));
         ArgumentException.ThrowIfNullOrWhiteSpace(command.PreparedEmailPayload);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.DeliveryIdempotencyKey);
-        BootstrapAccountHandler.ValidateDigest(command.EmailIntentHash, nameof(command.EmailIntentHash));
+        BootstrapAccountRule.ValidateDigest(command.EmailIntentHash, nameof(command.EmailIntentHash));
     }
 }

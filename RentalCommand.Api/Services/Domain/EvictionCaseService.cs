@@ -142,35 +142,35 @@ public class EvictionCaseService : IEvictionCaseService
 
     private Task<OperationMutationResult> CreateEvictionCaseAsync(
         CreateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        CreateEvictionCaseHandler.ExecuteAsync(_db, command, context, ct);
+        CreateEvictionCaseRule.ExecuteAsync(_db, command, context, ct);
 
     private Task<OperationMutationResult> UpdateEvictionCaseAsync(
         UpdateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        UpdateEvictionCaseHandler.ExecuteAsync(_db, command, context, ct);
+        UpdateEvictionCaseRule.ExecuteAsync(_db, command, context, ct);
 
     private Task<OperationMutationResult> AddEvictionCaseEventAsync(
         AddEvictionCaseEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        AddEvictionCaseEventHandler.ExecuteAsync(_db, command, context, ct);
+        AddEvictionCaseEventRule.ExecuteAsync(_db, command, context, ct);
 
     private Task<OperationMutationResult> DeleteEvictionCaseAsync(
         DeleteEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        DeleteEvictionCaseHandler.ExecuteAsync(_db, command, context, ct);
+        DeleteEvictionCaseRule.ExecuteAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         CreateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        CreateEvictionCaseHandler.AuthorizeAsync(_db, command, context, ct);
+        CreateEvictionCaseRule.AuthorizeAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         UpdateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        UpdateEvictionCaseHandler.AuthorizeAsync(_db, command, context, ct);
+        UpdateEvictionCaseRule.AuthorizeAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         AddEvictionCaseEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        AddEvictionCaseEventHandler.AuthorizeAsync(_db, command, context, ct);
+        AddEvictionCaseEventRule.AuthorizeAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         DeleteEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        DeleteEvictionCaseHandler.AuthorizeAsync(_db, command, context, ct);
+        DeleteEvictionCaseRule.AuthorizeAsync(_db, command, context, ct);
 
     private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
         "The shared request write executor is required for eviction case changes.");

@@ -70,11 +70,11 @@ public static class ScreeningWriteSupport
             applicationId);
 }
 
-public sealed class TrackExternalScreeningHandler
+public sealed class TrackExternalScreeningRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public TrackExternalScreeningHandler(RentalCommandDbContext db) => _db = db;
+    public TrackExternalScreeningRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ScreeningMutationResult> ExecuteAsync(
         TrackExternalScreeningCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -149,11 +149,11 @@ public sealed class TrackExternalScreeningHandler
             command.ExpectedAccessRevision, _db, ct);
 }
 
-public sealed class PrepareIntegratedScreeningHandler
+public sealed class PrepareIntegratedScreeningRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PrepareIntegratedScreeningHandler(RentalCommandDbContext db) => _db = db;
+    public PrepareIntegratedScreeningRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<PrepareIntegratedScreeningResult> ExecuteAsync(
         PrepareIntegratedScreeningCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -251,11 +251,11 @@ public sealed class PrepareIntegratedScreeningHandler
             command.ExpectedAccessRevision, _db, ct);
 }
 
-public sealed class FinalizeIntegratedScreeningHandler
+public sealed class FinalizeIntegratedScreeningRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public FinalizeIntegratedScreeningHandler(RentalCommandDbContext db) => _db = db;
+    public FinalizeIntegratedScreeningRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ScreeningMutationResult> ExecuteAsync(
         FinalizeIntegratedScreeningCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -319,11 +319,11 @@ public sealed class FinalizeIntegratedScreeningHandler
             command.ExpectedAccessRevision, _db, ct);
 }
 
-public sealed class UpdateExternalScreeningHandler
+public sealed class UpdateExternalScreeningRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public UpdateExternalScreeningHandler(RentalCommandDbContext db) => _db = db;
+    public UpdateExternalScreeningRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ScreeningMutationResult> ExecuteAsync(
         UpdateExternalScreeningCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -387,11 +387,11 @@ public sealed class UpdateExternalScreeningHandler
             command.ExpectedAccessRevision, _db, ct);
 }
 
-public sealed class RecordScreeningDecisionHandler
+public sealed class RecordScreeningDecisionRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RecordScreeningDecisionHandler(RentalCommandDbContext db) => _db = db;
+    public RecordScreeningDecisionRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ScreeningMutationResult> ExecuteAsync(
         RecordScreeningDecisionCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -450,11 +450,11 @@ public sealed class RecordScreeningDecisionHandler
             command.ExpectedAccessRevision, _db, ct);
 }
 
-public sealed class ApplyScreeningProviderDeliveryHandler
+public sealed class ApplyScreeningProviderDeliveryRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ApplyScreeningProviderDeliveryHandler(RentalCommandDbContext db) => _db = db;
+    public ApplyScreeningProviderDeliveryRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ScreeningMutationResult> ExecuteAsync(
         ApplyScreeningProviderDeliveryCommand command, IAtomicCommandContext context, CancellationToken ct)

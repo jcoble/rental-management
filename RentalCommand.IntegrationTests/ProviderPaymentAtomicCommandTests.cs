@@ -2233,7 +2233,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         if (command is RecordTenantReceiptCommand receipt)
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var handler = new RecordTenantReceiptHandler(db);
+            var handler = new RecordTenantReceiptRule(db);
             var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey,
                     TenantMoneyWriteSupport.Write(

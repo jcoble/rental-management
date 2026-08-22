@@ -634,9 +634,9 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
                 identity.IdempotencyKey,
                 ScanDraftWriteSupport.Write(
                     identity.CommandType, command, ScanDraftWriteSupport.ConfirmResultContract,
-                    (request, context, token) => ConfirmScanDraftHandler.ExecuteAsync(
+                    (request, context, token) => ConfirmScanDraftRule.ExecuteAsync(
                         db, writer, request, context, token),
-                    (request, context, token) => ConfirmScanDraftHandler.AuthorizeAsync(
+                    (request, context, token) => ConfirmScanDraftRule.AuthorizeAsync(
                         writer, request, context, token)));
     }
 
@@ -647,7 +647,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     {
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var handler = new RecordTenantReceiptHandler(db);
+        var handler = new RecordTenantReceiptRule(db);
         return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey, TenantMoneyWriteSupport.Write(
                 command, handler.ExecuteAsync, handler.AuthorizeAsync));
@@ -660,7 +660,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     {
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var handler = new FundSecurityDepositHandler(db);
+        var handler = new FundSecurityDepositRule(db);
         return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey, TenantMoneyWriteSupport.Write(
                 command, handler.ExecuteAsync, handler.AuthorizeAsync));

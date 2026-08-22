@@ -604,9 +604,9 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
         where TCommand : notnull, ILeasePartyAccessCommand => command switch
         {
             GrantTenantUserAccessCommand value =>
-                GrantTenantUserAccessHandler.ExecuteAsync(db, value, context, ct),
+                GrantTenantUserAccessRule.ExecuteAsync(db, value, context, ct),
             RevokeTenantUserAccessCommand value =>
-                RevokeTenantUserAccessHandler.ExecuteAsync(db, value, context, ct),
+                RevokeTenantUserAccessRule.ExecuteAsync(db, value, context, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
 
@@ -615,9 +615,9 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
         where TCommand : notnull, ILeasePartyAccessCommand => command switch
         {
             GrantTenantUserAccessCommand value =>
-                GrantTenantUserAccessHandler.AuthorizeAsync(db, value, context, ct),
+                GrantTenantUserAccessRule.AuthorizeAsync(db, value, context, ct),
             RevokeTenantUserAccessCommand value =>
-                RevokeTenantUserAccessHandler.AuthorizeAsync(db, value, context, ct),
+                RevokeTenantUserAccessRule.AuthorizeAsync(db, value, context, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
 

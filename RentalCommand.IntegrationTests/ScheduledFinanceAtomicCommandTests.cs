@@ -972,18 +972,18 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
             ApplyClaimedDebtServiceBatchCommand debt =>
                 (TransactionalWrite<TCommand, TResult>)(object)ScheduledFinanceWriteSupport.Write(
                     debt,
-                    new ApplyClaimedDebtServiceBatchHandler(db).ExecuteAsync,
-                    new ApplyClaimedDebtServiceBatchHandler(db).AuthorizeAsync),
+                    new ApplyClaimedDebtServiceBatchRule(db).ExecuteAsync,
+                    new ApplyClaimedDebtServiceBatchRule(db).AuthorizeAsync),
             ApplyClaimedRecurringExpenseBatchCommand expense =>
                 (TransactionalWrite<TCommand, TResult>)(object)ScheduledFinanceWriteSupport.Write(
                     expense,
-                    new ApplyClaimedRecurringExpenseBatchHandler(db).ExecuteAsync,
-                    new ApplyClaimedRecurringExpenseBatchHandler(db).AuthorizeAsync),
+                    new ApplyClaimedRecurringExpenseBatchRule(db).ExecuteAsync,
+                    new ApplyClaimedRecurringExpenseBatchRule(db).AuthorizeAsync),
             ApplyClaimedRecurringMaintenanceBatchCommand maintenance =>
                 (TransactionalWrite<TCommand, TResult>)(object)ScheduledFinanceWriteSupport.Write(
                     maintenance,
-                    new ApplyClaimedRecurringMaintenanceBatchHandler(db).ExecuteAsync,
-                    new ApplyClaimedRecurringMaintenanceBatchHandler(db).AuthorizeAsync),
+                    new ApplyClaimedRecurringMaintenanceBatchRule(db).ExecuteAsync,
+                    new ApplyClaimedRecurringMaintenanceBatchRule(db).AuthorizeAsync),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         write.OperationName.Should().Be(identity.CommandType);

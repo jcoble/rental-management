@@ -118,7 +118,7 @@ public class AccountingConnectionService
         var command = AtomicAccountingConnect.Command(
             scope, provider, redirectUri, operationKey);
         var identity = AtomicAccountingConnect.Identity(command);
-        var handler = new PrepareAccountingConnectHandler(_db);
+        var handler = new PrepareAccountingConnectRule(_db);
         var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
             AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
 
@@ -190,7 +190,7 @@ public class AccountingConnectionService
         var prepareCommand = AtomicAccountingLifecycle.PrepareDisconnectCommand(
             scope, provider, operationKey);
         var prepareIdentity = AtomicAccountingLifecycle.PrepareDisconnectIdentity(prepareCommand);
-        var prepareHandler = new PrepareAccountingDisconnectHandler(_db);
+        var prepareHandler = new PrepareAccountingDisconnectRule(_db);
         var prepared = await _writes.ExecuteAsync(prepareIdentity.IdempotencyKey,
             AccountingWriteSupport.Write(
                 prepareCommand, prepareHandler.ExecuteAsync, prepareHandler.AuthorizeAsync), ct);
@@ -220,7 +220,7 @@ public class AccountingConnectionService
         var finalizeCommand = AtomicAccountingLifecycle.FinalizeDisconnectCommand(
             prepareCommand, prepared.Value);
         var finalizeIdentity = AtomicAccountingLifecycle.FinalizeDisconnectIdentity(finalizeCommand);
-        var finalizeHandler = new FinalizeAccountingDisconnectHandler(_db);
+        var finalizeHandler = new FinalizeAccountingDisconnectRule(_db);
         var finalized = await _writes.ExecuteAsync(
             finalizeIdentity.IdempotencyKey,
             AccountingWriteSupport.Write(
@@ -351,7 +351,7 @@ public class AccountingConnectionService
         var command = AtomicAccountingLifecycle.DirectionCommand(
             scope, provider, pull, push, operationKey);
         var identity = AtomicAccountingLifecycle.DirectionIdentity(command);
-        var handler = new SetAccountingDirectionHandler(_db);
+        var handler = new SetAccountingDirectionRule(_db);
         var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
             AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         if (!outcome.Value.Found)
@@ -466,7 +466,7 @@ public class AccountingConnectionService
                 clientOperationId,
                 request.ExpectedRevision,
                 _timeProvider.UtcNow());
-        var handler = new ConfirmAccountingMappingHandler(_db);
+        var handler = new ConfirmAccountingMappingRule(_db);
         var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
             AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
 
@@ -542,7 +542,7 @@ public class AccountingConnectionService
                 CapabilityKeys.IntegrationsManage,
                 clientOperationId,
                 _timeProvider.UtcNow());
-        var handler = new ContinueAccountingMappingPromotionHandler(_db);
+        var handler = new ContinueAccountingMappingPromotionRule(_db);
         var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
             AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         if (outcome.Value.Outcome == ContinueAccountingMappingPromotionOutcome.NotFound)

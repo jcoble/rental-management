@@ -137,7 +137,7 @@ This link expires in 1 hour. If you didn't request a password reset, you can saf
             payload,
             intentHash,
             $"auth:{kind}:{user.Id}:{operationDigest}");
-        var handler = new AuthEmailOutboxHandler(_db);
+        var handler = new AuthEmailOutboxRule(_db);
         _ = await _writes.ExecuteAsync($"{user.Id}:{operationDigest}",
             AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
     }

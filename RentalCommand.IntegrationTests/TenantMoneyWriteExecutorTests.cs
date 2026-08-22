@@ -67,7 +67,7 @@ public sealed class TenantMoneyWriteExecutorTests
         paymentSource.IndexOf(lockCall, StringComparison.Ordinal).Should().Be(
             paymentSource.LastIndexOf(lockCall, StringComparison.Ordinal));
         paymentSource.IndexOf(lockCall, StringComparison.Ordinal).Should().BeLessThan(
-            paymentSource.IndexOf("new RecordTenantReceiptHandler(_db).ExecuteAsync", StringComparison.Ordinal));
+            paymentSource.IndexOf("new RecordTenantReceiptRule(_db).ExecuteAsync", StringComparison.Ordinal));
 
         var handlerSource = File.ReadAllText(Path.Combine(root, "RentalCommand.Data", "Payments",
             "TenantMoneyCommandHandlers.cs"));

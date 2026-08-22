@@ -827,7 +827,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         {
             var command = await import.PullAsync(connection, since, ct, fence);
             var key = $"{connection.Id}:{fence.ClaimToken:N}:{command.ProviderBatchIdentity}";
-            var handler = new ApplyAccountingPullResultHandler(db);
+            var handler = new ApplyAccountingPullResultRule(db);
             var outcome = await writes.ExecuteAsync(key,
                 AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
             return new AccountingImportService.ImportSummary(

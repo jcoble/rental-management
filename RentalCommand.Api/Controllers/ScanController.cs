@@ -919,9 +919,9 @@ public class ScanController : ManagementControllerBase
                 $"{scope.PortfolioId}:{id}:{operationDigest}",
                 ScanDraftWriteSupport.Write(
                     "scan-draft.retry", command, ScanDraftWriteSupport.MutationResultContract,
-                    (request, context, token) => RetryScanDraftHandler.ExecuteAsync(
+                    (request, context, token) => RetryScanDraftRule.ExecuteAsync(
                         _db, request, context, token),
-                    (request, context, token) => RetryScanDraftHandler.AuthorizeAsync(
+                    (request, context, token) => RetryScanDraftRule.AuthorizeAsync(
                         _db, request, context, token)),
                 ct);
             result = outcome.Value;
@@ -985,9 +985,9 @@ public class ScanController : ManagementControllerBase
                 ScanDraftWriteSupport.Write(
                     "scan-draft.payment-account", command,
                     ScanDraftWriteSupport.MutationResultContract,
-                    (request, context, token) => SetScanDraftPaymentAccountHandler.ExecuteAsync(
+                    (request, context, token) => SetScanDraftPaymentAccountRule.ExecuteAsync(
                         _db, request, context, token),
-                    (request, context, token) => SetScanDraftPaymentAccountHandler.AuthorizeAsync(
+                    (request, context, token) => SetScanDraftPaymentAccountRule.AuthorizeAsync(
                         _db, request, context, token)),
                 ct);
             result = outcome.Value;
@@ -1187,9 +1187,9 @@ public class ScanController : ManagementControllerBase
                 ScanDraftWriteSupport.Write(
                     "guided-setup.manual-lease", command,
                     ScanDraftWriteSupport.ConfirmResultContract,
-                    (request, context, token) => CreateManualLeaseHandler.ExecuteAsync(
+                    (request, context, token) => CreateManualLeaseRule.ExecuteAsync(
                         _db, _confirmationTargetWriter, request, context, token),
-                    (request, context, token) => CreateManualLeaseHandler.AuthorizeAsync(
+                    (request, context, token) => CreateManualLeaseRule.AuthorizeAsync(
                         _db, request, context, token)),
                 ct);
         }
@@ -1280,9 +1280,9 @@ public class ScanController : ManagementControllerBase
                 ScanDraftWriteSupport.Write(
                     identity.CommandType, command,
                     ScanDraftWriteSupport.ConfirmResultContract,
-                    (request, context, token) => ConfirmScanDraftHandler.ExecuteAsync(
+                    (request, context, token) => ConfirmScanDraftRule.ExecuteAsync(
                         _db, _confirmationTargetWriter, request, context, token),
-                    (request, context, token) => ConfirmScanDraftHandler.AuthorizeAsync(
+                    (request, context, token) => ConfirmScanDraftRule.AuthorizeAsync(
                         _confirmationTargetWriter, request, context, token)),
                 ct);
         }

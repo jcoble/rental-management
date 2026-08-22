@@ -857,7 +857,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
     {
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var handler = new ApplyClaimedTenantNoticeDraftBatchHandler(db);
+        var handler = new ApplyClaimedTenantNoticeDraftBatchRule(db);
         return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>().ExecuteAsync(
             TenantNoticeDraftAutomation.Identity(command).IdempotencyKey,
             TenantNoticeDraftAutomation.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));

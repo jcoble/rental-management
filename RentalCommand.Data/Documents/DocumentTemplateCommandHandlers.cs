@@ -62,7 +62,7 @@ public static class DocumentTemplateWriteSupport
 
 }
 
-public sealed class CreateDocumentTemplateHandler
+public sealed class CreateDocumentTemplateRule
 {
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, CreateDocumentTemplateCommand command,
@@ -126,7 +126,7 @@ public sealed class CreateDocumentTemplateHandler
     }
 }
 
-public sealed class FinalizeDocumentTemplateUploadHandler
+public sealed class FinalizeDocumentTemplateUploadRule
 {
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, FinalizeDocumentTemplateUploadCommand command,
@@ -219,7 +219,7 @@ public sealed class FinalizeDocumentTemplateUploadHandler
     }
 }
 
-public sealed class UpdateDocumentTemplateHandler
+public sealed class UpdateDocumentTemplateRule
 {
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, UpdateDocumentTemplateCommand command,
@@ -287,7 +287,7 @@ public sealed class UpdateDocumentTemplateHandler
             command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DocumentTemplateId, db, context, ct);
 }
 
-public sealed class AddDocumentTemplateFieldHandler
+public sealed class AddDocumentTemplateFieldRule
 {
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, AddDocumentTemplateFieldCommand command,
@@ -348,7 +348,7 @@ public sealed class AddDocumentTemplateFieldHandler
             command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DocumentTemplateId, db, context, ct);
 }
 
-public sealed class UpdateDocumentTemplateFieldHandler
+public sealed class UpdateDocumentTemplateFieldRule
 {
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, UpdateDocumentTemplateFieldCommand command,
@@ -413,7 +413,7 @@ public sealed class UpdateDocumentTemplateFieldHandler
             command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DocumentTemplateId, db, context, ct);
 }
 
-public sealed class DeleteDocumentTemplateFieldHandler
+public sealed class DeleteDocumentTemplateFieldRule
 {
     public static async Task<DocumentTemplateMutationResult> ExecuteAsync(
         RentalCommandDbContext db, DeleteDocumentTemplateFieldCommand command,

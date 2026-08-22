@@ -202,7 +202,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
                 user.Id,
                 user.SecurityStamp ?? string.Empty,
                 subjectHash);
-            var handler = new ConfirmGoogleAccountEmailHandler(_db);
+            var handler = new ConfirmGoogleAccountEmailRule(_db);
             var confirmed = (await _writes.ExecuteAsync($"{user.Id}:{subjectHash}",
                 AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct)).Value;
             if (confirmed.Outcome is ConfirmAccountEmailOutcome.UserNotFound)

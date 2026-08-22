@@ -26,26 +26,26 @@ public sealed class SandboxLifecycleAtomicContractTests
     public void Sandbox_lifecycle_is_receipt_backed_typed_atomic_command()
     {
         typeof(SandboxLifecycleCommand).Should().Implement<IAtomicCommandData>();
-        typeof(SandboxLifecycleCommandHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
-        typeof(SandboxLifecycleCommandHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
+        typeof(SandboxLifecycleCommandRule).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(SandboxLifecycleCommandRule).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
     }
 
     [Fact]
     public void Rich_demo_seed_and_legal_finalization_are_typed_replay_authorized_commands()
     {
         typeof(SeedDemoPortfolioCommand).Should().Implement<IAtomicCommandData>();
-        typeof(DemoSeedCommandHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
-        typeof(DemoSeedCommandHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
+        typeof(DemoSeedCommandRule).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(DemoSeedCommandRule).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
 
         typeof(FinalizeDemoLegalDocumentCommand).Should().Implement<IAtomicCommandData>();
-        typeof(DemoLegalDocumentFinalizeCommandHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
-        typeof(DemoLegalDocumentFinalizeCommandHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
+        typeof(DemoLegalDocumentFinalizeCommandRule).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(DemoLegalDocumentFinalizeCommandRule).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
     }
 
     [Fact]
     public void Sandbox_lifecycle_handler_has_no_nested_atomic_execution_path()
     {
-        typeof(SandboxLifecycleCommandHandler)
+        typeof(SandboxLifecycleCommandRule)
             .GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
             .Select(field => field.FieldType)
             .Should().NotContain(typeof(IWriteExecutor));
@@ -55,7 +55,7 @@ public sealed class SandboxLifecycleAtomicContractTests
     public void Demo_audit_reasons_use_plain_english_copy()
     {
         var sandboxHandler = ReadSource(
-            "RentalCommand.Api", "Services", "Auth", "SandboxLifecycleCommandHandler.cs");
+            "RentalCommand.Api", "Services", "Auth", "SandboxLifecycleCommandRule.cs");
         sandboxHandler.Should().Contain(
             "Existing demo information brought up to date during Sandbox onboarding.");
         sandboxHandler.Should().NotContain("Canonical demo facts reconciled during Sandbox onboarding.");

@@ -221,8 +221,8 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         eligibility.ParameterValues.Should().Contain(
             value => Equals(value, _portfolioId),
             "portfolio scope must be enforced by the translated query");
-        typeof(RequestVendorW9Handler).GetMethod("ExecuteAsync").Should().NotBeNull();
-        typeof(RequestVendorW9Handler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
+        typeof(RequestVendorW9Rule).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(RequestVendorW9Rule).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
     }
 
     [SkippableFact]
@@ -422,7 +422,7 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         return await writes.ExecuteAsync(
-            identity.IdempotencyKey, RequestVendorW9Handler.Write(command, db), ct);
+            identity.IdempotencyKey, RequestVendorW9Rule.Write(command, db), ct);
     }
 
     private CommandProbe Probe => _services!.GetRequiredService<CommandProbe>();

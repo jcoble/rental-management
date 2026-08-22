@@ -72,16 +72,16 @@ public static class ScanDraftWriteSupport
             case CreateVoiceScanDraftCommand value: ScanDraftMutationValidation.Validate(value); break;
             case AnswerVoiceScanDraftCommand value: ScanDraftMutationValidation.Validate(value); break;
             case SetScanDraftPaymentAccountCommand value: ScanDraftMutationValidation.Validate(value); break;
-            case RejectScanDraftCommand value: RejectScanDraftHandler.Validate(value); break;
-            case ConfirmScanDraftCommand value: ConfirmScanDraftHandler.Validate(value); break;
-            case CreateManualLeaseCommand value: CreateManualLeaseHandler.Validate(value); break;
+            case RejectScanDraftCommand value: RejectScanDraftRule.Validate(value); break;
+            case ConfirmScanDraftCommand value: ConfirmScanDraftRule.Validate(value); break;
+            case CreateManualLeaseCommand value: CreateManualLeaseRule.Validate(value); break;
             case FinalizeScanUploadCommand value when value.Files is not { Count: > 0 and <= 100 }:
                 throw new InvalidOperationException("A scan upload must contain between 1 and 100 files.");
         }
     }
 }
 
-public sealed class RetryScanDraftHandler
+public sealed class RetryScanDraftRule
 {
     public static async Task<ScanDraftMutationResult> ExecuteAsync(
         RentalCommandDbContext db, RetryScanDraftCommand command,
@@ -140,7 +140,7 @@ public sealed class RetryScanDraftHandler
     }
 }
 
-public sealed class CreateVoiceScanDraftHandler
+public sealed class CreateVoiceScanDraftRule
 {
     public static async Task<ScanDraftMutationResult> ExecuteAsync(
         RentalCommandDbContext db, CreateVoiceScanDraftCommand command,
@@ -238,7 +238,7 @@ public sealed class CreateVoiceScanDraftHandler
     }
 }
 
-public sealed class AnswerVoiceScanDraftHandler
+public sealed class AnswerVoiceScanDraftRule
 {
     public static async Task<ScanDraftMutationResult> ExecuteAsync(
         RentalCommandDbContext db, AnswerVoiceScanDraftCommand command,
@@ -296,7 +296,7 @@ public sealed class AnswerVoiceScanDraftHandler
     }
 }
 
-public sealed class SetScanDraftPaymentAccountHandler
+public sealed class SetScanDraftPaymentAccountRule
 {
     public static async Task<ScanDraftMutationResult> ExecuteAsync(
         RentalCommandDbContext db, SetScanDraftPaymentAccountCommand command,

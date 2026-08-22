@@ -16,7 +16,7 @@ public static class ApplicationFinanceWriteSupport
         RecordApplicationFeeCommand command,
         RentalCommandDbContext db)
     {
-        var handler = new RecordApplicationFeeHandler(db);
+        var handler = new RecordApplicationFeeRule(db);
         return Build("application-finance.record-fee", command, command.ApplicationId,
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
@@ -25,7 +25,7 @@ public static class ApplicationFinanceWriteSupport
         RefundApplicationFeeCommand command,
         RentalCommandDbContext db)
     {
-        var handler = new RefundApplicationFeeHandler(db);
+        var handler = new RefundApplicationFeeRule(db);
         return Build("application-finance.refund-fee", command, command.ApplicationId,
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
@@ -52,11 +52,11 @@ public static class ApplicationFinanceWriteSupport
         "Application finance mutations must use the shared write executor.");
 }
 
-public sealed class RecordApplicationFeeHandler
+public sealed class RecordApplicationFeeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RecordApplicationFeeHandler(RentalCommandDbContext db) => _db = db;
+    public RecordApplicationFeeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ApplicationFinanceMutationResult> ExecuteAsync(
         RecordApplicationFeeCommand command,
@@ -158,11 +158,11 @@ public sealed class RecordApplicationFeeHandler
             _db, ct);
 }
 
-public sealed class RefundApplicationFeeHandler
+public sealed class RefundApplicationFeeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RefundApplicationFeeHandler(RentalCommandDbContext db) => _db = db;
+    public RefundApplicationFeeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ApplicationFinanceMutationResult> ExecuteAsync(
         RefundApplicationFeeCommand command,

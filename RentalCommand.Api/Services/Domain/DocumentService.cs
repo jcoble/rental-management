@@ -210,17 +210,17 @@ public sealed class DocumentService : IDocumentService
         CreateStoredDocumentCommand command) => StoredDocumentWriteSupport.Create(
         command,
         (request, context, ct) =>
-            CreateStoredDocumentHandler.ExecuteAsync(_db, request, context, ct),
+            CreateStoredDocumentRule.ExecuteAsync(_db, request, context, ct),
         (request, context, ct) =>
-            CreateStoredDocumentHandler.AuthorizeAsync(_db, request, context, ct));
+            CreateStoredDocumentRule.AuthorizeAsync(_db, request, context, ct));
 
     private TransactionalWrite<DeleteStoredDocumentCommand, DeleteStoredDocumentResult> DeleteRule(
         DeleteStoredDocumentCommand command) => StoredDocumentWriteSupport.Delete(
         command,
         (request, context, ct) =>
-            DeleteStoredDocumentHandler.ExecuteAsync(_db, request, context, ct),
+            DeleteStoredDocumentRule.ExecuteAsync(_db, request, context, ct),
         (request, context, ct) =>
-            DeleteStoredDocumentHandler.AuthorizeAsync(_db, request, context, ct));
+            DeleteStoredDocumentRule.AuthorizeAsync(_db, request, context, ct));
 
     private static string NormalizeOperationId(string clientOperationId)
     {

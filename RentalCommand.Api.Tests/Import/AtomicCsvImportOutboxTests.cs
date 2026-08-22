@@ -22,7 +22,7 @@ public sealed class AtomicCsvImportOutboxTests
                 2, true, false, 41, 7, "2A", 2, 1, 1_250m, []),
         };
 
-        AtomicUnitCsvImportHandler.StageCreatedRowUpdates(
+        AtomicUnitCsvImportRule.StageCreatedRowUpdates(
             context.Object, portfolioId: 3, importOperationDigest: "unit-digest", rows, Now);
 
         AssertDataUpdate(staged.Should().ContainSingle().Subject, "Unit", 41);
@@ -38,7 +38,7 @@ public sealed class AtomicCsvImportOutboxTests
                 2, true, false, 9_001, 73, []),
         };
 
-        AtomicPaymentCsvImportHandler.StageCreatedRowUpdates(
+        AtomicPaymentCsvImportRule.StageCreatedRowUpdates(
             context.Object, portfolioId: 3, importOperationDigest: "payment-digest", rows, Now);
 
         AssertDataUpdate(staged.Should().ContainSingle().Subject, nameof(TenantAccount), 73);
@@ -53,7 +53,7 @@ public sealed class AtomicCsvImportOutboxTests
             new AtomicCoreCsvImportRowResult(2, true, false, 58, null, []),
         };
 
-        AtomicCoreCsvImportHandler.StageCreatedRowUpdates(
+        AtomicCoreCsvImportRule.StageCreatedRowUpdates(
             context.Object, portfolioId: 3, AtomicCoreCsvImportDomain.Expense,
             importOperationDigest: "expense-digest", rows, Now);
 

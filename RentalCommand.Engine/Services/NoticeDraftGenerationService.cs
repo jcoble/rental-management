@@ -45,7 +45,7 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
         if (work.Count == 0) return 0;
 
         var command = new ApplyClaimedTenantNoticeDraftBatchCommand(token);
-        var handler = new ApplyClaimedTenantNoticeDraftBatchHandler(_db);
+        var handler = new ApplyClaimedTenantNoticeDraftBatchRule(_db);
         var outcome = await _writes.ExecuteAsync(
             TenantNoticeDraftAutomation.Identity(command).IdempotencyKey,
             TenantNoticeDraftAutomation.Write(

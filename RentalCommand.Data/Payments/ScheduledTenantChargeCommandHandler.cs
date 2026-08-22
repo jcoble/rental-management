@@ -16,11 +16,11 @@ namespace RentalCommand.Data.Payments;
 /// decision; these handlers only attach durable audit/outbox companions to rows returned by each
 /// bounded insert statement.
 /// </summary>
-public sealed class ApplyScheduledRentChargeBatchHandler
+public sealed class ApplyScheduledRentChargeBatchRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ApplyScheduledRentChargeBatchHandler(RentalCommandDbContext db) => _db = db;
+    public ApplyScheduledRentChargeBatchRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ApplyScheduledRentChargeBatchResult> ExecuteAsync(
         ApplyScheduledRentChargeBatchCommand command,
@@ -74,11 +74,11 @@ public sealed class ApplyScheduledRentChargeBatchHandler
     }
 }
 
-public sealed class ApplyScheduledLateFeeChargeBatchHandler
+public sealed class ApplyScheduledLateFeeChargeBatchRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ApplyScheduledLateFeeChargeBatchHandler(RentalCommandDbContext db) => _db = db;
+    public ApplyScheduledLateFeeChargeBatchRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ApplyScheduledLateFeeChargeBatchResult> ExecuteAsync(
         ApplyScheduledLateFeeChargeBatchCommand command,

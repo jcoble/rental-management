@@ -2516,28 +2516,28 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
         if (command is PostTenantChargeCommand post)
         {
-            var handler = new PostTenantChargeHandler(db);
+            var handler = new PostTenantChargeRule(db);
             var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
                 TenantMoneyWriteSupport.Write(post, handler.ExecuteAsync, handler.AuthorizeAsync));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         if (command is ReverseTenantChargeCommand reverse)
         {
-            var handler = new ReverseTenantChargeHandler(db);
+            var handler = new ReverseTenantChargeRule(db);
             var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
                 TenantMoneyWriteSupport.Write(reverse, handler.ExecuteAsync, handler.AuthorizeAsync));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         if (command is ApplyScheduledRentChargeBatchCommand rent)
         {
-            var handler = new ApplyScheduledRentChargeBatchHandler(db);
+            var handler = new ApplyScheduledRentChargeBatchRule(db);
             var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
                 TenantMoneyWriteSupport.Write(rent, handler.ExecuteAsync, handler.AuthorizeAsync));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         if (command is ApplyScheduledLateFeeChargeBatchCommand lateFee)
         {
-            var handler = new ApplyScheduledLateFeeChargeBatchHandler(db);
+            var handler = new ApplyScheduledLateFeeChargeBatchRule(db);
             var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
                 TenantMoneyWriteSupport.Write(lateFee, handler.ExecuteAsync, handler.AuthorizeAsync));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
