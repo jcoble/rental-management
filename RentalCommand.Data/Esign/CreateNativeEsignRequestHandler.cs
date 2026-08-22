@@ -67,10 +67,10 @@ public static class NativeEsignWriteSupport
     }
 
     private static WriteLockPlan LeaseManagement(int id) => new(
-        WriteLockProtocol.NativeEsignLeaseManagement, WriteLock.For("LeaseManagement", id));
+        WriteLockProtocol.NativeEsignLeaseManagement, id);
 
     private static WriteLockPlan SignatureRequest(int id) => new(
-        WriteLockProtocol.NativeEsignRequest, WriteLock.For("SignatureRequest", id));
+        WriteLockProtocol.NativeEsignRequest, id);
 
     private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
         string operationName,

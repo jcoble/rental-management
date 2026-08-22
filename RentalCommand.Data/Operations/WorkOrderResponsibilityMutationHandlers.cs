@@ -154,8 +154,8 @@ public sealed class UpdateAssignedWorkOrderHandler
         return new TransactionalWrite<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult>(
             "assigned-work-order.update", WriteIdempotencyPolicy.Required, command, ResultContract,
             new WriteLockPlan(WriteLockProtocol.WorkspaceAccessContextWorkOrder,
-                WriteLock.For("WorkspaceAccessContext", command.ActorAccessContextId),
-                WriteLock.For("WorkOrder", command.WorkOrderId)),
+                command.ActorAccessContextId,
+                command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 

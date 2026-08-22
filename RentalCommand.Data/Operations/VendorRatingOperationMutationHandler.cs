@@ -24,9 +24,9 @@ public sealed class CreateVendorRatingHandler
         var handler = new CreateVendorRatingHandler(db);
         var locks = command.WorkOrderId is int workOrderId
             ? new WriteLockPlan(WriteLockProtocol.WorkOrderVendor,
-                WriteLock.For("WorkOrder", workOrderId), WriteLock.For("Vendor", command.VendorId))
+                workOrderId, command.VendorId)
             : new WriteLockPlan(WriteLockProtocol.Vendor,
-                WriteLock.For("Vendor", command.VendorId));
+                command.VendorId);
         return new TransactionalWrite<CreateVendorRatingCommand, VendorRatingMutationResult>(
             "vendor-rating.create", WriteIdempotencyPolicy.Required, command, ResultContract,
             locks, handler.ExecuteAsync, handler.AuthorizeAsync);

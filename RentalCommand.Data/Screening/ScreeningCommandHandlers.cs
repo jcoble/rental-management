@@ -64,10 +64,10 @@ public static class ScreeningWriteSupport
     private static WriteLockPlan StaffApplicationLocks(
         int portfolioId, int applicationId, Guid authSessionId, int accessContextId) =>
         new(WriteLockProtocol.AuthorizationScopeRentalApplication,
-            WriteLock.For("AuthSession", authSessionId),
-            WriteLock.For("WorkspaceAccessContext", accessContextId),
-            WriteLock.For("Portfolio", portfolioId),
-            WriteLock.For("RentalApplication", applicationId));
+            authSessionId,
+            accessContextId,
+            portfolioId,
+            applicationId);
 }
 
 public sealed class TrackExternalScreeningHandler

@@ -18,7 +18,7 @@ public static class LeasingWriteSupport
         {
             PrepareMoveInCommand value => Build(
                 "lease-management.prepare-move-in", "lease-management.prepare-move-in.v2",
-                new WriteLockPlan(WriteLockProtocol.PrepareMoveIn, WriteLock.For("Unit", value.UnitId)),
+                new WriteLockPlan(WriteLockProtocol.PrepareMoveIn, value.UnitId),
                 value, new PrepareMoveInHandler(db).ExecuteAsync, new PrepareMoveInHandler(db).AuthorizeReplayAsync),
             RecordLeaseEndingDispositionCommand value => Build(
                 "lease-management.ending-disposition", "lease-management.ending-disposition.v1",
@@ -67,7 +67,7 @@ public static class LeasingWriteSupport
             CreatePropertyDispositionCommand value => Build(
                 "property-disposition.create", "property-disposition.create.v1",
                 new WriteLockPlan(WriteLockProtocol.PropertyDisposition,
-                    WriteLock.For("Property", value.PropertyId)),
+                    value.PropertyId),
                 value, new CreatePropertyDispositionHandler(db).ExecuteAsync,
                 new CreatePropertyDispositionHandler(db).AuthorizeReplayAsync),
             GivePossessionCommand value => Build(
@@ -113,25 +113,25 @@ public static class LeasingWriteSupport
     }
 
     private static WriteLockPlan LeaseManagement(int id) => new(
-        WriteLockProtocol.LeaseManagement, WriteLock.For("LeaseManagement", id));
+        WriteLockProtocol.LeaseManagement, id);
 
     private static WriteLockPlan Possession(int unitId, int leaseManagementId) => new(
         WriteLockProtocol.Possession,
-        WriteLock.For("Unit", unitId),
-        WriteLock.For("LeaseManagement", leaseManagementId));
+        unitId,
+        leaseManagementId);
 
     private static WriteLockPlan Agreement(ILeaseAgreementDraftCommand command) => new(
         WriteLockProtocol.LeaseAgreementDraft,
-        WriteLock.For("AuthSession", command.AuthSessionId),
-        WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
-        WriteLock.For("LeaseManagement", command.LeaseManagementId));
+        command.AuthSessionId,
+        command.AccessContextId,
+        command.LeaseManagementId);
 
     private static WriteLockPlan Transfer(TransferLeaseManagementCommand command)
     {
         var unitIds = new[] { command.SourceUnitId, command.DestinationUnitId }.OrderBy(id => id).ToArray();
         return new(WriteLockProtocol.LeaseTransfer,
-            WriteLock.For("Unit", unitIds[0]), WriteLock.For("Unit", unitIds[1]),
-            WriteLock.For("LeaseManagement", command.SourceLeaseManagementId));
+            unitIds[0], unitIds[1],
+            command.SourceLeaseManagementId);
     }
 
     private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(

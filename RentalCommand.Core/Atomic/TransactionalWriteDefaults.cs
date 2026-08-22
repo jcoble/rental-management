@@ -38,42 +38,26 @@ public static class TransactionalWriteDefaults
         string operationName, TCommand request, string resultContract,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
-        WriteLock? entityLock = null)
+        WriteLockProtocol? entityLockProtocol = null, object? entityLockId = null)
         where TCommand : notnull, IAuthorizationScopedRequest
         where TResult : notnull =>
         new(operationName, WriteIdempotencyPolicy.Required, request, resultContract,
-            AuthorizationLockPlan(request, entityLock),
+            AuthorizationLockPlan(request, entityLockProtocol, entityLockId),
             executeAsync, authorizeReplayAsync);
 
     private static WriteLockPlan AuthorizationLockPlan(
-        IAuthorizationScopedRequest request, WriteLock? entityLock) => entityLock is null
+        IAuthorizationScopedRequest request,
+        WriteLockProtocol? entityLockProtocol,
+        object? entityLockId) => entityLockProtocol is null
         ? new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
-            WriteLock.For("AuthSession", request.AuthSessionId),
-            WriteLock.For("WorkspaceAccessContext", request.AccessContextId),
-            WriteLock.For("Portfolio", request.PortfolioId))
-        : new WriteLockPlan(entityLock.LockNamespace switch
-            {
-                "OwnerEntity" => WriteLockProtocol.AuthorizationScopeOwnerEntity,
-                "Vendor" => WriteLockProtocol.AuthorizationScopeVendor,
-                "Property" => WriteLockProtocol.AuthorizationScopeProperty,
-                "Unit" => WriteLockProtocol.AuthorizationScopeUnit,
-                "Tenant" => WriteLockProtocol.AuthorizationScopeTenant,
-                _ => throw new ArgumentException(
-                    "That authorization-scoped entity lock is not supported.", nameof(entityLock)),
-            },
-            WriteLock.For("AuthSession", request.AuthSessionId),
-            WriteLock.For("WorkspaceAccessContext", request.AccessContextId),
-            WriteLock.For("Portfolio", request.PortfolioId),
-            entityLock);
-
-    public static string OperationName<TDomain>(string prefix, TDomain domain)
-        where TDomain : struct, Enum => $"{prefix}.{domain.ToString().ToLowerInvariant()}";
-
-    public static string IdempotencyKey<TDomain>(
-        IAuthorizationScopedRequest request, TDomain domain, int targetId, string targetKey)
-        where TDomain : struct, Enum =>
-        $"{request.PortfolioId}:{request.AccessContextId}:{domain}:" +
-        $"{targetId}:{targetKey}:{request.DeliveryIdempotencyKey}";
+            request.AuthSessionId,
+            request.AccessContextId,
+            request.PortfolioId)
+        : new WriteLockPlan(entityLockProtocol.Value,
+            request.AuthSessionId,
+            request.AccessContextId,
+            request.PortfolioId,
+            entityLockId!);
 
     public static void ValidateAuthorizationScope(IAuthorizationScopedRequest request)
     {
@@ -87,35 +71,6 @@ public static class TransactionalWriteDefaults
             throw new ArgumentException(
                 "Workspace, user, access details, and delivery details are required.");
         }
-    }
-
-    public static async Task<DateTime> BeginExecutionAsync<TDomain>(
-        AuthorizationScopedRequest<TDomain> request, IAtomicCommandContext context,
-        Action<AuthorizationScopedRequest<TDomain>> validateRequest,
-        Func<DateTime, CancellationToken, Task> authorizeAsync,
-        string invalidBusinessTimeMessage, CancellationToken ct)
-        where TDomain : struct, Enum
-    {
-        ValidateAuthorizationScope(request);
-        validateRequest(request);
-        var databaseNow = await context.ReadDatabaseClockUtcAsync(ct);
-        var mutationNow = request.BusinessNowUtc == default ? databaseNow
-            : request.BusinessNowUtc.Kind == DateTimeKind.Utc ? request.BusinessNowUtc
-            : throw new ArgumentException(invalidBusinessTimeMessage);
-        context.UseDatabaseWallClockForAudit(mutationNow);
-        await authorizeAsync(databaseNow, ct);
-        return mutationNow;
-    }
-
-    public static async Task AuthorizeReplayAsync<TDomain>(
-        AuthorizationScopedRequest<TDomain> request, IAtomicCommandContext context,
-        Action<AuthorizationScopedRequest<TDomain>> validateRequest,
-        Func<DateTime, CancellationToken, Task> authorizeAsync, CancellationToken ct)
-        where TDomain : struct, Enum
-    {
-        ValidateAuthorizationScope(request);
-        validateRequest(request);
-        await authorizeAsync(await context.ReadDatabaseClockUtcAsync(ct), ct);
     }
 
     public static AtomicSemanticAudit Audit(

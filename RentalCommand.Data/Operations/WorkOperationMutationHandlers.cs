@@ -107,7 +107,7 @@ public static class WorkOrderCrudWriteSupport
             lockPlan, execute, authorizeReplay);
 
     private static WriteLockPlan WorkOrderPlan(int workOrderId) => new(
-        WriteLockProtocol.WorkOrder, WriteLock.For("WorkOrder", workOrderId));
+        WriteLockProtocol.WorkOrder, workOrderId);
 
     private static WriteLockPlan ProgressionPlan() => new(
         WriteLockProtocol.WorkOrderAppointmentProgression);
