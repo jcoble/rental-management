@@ -768,7 +768,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         return connection;
     }
 
-    private AccountingImportService CreateImportService(
+    private AccountingImportHarness CreateImportService(
         RentalCommandDbContext _,
         IAccountingProvider provider,
         List<string>? applyCommands = null)
@@ -777,13 +777,13 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         var db = execution.Db;
         var (providerResolver, settingsResolver) = CreateResolvers(provider);
         var claims = new AccountingConnectionClaimStore(db);
-        return new AccountingImportService(
+        var import = new AccountingImportService(
             db, _dataProtection, providerResolver, settingsResolver,
             new AccountingTokenService(_dataProtection, providerResolver, settingsResolver,
                 claims, TimeProvider.System, NullLogger<AccountingTokenService>.Instance),
             claims,
-            execution.Writes,
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
+        return new AccountingImportHarness(import, db, execution.Writes);
     }
 
     private AccountingTokenService CreateTokenService(
@@ -807,12 +807,37 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         var import = new AccountingImportService(
             db, _dataProtection, providerResolver, settingsResolver, tokenService, claims,
-            execution.Writes,
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
             db, _dataProtection, providerResolver, settingsResolver, import,
             TimeProvider.System, execution.Writes,
             NullLogger<AccountingConnectionService>.Instance);
+    }
+
+    private sealed class AccountingImportHarness(
+        AccountingImportService import,
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes)
+    {
+        public async Task<AccountingImportService.ImportSummary> ImportAsync(
+            AccountingConnection connection,
+            DateTime? since,
+            CancellationToken ct,
+            AccountingWorkerFence fence)
+        {
+            var command = await import.PullAsync(connection, since, ct, fence);
+            var key = $"{connection.Id}:{fence.ClaimToken:N}:{command.ProviderBatchIdentity}";
+            var handler = new ApplyAccountingPullResultHandler(db);
+            var outcome = await writes.ExecuteAsync(key,
+                AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
+            return new AccountingImportService.ImportSummary(
+                outcome.Value.CustomersMapped,
+                outcome.Value.VendorsMapped,
+                outcome.Value.AccountsMapped,
+                outcome.Value.PaymentsImported,
+                outcome.Value.ExpensesImported,
+                outcome.Value.NeedsReview);
+        }
     }
 
     private sealed class FailCompletionClaimStore(IAccountingConnectionClaimStore inner)
