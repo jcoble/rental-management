@@ -15,6 +15,62 @@ using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Data.Listings;
 
+public static class ConnectedListingWriteSupport
+{
+    public static TransactionalWrite<AdmitConnectedListingIntentCommand, ConnectedListingIntentResult> Write(
+        AdmitConnectedListingIntentCommand command, RentalCommandDbContext db)
+    {
+        var handler = new AdmitConnectedListingIntentHandler(db);
+        return new TransactionalWrite<AdmitConnectedListingIntentCommand, ConnectedListingIntentResult>(
+            $"listing-workspace.connected.{command.Operation.ToString().ToLowerInvariant()}.intent",
+            WriteIdempotencyPolicy.Required, command, "listing-workspace.connected-intent.result.v1",
+            WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public static TransactionalWrite<PersistConnectedListingResultCommand, ConnectedListingPersistenceResult> Write(
+        PersistConnectedListingResultCommand command, RentalCommandDbContext db)
+    {
+        var handler = new PersistConnectedListingResultHandler(db);
+        return new TransactionalWrite<PersistConnectedListingResultCommand, ConnectedListingPersistenceResult>(
+            "listing-workspace.connected.persist-result", WriteIdempotencyPolicy.Required, command,
+            "listing-workspace.connected-persistence.result.v1", WriteLockPlan.None,
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public static TransactionalWrite<ApplyConnectedListingResultCommand, ConnectedListingPersistenceResult> Write(
+        ApplyConnectedListingResultCommand command, RentalCommandDbContext db)
+    {
+        var handler = new ApplyConnectedListingResultHandler(db);
+        return new TransactionalWrite<ApplyConnectedListingResultCommand, ConnectedListingPersistenceResult>(
+            "listing-workspace.connected.apply-result", WriteIdempotencyPolicy.Required, command,
+            "listing-workspace.connected-application.result.v1", WriteLockPlan.None,
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public static TransactionalWrite<IngestExternalListingSignalCommand, IngestExternalListingSignalResult> Write(
+        IngestExternalListingSignalCommand command, RentalCommandDbContext db)
+    {
+        var handler = new IngestExternalListingSignalHandler(db);
+        return new TransactionalWrite<IngestExternalListingSignalCommand, IngestExternalListingSignalResult>(
+            "listing-workspace.signal.ingest", WriteIdempotencyPolicy.Required, command,
+            "listing-workspace.signal-ingest.result.v1", WriteLockPlan.None,
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    public static TransactionalWrite<ConfirmExternalListingSignalCommand, ListingWorkspaceMutationResult> Write(
+        ConfirmExternalListingSignalCommand command, RentalCommandDbContext db)
+    {
+        var handler = new ConfirmExternalListingSignalHandler(db);
+        return new TransactionalWrite<ConfirmExternalListingSignalCommand, ListingWorkspaceMutationResult>(
+            "listing-workspace.signal.confirm", WriteIdempotencyPolicy.Required, command,
+            "listing-workspace.mutation.result.v1", WriteLockPlan.None,
+            handler.ExecuteAsync, handler.AuthorizeAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Connected listing mutations must use the shared write executor.");
+}
+
 public sealed class AdmitConnectedListingIntentHandler
     : IAtomicCommandHandler<AdmitConnectedListingIntentCommand, ConnectedListingIntentResult>
 {
@@ -22,7 +78,11 @@ public sealed class AdmitConnectedListingIntentHandler
 
     public AdmitConnectedListingIntentHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ConnectedListingIntentResult> HandleAsync(
+    public Task<ConnectedListingIntentResult> HandleAsync(
+        AdmitConnectedListingIntentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public async Task<ConnectedListingIntentResult> ExecuteAsync(
         AdmitConnectedListingIntentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
@@ -45,6 +105,9 @@ public sealed class AdmitConnectedListingIntentHandler
     }
 
     public Task AuthorizeReplayAsync(AdmitConnectedListingIntentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(AdmitConnectedListingIntentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
@@ -55,7 +118,11 @@ public sealed class PersistConnectedListingResultHandler
 
     public PersistConnectedListingResultHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ConnectedListingPersistenceResult> HandleAsync(
+    public Task<ConnectedListingPersistenceResult> HandleAsync(
+        PersistConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public async Task<ConnectedListingPersistenceResult> ExecuteAsync(
         PersistConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         await ValidateAdmissionAsync(command, _db, ct);
@@ -69,6 +136,9 @@ public sealed class PersistConnectedListingResultHandler
     }
 
     public Task AuthorizeReplayAsync(PersistConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(PersistConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ValidateAdmissionAsync(command, _db, ct);
 
     internal static async Task ValidateAdmissionAsync(
@@ -100,7 +170,11 @@ public sealed class ApplyConnectedListingResultHandler
 
     public ApplyConnectedListingResultHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ConnectedListingPersistenceResult> HandleAsync(
+    public Task<ConnectedListingPersistenceResult> HandleAsync(
+        ApplyConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public async Task<ConnectedListingPersistenceResult> ExecuteAsync(
         ApplyConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         await ValidateProviderResultAsync(command, _db, ct);
@@ -173,6 +247,9 @@ public sealed class ApplyConnectedListingResultHandler
     }
 
     public Task AuthorizeReplayAsync(ApplyConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(ApplyConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ValidateProviderResultAsync(command, _db, ct);
 
     private static async Task ValidateProviderResultAsync(
@@ -243,7 +320,11 @@ public sealed class ConfirmExternalListingSignalHandler
 
     public ConfirmExternalListingSignalHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ListingWorkspaceMutationResult> HandleAsync(
+    public Task<ListingWorkspaceMutationResult> HandleAsync(
+        ConfirmExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public async Task<ListingWorkspaceMutationResult> ExecuteAsync(
         ConfirmExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
@@ -288,6 +369,9 @@ public sealed class ConfirmExternalListingSignalHandler
     }
 
     public Task AuthorizeReplayAsync(ConfirmExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(ConfirmExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
@@ -298,7 +382,11 @@ public sealed class IngestExternalListingSignalHandler
 
     public IngestExternalListingSignalHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<IngestExternalListingSignalResult> HandleAsync(
+    public Task<IngestExternalListingSignalResult> HandleAsync(
+        IngestExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public async Task<IngestExternalListingSignalResult> ExecuteAsync(
         IngestExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
@@ -366,6 +454,10 @@ public sealed class IngestExternalListingSignalHandler
     }
 
     public Task AuthorizeReplayAsync(
+        IngestExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ConnectedListingWriteSupport.RetiredPath();
+
+    public Task AuthorizeAsync(
         IngestExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
