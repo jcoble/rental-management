@@ -33,7 +33,10 @@ project_name="rental-command-local"
 preview_port="15667"
 loopback_ip="127.0.0.1"
 web_origin="http://${loopback_ip}:${preview_port}"
-build_platform="linux/amd64"
+# Build for the host architecture: emulated amd64 containers idle at real CPU cost on ARM Macs.
+# VPS-bound amd64 images come from the tag-triggered CI, not this local preview stack.
+# Override with RENTAL_COMMAND_BUILD_PLATFORM=linux/amd64 when parity testing is explicitly needed.
+build_platform="${RENTAL_COMMAND_BUILD_PLATFORM:-linux/$(docker version --format '{{.Server.Arch}}')}"
 nuget_cache_dir="${RENTAL_COMMAND_NUGET_CACHE_DIR:-${HOME}/.nuget/packages}"
 api_image="rc-api:local"
 engine_image="rc-engine:local"
@@ -146,8 +149,8 @@ ensure_postgres_data_permissions() {
 
 image_is_ready() {
   local image="$1" platform
-  platform="$(docker image inspect "$image" --format '{{.Architecture}}/{{.Os}}' 2>/dev/null || true)"
-  [[ "$platform" == "amd64/linux" ]]
+  platform="$(docker image inspect "$image" --format '{{.Os}}/{{.Architecture}}' 2>/dev/null || true)"
+  [[ "$platform" == "$build_platform" ]]
 }
 
 build_state_value() {
