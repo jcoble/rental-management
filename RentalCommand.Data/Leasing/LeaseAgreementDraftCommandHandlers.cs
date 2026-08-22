@@ -817,6 +817,10 @@ internal static class LeaseAgreementDraftCommandSupport
 
     internal static void ValidateEditShape(EditLeaseAgreementDraftCommand command)
     {
+        if (command.RentDueDay is < 1 or > 31)
+        {
+            throw new ArgumentException("RentDueDay must be between 1 and 31.");
+        }
         if (command.LeaseAgreementId <= 0 || command.ExpectedDraftRevision <= 0
             || string.IsNullOrWhiteSpace(command.AgreementNumber) || command.AgreementNumber.Trim().Length > 100
             || !ValidTerms(command.TermType, command.TermStartOn, command.TermEndOn,
