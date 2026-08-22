@@ -1,10 +1,16 @@
+using System.Security.Cryptography;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using RentalCommand.Api.Services.Payments;
 using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -13,6 +19,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Payments;
+using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 
@@ -32,28 +39,40 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
     private const long ChargeId = 91005;
     private const long AttemptId = 91006;
     private const long InboxId = 91007;
+    private const long AutopayAttemptId = 91014;
+    private const long EnsureExpireAttemptId = 91015;
+    private const long ScheduleAttemptId = 91016;
 
     // Frozen legacy fingerprints computed once from the command DTO shapes at c9dae23c.
     // These values must never be regenerated from the current command model or a codec helper.
     private const string PrepareFingerprint = "ffe3468788c204e4fc299dd99a3d7289af683fdbe448d3d57e795a25165e307a";
     private const string AutopayFingerprint = "250b58e65e01cdefc701fb777a2f077a46c0b9dd75a615eca96418ec6cc10c79";
     private const string SubmitFingerprint = "b08709453efbe8d87c5535358e53c8b5c85b3cc7246ea14939004760c3ca9e24";
-    private const string ScheduleFingerprint = "a081fa7807f1889be13fb276f11e141f7e9e0e9e28eb586ac9f7a093f932777f";
+    private const string EnsureFenceFingerprint = "d542a79348a086ce725882b95b82735aa4a51a9e0a70b42be886fbe8c3b4577a";
+    private const string ScheduleFingerprint = "369b96146f5cbb2806e214f315697a3355a3b5f34d87ecfe83efe463fe7f022a";
     private const string FinalizeFingerprint = "db5af311402b4f587ef114ffd5266c2aa5fa3483235f638ab7c28f6a7e85f2f9";
-    private const string FailFingerprint = "c4e6eef3e4e4313da121ad0373a025e13b028f83ef76ec1383f7553be0289658";
+    private const string FailFingerprint = "402c2d67fe9dea7a22157173f072fdba0a0c21e92f753ff4ba2faf884cb58bf8";
     private const string AbandonFingerprint = "d00b83c80e1d0d9270bfee0a08d3ccdeb08922e24a73c7bd85fbdeaa8edbb620";
     private const string InspectFingerprint = "8caaded90a3a2d35397dc41dc1d01ebbe598dc6269108d5f459022c097f71510";
-    private const string EventFingerprint = "4f5f5949c17bac8026ab4275a9f29914eb801496eff47ae73047ffaf04df3dca";
+    private const string EventFingerprint = "898327e8cb09f4ce2add42087bffa4d5d84f7024c635ca14b64475454cfa70e2";
     private const string ReconcileFingerprint = "a96c981beca907aa47557b985597461418d736a5abd8c470c13af1ea49eafa93";
+    private const string AutopaySubmitFingerprint = "bc09512e87e9733c640cabc1e1b9dbf720d8401e608dbf40f6d0458835f217c2";
+    private const string ExpireFingerprint = "8d0ab018b7833148e67fe3ab512940e9266d27d8006fa90cb9b35a903be31a7a";
 
     // Literal formulas hand-reproduced from the base callers at c9dae23c.
     private const string AttemptKey =
         "checkout:tenant-charge:91005:actor:91001:attempt:legacy-replay";
     private const string AutopayKey = "autopay-setup:legacy-replay";
-    private const string ScheduleKey = "91006:NETWORK:639229968000000000";
+    private const string EnsureExpireAttemptKey = "verification:legacy-ensure-expire";
+    private const string ScheduleAttemptKey = "verification:legacy-schedule";
+    private const string ScheduleKey =
+        "91016:PROVIDER_RECONCILE_UNKNOWN:639229968000000000";
     private const string EventId = " evt_legacy_replay ";
     private const string EventKey = "stripe: evt_legacy_replay ";
+    private const string ExpireKey =
+        "91015:verification:legacy-ensure-expire";
     private const string ReconcileKey = "91007:22222222222222222222222222222222";
+    private const string WebhookSecret = "whsec_legacy_replay";
 
     [Fact]
     public void FrozenFingerprints_PreserveExactlyTheLegacyCommandFields()
@@ -70,10 +89,14 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
             AtomicCommandFingerprint.Create(Inspect()),
             AtomicCommandFingerprint.Create(Event()),
             AtomicCommandFingerprint.Create(Reconcile()),
+            AtomicCommandFingerprint.Create(AutopaySubmit()),
+            AtomicCommandFingerprint.Create(EnsureFence()),
+            AtomicCommandFingerprint.Create(Expire()),
         };
         actual.Should().Equal(PrepareFingerprint, AutopayFingerprint, SubmitFingerprint,
             ScheduleFingerprint, FinalizeFingerprint, FailFingerprint, AbandonFingerprint,
-            InspectFingerprint, EventFingerprint, ReconcileFingerprint);
+            InspectFingerprint, EventFingerprint, ReconcileFingerprint, AutopaySubmitFingerprint,
+            EnsureFenceFingerprint, ExpireFingerprint);
 
         Ignored(typeof(PrepareProviderPaymentCreateCommand)).Should().Equal("PreparedAtUtc");
         Ignored(typeof(PrepareProviderAutopaySetupCommand)).Should().Equal("PreparedAtUtc");
@@ -199,35 +222,62 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
     }
 
     [Fact]
-    public async Task FrozenLegacyReceipts_ReplayAllTenContracts_AndRecheckAuthorization()
+    public async Task FrozenLegacyReceipts_ReplayThroughProductionCallers_AndRecheckAuthorization()
     {
         await using var database = await fixture.CreateContextAsync();
         await SeedAuthorityAndReceiptsAsync(database.Db);
-        await using var services = Services(database.ConnectionString);
+        var interactiveProvider = new ReceiptInteractiveProviderClient();
+        var autopayProvider = new ReceiptAutopayProviderClient();
+        var inboxClaims = new FrozenProviderInboxClaimStore();
+        await using var services = Services(
+            database.ConnectionString, interactiveProvider, autopayProvider, inboxClaims);
 
-        await ReplayRequestAsync<PrepareProviderPaymentCreateCommand, PrepareProviderPaymentCreateResult>(
-            services, AttemptKey, "payments.provider-create.prepare", Prepare(), PrepareJson);
-        await ReplayRequestAsync<PrepareProviderAutopaySetupCommand, PrepareProviderAutopaySetupResult>(
-            services, AutopayKey, "payments.provider-autopay.prepare", Autopay(), AutopayJson);
-        await ReplayRequestAsync<SubmitProviderPaymentCreateCommand, SubmitProviderPaymentCreateResult>(
-            services, AttemptKey, "payments.provider-create.submit", Submit(), SubmitJson);
-        await ReplayJobAsync<ScheduleProviderPaymentReconciliationCommand,
-            ScheduleProviderPaymentReconciliationResult>(
-            services, ScheduleKey, "payments.provider-reconciliation.schedule", Schedule(), ScheduleJson);
-        await ReplayRequestAsync<FinalizeProviderPaymentCreateCommand, FinalizeProviderPaymentCreateResult>(
-            services, AttemptKey, "payments.provider-create.finalize:Succeeded", Finalize(), FinalizeJson);
-        await ReplayRequestAsync<FailProviderPaymentCreateCommand, FailProviderPaymentCreateResult>(
-            services, AttemptKey, "payments.provider-create.fail", Fail(), FailJson);
-        await ReplayRequestAsync<AbandonProviderPaymentAttemptCommand, AbandonProviderPaymentAttemptResult>(
-            services, AttemptKey, "payments.provider-attempt.abandon", Abandon(), AbandonJson);
-        await ReplayRequestAsync<InspectProviderPaymentAttemptCommand, InspectProviderPaymentAttemptResult>(
-            services, AttemptId.ToString(), "payments.provider-attempt.inspect", Inspect(), InspectJson);
-        await ReplayExactRequestAsync<RecordVerifiedProviderPaymentEventCommand,
-            RecordVerifiedProviderPaymentEventResult>(
-            services, EventKey, "payments.provider-event.record", Event(), EventJson);
-        await ReplayJobAsync<ReconcileClaimedProviderPaymentEventCommand,
-            ReconcileClaimedProviderPaymentEventResult>(
-            services, ReconcileKey, "payments.provider-inbox.reconcile", Reconcile(), ReconcileJson);
+        interactiveProvider.Reconciled = ConfirmedNoProviderObject(AttemptKey);
+        var failed = await CreateCheckoutAsync(services, Now.AddHours(25));
+        failed.Result.Should().Be(CheckoutResult.Outcome.AttemptFailed);
+
+        interactiveProvider.Reconciled = ProviderObject("succeeded", AttemptKey);
+        var succeeded = await CreateCheckoutAsync(services, Now.AddHours(25));
+        succeeded.Result.Should().Be(CheckoutResult.Outcome.AlreadyPaid);
+        succeeded.ProviderPaymentId.Should().Be("pi_legacy_replay");
+
+        interactiveProvider.Reconciled = null;
+        var autopaySetup = await CreateAutopaySetupAsync(services, Now);
+        autopaySetup.Result.Should().Be(CheckoutResult.Outcome.AttemptPending);
+
+        interactiveProvider.Reconciled = ProviderObject("canceled", AttemptKey);
+        var canceled = await CancelCheckoutAsync(services, Now);
+        canceled.Result.Should().Be(CheckoutResult.Outcome.AttemptCanceled);
+
+        await ReplayWebhookAsync(services, Now);
+
+        interactiveProvider.SetReconciled(
+            EnsureExpireAttemptId, ConfirmedNoProviderObject(EnsureExpireAttemptKey));
+        interactiveProvider.SetReconciled(ScheduleAttemptId, null);
+        (await RunInteractiveReconciliationAsync(services, Now)).Should().Be(2);
+
+        (await RunAutopayAsync(services, Now)).Should().Be(0);
+        (await RunProviderInboxAsync(services, Now)).Should().Be(1);
+
+        interactiveProvider.CheckoutCreateCount.Should().Be(0);
+        interactiveProvider.SetupCreateCount.Should().Be(0);
+        interactiveProvider.PaymentIntentCreateCount.Should().Be(0);
+        autopayProvider.CreateCount.Should().Be(0);
+        autopayProvider.ReconcileCount.Should().Be(1);
+        inboxClaims.ClaimCount.Should().Be(1);
+
+        await using (var verify = NewContext(database.ConnectionString))
+        {
+            (await verify.TenantPaymentAttempts.CountAsync(row =>
+                row.Id == AttemptId || row.Id == AutopayAttemptId
+                || row.Id == EnsureExpireAttemptId || row.Id == ScheduleAttemptId)).Should().Be(4);
+            (await verify.TenantPaymentAttempts.CountAsync()).Should().Be(4);
+            (await verify.ProviderInboxEvents.CountAsync(row => row.Id == InboxId)).Should().Be(1);
+            var inbox = await verify.ProviderInboxEvents.SingleAsync(row => row.Id == InboxId);
+            inbox.AttemptCount.Should().Be(1);
+            inbox.ProcessedAtUtc.Should().Be(Now);
+            (await verify.AtomicCommandReceipts.CountAsync()).Should().Be(14);
+        }
 
         await using (var revoke = new RentalCommandDbContext(
             new DbContextOptionsBuilder<RentalCommandDbContext>().UseNpgsql(database.ConnectionString).Options))
@@ -237,48 +287,106 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
                     .SetProperty(access => access.RevokedAtUtc, Now)
                     .SetProperty(access => access.RevokedByUserId, UserId));
         }
-        var denied = () => ReplayRequestAsync<PrepareProviderAutopaySetupCommand,
-            PrepareProviderAutopaySetupResult>(
-            services, AutopayKey, "payments.provider-autopay.prepare", Autopay(), AutopayJson);
+        var denied = () => CreateAutopaySetupAsync(services, Now);
         await denied.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
-    private static async Task ReplayRequestAsync<TCommand, TResult>(
-        ServiceProvider services, string key, string operation, TCommand command, string storedJson)
-        where TCommand : notnull, IAtomicCommandData where TResult : notnull
+    private static async Task<CheckoutResult> CreateCheckoutAsync(
+        ServiceProvider services, DateTime now)
     {
         await using var scope = services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var write = ProviderPaymentWriteSupport.Write<TCommand, TResult>(db, operation, command);
-        var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
-            .ExecuteAsync(key, write);
-        outcome.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        write.ResultContract.Should().NotBeNullOrWhiteSpace();
+        return await StripeService(scope.ServiceProvider, now).CreatePaymentCheckoutSessionAsync(
+            PortfolioId, TenantId, AccountId, ChargeId, UserId, null, null, default,
+            " legacy-replay ");
     }
 
-    private static async Task ReplayExactRequestAsync<TCommand, TResult>(
-        ServiceProvider services, string key, string operation, TCommand command, string storedJson)
-        where TCommand : notnull, IAtomicCommandData where TResult : notnull
+    private static async Task<CheckoutResult> CreateAutopaySetupAsync(
+        ServiceProvider services, DateTime now)
     {
         await using var scope = services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var write = ProviderPaymentWriteSupport.Write<TCommand, TResult>(db, operation, command);
-        var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
-            .ExecuteExactAsync(key, write);
-        outcome.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        return await StripeService(scope.ServiceProvider, now).CreateAutopaySetupSessionAsync(
+            PortfolioId, TenantId, AccountId, UserId, " legacy-replay ", null, null, default);
     }
 
-    private static async Task ReplayJobAsync<TCommand, TResult>(
-        ServiceProvider services, string key, string operation, TCommand command, string storedJson)
-        where TCommand : notnull, IAtomicCommandData where TResult : notnull
+    private static async Task<CheckoutResult> CancelCheckoutAsync(
+        ServiceProvider services, DateTime now)
     {
         await using var scope = services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var write = ProviderPaymentWriteSupport.Write<TCommand, TResult>(db, operation, command);
-        var outcome = await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>()
-            .ExecuteAsync(key, write);
-        outcome.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        return await StripeService(scope.ServiceProvider, now).CancelPaymentAttemptAsync(
+            PortfolioId, TenantId, AccountId, AttemptId, "abandoned", default);
     }
+
+    private static async Task ReplayWebhookAsync(ServiceProvider services, DateTime now)
+    {
+        const string json =
+            "{\"id\":\" evt_legacy_replay \",\"object\":\"event\",\"type\":\"legacy.replay\",\"request\":null,\"data\":{\"object\":{\"id\":\"obj_legacy\",\"object\":\"payment_intent\"}}}";
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var signature = Convert.ToHexString(HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes(WebhookSecret), Encoding.UTF8.GetBytes($"{timestamp}.{json}")))
+            .ToLowerInvariant();
+        await using var scope = services.CreateAsyncScope();
+        await StripeService(scope.ServiceProvider, now).HandleWebhookEventAsync(
+            json, $"t={timestamp},v1={signature}", default);
+    }
+
+    private static async Task<int> RunInteractiveReconciliationAsync(
+        ServiceProvider services, DateTime now)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var provider = scope.ServiceProvider;
+        return await new InteractivePaymentReconciliationService(
+            provider.GetRequiredService<RentalCommandDbContext>(),
+            provider.GetRequiredService<IJobStepWriteExecutor>(),
+            provider.GetRequiredService<IInteractivePaymentProviderClient>(),
+            new FixedTimeProvider(now),
+            Options.Create(new InteractivePaymentReconciliationOptions
+            {
+                BatchSize = 2,
+                RetryDelay = TimeSpan.FromDays(1),
+                Expiration = TimeSpan.FromDays(1),
+            }),
+            NullLogger<InteractivePaymentReconciliationService>.Instance,
+            provider.GetRequiredService<IServiceScopeFactory>()).ReconcileAsync();
+    }
+
+    private static async Task<int> RunAutopayAsync(ServiceProvider services, DateTime now)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var provider = scope.ServiceProvider;
+        return await new AutopayChargeService(
+            provider.GetRequiredService<RentalCommandDbContext>(),
+            Options.Create(new StripeConfig { SecretKey = "sk_test_legacy_replay" }),
+            new FixedTimeProvider(now),
+            provider.GetRequiredService<IJobStepWriteExecutor>(),
+            NullLogger<AutopayChargeService>.Instance,
+            provider.GetRequiredService<IAutopayProviderClient>()).ChargeDueAsync();
+    }
+
+    private static async Task<int> RunProviderInboxAsync(ServiceProvider services, DateTime now)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var provider = scope.ServiceProvider;
+        return await new ProviderInboxReconciliationService(
+            provider.GetRequiredService<IProviderInboxClaimStore>(),
+            provider.GetRequiredService<RentalCommandDbContext>(),
+            provider.GetRequiredService<IJobStepWriteExecutor>(),
+            new FixedTimeProvider(now),
+            NullLogger<ProviderInboxReconciliationService>.Instance).ReconcileAsync();
+    }
+
+    private static StripePaymentService StripeService(IServiceProvider provider, DateTime now) => new(
+        Options.Create(new StripeConfig
+        {
+            SecretKey = "sk_test_legacy_replay",
+            PublishableKey = "pk_test_legacy_replay",
+            WebhookSecret = WebhookSecret,
+        }),
+        provider.GetRequiredService<ISandboxGuard>(),
+        NullLogger<StripePaymentService>.Instance,
+        new FixedTimeProvider(now),
+        provider.GetRequiredService<RentalCommandDbContext>(),
+        provider.GetRequiredService<IRequestWriteExecutor>(),
+        provider.GetRequiredService<IInteractivePaymentProviderClient>());
 
     private static async Task SeedAuthorityAndReceiptsAsync(RentalCommandDbContext db)
     {
@@ -364,7 +472,43 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
             ProviderFenceToken = Fence, IdempotencyKey = AttemptKey,
             AttemptType = TenantPaymentAttemptType.Charge, State = TenantPaymentAttemptState.Submitted,
             Amount = 100m, Currency = "USD", PreparedAtUtc = Now, SubmittedAtUtc = Now,
-            UpdatedAtUtc = Now, CreatedByUserId = UserId,
+            NextAttemptAtUtc = Now.AddYears(1), UpdatedAtUtc = Now, CreatedByUserId = UserId,
+        });
+        db.Add(new TenantPaymentAttempt
+        {
+            Id = AutopayAttemptId, PortfolioId = PortfolioId, TenantAccountId = AccountId,
+            ProviderObjectId = "seti_legacy_replay", ProviderFenceToken = Fence,
+            Provider = "stripe", IdempotencyKey = AutopayKey,
+            AttemptType = TenantPaymentAttemptType.Verification,
+            State = TenantPaymentAttemptState.Submitted,
+            Amount = 0m, Currency = "USD", PreparedAtUtc = Now, SubmittedAtUtc = Now,
+            NextAttemptAtUtc = Now.AddYears(1), UpdatedAtUtc = Now, CreatedByUserId = UserId,
+        });
+        db.AddRange(
+            new TenantPaymentAttempt
+            {
+                Id = EnsureExpireAttemptId, PortfolioId = PortfolioId, TenantAccountId = AccountId,
+                Provider = "stripe", IdempotencyKey = EnsureExpireAttemptKey,
+                AttemptType = TenantPaymentAttemptType.Verification,
+                State = TenantPaymentAttemptState.Submitted,
+                Amount = 0m, Currency = "USD", PreparedAtUtc = Now.AddDays(-2),
+                SubmittedAtUtc = Now.AddDays(-2), UpdatedAtUtc = Now, CreatedByUserId = UserId,
+            },
+            new TenantPaymentAttempt
+            {
+                Id = ScheduleAttemptId, PortfolioId = PortfolioId, TenantAccountId = AccountId,
+                Provider = "stripe", IdempotencyKey = ScheduleAttemptKey,
+                ProviderFenceToken = Fence, AttemptType = TenantPaymentAttemptType.Verification,
+                State = TenantPaymentAttemptState.Submitted,
+                Amount = 0m, Currency = "USD", PreparedAtUtc = Now,
+                SubmittedAtUtc = Now, UpdatedAtUtc = Now, CreatedByUserId = UserId,
+            });
+        db.Add(new TenantAutopayEnrollment
+        {
+            Id = 91013, PortfolioId = PortfolioId, TenantAccountId = AccountId,
+            AuthorizingPartyId = PartyId, Provider = "stripe",
+            ProviderCustomerId = "cus_legacy_replay", ProviderPaymentMethodId = "pm_legacy_replay",
+            EnrolledAtUtc = Now, CreatedByUserId = UserId,
         });
         db.Add(new ProviderInboxEvent
         {
@@ -396,6 +540,16 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
             "record-verified-provider-payment-event-result.v1", EventJson);
         AddReceipt(db, "payments.provider-inbox.reconcile", ReconcileKey, ReconcileFingerprint,
             "reconcile-claimed-provider-payment-event-result.v1", ReconcileJson);
+        AddReceipt(db, "payments.provider-create.submit", AutopayKey, AutopaySubmitFingerprint,
+            "submit-provider-payment-create-result.v1", AutopaySubmitJson);
+        // Frozen caller identities calculated once by hand from the legacy base formulas.
+        // Never regenerate these fixtures from current helpers or command metadata.
+        AddReceipt(db, "payments.provider-reconciliation.ensure-fence", EnsureExpireAttemptKey,
+            EnsureFenceFingerprint, "submit-provider-payment-create-result.v1", EnsureFenceJson);
+        AddReceipt(db, "payments.provider-create.finalize", AttemptKey, FinalizeFingerprint,
+            "finalize-provider-payment-create-result.v1", FinalizeJson);
+        AddReceipt(db, "payments.provider-reconciliation.expire", ExpireKey, ExpireFingerprint,
+            "fail-provider-payment-create-result.v1", ExpireJson);
         await db.SaveChangesAsync();
     }
 
@@ -408,7 +562,11 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
         StartedAt = Now, CompletedAt = Now,
     });
 
-    private static ServiceProvider Services(string connectionString)
+    private static ServiceProvider Services(
+        string connectionString,
+        ReceiptInteractiveProviderClient interactiveProvider,
+        ReceiptAutopayProviderClient autopayProvider,
+        FrozenProviderInboxClaimStore inboxClaims)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -416,6 +574,10 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
+        services.AddSingleton<ISandboxGuard, NeverSandboxGuard>();
+        services.AddSingleton<IInteractivePaymentProviderClient>(interactiveProvider);
+        services.AddSingleton<IAutopayProviderClient>(autopayProvider);
+        services.AddSingleton<IProviderInboxClaimStore>(inboxClaims);
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider();
@@ -452,36 +614,55 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
     private static SubmitProviderPaymentCreateCommand Submit() => new(
         PortfolioId, AccountId, AttemptId, "stripe", AttemptKey, Now);
     private static ScheduleProviderPaymentReconciliationCommand Schedule() => new(
-        PortfolioId, AccountId, AttemptId, "stripe", AttemptKey, Fence,
-        new DateTime(2026, 8, 22, 12, 0, 0, DateTimeKind.Utc), "NETWORK", "retry", Now);
+        PortfolioId, AccountId, ScheduleAttemptId, "stripe", ScheduleAttemptKey, Fence,
+        new DateTime(2026, 8, 22, 12, 0, 0, DateTimeKind.Utc),
+        "PROVIDER_RECONCILE_UNKNOWN",
+        "Provider reconciliation returned no definitive result.", Now);
     private static FinalizeProviderPaymentCreateCommand Finalize() => new(
         PortfolioId, AccountId, AttemptId, "stripe", AttemptKey, "pi_legacy_replay",
         TenantPaymentAttemptState.Succeeded, null, Now, Fence);
     private static FailProviderPaymentCreateCommand Fail() => new(
-        PortfolioId, AccountId, AttemptId, "stripe", AttemptKey, "DECLINED", "declined", Now, Fence);
+        PortfolioId, AccountId, AttemptId, "stripe", AttemptKey, "PROVIDER_RECONCILE_EXPIRED",
+        "Provider reconciliation found no accepted payment after 24 hours.", Now, Fence);
     private static AbandonProviderPaymentAttemptCommand Abandon() => new(
         PortfolioId, AccountId, AttemptId, "stripe", AttemptKey, "abandoned", Now,
         true, TenantPaymentAttemptState.Canceled, "pi_legacy_replay");
     private static InspectProviderPaymentAttemptCommand Inspect() => new(
         PortfolioId, TenantId, AccountId, AttemptId, "stripe");
     private static RecordVerifiedProviderPaymentEventCommand Event() => new(
-        "stripe", EventId, "payment_intent.succeeded", "{}", "pi_legacy_replay",
-        ProviderPaymentEventKind.Succeeded, 100m, "USD", null, Now, Now);
+        "stripe", EventId, "legacy.replay",
+        "{\"Id\":\" evt_legacy_replay \",\"Type\":\"legacy.replay\"}",
+        "event: evt_legacy_replay ", ProviderPaymentEventKind.Ignored,
+        null, null, null, Now, Now);
     private static ReconcileClaimedProviderPaymentEventCommand Reconcile() => new(
         InboxId, "worker-legacy", ClaimToken, Now);
+    private static SubmitProviderPaymentCreateCommand AutopaySubmit() => new(
+        PortfolioId, AccountId, AutopayAttemptId, "stripe", AutopayKey, Now);
+    private static SubmitProviderPaymentCreateCommand EnsureFence() => new(
+        PortfolioId, AccountId, EnsureExpireAttemptId, "stripe", EnsureExpireAttemptKey, Now);
+    private static FailProviderPaymentCreateCommand Expire() => new(
+        PortfolioId, AccountId, EnsureExpireAttemptId, "stripe", EnsureExpireAttemptKey,
+        "PROVIDER_RECONCILE_EXPIRED",
+        "Provider reconciliation found no accepted payment after the expiry policy.", Now, Fence);
 
     private const string PrepareJson =
         "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"ChargeLedgerEntryId\":91005,\"PaymentAttemptId\":91006,\"Amount\":100,\"Currency\":\"USD\",\"Provider\":\"stripe\",\"IdempotencyKey\":\"checkout:tenant-charge:91005:actor:91001:attempt:legacy-replay\",\"ProviderCustomerId\":null,\"ProviderPaymentMethodId\":null,\"State\":1,\"ProviderFenceToken\":\"11111111-1111-1111-1111-111111111111\",\"ProviderPaymentId\":\"pi_legacy_replay\",\"PreparedAtUtc\":\"2026-08-21T12:00:00Z\"}";
     private const string AutopayJson =
-        "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"AuthorizingPartyId\":91003,\"ActorUserId\":91001,\"PaymentAttemptId\":91006,\"Provider\":\"stripe\",\"IdempotencyKey\":\"autopay-setup:legacy-replay\",\"State\":1,\"ProviderFenceToken\":\"11111111-1111-1111-1111-111111111111\",\"ProviderPaymentId\":\"pi_legacy_replay\"}";
+        "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"AuthorizingPartyId\":91003,\"ActorUserId\":91001,\"PaymentAttemptId\":91014,\"Provider\":\"stripe\",\"IdempotencyKey\":\"autopay-setup:legacy-replay\",\"State\":1,\"ProviderFenceToken\":\"11111111-1111-1111-1111-111111111111\",\"ProviderPaymentId\":\"seti_legacy_replay\"}";
     private const string SubmitJson =
         "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91006,\"State\":1,\"Amount\":100,\"Currency\":\"USD\",\"Provider\":\"stripe\",\"IdempotencyKey\":\"checkout:tenant-charge:91005:actor:91001:attempt:legacy-replay\",\"ProviderFenceToken\":\"11111111-1111-1111-1111-111111111111\",\"ProviderPaymentId\":\"pi_legacy_replay\",\"PreparedAtUtc\":\"2026-08-21T12:00:00Z\"}";
+    private const string AutopaySubmitJson =
+        "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91014,\"State\":1,\"Amount\":0,\"Currency\":\"USD\",\"Provider\":\"stripe\",\"IdempotencyKey\":\"autopay-setup:legacy-replay\",\"ProviderFenceToken\":\"11111111-1111-1111-1111-111111111111\",\"ProviderPaymentId\":\"seti_legacy_replay\",\"PreparedAtUtc\":\"2026-08-21T12:00:00Z\"}";
+    private const string EnsureFenceJson =
+        "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91015,\"State\":1,\"Amount\":0,\"Currency\":\"USD\",\"Provider\":\"stripe\",\"IdempotencyKey\":\"verification:legacy-ensure-expire\",\"ProviderFenceToken\":\"11111111-1111-1111-1111-111111111111\",\"ProviderPaymentId\":null,\"PreparedAtUtc\":\"2026-08-19T12:00:00Z\"}";
     private const string ScheduleJson =
-        "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91006,\"State\":1,\"NextAttemptAtUtc\":\"2026-08-22T12:00:00Z\"}";
+        "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91016,\"State\":1,\"NextAttemptAtUtc\":\"2026-08-22T12:00:00Z\"}";
     private const string FinalizeJson =
         "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91006,\"Provider\":\"stripe\",\"ProviderPaymentId\":\"pi_legacy_replay\",\"State\":2}";
     private const string FailJson =
         "{\"Found\":true,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91006,\"State\":3}";
+    private const string ExpireJson =
+        "{\"Found\":true,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91015,\"State\":3}";
     private const string AbandonJson =
         "{\"Outcome\":0,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91006,\"State\":4}";
     private const string InspectJson =
@@ -490,6 +671,119 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
         "{\"Outcome\":0,\"ProviderInboxEventId\":91007,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91006,\"AttemptState\":2}";
     private const string ReconcileJson =
         "{\"Outcome\":0,\"ProviderInboxEventId\":91007,\"PortfolioId\":91000,\"TenantAccountId\":91004,\"PaymentAttemptId\":91006,\"AttemptState\":2,\"NextAttemptAtUtc\":null}";
+
+    private static InteractiveProviderObject ProviderObject(string status, string key) => new(
+        "pi_legacy_replay", status, key, PaymentIntentId: "pi_legacy_replay");
+
+    private static InteractiveProviderObject ConfirmedNoProviderObject(string key) => new(
+        string.Empty, "none", key, ConfirmedNoProviderObject: true);
+
+    private static RentalCommandDbContext NewContext(string connectionString) => new(
+        new DbContextOptionsBuilder<RentalCommandDbContext>().UseNpgsql(connectionString).Options);
+
+    private sealed class FixedTimeProvider(DateTime now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(now);
+    }
+
+    private sealed class NeverSandboxGuard : ISandboxGuard
+    {
+        public Task<bool> IsSandboxAsync(int? portfolioId, CancellationToken ct = default) =>
+            Task.FromResult(false);
+    }
+
+    private sealed class FrozenProviderInboxClaimStore : IProviderInboxClaimStore
+    {
+        private int _claimCount;
+        public int ClaimCount => Volatile.Read(ref _claimCount);
+
+        public Task<IReadOnlyList<ProviderInboxClaim>> ClaimAsync(
+            string claimOwner, TimeSpan leaseDuration, int batchSize,
+            CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _claimCount);
+            return Task.FromResult<IReadOnlyList<ProviderInboxClaim>>(
+                [new ProviderInboxClaim(InboxId, "worker-legacy", ClaimToken, 1)]);
+        }
+    }
+
+    private sealed class ReceiptAutopayProviderClient : IAutopayProviderClient
+    {
+        private int _createCount;
+        private int _reconcileCount;
+        public int CreateCount => Volatile.Read(ref _createCount);
+        public int ReconcileCount => Volatile.Read(ref _reconcileCount);
+
+        public Task<AutopayProviderPayment> CreateAsync(
+            TenantPaymentAttempt attempt, string customerId, string paymentMethodId,
+            CancellationToken ct)
+        {
+            Interlocked.Increment(ref _createCount);
+            return Task.FromResult(new AutopayProviderPayment(
+                "pi_legacy_replay", "succeeded", attempt.IdempotencyKey));
+        }
+
+        public Task<AutopayProviderPayment?> ReconcileAsync(
+            TenantPaymentAttempt attempt, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _reconcileCount);
+            return Task.FromResult<AutopayProviderPayment?>(new(
+                "pi_legacy_replay", "succeeded", attempt.IdempotencyKey));
+        }
+    }
+
+    private sealed class ReceiptInteractiveProviderClient : IInteractivePaymentProviderClient
+    {
+        private readonly Dictionary<long, InteractiveProviderObject?> _reconciledByAttempt = [];
+        private int _checkoutCreateCount;
+        private int _paymentIntentCreateCount;
+        private int _setupCreateCount;
+
+        public InteractiveProviderObject? Reconciled { get; set; }
+        public int CheckoutCreateCount => Volatile.Read(ref _checkoutCreateCount);
+        public int PaymentIntentCreateCount => Volatile.Read(ref _paymentIntentCreateCount);
+        public int SetupCreateCount => Volatile.Read(ref _setupCreateCount);
+
+        public void SetReconciled(long attemptId, InteractiveProviderObject? provider) =>
+            _reconciledByAttempt[attemptId] = provider;
+
+        public Task<InteractiveProviderObject> CreatePaymentIntentAsync(
+            InteractiveProviderCreateRequest request, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _paymentIntentCreateCount);
+            return Task.FromResult(ProviderObject("open", request.IdempotencyKey));
+        }
+
+        public Task<InteractiveProviderObject> CreateCheckoutSessionAsync(
+            InteractiveProviderCreateRequest request, string successUrl, string cancelUrl,
+            CancellationToken ct)
+        {
+            Interlocked.Increment(ref _checkoutCreateCount);
+            return Task.FromResult(ProviderObject("open", request.IdempotencyKey));
+        }
+
+        public Task<InteractiveProviderObject> CreateSetupCheckoutSessionAsync(
+            InteractiveProviderCreateRequest request, string successUrl, string cancelUrl,
+            CancellationToken ct)
+        {
+            Interlocked.Increment(ref _setupCreateCount);
+            return Task.FromResult(ProviderObject("open", request.IdempotencyKey));
+        }
+
+        public Task<InteractiveProviderObject?> ReconcileAsync(
+            InteractiveProviderAttempt attempt, CancellationToken ct) => Task.FromResult(
+                _reconciledByAttempt.TryGetValue(attempt.PaymentAttemptId, out var provider)
+                    ? provider
+                    : Reconciled);
+
+        public Task<InteractiveProviderObject?> CancelOrExpireAsync(
+            InteractiveProviderAttempt attempt, CancellationToken ct) =>
+            Task.FromResult(Reconciled);
+
+        public Task<(string? CustomerId, string? PaymentMethodId)> GetSetupPaymentMethodAsync(
+            string setupIntentId, CancellationToken ct) =>
+            Task.FromResult<(string?, string?)>((null, null));
+    }
 
     private sealed record Descriptor(
         string Operation, string Contract, WriteLockProtocol? Protocol, string[] Locks);
