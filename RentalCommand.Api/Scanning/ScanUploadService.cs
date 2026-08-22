@@ -195,9 +195,9 @@ public sealed class ScanUploadService : IScanUploadService
             $"{portfolioId}:{userId}:{Digest(operationId)}",
             ScanDraftWriteSupport.Write(
                 "scan-upload.finalize", command, ScanDraftWriteSupport.FinalizeResultContract,
-                (request, context, token) => FinalizeScanUploadHandler.ExecuteAsync(
+                (request, context, token) => FinalizeScanUploadRule.ExecuteAsync(
                     _db, request, context, token),
-                (request, context, token) => FinalizeScanUploadHandler.AuthorizeAsync(
+                (request, context, token) => FinalizeScanUploadRule.AuthorizeAsync(
                     _db, request, context, token)),
             ct);
         return outcome.Value;

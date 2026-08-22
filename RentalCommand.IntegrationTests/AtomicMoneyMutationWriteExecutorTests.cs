@@ -245,7 +245,7 @@ public sealed class AtomicMoneyMutationWriteExecutorTests
         {
             var (context, acquired) = Recorder();
             await AcquirePrefixAsync(command, context);
-            await InvokeAsync(new AtomicMoneyMutationHandler(_db), "AcquireProgressionWorkOrderLockAsync",
+            await InvokeAsync(new AtomicMoneyMutationRule(_db), "AcquireProgressionWorkOrderLockAsync",
                 command, context, CancellationToken.None);
             acquired.Should().Equal(Prefix().Concat(conditional));
         }
@@ -254,7 +254,7 @@ public sealed class AtomicMoneyMutationWriteExecutorTests
         {
             var (context, acquired) = Recorder();
             await AcquirePrefixAsync(command, context);
-            await InvokeAsync(new AtomicMoneyMutationHandler(_db), "MutateDistributionAsync",
+            await InvokeAsync(new AtomicMoneyMutationRule(_db), "MutateDistributionAsync",
                 command, context, BusinessNow, BusinessNow, BusinessNow.Date, CancellationToken.None);
             acquired.Should().Equal(Prefix().Concat(conditional));
         }

@@ -65,7 +65,7 @@ public static class LeasePartyAccessWriteSupport
 
 }
 
-public sealed class AddEffectivePartyHandler
+public sealed class AddEffectivePartyRule
 {
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,
@@ -192,7 +192,7 @@ public sealed class AddEffectivePartyHandler
         bool LegalBasisValid);
 }
 
-public sealed class EndEffectivePartyHandler
+public sealed class EndEffectivePartyRule
 {
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,
@@ -389,7 +389,7 @@ public sealed class EndEffectivePartyHandler
         bool LegalBasisValid);
 }
 
-public sealed class ChangeEffectivePartyRoleHandler
+public sealed class ChangeEffectivePartyRoleRule
 {
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,
@@ -615,7 +615,7 @@ public sealed class ChangeEffectivePartyRoleHandler
         bool LegalBasisValid);
 }
 
-public sealed class GrantTenantUserAccessHandler
+public sealed class GrantTenantUserAccessRule
 {
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,
@@ -820,7 +820,7 @@ public sealed class GrantTenantUserAccessHandler
                 WorkspaceMembershipId = tenantMembership.Id,
                 InvitedUserId = user.Id,
                 InvitedByUserId = command.ActorUserId,
-                TokenHash = CreateWorkspaceMembershipHandler.HashInvitationToken(rawToken),
+                TokenHash = CreateWorkspaceMembershipRule.HashInvitationToken(rawToken),
                 CreatedAtUtc = changedAtUtc,
                 ExpiresAtUtc = changedAtUtc.AddDays(7),
             };
@@ -967,7 +967,7 @@ public sealed class GrantTenantUserAccessHandler
         string rawToken,
         DateTime nowUtc)
     {
-        var tokenHash = CreateWorkspaceMembershipHandler.HashInvitationToken(rawToken);
+        var tokenHash = CreateWorkspaceMembershipRule.HashInvitationToken(rawToken);
         var setupUrl = $"{command.WebBaseUrl.TrimEnd('/')}/activate-team?token={Uri.EscapeDataString(rawToken)}";
         var greeting = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName;
         var subject = "Activate your Rental Command resident portal";
@@ -1006,7 +1006,7 @@ public sealed class GrantTenantUserAccessHandler
         string? DisplayName);
 }
 
-public sealed class RevokeTenantUserAccessHandler
+public sealed class RevokeTenantUserAccessRule
 {
     public static async Task<LeasePartyMutationResult> ExecuteAsync(
         RentalCommandDbContext _db,

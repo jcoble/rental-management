@@ -892,7 +892,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         var db = services.GetRequiredService<RentalCommandDbContext>();
         var guard = services.GetRequiredService<WorkOrderResponsibilityAccessRevisionGuard>();
         return services.GetRequiredService<IWriteExecutor>()
-            .ExecuteAsync(identity.IdempotencyKey, AssignWorkOrderResponsibilityHandler.Write(command, db, guard));
+            .ExecuteAsync(identity.IdempotencyKey, AssignWorkOrderResponsibilityRule.Write(command, db, guard));
     }
 
     private static Task<AtomicCommandOutcome<CloseWorkOrderResponsibilityResult>> ExecuteAsync(
@@ -903,7 +903,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         var db = services.GetRequiredService<RentalCommandDbContext>();
         var guard = services.GetRequiredService<WorkOrderResponsibilityAccessRevisionGuard>();
         return services.GetRequiredService<IWriteExecutor>()
-            .ExecuteAsync(identity.IdempotencyKey, CloseWorkOrderResponsibilityHandler.Write(command, db, guard));
+            .ExecuteAsync(identity.IdempotencyKey, CloseWorkOrderResponsibilityRule.Write(command, db, guard));
     }
 
     private static Task<AtomicCommandOutcome<UpdateAssignedWorkOrderResult>> ExecuteAsync(
@@ -913,7 +913,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     {
         var db = services.GetRequiredService<RentalCommandDbContext>();
         return services.GetRequiredService<IWriteExecutor>()
-            .ExecuteAsync(identity.IdempotencyKey, UpdateAssignedWorkOrderHandler.Write(command, db));
+            .ExecuteAsync(identity.IdempotencyKey, UpdateAssignedWorkOrderRule.Write(command, db));
     }
 
     private static Task<AtomicCommandOutcome<RecordTechnicianWorkEntryResult>> ExecuteAsync(
@@ -923,7 +923,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     {
         var db = services.GetRequiredService<RentalCommandDbContext>();
         return services.GetRequiredService<IWriteExecutor>()
-            .ExecuteAsync(identity.IdempotencyKey, RecordTechnicianWorkEntryHandler.Write(command, db));
+            .ExecuteAsync(identity.IdempotencyKey, RecordTechnicianWorkEntryRule.Write(command, db));
     }
 
     private static Task<AtomicCommandOutcome<SendTechnicianAssignmentMessageResult>> ExecuteAsync(
@@ -933,7 +933,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     {
         var db = services.GetRequiredService<RentalCommandDbContext>();
         return services.GetRequiredService<IWriteExecutor>()
-            .ExecuteAsync(identity.IdempotencyKey, SendTechnicianAssignmentMessageHandler.Write(command, db));
+            .ExecuteAsync(identity.IdempotencyKey, SendTechnicianAssignmentMessageRule.Write(command, db));
     }
 
     private static Task<AtomicCommandOutcome<MarkTechnicianAssignmentConversationReadResult>> ExecuteAsync(
@@ -943,7 +943,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     {
         var db = services.GetRequiredService<RentalCommandDbContext>();
         return services.GetRequiredService<IWriteExecutor>()
-            .ExecuteAsync(identity.IdempotencyKey, MarkTechnicianAssignmentConversationReadHandler.Write(command, db));
+            .ExecuteAsync(identity.IdempotencyKey, MarkTechnicianAssignmentConversationReadRule.Write(command, db));
     }
 
     private ServiceProvider BuildResponsibilityServices(

@@ -251,19 +251,19 @@ public sealed class WorkOrderCrudWritePostgreSqlTests : IAsyncLifetime
         var staffCommentRule = new AddStaffWorkOrderCommentRule(_context.Db);
         await AssertLockSequencesAsync(_context.Db, context.Object, acquired,
             WorkOrderCrudWriteSupport.Write(
-                staffComment, staffCommentRule.HandleAsync, staffCommentRule.AuthorizeReplayAsync), workOrder.Id);
+                staffComment, staffCommentRule.ExecuteAsync, staffCommentRule.AuthorizeReplayAsync), workOrder.Id);
         var tenantCommentRule = new AddTenantWorkOrderCommentRule(_context.Db);
         await AssertLockSequencesAsync(_context.Db, context.Object, acquired,
             WorkOrderCrudWriteSupport.Write(
-                tenantComment, tenantCommentRule.HandleAsync, tenantCommentRule.AuthorizeReplayAsync), workOrder.Id);
+                tenantComment, tenantCommentRule.ExecuteAsync, tenantCommentRule.AuthorizeReplayAsync), workOrder.Id);
         var tenantUpdateRule = new UpdateTenantWorkOrderRule(_context.Db);
         await AssertLockSequencesAsync(_context.Db, context.Object, acquired,
             WorkOrderCrudWriteSupport.Write(
-                tenantUpdate, tenantUpdateRule.HandleAsync, tenantUpdateRule.AuthorizeReplayAsync), workOrder.Id);
+                tenantUpdate, tenantUpdateRule.ExecuteAsync, tenantUpdateRule.AuthorizeReplayAsync), workOrder.Id);
         var deleteRule = new DeleteWorkOrderRule(_context.Db);
         await AssertLockSequencesAsync(_context.Db, context.Object, acquired,
             WorkOrderCrudWriteSupport.Write(
-                delete, deleteRule.HandleAsync, deleteRule.AuthorizeReplayAsync), workOrder.Id);
+                delete, deleteRule.ExecuteAsync, deleteRule.AuthorizeReplayAsync), workOrder.Id);
     }
 
     private static async Task AssertLockSequencesAsync<TCommand>(

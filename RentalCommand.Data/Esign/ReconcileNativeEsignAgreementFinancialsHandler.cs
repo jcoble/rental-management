@@ -8,11 +8,11 @@ using RentalCommand.Core.Esign;
 
 namespace RentalCommand.Data.Esign;
 
-public sealed class ReconcileNativeEsignAgreementFinancialsHandler
+public sealed class ReconcileNativeEsignAgreementFinancialsRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReconcileNativeEsignAgreementFinancialsHandler(RentalCommandDbContext db) => _db = db;
+    public ReconcileNativeEsignAgreementFinancialsRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ReconcileNativeEsignAgreementFinancialsResult> ExecuteAsync(
         ReconcileNativeEsignAgreementFinancialsCommand command,
@@ -84,11 +84,11 @@ public sealed class ReconcileNativeEsignAgreementFinancialsHandler
     }
 }
 
-public sealed class ReconcileNativeEsignAgreementFinancialsBatchHandler
+public sealed class ReconcileNativeEsignAgreementFinancialsBatchRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReconcileNativeEsignAgreementFinancialsBatchHandler(RentalCommandDbContext db) => _db = db;
+    public ReconcileNativeEsignAgreementFinancialsBatchRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ReconcileNativeEsignAgreementFinancialsBatchResult> ExecuteAsync(
         ReconcileNativeEsignAgreementFinancialsBatchCommand command,

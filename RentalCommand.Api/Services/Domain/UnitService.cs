@@ -24,7 +24,7 @@ public class UnitService : IUnitService
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IRequestWriteExecutor? _writes;
-    private readonly UnitCrudWriteRules _crudRules;
+    private readonly UnitCrudRule _crudRules;
 
     public UnitService(
         RentalCommandDbContext db,
@@ -36,7 +36,7 @@ public class UnitService : IUnitService
         _db = db;
         _timeProvider = timeProvider;
         _writes = writes;
-        _crudRules = new UnitCrudWriteRules(db);
+        _crudRules = new UnitCrudRule(db);
     }
 
     public async Task<IReadOnlyList<UnitResponse>> ListAsync(

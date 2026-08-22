@@ -109,7 +109,7 @@ public sealed class ScreeningService : IScreeningService
             request.CreditReportingAgencyPhone,
             request.Status,
             $"screening-external-create:{digest}");
-        var handler = new TrackExternalScreeningHandler(_db);
+        var handler = new TrackExternalScreeningRule(_db);
         var outcome = await _writes.ExecuteAsync(
             Identity("screening.external.create", scope.PortfolioId, applicationId, digest).IdempotencyKey,
             ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
@@ -138,7 +138,7 @@ public sealed class ScreeningService : IScreeningService
                 descriptor.Key,
                 descriptor.DisplayName,
                 $"screening-integrated-prepare:{digest}");
-        var prepareHandler = new PrepareIntegratedScreeningHandler(_db);
+        var prepareHandler = new PrepareIntegratedScreeningRule(_db);
         var prepare = await _writes.ExecuteAsync(
             Identity("screening.integrated.prepare", scope.PortfolioId, applicationId, digest).IdempotencyKey,
             ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
@@ -181,7 +181,7 @@ public sealed class ScreeningService : IScreeningService
                 providerResult.CreditReportingAgencyAddress,
                 providerResult.CreditReportingAgencyPhone,
                 $"screening-integrated-finalize:{digest}");
-        var finalizeHandler = new FinalizeIntegratedScreeningHandler(_db);
+        var finalizeHandler = new FinalizeIntegratedScreeningRule(_db);
         var finalize = await _writes.ExecuteAsync(
             Identity("screening.integrated.finalize", scope.PortfolioId, applicationId, digest).IdempotencyKey,
             ScreeningWriteSupport.Write(finalizeCommand, finalizeHandler.ExecuteAsync,
@@ -215,7 +215,7 @@ public sealed class ScreeningService : IScreeningService
                 request.CreditReportingAgencyPhone,
                 request.OccurredAtUtc,
                 $"screening-external-update:{screeningId}:{digest}");
-        var handler = new UpdateExternalScreeningHandler(_db);
+        var handler = new UpdateExternalScreeningRule(_db);
         var outcome = await _writes.ExecuteAsync(
             Identity("screening.external.update", scope.PortfolioId, applicationId, digest).IdempotencyKey,
             ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
@@ -246,7 +246,7 @@ public sealed class ScreeningService : IScreeningService
                 request.Reason,
                 request.ConsumerReportUsed,
                 $"screening-decision:{screeningId}:{digest}");
-        var handler = new RecordScreeningDecisionHandler(_db);
+        var handler = new RecordScreeningDecisionRule(_db);
         var outcome = await _writes.ExecuteAsync(
             Identity("screening.decision", scope.PortfolioId, applicationId, digest).IdempotencyKey,
             ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
@@ -270,7 +270,7 @@ public sealed class ScreeningService : IScreeningService
                 delivery.CreditReportingAgencyAddress,
                 delivery.CreditReportingAgencyPhone,
                 $"screening-provider:{digest}");
-        var handler = new ApplyScreeningProviderDeliveryHandler(_db);
+        var handler = new ApplyScreeningProviderDeliveryRule(_db);
         var outcome = await _writes.ExecuteAsync(digest,
             ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         return Response(outcome.Value);
@@ -294,7 +294,7 @@ public sealed class ScreeningService : IScreeningService
                 operationKey,
                 request.Reason,
                 request.SendToApplicant);
-        var prepareHandler = new PrepareAdverseActionNoticeHandler(_db);
+        var prepareHandler = new PrepareAdverseActionNoticeRule(_db);
         var prepared = await _writes.ExecuteAsync(
             Identity("adverse-action.prepare", scope.PortfolioId, applicationId, digest).IdempotencyKey,
             ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
@@ -431,7 +431,7 @@ public sealed class ScreeningService : IScreeningService
                 value.SendToApplicant,
                 $"adverse-action:{scope.PortfolioId}:{applicationId}:{digest}",
                 value.GeneratedAtUtc);
-        var finalizeHandler = new CreateAdverseActionNoticeHandler(_db);
+        var finalizeHandler = new CreateAdverseActionNoticeRule(_db);
         var finalized = await _writes.ExecuteAsync(
             Identity("adverse-action.finalize", scope.PortfolioId, applicationId, digest).IdempotencyKey,
             ScreeningWriteSupport.Write(finalizeCommand, finalizeHandler.ExecuteAsync,

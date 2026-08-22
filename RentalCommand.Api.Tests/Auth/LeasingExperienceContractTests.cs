@@ -211,7 +211,7 @@ public sealed class LeasingExperienceContractTests
         var conversationService = ReadSource(
             "RentalCommand.Api", "Services", "Domain", "ConversationService.cs");
         var atomicHandler = ReadSource(
-            "RentalCommand.Data", "Conversations", "SendConversationMessageHandler.cs");
+            "RentalCommand.Data", "Conversations", "SendConversationMessageRule.cs");
 
         controller.Should().Contain("_workspace.CanAccessConversationAsync(scope, id, ct)");
         controller.Should().NotContain("_workspace.GetConversationAsync(scope, id, ct) is null");
@@ -227,7 +227,7 @@ public sealed class LeasingExperienceContractTests
     public void AuthorizedLandlordConversationWritesLockAuthorityBeforeTheConversation()
     {
         var handler = ReadSource(
-            "RentalCommand.Data", "Conversations", "SendConversationMessageHandler.cs");
+            "RentalCommand.Data", "Conversations", "SendConversationMessageRule.cs");
 
         var sessionLock = handler.IndexOf(
             "\"AuthSession\", managementAccess.SessionId", StringComparison.Ordinal);

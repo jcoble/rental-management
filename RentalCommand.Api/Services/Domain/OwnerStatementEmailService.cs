@@ -181,11 +181,11 @@ public sealed record QueueOwnerStatementEmailResult(
     bool Queued,
     string? Reason = null);
 
-public sealed class QueueOwnerStatementEmailHandler
+public sealed class QueueOwnerStatementEmailRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public QueueOwnerStatementEmailHandler(RentalCommandDbContext db) => _db = db;
+    public QueueOwnerStatementEmailRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<QueueOwnerStatementEmailResult> ExecuteAsync(
         QueueOwnerStatementEmailCommand command,
@@ -331,7 +331,7 @@ public static class QueueOwnerStatementEmail
         RentalCommandDbContext db,
         QueueOwnerStatementEmailCommand command)
     {
-        var handler = new QueueOwnerStatementEmailHandler(db);
+        var handler = new QueueOwnerStatementEmailRule(db);
         return new(
             Identity(command).CommandType,
             WriteIdempotencyPolicy.Required,

@@ -1761,17 +1761,17 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
         object outcome = command switch
         {
-            PostTenantChargeCommand value => await RunPostCharge(value, new PostTenantChargeHandler(db)),
-            ReverseTenantChargeCommand value => await RunReverseCharge(value, new ReverseTenantChargeHandler(db)),
-            RecordTenantReceiptCommand value => await RunReceipt(value, new RecordTenantReceiptHandler(db)),
-            PostTenantCreditCommand value => await RunCredit(value, new PostTenantCreditHandler(db)),
-            PostTenantAdjustmentCommand value => await RunAdjustment(value, new PostTenantAdjustmentHandler(db)),
-            ReverseTenantLedgerEntryCommand value => await RunReverseLedger(value, new ReverseTenantLedgerEntryHandler(db)),
-            RefundTenantPaymentCommand value => await RunRefundPayment(value, new RefundTenantPaymentHandler(db)),
-            FundSecurityDepositCommand value => await RunFundDeposit(value, new FundSecurityDepositHandler(db)),
-            DeductSecurityDepositCommand value => await RunDeductDeposit(value, new DeductSecurityDepositHandler(db)),
-            RefundSecurityDepositCommand value => await RunRefundDeposit(value, new RefundSecurityDepositHandler(db)),
-            ReverseSecurityDepositEntryCommand value => await RunReverseDeposit(value, new ReverseSecurityDepositEntryHandler(db)),
+            PostTenantChargeCommand value => await RunPostCharge(value, new PostTenantChargeRule(db)),
+            ReverseTenantChargeCommand value => await RunReverseCharge(value, new ReverseTenantChargeRule(db)),
+            RecordTenantReceiptCommand value => await RunReceipt(value, new RecordTenantReceiptRule(db)),
+            PostTenantCreditCommand value => await RunCredit(value, new PostTenantCreditRule(db)),
+            PostTenantAdjustmentCommand value => await RunAdjustment(value, new PostTenantAdjustmentRule(db)),
+            ReverseTenantLedgerEntryCommand value => await RunReverseLedger(value, new ReverseTenantLedgerEntryRule(db)),
+            RefundTenantPaymentCommand value => await RunRefundPayment(value, new RefundTenantPaymentRule(db)),
+            FundSecurityDepositCommand value => await RunFundDeposit(value, new FundSecurityDepositRule(db)),
+            DeductSecurityDepositCommand value => await RunDeductDeposit(value, new DeductSecurityDepositRule(db)),
+            RefundSecurityDepositCommand value => await RunRefundDeposit(value, new RefundSecurityDepositRule(db)),
+            ReverseSecurityDepositEntryCommand value => await RunReverseDeposit(value, new ReverseSecurityDepositEntryRule(db)),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return (AtomicCommandOutcome<TResult>)outcome;
@@ -1786,37 +1786,37 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
                 TenantMoneyWriteSupport.Write(request, executeAsync, authorizeAsync));
 
         Task<AtomicCommandOutcome<TenantChargeMutationResult>> RunPostCharge(
-            PostTenantChargeCommand request, PostTenantChargeHandler handler) =>
+            PostTenantChargeCommand request, PostTenantChargeRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<TenantChargeMutationResult>> RunReverseCharge(
-            ReverseTenantChargeCommand request, ReverseTenantChargeHandler handler) =>
+            ReverseTenantChargeCommand request, ReverseTenantChargeRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<RecordTenantReceiptResult>> RunReceipt(
-            RecordTenantReceiptCommand request, RecordTenantReceiptHandler handler) =>
+            RecordTenantReceiptCommand request, RecordTenantReceiptRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<TenantLedgerMutationResult>> RunCredit(
-            PostTenantCreditCommand request, PostTenantCreditHandler handler) =>
+            PostTenantCreditCommand request, PostTenantCreditRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<TenantLedgerMutationResult>> RunAdjustment(
-            PostTenantAdjustmentCommand request, PostTenantAdjustmentHandler handler) =>
+            PostTenantAdjustmentCommand request, PostTenantAdjustmentRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<TenantLedgerMutationResult>> RunReverseLedger(
-            ReverseTenantLedgerEntryCommand request, ReverseTenantLedgerEntryHandler handler) =>
+            ReverseTenantLedgerEntryCommand request, ReverseTenantLedgerEntryRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<TenantPaymentRefundResult>> RunRefundPayment(
-            RefundTenantPaymentCommand request, RefundTenantPaymentHandler handler) =>
+            RefundTenantPaymentCommand request, RefundTenantPaymentRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<SecurityDepositMutationResult>> RunFundDeposit(
-            FundSecurityDepositCommand request, FundSecurityDepositHandler handler) =>
+            FundSecurityDepositCommand request, FundSecurityDepositRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<SecurityDepositMutationResult>> RunDeductDeposit(
-            DeductSecurityDepositCommand request, DeductSecurityDepositHandler handler) =>
+            DeductSecurityDepositCommand request, DeductSecurityDepositRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<SecurityDepositMutationResult>> RunRefundDeposit(
-            RefundSecurityDepositCommand request, RefundSecurityDepositHandler handler) =>
+            RefundSecurityDepositCommand request, RefundSecurityDepositRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
         Task<AtomicCommandOutcome<SecurityDepositMutationResult>> RunReverseDeposit(
-            ReverseSecurityDepositEntryCommand request, ReverseSecurityDepositEntryHandler handler) =>
+            ReverseSecurityDepositEntryCommand request, ReverseSecurityDepositEntryRule handler) =>
             Execute(request, handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 

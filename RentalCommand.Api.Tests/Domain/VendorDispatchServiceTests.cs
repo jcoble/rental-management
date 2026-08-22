@@ -587,20 +587,20 @@ public class VendorDispatchServiceTests : IAsyncLifetime
                 "b9960f7fa31960daf02ba32a1fac644bdeabef2c4297e18b69585526e12e6be3",
                 "8db4410ca3ce0277821c8ff00604bd74884963b0d1a1720ac525082228393441");
 
-        SeedReceipt(dispatchKey, DispatchWorkOrderToVendorHandler.Write(dispatch, _ctx.Db),
+        SeedReceipt(dispatchKey, DispatchWorkOrderToVendorRule.Write(dispatch, _ctx.Db),
             "vendor-dispatch.create", "4140d2b9d30ceae74b2356f67f8c7ea80f3d621f3300fbdb956dca40b89e3589", "vendor-dispatch.create.v1",
             $$"""{"Outcome":0,"DispatchId":90,"PortfolioId":1,"WorkOrderId":{{workOrder.Id}},"VendorId":{{vendor.Id}},"Status":0,"DispatchedAtUtc":"2099-08-21T12:00:00Z","Message":"Frozen dispatch"}""");
-        SeedReceipt(cancelKey, CancelVendorDispatchHandler.Write(cancel, _ctx.Db),
+        SeedReceipt(cancelKey, CancelVendorDispatchRule.Write(cancel, _ctx.Db),
             "vendor-dispatch.cancel", "3b0ab036cf6e2a5822e87efe46221d7c27269ac30927790b85e524c86ee932ec", "vendor-dispatch.cancel.v1",
             $$"""{"Outcome":0,"DispatchId":91,"PortfolioId":1,"WorkOrderId":{{workOrder.Id}},"VendorId":{{vendor.Id}},"Status":3,"CancelledAtUtc":"2099-08-21T12:00:00Z","Reason":"Frozen cancellation"}""");
-        SeedReceipt(recoveryKey, RecoverVendorDispatchChronologyHandler.Write(recovery, _ctx.Db),
+        SeedReceipt(recoveryKey, RecoverVendorDispatchChronologyRule.Write(recovery, _ctx.Db),
             "vendor-dispatch.recover-chronology", "2ad9380df0ba858a66925258460f270dec110b993182b5f09a7a89a0de136228", "vendor-dispatch.chronology-recovery.v1",
             $$"""{"WorkOrderId":{{workOrder.Id}},"DispatchId":91,"StatusEventId":92,"OutboxId":93,"DispatchedAtUtc":"2099-08-21T12:00:00Z","WorkOrderUpdatedAtRepaired":true}""");
         SeedReceipt(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ratingKey))),
-            CreateVendorRatingHandler.Write(rating, _ctx.Db),
+            CreateVendorRatingRule.Write(rating, _ctx.Db),
             "vendor-rating.create", "b9960f7fa31960daf02ba32a1fac644bdeabef2c4297e18b69585526e12e6be3", "vendor-rating.create.v1",
             $$"""{"Outcome":0,"RatingId":94,"VendorId":{{vendor.Id}},"ResponseJson":"{\"Id\":94,\"VendorId\":{{vendor.Id}},\"WorkOrderId\":null,\"Stars\":5,\"Comment\":\"Frozen rating\",\"CreatedAtUtc\":\"2099-08-21T12:00:00Z\"}"}""");
-        SeedReceipt(inboundKey, CompleteVendorDispatchFromInboundHandler.Write(inbound, _ctx.Db),
+        SeedReceipt(inboundKey, CompleteVendorDispatchFromInboundRule.Write(inbound, _ctx.Db),
             "sms.vendor-done", "8db4410ca3ce0277821c8ff00604bd74884963b0d1a1720ac525082228393441", "complete-vendor-dispatch-from-inbound-result.v1",
             """{"Outcome":1,"PortfolioId":0,"DispatchId":0,"WorkOrderId":0,"VendorId":0,"NotificationIds":[]}""");
         await _ctx.Db.SaveChangesAsync();

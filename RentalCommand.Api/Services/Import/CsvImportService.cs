@@ -16,9 +16,9 @@ namespace RentalCommand.Api.Services.Import;
 public sealed class CsvImportService : ICsvImportService
 {
     private readonly IRequestWriteExecutor _writes;
-    private readonly AtomicCoreCsvImportHandler _coreImport;
-    private readonly AtomicUnitCsvImportHandler _unitImport;
-    private readonly AtomicPaymentCsvImportHandler _paymentImport;
+    private readonly AtomicCoreCsvImportRule _coreImport;
+    private readonly AtomicUnitCsvImportRule _unitImport;
+    private readonly AtomicPaymentCsvImportRule _paymentImport;
     private readonly IUnitCsvImportPreviewQuery _unitPreview;
     private readonly ICoreCsvImportPreviewQuery _corePreview;
     private readonly IPaymentCsvImportPreviewQuery _paymentPreview;
@@ -39,9 +39,9 @@ public sealed class CsvImportService : ICsvImportService
         IRequestWriteExecutor writes)
     {
         _writes = writes;
-        _coreImport = new AtomicCoreCsvImportHandler(db);
-        _unitImport = new AtomicUnitCsvImportHandler(db);
-        _paymentImport = new AtomicPaymentCsvImportHandler(db);
+        _coreImport = new AtomicCoreCsvImportRule(db);
+        _unitImport = new AtomicUnitCsvImportRule(db);
+        _paymentImport = new AtomicPaymentCsvImportRule(db);
         _unitPreview = unitPreview;
         _corePreview = corePreview;
         _paymentPreview = paymentPreview;

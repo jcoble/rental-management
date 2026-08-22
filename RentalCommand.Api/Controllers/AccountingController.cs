@@ -88,7 +88,7 @@ public class AccountingController : ManagementControllerBase
         try
         {
             var identityKey = $"{active.PortfolioId}:{active.AccessContextId}:{operationKey}";
-            var handler = new CreateLedgerAccountHandler(_db);
+            var handler = new CreateLedgerAccountRule(_db);
             var outcome = await _writes.ExecuteAsync(identityKey,
                 AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
             var account = outcome.Value.Account;
@@ -129,7 +129,7 @@ public class AccountingController : ManagementControllerBase
         try
         {
             var identityKey = $"{active.PortfolioId}:{active.AccessContextId}:{operationKey}";
-            var handler = new UpdateLedgerAccountHandler(_db);
+            var handler = new UpdateLedgerAccountRule(_db);
             var outcome = await _writes.ExecuteAsync(identityKey,
                 AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
             var account = outcome.Value.Account;

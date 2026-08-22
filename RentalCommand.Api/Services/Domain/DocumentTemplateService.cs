@@ -351,51 +351,51 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
 
     private Task<DocumentTemplateMutationResult> CreateAsync(
         CreateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        CreateDocumentTemplateHandler.ExecuteAsync(_db, command, context, ct);
+        CreateDocumentTemplateRule.ExecuteAsync(_db, command, context, ct);
 
     private Task<DocumentTemplateMutationResult> FinalizeUploadAsync(
         FinalizeDocumentTemplateUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        FinalizeDocumentTemplateUploadHandler.ExecuteAsync(_db, command, context, ct);
+        FinalizeDocumentTemplateUploadRule.ExecuteAsync(_db, command, context, ct);
 
     private Task<DocumentTemplateMutationResult> UpdateAsync(
         UpdateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        UpdateDocumentTemplateHandler.ExecuteAsync(_db, command, context, ct);
+        UpdateDocumentTemplateRule.ExecuteAsync(_db, command, context, ct);
 
     private Task<DocumentTemplateMutationResult> AddFieldAsync(
         AddDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        AddDocumentTemplateFieldHandler.ExecuteAsync(_db, command, context, ct);
+        AddDocumentTemplateFieldRule.ExecuteAsync(_db, command, context, ct);
 
     private Task<DocumentTemplateMutationResult> UpdateFieldAsync(
         UpdateDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        UpdateDocumentTemplateFieldHandler.ExecuteAsync(_db, command, context, ct);
+        UpdateDocumentTemplateFieldRule.ExecuteAsync(_db, command, context, ct);
 
     private Task<DocumentTemplateMutationResult> DeleteFieldAsync(
         DeleteDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        DeleteDocumentTemplateFieldHandler.ExecuteAsync(_db, command, context, ct);
+        DeleteDocumentTemplateFieldRule.ExecuteAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         CreateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        CreateDocumentTemplateHandler.AuthorizeAsync(_db, command, context, ct);
+        CreateDocumentTemplateRule.AuthorizeAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         FinalizeDocumentTemplateUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        FinalizeDocumentTemplateUploadHandler.AuthorizeAsync(_db, command, context, ct);
+        FinalizeDocumentTemplateUploadRule.AuthorizeAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         UpdateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        UpdateDocumentTemplateHandler.AuthorizeAsync(_db, command, context, ct);
+        UpdateDocumentTemplateRule.AuthorizeAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         AddDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        AddDocumentTemplateFieldHandler.AuthorizeAsync(_db, command, context, ct);
+        AddDocumentTemplateFieldRule.AuthorizeAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         UpdateDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        UpdateDocumentTemplateFieldHandler.AuthorizeAsync(_db, command, context, ct);
+        UpdateDocumentTemplateFieldRule.AuthorizeAsync(_db, command, context, ct);
 
     private Task AuthorizeReplayAsync(
         DeleteDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        DeleteDocumentTemplateFieldHandler.AuthorizeAsync(_db, command, context, ct);
+        DeleteDocumentTemplateFieldRule.AuthorizeAsync(_db, command, context, ct);
 
     public async Task<DocumentTemplateOperationResult<DocumentTemplatePreviewResult>> PreviewLeasePdfAsync(
         WorkspaceReadScope scope,

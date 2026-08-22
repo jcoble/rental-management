@@ -791,7 +791,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
             AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
             Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
                 command,
-                (request, context, ct) => new AddStaffWorkOrderCommentRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new AddStaffWorkOrderCommentRule(Db).ExecuteAsync(request, context, ct),
                 (request, context, ct) => new AddStaffWorkOrderCommentRule(Db).AuthorizeReplayAsync(request, context, ct)));
 
         public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
@@ -799,7 +799,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
             AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
             Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
                 command,
-                (request, context, ct) => new UpdateWorkOrderRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new UpdateWorkOrderRule(Db).ExecuteAsync(request, context, ct),
                 (request, context, ct) => new UpdateWorkOrderRule(Db).AuthorizeReplayAsync(request, context, ct)));
 
         public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
@@ -807,7 +807,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
             AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
             Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
                 command,
-                (request, context, ct) => new AddTenantWorkOrderCommentRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new AddTenantWorkOrderCommentRule(Db).ExecuteAsync(request, context, ct),
                 (request, context, ct) => new AddTenantWorkOrderCommentRule(Db).AuthorizeReplayAsync(request, context, ct)));
 
         public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
@@ -815,7 +815,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
             AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
             Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
                 command,
-                (request, context, ct) => new UpdateTenantWorkOrderRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new UpdateTenantWorkOrderRule(Db).ExecuteAsync(request, context, ct),
                 (request, context, ct) => new UpdateTenantWorkOrderRule(Db).AuthorizeReplayAsync(request, context, ct)));
 
         public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
@@ -823,7 +823,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
             AtomicJsonResultCodec<WorkOrderMutationResult> codec) =>
             Writes.ExecuteAsync(identity.IdempotencyKey, WorkOrderCrudWriteSupport.Write(
                 command,
-                (request, context, ct) => new CancelTenantWorkOrderRule(Db).HandleAsync(request, context, ct),
+                (request, context, ct) => new CancelTenantWorkOrderRule(Db).ExecuteAsync(request, context, ct),
                 (request, context, ct) => new CancelTenantWorkOrderRule(Db).AuthorizeReplayAsync(request, context, ct)));
     }
 

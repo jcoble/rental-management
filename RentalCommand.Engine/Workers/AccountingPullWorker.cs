@@ -47,7 +47,7 @@ public sealed class AccountingPullWorker : EngineWorkerBase
                 var identity = new AtomicCommandIdentity(
                     "accounting.pull.apply",
                     $"{claim.Connection.Id}:{claim.Fence.ClaimToken:N}:{command.ProviderBatchIdentity}");
-                var handler = new ApplyAccountingPullResultHandler(db);
+                var handler = new ApplyAccountingPullResultRule(db);
                 var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
                     AccountingWriteSupport.Write(
                         command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);

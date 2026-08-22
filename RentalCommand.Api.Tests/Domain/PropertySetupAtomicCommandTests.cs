@@ -316,7 +316,7 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
             operationKey: "ordinary-create-is-disabled",
             request: request);
 
-        var rules = new PropertyTenantCrudWriteRules(
+        var rules = new PropertyTenantCrudRule(
             _services.GetRequiredService<RentalCommandDbContext>());
         var write = CoreCrudWriteSupport.Write(
             command, rules.RejectPropertyCreateAsync, rules.AuthorizeReplayAsync);

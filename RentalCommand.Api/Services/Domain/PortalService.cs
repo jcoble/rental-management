@@ -1301,19 +1301,19 @@ public class PortalService : IPortalService
 
     private Task<WorkOrderMutationResult> CreateTenantWorkOrderAsync(
         CreateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        new CreateTenantWorkOrderRule(_db).HandleAsync(command, context, ct);
+        new CreateTenantWorkOrderRule(_db).ExecuteAsync(command, context, ct);
 
     private Task<WorkOrderMutationResult> AddTenantCommentAsync(
         AddTenantWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        new AddTenantWorkOrderCommentRule(_db).HandleAsync(command, context, ct);
+        new AddTenantWorkOrderCommentRule(_db).ExecuteAsync(command, context, ct);
 
     private Task<WorkOrderMutationResult> UpdateTenantWorkOrderAsync(
         UpdateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        new UpdateTenantWorkOrderRule(_db).HandleAsync(command, context, ct);
+        new UpdateTenantWorkOrderRule(_db).ExecuteAsync(command, context, ct);
 
     private Task<WorkOrderMutationResult> CancelTenantWorkOrderAsync(
         CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        new CancelTenantWorkOrderRule(_db).HandleAsync(command, context, ct);
+        new CancelTenantWorkOrderRule(_db).ExecuteAsync(command, context, ct);
 
     private Task AuthorizeReplayAsync(
         CreateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
@@ -1435,7 +1435,7 @@ public class PortalService : IPortalService
         var command = AtomicTenantAutopayCancellation.Command(
             access, tenantId, tenantAccountId, operationKey);
         var identity = AtomicTenantAutopayCancellation.Identity(command);
-        var handler = new CancelTenantAutopayHandler(_db);
+        var handler = new CancelTenantAutopayRule(_db);
         var outcome = await RequireWrites().ExecuteAsync(identity.IdempotencyKey,
             AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         if (!outcome.Value.Found) return null;

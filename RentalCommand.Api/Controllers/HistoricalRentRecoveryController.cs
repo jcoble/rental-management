@@ -67,7 +67,7 @@ public sealed class HistoricalRentRecoveryController : AuthenticatedPortfolioCon
             $"historical-rent:{access.PortfolioId}:{request.TenantAccountId}:{digest}");
         try
         {
-            var handler = new RecoverHistoricalRentChargeHandler(_db);
+            var handler = new RecoverHistoricalRentChargeRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 command.DeliveryIdempotencyKey,
                 TenantMoneyWriteSupport.Write(
@@ -132,7 +132,7 @@ public sealed class HistoricalRentRecoveryController : AuthenticatedPortfolioCon
             $"late-fee-recovery:{access.PortfolioId}:{digest}");
         try
         {
-            var handler = new RecoverLateFeeChargesHandler(_db);
+            var handler = new RecoverLateFeeChargesRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 command.DeliveryIdempotencyKey,
                 TenantMoneyWriteSupport.Write(

@@ -168,7 +168,7 @@ public class DemoDataSeeder
             operationKey);
         await _writes.ExecuteExactAsync(
             $"portfolio:{portfolioId}:{operationKey}",
-            DemoSeedCommandHandler.Write(_db, command), ct);
+            DemoSeedCommandRule.Write(_db, command), ct);
         await CompleteLegalArtifactsAsync(
             portfolioId,
             ct);
@@ -191,7 +191,7 @@ public class DemoDataSeeder
             var finalizeCommand = ToFinalizeCommand(prepared);
             var outcome = await _writes.ExecuteExactAsync(
                 $"portfolio:{portfolioId}:agreement:{finalizeCommand.AgreementId}:v1",
-                DemoLegalDocumentFinalizeCommandHandler.Write(_db, finalizeCommand), ct);
+                DemoLegalDocumentFinalizeCommandRule.Write(_db, finalizeCommand), ct);
             if (outcome.Value.Skipped)
             {
                 skippedCount++;
@@ -212,7 +212,7 @@ public class DemoDataSeeder
             _timeProvider.UtcNow());
         await _writes.ExecuteExactAsync(
             $"portfolio:{portfolioId}:standard-lease-addendum-template:v2",
-            DemoLeaseAddendumTemplateCommandHandler.Write(_db, addendumCommand), ct);
+            DemoLeaseAddendumTemplateCommandRule.Write(_db, addendumCommand), ct);
 
         _logger.LogInformation(
             "Demo legal-document reconciliation completed for portfolio {PortfolioId}: {FinalizedCount} finalized, {SkippedCount} skipped.",
@@ -1486,7 +1486,7 @@ public class DemoDataSeeder
         string ExecutedHash);
 }
 
-public sealed class DemoLeaseAddendumTemplateCommandHandler
+public sealed class DemoLeaseAddendumTemplateCommandRule
 {
     internal const string CommandType = "sandbox.demo-addendum-template";
     internal const string TemplateName = "Standard lease addendum page";
@@ -1496,13 +1496,13 @@ public sealed class DemoLeaseAddendumTemplateCommandHandler
 
     private readonly RentalCommandDbContext _db;
 
-    public DemoLeaseAddendumTemplateCommandHandler(RentalCommandDbContext db) => _db = db;
+    public DemoLeaseAddendumTemplateCommandRule(RentalCommandDbContext db) => _db = db;
 
     public static TransactionalWrite<EnsureDemoLeaseAddendumTemplateCommand, EnsureDemoLeaseAddendumTemplateResult> Write(
         RentalCommandDbContext db,
         EnsureDemoLeaseAddendumTemplateCommand command)
     {
-        var handler = new DemoLeaseAddendumTemplateCommandHandler(db);
+        var handler = new DemoLeaseAddendumTemplateCommandRule(db);
         return new TransactionalWrite<EnsureDemoLeaseAddendumTemplateCommand, EnsureDemoLeaseAddendumTemplateResult>(
             CommandType, WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
@@ -1634,11 +1634,11 @@ public sealed class DemoLeaseAddendumTemplateCommandHandler
     }
 }
 
-public sealed class DemoSeedCommandHandler
+public sealed class DemoSeedCommandRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public DemoSeedCommandHandler(RentalCommandDbContext db) => _db = db;
+    public DemoSeedCommandRule(RentalCommandDbContext db) => _db = db;
 
     internal static readonly AtomicJsonResultCodec<SeedDemoPortfolioResult> ResultCodec =
         new("demo-portfolio-seed-result:v1");
@@ -1647,7 +1647,7 @@ public sealed class DemoSeedCommandHandler
         RentalCommandDbContext db,
         SeedDemoPortfolioCommand command)
     {
-        var handler = new DemoSeedCommandHandler(db);
+        var handler = new DemoSeedCommandRule(db);
         return new TransactionalWrite<SeedDemoPortfolioCommand, SeedDemoPortfolioResult>(
             "sandbox.demo-seed", WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
@@ -1764,11 +1764,11 @@ public sealed class DemoSeedCommandHandler
     }
 }
 
-public sealed class DemoLegalDocumentFinalizeCommandHandler
+public sealed class DemoLegalDocumentFinalizeCommandRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public DemoLegalDocumentFinalizeCommandHandler(RentalCommandDbContext db) => _db = db;
+    public DemoLegalDocumentFinalizeCommandRule(RentalCommandDbContext db) => _db = db;
 
     internal static readonly AtomicJsonResultCodec<FinalizeDemoLegalDocumentResult> ResultCodec =
         new("demo-legal-document-finalize-result:v2");
@@ -1777,7 +1777,7 @@ public sealed class DemoLegalDocumentFinalizeCommandHandler
         RentalCommandDbContext db,
         FinalizeDemoLegalDocumentCommand command)
     {
-        var handler = new DemoLegalDocumentFinalizeCommandHandler(db);
+        var handler = new DemoLegalDocumentFinalizeCommandRule(db);
         return new TransactionalWrite<FinalizeDemoLegalDocumentCommand, FinalizeDemoLegalDocumentResult>(
             "sandbox.demo-legal-finalize", WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);

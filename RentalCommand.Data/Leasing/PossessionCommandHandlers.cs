@@ -12,11 +12,11 @@ using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Data.Leasing;
 
-public sealed class GivePossessionHandler
+public sealed class GivePossessionRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public GivePossessionHandler(RentalCommandDbContext db) => _db = db;
+    public GivePossessionRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<GivePossessionResult> ExecuteAsync(
         GivePossessionCommand command,
@@ -137,11 +137,11 @@ public sealed class GivePossessionHandler
         bool HasOpenOperationalPeriod);
 }
 
-public sealed class ReconcileHistoricalPossessionHandler
+public sealed class ReconcileHistoricalPossessionRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReconcileHistoricalPossessionHandler(RentalCommandDbContext db) => _db = db;
+    public ReconcileHistoricalPossessionRule(RentalCommandDbContext db) => _db = db;
 
     private const string EligibleExceptionCode = "GoverningAgreementWithoutPossession";
 
@@ -383,11 +383,11 @@ public sealed class ReconcileHistoricalPossessionHandler
 /// possession, and the optional MoveIn appointment completion either all commit with one receipt or
 /// all roll back. Account ids and the governing deposit amount are always resolved in PostgreSQL.
 /// </summary>
-public sealed class ConfirmMoveInHandler
+public sealed class ConfirmMoveInRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ConfirmMoveInHandler(RentalCommandDbContext db) => _db = db;
+    public ConfirmMoveInRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ConfirmMoveInResult> ExecuteAsync(
         ConfirmMoveInCommand command,
@@ -492,7 +492,7 @@ public sealed class ConfirmMoveInHandler
                 target.SecurityDepositAccountId.Value,
                 target.GoverningAgreementNumber,
                 depositAmount);
-            fundedDeposit = await new FundSecurityDepositHandler(_db)
+            fundedDeposit = await new FundSecurityDepositRule(_db)
                 .ExecuteAsync(depositCommand, context, ct);
             if (!fundedDeposit.Applied)
             {
@@ -735,11 +735,11 @@ public sealed class ConfirmMoveInHandler
         bool HasCurrentResident);
 }
 
-public sealed class ReturnPossessionHandler
+public sealed class ReturnPossessionRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReturnPossessionHandler(RentalCommandDbContext db) => _db = db;
+    public ReturnPossessionRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ReturnPossessionResult> ExecuteAsync(
         ReturnPossessionCommand command,
@@ -859,11 +859,11 @@ public sealed class ReturnPossessionHandler
         new(outcome, command.LeaseManagementId, command.UnitId, null, null, error);
 }
 
-public sealed class CompleteTurnoverHandler
+public sealed class CompleteTurnoverRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CompleteTurnoverHandler(RentalCommandDbContext db) => _db = db;
+    public CompleteTurnoverRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<CompleteTurnoverResult> ExecuteAsync(CompleteTurnoverCommand command,
         IAtomicCommandContext context, CancellationToken ct)

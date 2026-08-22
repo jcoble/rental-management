@@ -523,14 +523,14 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
         if (command is ConfirmAccountingMappingCommand confirm)
         {
-            var handler = new ConfirmAccountingMappingHandler(db);
+            var handler = new ConfirmAccountingMappingRule(db);
             var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
                 AccountingWriteSupport.Write(confirm, handler.ExecuteAsync, handler.AuthorizeAsync));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         if (command is ContinueAccountingMappingPromotionCommand continuation)
         {
-            var handler = new ContinueAccountingMappingPromotionHandler(db);
+            var handler = new ContinueAccountingMappingPromotionRule(db);
             var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
                 AccountingWriteSupport.Write(
                     continuation, handler.ExecuteAsync, handler.AuthorizeAsync));

@@ -22,44 +22,44 @@ public static class ProviderPaymentWriteSupport
         {
             PrepareProviderPaymentCreateCommand value => Build(operationName,
                 "prepare-provider-payment-create-result.v1", TenantAccount(value.TenantAccountId),
-                value, new PrepareProviderPaymentCreateHandler(db).ExecuteAsync,
-                new PrepareProviderPaymentCreateHandler(db).AuthorizeReplayAsync),
+                value, new PrepareProviderPaymentCreateRule(db).ExecuteAsync,
+                new PrepareProviderPaymentCreateRule(db).AuthorizeReplayAsync),
             PrepareProviderAutopaySetupCommand value => Build(operationName,
                 "prepare-provider-autopay-setup-result.v1", TenantAccount(value.TenantAccountId),
-                value, new PrepareProviderAutopaySetupHandler(db).ExecuteAsync,
-                new PrepareProviderAutopaySetupHandler(db).AuthorizeReplayAsync),
+                value, new PrepareProviderAutopaySetupRule(db).ExecuteAsync,
+                new PrepareProviderAutopaySetupRule(db).AuthorizeReplayAsync),
             SubmitProviderPaymentCreateCommand value => Build(operationName,
                 "submit-provider-payment-create-result.v1", TenantAccount(value.TenantAccountId),
-                value, new SubmitProviderPaymentCreateHandler(db).ExecuteAsync,
-                new SubmitProviderPaymentCreateHandler(db).AuthorizeReplayAsync),
+                value, new SubmitProviderPaymentCreateRule(db).ExecuteAsync,
+                new SubmitProviderPaymentCreateRule(db).AuthorizeReplayAsync),
             ScheduleProviderPaymentReconciliationCommand value => Build(operationName,
                 "schedule-provider-payment-reconciliation-result.v1", TenantAccount(value.TenantAccountId),
-                value, new ScheduleProviderPaymentReconciliationHandler(db).ExecuteAsync,
-                new ScheduleProviderPaymentReconciliationHandler(db).AuthorizeReplayAsync),
+                value, new ScheduleProviderPaymentReconciliationRule(db).ExecuteAsync,
+                new ScheduleProviderPaymentReconciliationRule(db).AuthorizeReplayAsync),
             FinalizeProviderPaymentCreateCommand value => Build(operationName,
                 "finalize-provider-payment-create-result.v1", TenantAccount(value.TenantAccountId),
-                value, new FinalizeProviderPaymentCreateHandler(db).ExecuteAsync,
-                new FinalizeProviderPaymentCreateHandler(db).AuthorizeReplayAsync),
+                value, new FinalizeProviderPaymentCreateRule(db).ExecuteAsync,
+                new FinalizeProviderPaymentCreateRule(db).AuthorizeReplayAsync),
             FailProviderPaymentCreateCommand value => Build(operationName,
                 "fail-provider-payment-create-result.v1", TenantAccount(value.TenantAccountId),
-                value, new FailProviderPaymentCreateHandler(db).ExecuteAsync,
-                new FailProviderPaymentCreateHandler(db).AuthorizeReplayAsync),
+                value, new FailProviderPaymentCreateRule(db).ExecuteAsync,
+                new FailProviderPaymentCreateRule(db).AuthorizeReplayAsync),
             AbandonProviderPaymentAttemptCommand value => Build(operationName,
                 "abandon-provider-payment-attempt-result.v1", TenantAccount(value.TenantAccountId),
-                value, new AbandonProviderPaymentAttemptHandler(db).ExecuteAsync,
-                new AbandonProviderPaymentAttemptHandler(db).AuthorizeReplayAsync),
+                value, new AbandonProviderPaymentAttemptRule(db).ExecuteAsync,
+                new AbandonProviderPaymentAttemptRule(db).AuthorizeReplayAsync),
             InspectProviderPaymentAttemptCommand value => Build(operationName,
                 "inspect-provider-payment-attempt-result.v1", TenantAccount(value.TenantAccountId),
-                value, new InspectProviderPaymentAttemptHandler(db).ExecuteAsync,
-                new InspectProviderPaymentAttemptHandler(db).AuthorizeReplayAsync),
+                value, new InspectProviderPaymentAttemptRule(db).ExecuteAsync,
+                new InspectProviderPaymentAttemptRule(db).AuthorizeReplayAsync),
             RecordVerifiedProviderPaymentEventCommand value => Build(operationName,
                 "record-verified-provider-payment-event-result.v1", WriteLockPlan.None,
-                value, new RecordVerifiedProviderPaymentEventHandler(db).ExecuteAsync,
-                new RecordVerifiedProviderPaymentEventHandler(db).AuthorizeReplayAsync),
+                value, new RecordVerifiedProviderPaymentEventRule(db).ExecuteAsync,
+                new RecordVerifiedProviderPaymentEventRule(db).AuthorizeReplayAsync),
             ReconcileClaimedProviderPaymentEventCommand value => Build(operationName,
                 "reconcile-claimed-provider-payment-event-result.v1", WriteLockPlan.None,
-                value, new ReconcileClaimedProviderPaymentEventHandler(db).ExecuteAsync,
-                new ReconcileClaimedProviderPaymentEventHandler(db).AuthorizeReplayAsync),
+                value, new ReconcileClaimedProviderPaymentEventRule(db).ExecuteAsync,
+                new ReconcileClaimedProviderPaymentEventRule(db).AuthorizeReplayAsync),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return (TransactionalWrite<TCommand, TResult>)write;
@@ -81,11 +81,11 @@ public static class ProviderPaymentWriteSupport
         "Legacy atomic provider-payment writes are retired; use the shared write executor.");
 }
 
-public sealed class PrepareProviderPaymentCreateHandler
+public sealed class PrepareProviderPaymentCreateRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PrepareProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
+    public PrepareProviderPaymentCreateRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<PrepareProviderPaymentCreateResult> ExecuteAsync(
         PrepareProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -215,11 +215,11 @@ public sealed class PrepareProviderPaymentCreateHandler
         ProviderPaymentHandlerSupport.AuthorizePaymentPrepareReplayAsync(command, _db, ct);
 }
 
-public sealed class PrepareProviderAutopaySetupHandler
+public sealed class PrepareProviderAutopaySetupRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PrepareProviderAutopaySetupHandler(RentalCommandDbContext db) => _db = db;
+    public PrepareProviderAutopaySetupRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<PrepareProviderAutopaySetupResult> ExecuteAsync(
         PrepareProviderAutopaySetupCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -307,11 +307,11 @@ public sealed class PrepareProviderAutopaySetupHandler
 /// the provider request. A money command can cancel Prepared while this command is waiting; in
 /// that case the caller receives a terminal state and must not call the provider.
 /// </summary>
-public sealed class SubmitProviderPaymentCreateHandler
+public sealed class SubmitProviderPaymentCreateRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public SubmitProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
+    public SubmitProviderPaymentCreateRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<SubmitProviderPaymentCreateResult> ExecuteAsync(
         SubmitProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -414,11 +414,11 @@ public sealed class SubmitProviderPaymentCreateHandler
 /// always outside this command transaction; this command only persists the next durable slot and
 /// retains the Submitted fence until a later provider-confirmed terminal transition.
 /// </summary>
-public sealed class ScheduleProviderPaymentReconciliationHandler
+public sealed class ScheduleProviderPaymentReconciliationRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ScheduleProviderPaymentReconciliationHandler(RentalCommandDbContext db) => _db = db;
+    public ScheduleProviderPaymentReconciliationRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ScheduleProviderPaymentReconciliationResult> ExecuteAsync(
         ScheduleProviderPaymentReconciliationCommand command,
@@ -497,11 +497,11 @@ public sealed class ScheduleProviderPaymentReconciliationHandler
             command.Provider, command.IdempotencyKey, _db, ct);
 }
 
-public sealed class FinalizeProviderPaymentCreateHandler
+public sealed class FinalizeProviderPaymentCreateRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public FinalizeProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
+    public FinalizeProviderPaymentCreateRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<FinalizeProviderPaymentCreateResult> ExecuteAsync(
         FinalizeProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -556,11 +556,11 @@ public sealed class FinalizeProviderPaymentCreateHandler
             command.Provider, command.IdempotencyKey, _db, ct);
 }
 
-public sealed class FailProviderPaymentCreateHandler
+public sealed class FailProviderPaymentCreateRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public FailProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
+    public FailProviderPaymentCreateRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<FailProviderPaymentCreateResult> ExecuteAsync(
         FailProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -607,11 +607,11 @@ public sealed class FailProviderPaymentCreateHandler
             command.Provider, command.IdempotencyKey, _db, ct);
 }
 
-public sealed class AbandonProviderPaymentAttemptHandler
+public sealed class AbandonProviderPaymentAttemptRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public AbandonProviderPaymentAttemptHandler(RentalCommandDbContext db) => _db = db;
+    public AbandonProviderPaymentAttemptRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<AbandonProviderPaymentAttemptResult> ExecuteAsync(
         AbandonProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -681,11 +681,11 @@ public sealed class AbandonProviderPaymentAttemptHandler
             command.Provider, command.IdempotencyKey, _db, ct);
 }
 
-public sealed class InspectProviderPaymentAttemptHandler
+public sealed class InspectProviderPaymentAttemptRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public InspectProviderPaymentAttemptHandler(RentalCommandDbContext db) => _db = db;
+    public InspectProviderPaymentAttemptRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<InspectProviderPaymentAttemptResult> ExecuteAsync(
         InspectProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -730,11 +730,11 @@ public sealed class InspectProviderPaymentAttemptHandler
             command.Provider, idempotencyKey: null, _db, ct);
 }
 
-public sealed class RecordVerifiedProviderPaymentEventHandler
+public sealed class RecordVerifiedProviderPaymentEventRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RecordVerifiedProviderPaymentEventHandler(RentalCommandDbContext db) => _db = db;
+    public RecordVerifiedProviderPaymentEventRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RecordVerifiedProviderPaymentEventResult> ExecuteAsync(
         RecordVerifiedProviderPaymentEventCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -941,11 +941,11 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
             command.Provider, command.ProviderEventId, _db, ct);
 }
 
-public sealed class ReconcileClaimedProviderPaymentEventHandler
+public sealed class ReconcileClaimedProviderPaymentEventRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReconcileClaimedProviderPaymentEventHandler(RentalCommandDbContext db) => _db = db;
+    public ReconcileClaimedProviderPaymentEventRule(RentalCommandDbContext db) => _db = db;
 
     internal const int MaximumAttempts = 8;
 

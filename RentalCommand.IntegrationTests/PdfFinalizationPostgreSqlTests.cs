@@ -62,7 +62,7 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
                 "integration-prepare",
                 null,
                 false);
-        var prepareHandler = new PrepareAdverseActionNoticeHandler(provider.GetRequiredService<RentalCommandDbContext>());
+        var prepareHandler = new PrepareAdverseActionNoticeRule(provider.GetRequiredService<RentalCommandDbContext>());
         var prepared = await writes.ExecuteAsync("integration-prepare",
             ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
                 prepareHandler.AuthorizeAsync));
@@ -107,7 +107,7 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
             "integration-delivery",
             prepared.Value.GeneratedAtUtc);
 
-        var finalizeHandler = new CreateAdverseActionNoticeHandler(provider.GetRequiredService<RentalCommandDbContext>());
+        var finalizeHandler = new CreateAdverseActionNoticeRule(provider.GetRequiredService<RentalCommandDbContext>());
         var act = () => writes.ExecuteAsync("integration-finalize",
             ScreeningWriteSupport.Write(command, finalizeHandler.ExecuteAsync,
                 finalizeHandler.AuthorizeAsync));

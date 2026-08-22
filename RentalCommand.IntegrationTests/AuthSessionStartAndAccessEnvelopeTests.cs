@@ -1426,13 +1426,13 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         object write = command switch
         {
-            IssueLoginContextSelectionChallengeCommand value => Build(value, new IssueLoginContextSelectionChallengeHandler(db)),
-            StartAuthSessionCommand value => Build(value, new StartAuthSessionHandler(db)),
-            AuthEmailOutboxCommand value => Build(value, new AuthEmailOutboxHandler(db)),
-            ConfirmAccountEmailCommand value => Build(value, new ConfirmAccountEmailHandler(db)),
-            ResetAccountPasswordCommand value => Build(value, new ResetAccountPasswordHandler(db)),
-            ChangePasswordCommand value => Build(value, new ChangePasswordHandler(db)),
-            ConfirmGoogleAccountEmailCommand value => Build(value, new ConfirmGoogleAccountEmailHandler(db)),
+            IssueLoginContextSelectionChallengeCommand value => Build(value, new IssueLoginContextSelectionChallengeRule(db)),
+            StartAuthSessionCommand value => Build(value, new StartAuthSessionRule(db)),
+            AuthEmailOutboxCommand value => Build(value, new AuthEmailOutboxRule(db)),
+            ConfirmAccountEmailCommand value => Build(value, new ConfirmAccountEmailRule(db)),
+            ResetAccountPasswordCommand value => Build(value, new ResetAccountPasswordRule(db)),
+            ChangePasswordCommand value => Build(value, new ChangePasswordRule(db)),
+            ConfirmGoogleAccountEmailCommand value => Build(value, new ConfirmGoogleAccountEmailRule(db)),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
@@ -1440,31 +1440,31 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     }
 
     private static TransactionalWrite<IssueLoginContextSelectionChallengeCommand, LoginContextSelectionChallengeResult> Build(
-        IssueLoginContextSelectionChallengeCommand command, IssueLoginContextSelectionChallengeHandler handler) =>
+        IssueLoginContextSelectionChallengeCommand command, IssueLoginContextSelectionChallengeRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private static TransactionalWrite<StartAuthSessionCommand, StartAuthSessionResult> Build(
-        StartAuthSessionCommand command, StartAuthSessionHandler handler) =>
+        StartAuthSessionCommand command, StartAuthSessionRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private static TransactionalWrite<AuthEmailOutboxCommand, AuthEmailOutboxResult> Build(
-        AuthEmailOutboxCommand command, AuthEmailOutboxHandler handler) =>
+        AuthEmailOutboxCommand command, AuthEmailOutboxRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private static TransactionalWrite<ConfirmAccountEmailCommand, ConfirmAccountEmailResult> Build(
-        ConfirmAccountEmailCommand command, ConfirmAccountEmailHandler handler) =>
+        ConfirmAccountEmailCommand command, ConfirmAccountEmailRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private static TransactionalWrite<ResetAccountPasswordCommand, ResetAccountPasswordResult> Build(
-        ResetAccountPasswordCommand command, ResetAccountPasswordHandler handler) =>
+        ResetAccountPasswordCommand command, ResetAccountPasswordRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private static TransactionalWrite<ChangePasswordCommand, ChangePasswordResult> Build(
-        ChangePasswordCommand command, ChangePasswordHandler handler) =>
+        ChangePasswordCommand command, ChangePasswordRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private static TransactionalWrite<ConfirmGoogleAccountEmailCommand, ConfirmAccountEmailResult> Build(
-        ConfirmGoogleAccountEmailCommand command, ConfirmGoogleAccountEmailHandler handler) =>
+        ConfirmGoogleAccountEmailCommand command, ConfirmGoogleAccountEmailRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private ServiceProvider RuntimeServices =>

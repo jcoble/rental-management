@@ -23,7 +23,7 @@ public class PropertyService : IPropertyService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IRequestWriteExecutor? _writes;
-    private readonly PropertyTenantCrudWriteRules _crudRules;
+    private readonly PropertyTenantCrudRule _crudRules;
     private readonly TimeProvider _timeProvider;
 
     public PropertyService(
@@ -36,7 +36,7 @@ public class PropertyService : IPropertyService
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
         _writes = writes;
-        _crudRules = new PropertyTenantCrudWriteRules(db);
+        _crudRules = new PropertyTenantCrudRule(db);
     }
 
     public async Task<PropertyResponse?> UpdateAsync(

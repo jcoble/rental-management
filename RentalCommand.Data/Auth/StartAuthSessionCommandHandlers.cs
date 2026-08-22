@@ -8,11 +8,11 @@ using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Auth;
 
-public sealed class IssueLoginContextSelectionChallengeHandler
+public sealed class IssueLoginContextSelectionChallengeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public IssueLoginContextSelectionChallengeHandler(RentalCommandDbContext db) => _db = db;
+    public IssueLoginContextSelectionChallengeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<LoginContextSelectionChallengeResult> ExecuteAsync(
         IssueLoginContextSelectionChallengeCommand command,
@@ -123,7 +123,7 @@ public sealed class IssueLoginContextSelectionChallengeHandler
             throw new ArgumentOutOfRangeException(nameof(command.UserId));
         }
 
-        IssueSessionRefreshCredentialHandler.ValidateHash(
+        IssueSessionRefreshCredentialRule.ValidateHash(
             command.ChallengeTokenHash,
             nameof(command.ChallengeTokenHash));
         if (command.ExpiresAtUtc <= command.IssuedAtUtc)
@@ -138,11 +138,11 @@ public sealed class IssueLoginContextSelectionChallengeHandler
         int EffectiveContextCount);
 }
 
-public sealed class StartAuthSessionHandler
+public sealed class StartAuthSessionRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public StartAuthSessionHandler(RentalCommandDbContext db) => _db = db;
+    public StartAuthSessionRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<StartAuthSessionResult> ExecuteAsync(
         StartAuthSessionCommand command,
@@ -334,7 +334,7 @@ public sealed class StartAuthSessionHandler
             throw new ArgumentOutOfRangeException(nameof(command));
         }
 
-        IssueSessionRefreshCredentialHandler.ValidateHash(
+        IssueSessionRefreshCredentialRule.ValidateHash(
             command.CredentialTokenHash,
             nameof(command.CredentialTokenHash));
         if (command.SessionExpiresAtUtc <= command.IssuedAtUtc ||
@@ -361,7 +361,7 @@ public sealed class StartAuthSessionHandler
 
         if (command.ContextSelectionChallengeTokenHash is { } hash)
         {
-            IssueSessionRefreshCredentialHandler.ValidateHash(
+            IssueSessionRefreshCredentialRule.ValidateHash(
                 hash,
                 nameof(command.ContextSelectionChallengeTokenHash));
         }

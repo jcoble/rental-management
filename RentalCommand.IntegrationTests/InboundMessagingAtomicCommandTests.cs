@@ -206,8 +206,8 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             StringComparison.Ordinal)).Should().Be(2);
         _probe.AdvisoryLockParameterCounts.Should().StartWith([1, 2],
             "the executor must acquire the hashed phone lock before the work-order lock");
-        typeof(CompleteVendorDispatchFromInboundHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
-        typeof(CompleteVendorDispatchFromInboundHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
+        typeof(CompleteVendorDispatchFromInboundRule).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(CompleteVendorDispatchFromInboundRule).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
     }
 
     [SkippableFact]
@@ -515,7 +515,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         return await writes.ExecuteAsync(
-            identity.IdempotencyKey, CompleteVendorDispatchFromInboundHandler.Write(command, db), ct);
+            identity.IdempotencyKey, CompleteVendorDispatchFromInboundRule.Write(command, db), ct);
     }
 
     private CompleteVendorDispatchFromInboundCommand VendorDone(string eventId, DateTime? receivedAt = null) =>

@@ -47,39 +47,39 @@ public sealed class WorkOperationAtomicExecutorParityTests
             new DbContextOptionsBuilder<RentalCommandDbContext>().Options);
         var guard = new WorkOrderResponsibilityAccessRevisionGuard();
 
-        AssertWrite(RequestVendorW9Handler.Write(W9(), db),
+        AssertWrite(RequestVendorW9Rule.Write(W9(), db),
             "vendor-w9.request", "vendor-w9.request.result.v1", null);
-        AssertWrite(AssignWorkOrderResponsibilityHandler.Write(Assign(), db, guard),
+        AssertWrite(AssignWorkOrderResponsibilityRule.Write(Assign(), db, guard),
             "work-order-responsibility.assign", "work-order-responsibility.assign.v1",
             WriteLockProtocol.WorkOrderResponsibility);
-        AssertWrite(CompleteVendorDispatchFromInboundHandler.Write(Inbound(), db),
+        AssertWrite(CompleteVendorDispatchFromInboundRule.Write(Inbound(), db),
             "sms.vendor-done", "complete-vendor-dispatch-from-inbound-result.v1",
             WriteLockProtocol.VendorDispatchInbound, "VendorDispatch");
-        AssertWrite(CancelVendorDispatchHandler.Write(Cancel(), db),
+        AssertWrite(CancelVendorDispatchRule.Write(Cancel(), db),
             "vendor-dispatch.cancel", "vendor-dispatch.cancel.v1",
             WriteLockProtocol.WorkOrder, "WorkOrder");
-        AssertWrite(CloseWorkOrderResponsibilityHandler.Write(Close(), db, guard),
+        AssertWrite(CloseWorkOrderResponsibilityRule.Write(Close(), db, guard),
             "work-order-responsibility.close", "work-order-responsibility.close.v1",
             WriteLockProtocol.WorkOrderResponsibility);
-        AssertWrite(UpdateAssignedWorkOrderHandler.Write(Update(), db),
+        AssertWrite(UpdateAssignedWorkOrderRule.Write(Update(), db),
             "assigned-work-order.update", "assigned-work-order.update.v1",
             WriteLockProtocol.WorkspaceAccessContextWorkOrder,
             "WorkspaceAccessContext", "WorkOrder");
-        AssertWrite(RecordTechnicianWorkEntryHandler.Write(Entry(), db),
+        AssertWrite(RecordTechnicianWorkEntryRule.Write(Entry(), db),
             "technician-work-entry.record", "technician-work-entry.v1",
             WriteLockProtocol.WorkOrder, "WorkOrder");
-        AssertWrite(SendTechnicianAssignmentMessageHandler.Write(Message(), db),
+        AssertWrite(SendTechnicianAssignmentMessageRule.Write(Message(), db),
             "technician-assignment-message.send", "technician-assignment-message.v1",
             WriteLockProtocol.WorkOrder, "WorkOrder");
-        AssertWrite(MarkTechnicianAssignmentConversationReadHandler.Write(Read(), db),
+        AssertWrite(MarkTechnicianAssignmentConversationReadRule.Write(Read(), db),
             "technician-assignment-conversation.read", "technician-assignment-conversation-read.v1",
             WriteLockProtocol.WorkOrder, "WorkOrder");
-        AssertWrite(RecoverVendorDispatchChronologyHandler.Write(Recovery(), db),
+        AssertWrite(RecoverVendorDispatchChronologyRule.Write(Recovery(), db),
             "vendor-dispatch.recover-chronology", "vendor-dispatch.chronology-recovery.v1", null);
-        AssertWrite(DispatchWorkOrderToVendorHandler.Write(Dispatch(), db),
+        AssertWrite(DispatchWorkOrderToVendorRule.Write(Dispatch(), db),
             "vendor-dispatch.create", "vendor-dispatch.create.v1",
             WriteLockProtocol.WorkOrder, "WorkOrder");
-        AssertWrite(CreateVendorRatingHandler.Write(Rating(), db),
+        AssertWrite(CreateVendorRatingRule.Write(Rating(), db),
             "vendor-rating.create", "vendor-rating.create.v1",
             WriteLockProtocol.WorkOrderVendor, "WorkOrder", "Vendor");
     }

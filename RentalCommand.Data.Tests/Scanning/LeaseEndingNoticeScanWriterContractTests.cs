@@ -15,7 +15,7 @@ public sealed class LeaseEndingNoticeScanWriterContractTests
                 "ProductionScanConfirmationTargetWriter.cs"));
 
         source.Should().Contain("ScanConfirmationTargetKind.LeaseEndingNotice => WriteLeaseEndingNoticeAsync");
-        source.Should().Contain("RecordLeaseEndingDispositionHandler");
+        source.Should().Contain("RecordLeaseEndingDispositionRule");
         source.Should().Contain("LeaseManagementEndingDisposition.NonRenewalMoveOut");
         source.Should().Contain("CanonicalEntityType: nameof(LeaseManagement)");
         source.Should().Contain("TargetAuditRecorded: true");

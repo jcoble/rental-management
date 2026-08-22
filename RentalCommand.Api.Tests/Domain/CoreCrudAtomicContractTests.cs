@@ -37,7 +37,7 @@ public sealed class CoreCrudAtomicContractTests
                 "RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationCommand")
             .Should().BeNull();
 
-        var source = ReadSource("RentalCommand.Api", "Services", "Domain", "AtomicCoreCrudMutation.cs");
+        var source = ReadSource("RentalCommand.Api", "Services", "Domain", "PropertyTenantCrudRule.cs");
         source.Should().Contain("BindSemanticAudit");
         source.Should().Contain("AuthorizeReplayAsync");
         source.Should().Contain("ReadDatabaseClockUtcAsync");
@@ -69,7 +69,7 @@ public sealed class CoreCrudAtomicContractTests
         typeof(PropertyController).GetMethod("Create").Should().BeNull(
             "Property creation must go through setup so Property and Units commit together");
 
-        var source = ReadSource("RentalCommand.Api", "Services", "Domain", "AtomicCoreCrudMutation.cs");
+        var source = ReadSource("RentalCommand.Api", "Services", "Domain", "PropertyTenantCrudRule.cs");
         source.Should().Contain("AtomicCoreCrudMutationOperation.Setup");
         source.Should().Contain("SetupPropertyAsync");
         source.Should().NotContain("NewCanonicalUnit");
@@ -92,7 +92,7 @@ public sealed class CoreCrudAtomicContractTests
         typeof(UpdatePropertyRequest).GetProperty(nameof(UpdatePropertyRequest.Ownerships))
             .Should().NotBeNull();
 
-        var source = ReadSource("RentalCommand.Api", "Services", "Domain", "AtomicCoreCrudMutation.cs");
+        var source = ReadSource("RentalCommand.Api", "Services", "Domain", "PropertyTenantCrudRule.cs");
         source.Should().Contain("new PropertyOwnership");
         source.Should().Contain("OwnershipSharePercent = request.OwnershipSharePercent");
         source.Should().Contain("StatementRecipientName =");
@@ -112,11 +112,11 @@ public sealed class CoreCrudAtomicContractTests
         endpoint!.GetParameters().Any(parameter =>
             parameter.GetCustomAttribute<FromHeaderAttribute>()?.Name == "Idempotency-Key")
             .Should().BeTrue();
-        typeof(AtomicGuidedTenantSetupHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
-        typeof(AtomicGuidedTenantSetupHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
+        typeof(AtomicGuidedTenantSetupRule).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(AtomicGuidedTenantSetupRule).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
 
         var handler = ReadSource(
-            "RentalCommand.Api", "Services", "Domain", "AtomicGuidedTenantSetup.cs");
+            "RentalCommand.Api", "Services", "Domain", "AtomicGuidedTenantSetupRule.cs");
         handler.Should().Contain("CapabilityKeys.SecurityManage");
         handler.Should().NotContain("CapabilityKeys.RentalsManage");
         handler.Should().NotContain("CapabilityKeys.LeasingOnboardingManage");

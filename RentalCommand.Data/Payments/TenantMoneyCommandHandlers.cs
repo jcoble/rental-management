@@ -115,11 +115,11 @@ public static class TenantMoneyWriteSupport
 
 }
 
-public sealed class RecordTenantReceiptHandler
+public sealed class RecordTenantReceiptRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RecordTenantReceiptHandler(RentalCommandDbContext db) => _db = db;
+    public RecordTenantReceiptRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RecordTenantReceiptResult> ExecuteAsync(
         RecordTenantReceiptCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -660,11 +660,11 @@ internal static class TenantReceiptNotificationStaging
     }
 }
 
-public sealed class PostTenantChargeHandler
+public sealed class PostTenantChargeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PostTenantChargeHandler(RentalCommandDbContext db) => _db = db;
+    public PostTenantChargeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<TenantChargeMutationResult> ExecuteAsync(
         PostTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -721,11 +721,11 @@ public sealed class PostTenantChargeHandler
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class ReverseTenantChargeHandler
+public sealed class ReverseTenantChargeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReverseTenantChargeHandler(RentalCommandDbContext db) => _db = db;
+    public ReverseTenantChargeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<TenantChargeMutationResult> ExecuteAsync(
         ReverseTenantChargeCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -814,11 +814,11 @@ public sealed class ReverseTenantChargeHandler
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class PostTenantCreditHandler
+public sealed class PostTenantCreditRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PostTenantCreditHandler(RentalCommandDbContext db) => _db = db;
+    public PostTenantCreditRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<TenantLedgerMutationResult> ExecuteAsync(
         PostTenantCreditCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -930,11 +930,11 @@ public sealed class PostTenantCreditHandler
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class PostTenantAdjustmentHandler
+public sealed class PostTenantAdjustmentRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PostTenantAdjustmentHandler(RentalCommandDbContext db) => _db = db;
+    public PostTenantAdjustmentRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<TenantLedgerMutationResult> ExecuteAsync(
         PostTenantAdjustmentCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -985,11 +985,11 @@ public sealed class PostTenantAdjustmentHandler
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class ReverseTenantLedgerEntryHandler
+public sealed class ReverseTenantLedgerEntryRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReverseTenantLedgerEntryHandler(RentalCommandDbContext db) => _db = db;
+    public ReverseTenantLedgerEntryRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<TenantLedgerMutationResult> ExecuteAsync(
         ReverseTenantLedgerEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1122,11 +1122,11 @@ public sealed class ReverseTenantLedgerEntryHandler
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class RefundTenantPaymentHandler
+public sealed class RefundTenantPaymentRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RefundTenantPaymentHandler(RentalCommandDbContext db) => _db = db;
+    public RefundTenantPaymentRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<TenantPaymentRefundResult> ExecuteAsync(
         RefundTenantPaymentCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1309,11 +1309,11 @@ public sealed class RefundTenantPaymentHandler
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class RecoverHistoricalRentChargeHandler
+public sealed class RecoverHistoricalRentChargeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RecoverHistoricalRentChargeHandler(RentalCommandDbContext db) => _db = db;
+    public RecoverHistoricalRentChargeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RecoverHistoricalRentChargeResult> ExecuteAsync(
         RecoverHistoricalRentChargeCommand command,
@@ -1482,11 +1482,11 @@ public sealed class RecoverHistoricalRentChargeHandler
     }
 }
 
-public sealed class RecoverLateFeeChargesHandler
+public sealed class RecoverLateFeeChargesRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RecoverLateFeeChargesHandler(RentalCommandDbContext db) => _db = db;
+    public RecoverLateFeeChargesRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RecoverLateFeeChargesResult> ExecuteAsync(
         RecoverLateFeeChargesCommand command,
@@ -1726,11 +1726,11 @@ public sealed class RecoverLateFeeChargesHandler
     }
 }
 
-public sealed class FundSecurityDepositHandler
+public sealed class FundSecurityDepositRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public FundSecurityDepositHandler(RentalCommandDbContext db) => _db = db;
+    public FundSecurityDepositRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<SecurityDepositMutationResult> ExecuteAsync(
         FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1811,11 +1811,11 @@ public sealed class FundSecurityDepositHandler
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 
-public sealed class DeductSecurityDepositHandler
+public sealed class DeductSecurityDepositRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public DeductSecurityDepositHandler(RentalCommandDbContext db) => _db = db;
+    public DeductSecurityDepositRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<SecurityDepositMutationResult> ExecuteAsync(
         DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1883,11 +1883,11 @@ public sealed class DeductSecurityDepositHandler
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 
-public sealed class RefundSecurityDepositHandler
+public sealed class RefundSecurityDepositRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RefundSecurityDepositHandler(RentalCommandDbContext db) => _db = db;
+    public RefundSecurityDepositRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<SecurityDepositMutationResult> ExecuteAsync(
         RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -1932,11 +1932,11 @@ public sealed class RefundSecurityDepositHandler
         TenantMoneyCommandSupport.AuthorizeDepositReplayAsync(command, _db, ct);
 }
 
-public sealed class ReverseSecurityDepositEntryHandler
+public sealed class ReverseSecurityDepositEntryRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReverseSecurityDepositEntryHandler(RentalCommandDbContext db) => _db = db;
+    public ReverseSecurityDepositEntryRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<SecurityDepositMutationResult> ExecuteAsync(
         ReverseSecurityDepositEntryCommand command,

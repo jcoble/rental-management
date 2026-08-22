@@ -142,7 +142,7 @@ public sealed class HistoricalPossessionReconciliationPostgreSqlTests : IAsyncLi
         var scenario = await SeedScenarioAsync();
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var sql = ReconcileHistoricalPossessionHandler.LoadTarget(
+        var sql = ReconcileHistoricalPossessionRule.LoadTarget(
                 Command(scenario, scenario.TermStartOn, "sql"),
                 db,
                 DateTime.UtcNow,

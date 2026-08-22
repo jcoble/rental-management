@@ -54,7 +54,7 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
                     token,
                     today,
                     _timeProvider.GetUtcNow().UtcDateTime);
-            var handler = new ApplyClaimedRecurringExpenseBatchHandler(_db);
+            var handler = new ApplyClaimedRecurringExpenseBatchRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 token.ToString("N"),
                 ScheduledFinanceWriteSupport.Write(

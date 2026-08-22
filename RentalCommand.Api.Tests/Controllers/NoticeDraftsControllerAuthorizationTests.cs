@@ -21,7 +21,7 @@ public sealed class NoticeDraftsControllerAuthorizationTests
             "RentalCommand.Api",
             "Services",
             "Domain",
-            "AtomicNoticeDeliveryMutation.cs"));
+            "AtomicNoticeDeliveryRule.cs"));
 
         source.Should().Contain(
             "await AuthorizeCallerAsync(command, _db, securityNow, requireActiveClaim: true, ct)");

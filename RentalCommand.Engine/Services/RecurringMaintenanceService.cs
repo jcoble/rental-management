@@ -79,7 +79,7 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
                     today,
                     appliedAtUtc,
                     businessTimeZoneId);
-            var handler = new ApplyClaimedRecurringMaintenanceBatchHandler(
+            var handler = new ApplyClaimedRecurringMaintenanceBatchRule(
                 scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
             var outcome = await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>().ExecuteAsync(
                 $"{claim.ClaimToken:N}:{claim.Id}",

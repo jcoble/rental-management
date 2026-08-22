@@ -56,7 +56,7 @@ public sealed class SmsInboundVendorDoneService : ISmsInboundVendorDoneService
                 DateTime.SpecifyKind(receivedAtUtc, DateTimeKind.Utc));
         var outcome = await _writes.ExecuteAsync(
             identity.IdempotencyKey,
-            CompleteVendorDispatchFromInboundHandler.Write(command, _db), ct);
+            CompleteVendorDispatchFromInboundRule.Write(command, _db), ct);
 
         if (outcome.Value.Outcome == CompleteVendorDispatchFromInboundOutcome.NoOpenDispatch)
         {

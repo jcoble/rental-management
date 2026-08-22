@@ -532,19 +532,19 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
         var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
         if (command is CreateRecurringTenantChargeCommand create)
         {
-            var handler = new CreateRecurringTenantChargeHandler(db);
+            var handler = new CreateRecurringTenantChargeRule(db);
             return await writes.ExecuteAsync(idempotencyKey,
                 TenantMoneyWriteSupport.Write(create, handler.ExecuteAsync, handler.AuthorizeAsync));
         }
         if (command is UpdateRecurringTenantChargeCommand update)
         {
-            var handler = new UpdateRecurringTenantChargeHandler(db);
+            var handler = new UpdateRecurringTenantChargeRule(db);
             return await writes.ExecuteAsync(idempotencyKey,
                 TenantMoneyWriteSupport.Write(update, handler.ExecuteAsync, handler.AuthorizeAsync));
         }
         if (command is DeactivateRecurringTenantChargeCommand deactivate)
         {
-            var handler = new DeactivateRecurringTenantChargeHandler(db);
+            var handler = new DeactivateRecurringTenantChargeRule(db);
             return await writes.ExecuteAsync(idempotencyKey,
                 TenantMoneyWriteSupport.Write(deactivate, handler.ExecuteAsync, handler.AuthorizeAsync));
         }
@@ -555,7 +555,7 @@ public sealed class RecurringTenantChargeAtomicPostgreSqlTests : IAsyncLifetime
         ExecuteCreateAsync(IServiceProvider services, CreateRecurringTenantChargeCommand command)
     {
         await using var scope = services.CreateAsyncScope();
-        var handler = new CreateRecurringTenantChargeHandler(
+        var handler = new CreateRecurringTenantChargeRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
             .ExecuteAsync(command.DeliveryIdempotencyKey, TenantMoneyWriteSupport.Write(
