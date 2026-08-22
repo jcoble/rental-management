@@ -50,9 +50,9 @@ public static class AtomicPaymentCsvImport
         return new(identity.CommandType, WriteIdempotencyPolicy.Required, command,
             Codec.ContractName,
             new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
-                WriteLock.For("AuthSession", command.AuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
-                WriteLock.For("Portfolio", command.PortfolioId)),
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.PortfolioId),
             executeAsync, authorizeReplayAsync);
     }
 

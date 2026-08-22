@@ -28,7 +28,7 @@ public static class ScanDraftWriteSupport
         {
             FinalizeScanUploadCommand value => new WriteLockPlan(
                 WriteLockProtocol.Portfolio,
-                WriteLock.For("Portfolio", value.PortfolioId)),
+                value.PortfolioId),
             RetryScanDraftCommand value => DraftPlan(value.AuthSessionId, value.AccessContextId,
                 value.PortfolioId, value.DraftId),
             CreateVoiceScanDraftCommand value => ScopePlan(
@@ -52,17 +52,17 @@ public static class ScanDraftWriteSupport
 
     private static WriteLockPlan ScopePlan(Guid sessionId, int accessContextId, int portfolioId) =>
         new(WriteLockProtocol.AuthorizationScope,
-            WriteLock.For("AuthSession", sessionId),
-            WriteLock.For("WorkspaceAccessContext", accessContextId),
-            WriteLock.For("Portfolio", portfolioId));
+            sessionId,
+            accessContextId,
+            portfolioId);
 
     private static WriteLockPlan DraftPlan(
         Guid sessionId, int accessContextId, int portfolioId, int draftId) =>
         new(WriteLockProtocol.AuthorizationScopeScanDraft,
-            WriteLock.For("AuthSession", sessionId),
-            WriteLock.For("WorkspaceAccessContext", accessContextId),
-            WriteLock.For("Portfolio", portfolioId),
-            WriteLock.For("ScanDraft", draftId));
+            sessionId,
+            accessContextId,
+            portfolioId,
+            draftId);
 
     private static void Validate<TCommand>(TCommand command)
     {

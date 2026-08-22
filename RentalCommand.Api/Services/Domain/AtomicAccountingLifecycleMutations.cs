@@ -630,17 +630,17 @@ public static class AccountingWriteSupport
                 create.ActorAuthSessionId, create.ActorAccessContextId, create.PortfolioId),
             UpdateLedgerAccountCommand update => new WriteLockPlan(
                 WriteLockProtocol.AuthorizationScopeLedgerAccount,
-                WriteLock.For("AuthSession", update.ActorAuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", update.ActorAccessContextId),
-                WriteLock.For("Portfolio", update.PortfolioId),
-                WriteLock.For("LedgerAccount", update.AccountId)),
+                update.ActorAuthSessionId,
+                update.ActorAccessContextId,
+                update.PortfolioId,
+                update.AccountId),
             PrepareAccountingConnectCommand connect => AuthorizationScope(
                 connect.AuthSessionId, connect.AccessContextId, connect.PortfolioId),
             CancelTenantAutopayCommand autopay => new WriteLockPlan(
                 WriteLockProtocol.AuthorizationScopeTenantAccount,
-                WriteLock.For("AuthSession", autopay.TenantAuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", autopay.TenantAccessContextId),
-                WriteLock.For("TenantAccount", autopay.TenantAccountId)),
+                autopay.TenantAuthSessionId,
+                autopay.TenantAccessContextId,
+                autopay.TenantAccountId),
             PrepareAccountingDisconnectCommand prepare => AuthorizationScope(
                 prepare.AuthSessionId, prepare.AccessContextId, prepare.PortfolioId),
             FinalizeAccountingDisconnectCommand finalize => AuthorizationAccountingConnection(
@@ -649,7 +649,7 @@ public static class AccountingWriteSupport
                 direction.AuthSessionId, direction.AccessContextId, direction.PortfolioId),
             ApplyAccountingPullResultCommand pull => new WriteLockPlan(
                 WriteLockProtocol.AccountingConnection,
-                WriteLock.For("AccountingConnection", pull.AccountingConnectionId)),
+                pull.AccountingConnectionId),
             ConfirmAccountingMappingCommand mapping => AuthorizationAccountingConnection(
                 mapping.AuthSessionId, mapping.AccessContextId, mapping.AccountingConnectionId),
             ContinueAccountingMappingPromotionCommand continuation => AuthorizationAccountingConnection(
@@ -674,15 +674,15 @@ public static class AccountingWriteSupport
     private static WriteLockPlan AuthorizationScope(Guid sessionId, int accessContextId, int portfolioId) =>
         new(
             WriteLockProtocol.AuthorizationScope,
-            WriteLock.For("AuthSession", sessionId),
-            WriteLock.For("WorkspaceAccessContext", accessContextId),
-            WriteLock.For("Portfolio", portfolioId));
+            sessionId,
+            accessContextId,
+            portfolioId);
 
     private static WriteLockPlan AuthorizationAccountingConnection(
         Guid sessionId, int accessContextId, int connectionId) =>
         new(
             WriteLockProtocol.AuthorizationScopeAccountingConnection,
-            WriteLock.For("AuthSession", sessionId),
-            WriteLock.For("WorkspaceAccessContext", accessContextId),
-            WriteLock.For("AccountingConnection", connectionId));
+            sessionId,
+            accessContextId,
+            connectionId);
 }

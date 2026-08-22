@@ -107,7 +107,7 @@ public sealed class RecordTechnicianWorkEntryHandler
     }
 
     internal static WriteLockPlan WorkOrderLock(int workOrderId) => new(
-        WriteLockProtocol.WorkOrder, WriteLock.For("WorkOrder", workOrderId));
+        WriteLockProtocol.WorkOrder, workOrderId);
 
     internal static InvalidOperationException RetiredPath() => new(
         "Technician experience mutations must use the shared write executor.");

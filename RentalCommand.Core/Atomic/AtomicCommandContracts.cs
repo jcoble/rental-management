@@ -210,26 +210,29 @@ public sealed class WriteLockPlan
 
     private WriteLockPlan() => Locks = [];
 
-    public WriteLockPlan(WriteLockProtocol protocol, params WriteLock[] locks)
+    public WriteLockPlan(WriteLockProtocol protocol, params object[] lockIds)
     {
-        ArgumentNullException.ThrowIfNull(locks);
-        if (locks.Any(item => item is null))
-        {
-            throw new ArgumentException("A lock plan cannot contain a null lock.", nameof(locks));
-        }
-
-        var expectedNamespaces = ProtocolNamespaces[protocol];
-        if (!locks.Select(item => item.LockNamespace).SequenceEqual(expectedNamespaces))
+        ArgumentNullException.ThrowIfNull(lockIds);
+        var namespaces = ProtocolNamespaces[protocol];
+        if (lockIds.Length != namespaces.Length)
         {
             throw new ArgumentException(
-                $"Write locks for protocol '{protocol}' must be exactly: " +
-                string.Join(" then ", expectedNamespaces) + ".",
-                nameof(locks));
+                $"Write lock protocol '{protocol}' requires {namespaces.Length} lock ids.",
+                nameof(lockIds));
         }
+
+        var locks = namespaces.Zip(lockIds, static (lockNamespace, lockId) => lockId switch
+        {
+            int integerId => WriteLock.For(lockNamespace, integerId),
+            Guid guidId => WriteLock.For(lockNamespace, guidId),
+            _ => throw new ArgumentException(
+                "A lock identifier must be an integer or GUID.", nameof(lockIds)),
+        }).ToArray();
 
         if (locks.Distinct().Count() != locks.Length)
         {
-            throw new ArgumentException("A lock plan cannot acquire the same lock twice.", nameof(locks));
+            throw new ArgumentException(
+                "A lock plan cannot acquire the same lock twice.", nameof(lockIds));
         }
 
         Protocol = protocol;
