@@ -77,18 +77,24 @@ export function syncGridUrl(
 	values: Record<string, string | number | null | undefined>,
 	defaults: Record<string, string | number> = {}
 ): string {
-	const url = page.url;
-	const query = gridQueryString(values, defaults, url.searchParams);
-	const current = url.searchParams.toString();
+	// Compare against window.location, not page.url: SvelteKit's shallow replaceState does not
+	// refresh page.url, so after one shallow write page.url is stale and a later clear-to-default
+	// computes "no change" against the stale baseline and never removes the param.
+	const { pathname, hash } = window.location;
+	const query = gridQueryString(values, defaults, new URLSearchParams(window.location.search));
+	const current = new URLSearchParams(window.location.search).toString();
 	if (query !== current) {
-		const pathname = url.pathname;
-		const hash = url.hash;
 		// Wait until the current route is mounted before touching shallow history.
 		// A document navigation here can issue a data request while offline and
 		// can race SvelteKit hydration on routes such as Leases. A shallow replace
 		// keeps the current list mounted and changes only the filter URL.
 		void tick().then(() => {
-			if (page.url.pathname !== pathname || page.url.searchParams.toString() === query) return;
+			if (
+				window.location.pathname !== pathname ||
+				new URLSearchParams(window.location.search).toString() === query
+			) {
+				return;
+			}
 			replaceState(
 				`${pathname}${query ? `?${query}` : ''}${hash}`,
 				page.state ?? {},
