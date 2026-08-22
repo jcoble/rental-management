@@ -45,7 +45,7 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
                 db,
                 SecurityNowUtc)
             .ToQueryString();
-        var moveInSql = PrepareMoveInHandler.AuthorizedUnits(
+        var moveInSql = PrepareMoveInRule.AuthorizedUnits(
                 new PrepareMoveInCommand(
                     17, null, 42, 5, SessionId, 12, 3, null,
                     new DateOnly(2026, 9, 1), [], null, default,
@@ -54,7 +54,7 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
                 db,
                 SecurityNowUtc)
             .ToQueryString();
-        var dispositionSql = CreatePropertyDispositionHandler.AuthorizedProperties(
+        var dispositionSql = CreatePropertyDispositionRule.AuthorizedProperties(
                 new CreatePropertyDispositionCommand(
                     17, 9, SecurityNowUtc, 250000m, 15000m, null, null, 5,
                     SessionId, 12, 3, "disposition-replay"),
@@ -103,7 +103,7 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
     {
         using var db = Context();
 
-        var ownerSql = QueueOwnerStatementEmailHandler.AuthorizedOwners(
+        var ownerSql = QueueOwnerStatementEmailRule.AuthorizedOwners(
                 new QueueOwnerStatementEmailCommand(
                     17, 5, SessionId, 12, 3, 9, 2026, "owner@example.test", "Statement", "Body", "owner-replay"),
                 db,
@@ -122,21 +122,21 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
         var conversationCommand = new SendConversationMessageCommand(
             17, 88, 9, "Subject", "Body", ConversationSenderRole.Landlord, [], SecurityNowUtc,
             42, new ConversationManagementAccess(SessionId, 5, 12, 3));
-        var conversationSql = SendConversationMessageHandler.WhereManagementAuthorized(
+        var conversationSql = SendConversationMessageRule.WhereManagementAuthorized(
                 db.Set<Conversation>().Where(conversation =>
                     conversation.Id == 88 && conversation.PortfolioId == 17),
                 db,
                 conversationCommand,
                 SecurityNowUtc)
             .ToQueryString();
-        var tenantSql = SendConversationMessageHandler.WhereManagementAuthorizedForStart(
+        var tenantSql = SendConversationMessageRule.WhereManagementAuthorizedForStart(
                 db.Set<Tenant>().Where(tenant => tenant.Id == 9 && tenant.PortfolioId == 17),
                 db,
                 conversationCommand,
                 SecurityNowUtc,
                 new DateOnly(2026, 8, 13))
             .ToQueryString();
-        var dispatchSql = DispatchWorkOrderToVendorHandler.WhereManagementAuthorized(
+        var dispatchSql = DispatchWorkOrderToVendorRule.WhereManagementAuthorized(
                 db.Set<WorkOrder>().Where(workOrder => workOrder.Id == 71 && workOrder.PortfolioId == 17),
                 db,
                 17,
@@ -189,7 +189,7 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
     {
         using var db = Context();
 
-        var conversationSql = AtomicNotificationMutationHandler.LandlordConversationQuery(
+        var conversationSql = AtomicNotificationMutationRule.LandlordConversationQuery(
                 new AtomicNotificationMutationCommand(
                     17, 5, SessionId, 12, 3,
                     AtomicNotificationMutationDomain.LandlordConversationRead,
@@ -200,7 +200,7 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
         var noticeCommand = new AtomicNoticeDeliveryCommand(
             17, 5, SessionId, 12, 3, 91,
             [NoticeDeliveryChannel.Email], null, null, "notice-delivery-replay");
-        var authorizedProperties = AtomicNoticeDeliveryHandler.AuthorizedProperties(
+        var authorizedProperties = AtomicNoticeDeliveryRule.AuthorizedProperties(
             noticeCommand, db, SecurityNowUtc);
         var noticeSql = db.Set<NoticeDraft>().Where(draft =>
                 draft.Id == noticeCommand.NoticeDraftId
@@ -252,7 +252,7 @@ public sealed class WorkspaceAuthorizationConsumerSqlTranslationTests
             48,
             49,
             "translation-shape");
-        var scanSql = FinalizeScanUploadHandler.CaptureContextAuthorizationQuery(
+        var scanSql = FinalizeScanUploadRule.CaptureContextAuthorizationQuery(
                 new FinalizeScanUploadCommand(
                     17,
                     5,

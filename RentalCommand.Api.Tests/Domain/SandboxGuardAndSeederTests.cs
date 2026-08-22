@@ -444,7 +444,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             1, false, businessNowUtc, "frozen-demo-legal-setup");
         await writes.ExecuteExactAsync(
             "portfolio:1:frozen-demo-legal-setup",
-            DemoSeedCommandHandler.Write(atomicDb, setupCommand), CancellationToken.None);
+            DemoSeedCommandRule.Write(atomicDb, setupCommand), CancellationToken.None);
         var candidateAgreements = await atomicDb.LeaseAgreements
             .Where(agreement => agreement.PortfolioId == 1
                 && agreement.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-"))
@@ -585,12 +585,12 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         seededTemplate.UpdatedAtUtc = archivedAtUtc;
         var templateReceipt = await _ctx.Db.AtomicCommandReceipts
             .SingleAsync(receipt =>
-                receipt.CommandType == DemoLeaseAddendumTemplateCommandHandler.CommandType
+                receipt.CommandType == DemoLeaseAddendumTemplateCommandRule.CommandType
                 && receipt.IdempotencyKey == "portfolio:1:standard-lease-addendum-template:v2"
                 && receipt.Status == AtomicCommandReceiptStatus.Completed);
         templateReceipt.IdempotencyKey = "portfolio:1:standard-lease-addendum-template:v1";
         var templateAuditLogs = await _ctx.Db.AtomicAuditLogs
-            .Where(audit => audit.CommandType == DemoLeaseAddendumTemplateCommandHandler.CommandType
+            .Where(audit => audit.CommandType == DemoLeaseAddendumTemplateCommandRule.CommandType
                 && audit.CommandIdempotencyKey == "portfolio:1:standard-lease-addendum-template:v2")
             .ToListAsync();
         foreach (var audit in templateAuditLogs)
@@ -600,7 +600,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         await _ctx.Db.SaveChangesAsync();
 
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
-            receipt.CommandType == DemoLeaseAddendumTemplateCommandHandler.CommandType
+            receipt.CommandType == DemoLeaseAddendumTemplateCommandRule.CommandType
             && receipt.IdempotencyKey == "portfolio:1:standard-lease-addendum-template:v1"
             && receipt.Status == AtomicCommandReceiptStatus.Completed)).Should().Be(1);
 
@@ -625,7 +625,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             && template.Status == DocumentTemplateStatus.Archived
             && template.ArchivedAtUtc == archivedAtUtc);
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
-            receipt.CommandType == DemoLeaseAddendumTemplateCommandHandler.CommandType
+            receipt.CommandType == DemoLeaseAddendumTemplateCommandRule.CommandType
             && receipt.IdempotencyKey == "portfolio:1:standard-lease-addendum-template:v2"
             && receipt.Status == AtomicCommandReceiptStatus.Completed)).Should().Be(1);
     }

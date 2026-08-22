@@ -54,7 +54,7 @@ public sealed class DebtServiceService : IDebtServiceService
                     token,
                     today,
                     _timeProvider.GetUtcNow().UtcDateTime);
-            var handler = new ApplyClaimedDebtServiceBatchHandler(_db);
+            var handler = new ApplyClaimedDebtServiceBatchRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 token.ToString("N"),
                 ScheduledFinanceWriteSupport.Write(

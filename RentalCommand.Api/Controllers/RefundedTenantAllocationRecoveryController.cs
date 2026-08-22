@@ -64,7 +64,7 @@ public sealed class RefundedTenantAllocationRecoveryController
             $"refunded-allocation-recovery:{access.PortfolioId}:{request.TenantAccountId}:{digest}");
         try
         {
-            var handler = new RecoverRefundedTenantAllocationHandler(_db);
+            var handler = new RecoverRefundedTenantAllocationRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 command.DeliveryIdempotencyKey,
                 TenantMoneyWriteSupport.Write(

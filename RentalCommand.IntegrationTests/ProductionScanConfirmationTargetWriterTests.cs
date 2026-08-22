@@ -475,7 +475,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             .Returns(Task.CompletedTask);
 
         await using var scope = Scope();
-        await CreateManualLeaseHandler.AuthorizeAsync(
+        await CreateManualLeaseRule.AuthorizeAsync(
             scope.Db, command, context.Object, CancellationToken.None);
 
         acquired.Should().Equal(
@@ -3629,9 +3629,9 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                 .ExecuteAsync(identity.IdempotencyKey,
                     ScanDraftWriteSupport.Write(
                         identity.CommandType, confirm, ScanDraftWriteSupport.ConfirmResultContract,
-                        (request, context, token) => ConfirmScanDraftHandler.ExecuteAsync(
+                        (request, context, token) => ConfirmScanDraftRule.ExecuteAsync(
                             db, writer, request, context, token),
-                        (request, context, token) => ConfirmScanDraftHandler.AuthorizeAsync(
+                        (request, context, token) => ConfirmScanDraftRule.AuthorizeAsync(
                             writer, request, context, token)), ct);
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
@@ -3643,16 +3643,16 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                 .ExecuteAsync(identity.IdempotencyKey,
                     ScanDraftWriteSupport.Write(
                         identity.CommandType, manualLease, ScanDraftWriteSupport.ConfirmResultContract,
-                        (request, context, token) => CreateManualLeaseHandler.ExecuteAsync(
+                        (request, context, token) => CreateManualLeaseRule.ExecuteAsync(
                             db, writer, request, context, token),
-                        (request, context, token) => CreateManualLeaseHandler.AuthorizeAsync(
+                        (request, context, token) => CreateManualLeaseRule.AuthorizeAsync(
                             db, request, context, token)), ct);
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         if (command is RefundTenantPaymentCommand refund)
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var handler = new RefundTenantPaymentHandler(db);
+            var handler = new RefundTenantPaymentRule(db);
             var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey,
                     TenantMoneyWriteSupport.Write(

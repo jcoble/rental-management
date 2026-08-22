@@ -9,11 +9,11 @@ using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Leasing;
 
-public sealed class EditLeaseAgreementDraftHandler
+public sealed class EditLeaseAgreementDraftRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public EditLeaseAgreementDraftHandler(RentalCommandDbContext db) => _db = db;
+    public EditLeaseAgreementDraftRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<LeaseAgreementDraftMutationResult> ExecuteAsync(
         EditLeaseAgreementDraftCommand command,
@@ -149,11 +149,11 @@ public sealed class EditLeaseAgreementDraftHandler
         LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class CreateLeaseAgreementSuccessorDraftHandler
+public sealed class CreateLeaseAgreementSuccessorDraftRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CreateLeaseAgreementSuccessorDraftHandler(RentalCommandDbContext db) => _db = db;
+    public CreateLeaseAgreementSuccessorDraftRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<LeaseAgreementDraftMutationResult> ExecuteAsync(
         CreateLeaseAgreementSuccessorDraftCommand command,
@@ -438,11 +438,11 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
         LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class ReplaceIssuedAgreementWithDraftHandler
+public sealed class ReplaceIssuedAgreementWithDraftRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReplaceIssuedAgreementWithDraftHandler(RentalCommandDbContext db) => _db = db;
+    public ReplaceIssuedAgreementWithDraftRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<LeaseAgreementDraftMutationResult> ExecuteAsync(
         ReplaceIssuedAgreementWithDraftCommand command,

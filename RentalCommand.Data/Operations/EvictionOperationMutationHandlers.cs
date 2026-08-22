@@ -66,7 +66,7 @@ public static class EvictionCrudWriteSupport
 
 }
 
-public sealed class CreateEvictionCaseHandler
+public sealed class CreateEvictionCaseRule
 {
     public static async Task<OperationMutationResult> ExecuteAsync(
         RentalCommandDbContext db, CreateEvictionCaseCommand command,
@@ -171,7 +171,7 @@ public sealed class CreateEvictionCaseHandler
     }
 }
 
-public sealed class UpdateEvictionCaseHandler
+public sealed class UpdateEvictionCaseRule
 {
     public static async Task<OperationMutationResult> ExecuteAsync(
         RentalCommandDbContext db, UpdateEvictionCaseCommand command,
@@ -223,7 +223,7 @@ public sealed class UpdateEvictionCaseHandler
     }
 }
 
-public sealed class AddEvictionCaseEventHandler
+public sealed class AddEvictionCaseEventRule
 {
     public static async Task<OperationMutationResult> ExecuteAsync(
         RentalCommandDbContext db, AddEvictionCaseEventCommand command,
@@ -286,7 +286,7 @@ public sealed class AddEvictionCaseEventHandler
     }
 }
 
-public sealed class DeleteEvictionCaseHandler
+public sealed class DeleteEvictionCaseRule
 {
     public static async Task<OperationMutationResult> ExecuteAsync(
         RentalCommandDbContext db, DeleteEvictionCaseCommand command,

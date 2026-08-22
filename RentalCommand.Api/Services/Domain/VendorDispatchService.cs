@@ -136,7 +136,7 @@ public class VendorDispatchService : IVendorDispatchService
                         access.AccessRevision)
                     : null);
         var outcome = await _writes.ExecuteAsync(
-            operationKey, DispatchWorkOrderToVendorHandler.Write(command, _db), ct);
+            operationKey, DispatchWorkOrderToVendorRule.Write(command, _db), ct);
         if (outcome.Value.Outcome == DispatchWorkOrderToVendorOutcome.NotFound)
         {
             return DispatchResult.NotFound();
@@ -191,7 +191,7 @@ public class VendorDispatchService : IVendorDispatchService
                     scope.AccessContextId,
                     scope.AccessRevision));
         var outcome = await _writes.ExecuteAsync(
-            operationKey, CancelVendorDispatchHandler.Write(command, _db), ct);
+            operationKey, CancelVendorDispatchRule.Write(command, _db), ct);
 
         if (outcome.Value.Outcome == CancelVendorDispatchOutcome.NotFound)
         {
@@ -249,7 +249,7 @@ public class VendorDispatchService : IVendorDispatchService
                 scope.AccessRevision),
             deliveryKey);
         var outcome = await _writes.ExecuteAsync(
-            deliveryKey, RecoverVendorDispatchChronologyHandler.Write(command, _db), ct);
+            deliveryKey, RecoverVendorDispatchChronologyRule.Write(command, _db), ct);
         return new RecoverVendorDispatchChronologyResponse
         {
             WorkOrderId = outcome.Value.WorkOrderId,
@@ -285,7 +285,7 @@ public class VendorDispatchService : IVendorDispatchService
             idempotencyKey);
         var outcome = await _writes.ExecuteAsync(
             Identity("vendor-rating.create", idempotencyKey).IdempotencyKey,
-            CreateVendorRatingHandler.Write(command, _db), ct);
+            CreateVendorRatingRule.Write(command, _db), ct);
         return outcome.Value.Outcome == OperationMutationOutcome.NotFound ||
                outcome.Value.ResponseJson is null
             ? null

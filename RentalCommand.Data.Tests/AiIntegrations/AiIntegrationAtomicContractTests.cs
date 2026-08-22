@@ -10,16 +10,16 @@ public sealed class AiIntegrationAtomicContractTests
 {
     [Theory]
     [InlineData(
-        typeof(ActivateWorkspaceLlmCredentialHandler),
+        typeof(ActivateWorkspaceLlmCredentialRule),
         typeof(ActivateWorkspaceLlmCredentialCommand))]
     [InlineData(
-        typeof(RotateWorkspaceLlmCredentialHandler),
+        typeof(RotateWorkspaceLlmCredentialRule),
         typeof(RotateWorkspaceLlmCredentialCommand))]
     [InlineData(
-        typeof(RemoveWorkspaceLlmCredentialHandler),
+        typeof(RemoveWorkspaceLlmCredentialRule),
         typeof(RemoveWorkspaceLlmCredentialCommand))]
     [InlineData(
-        typeof(PortfolioQaDeliveryHandler),
+        typeof(PortfolioQaDeliveryRule),
         typeof(PortfolioQaDeliveryCommand))]
     public void UserFacingHandlers_ReauthorizeReceiptReplay(
         Type handlerType,

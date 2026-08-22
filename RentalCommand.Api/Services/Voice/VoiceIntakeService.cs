@@ -130,9 +130,9 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
             $"{portfolioId}:{scope.UserId}:{operationDigest}",
             ScanDraftWriteSupport.Write(
                 "voice-scan-draft.create", command, ScanDraftWriteSupport.MutationResultContract,
-                (request, context, token) => CreateVoiceScanDraftHandler.ExecuteAsync(
+                (request, context, token) => CreateVoiceScanDraftRule.ExecuteAsync(
                     _db, request, context, token),
-                (request, context, token) => CreateVoiceScanDraftHandler.AuthorizeAsync(
+                (request, context, token) => CreateVoiceScanDraftRule.AuthorizeAsync(
                     _db, request, context, token)),
             ct);
         return ToEntity(RequireApplied(outcome.Value));
@@ -190,9 +190,9 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
             $"{portfolioId}:{scope.UserId}:{draftId}:{Digest(operationKey)}",
             ScanDraftWriteSupport.Write(
                 "voice-scan-draft.answer", command, ScanDraftWriteSupport.MutationResultContract,
-                (request, context, token) => AnswerVoiceScanDraftHandler.ExecuteAsync(
+                (request, context, token) => AnswerVoiceScanDraftRule.ExecuteAsync(
                     _db, request, context, token),
-                (request, context, token) => AnswerVoiceScanDraftHandler.AuthorizeAsync(
+                (request, context, token) => AnswerVoiceScanDraftRule.AuthorizeAsync(
                     _db, request, context, token)),
             ct);
         return outcome.Value.Outcome switch

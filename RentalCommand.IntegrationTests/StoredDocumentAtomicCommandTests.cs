@@ -564,9 +564,9 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
                 _portfolioId, ActorUserId, Digest(operationId)),
             StoredDocumentWriteSupport.Create(
                 command,
-                (request, context, ct) => CreateStoredDocumentHandler.ExecuteAsync(
+                (request, context, ct) => CreateStoredDocumentRule.ExecuteAsync(
                     db, request, context, ct),
-                (request, context, ct) => CreateStoredDocumentHandler.AuthorizeAsync(
+                (request, context, ct) => CreateStoredDocumentRule.AuthorizeAsync(
                     db, request, context, ct)));
     }
 
@@ -597,9 +597,9 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
                 command.PortfolioId, command.StoredFileId, Digest(operationId)),
             StoredDocumentWriteSupport.Delete(
                 command,
-                (request, context, ct) => DeleteStoredDocumentHandler.ExecuteAsync(
+                (request, context, ct) => DeleteStoredDocumentRule.ExecuteAsync(
                     db, request, context, ct),
-                (request, context, ct) => DeleteStoredDocumentHandler.AuthorizeAsync(
+                (request, context, ct) => DeleteStoredDocumentRule.AuthorizeAsync(
                     db, request, context, ct)));
     }
 

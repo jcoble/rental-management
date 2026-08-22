@@ -17,7 +17,7 @@ public static class OwnerRelationshipAccessWriteSupport
         RentalCommandDbContext db,
         ActivateOwnerPortalAccessCommand command)
     {
-        var handler = new ActivateOwnerPortalAccessHandler(db);
+        var handler = new ActivateOwnerPortalAccessRule(db);
         return new TransactionalWrite<ActivateOwnerPortalAccessCommand, ActivateOwnerPortalAccessMutationResult>(
             "owner-entity.portal-access.activate", WriteIdempotencyPolicy.Required, command,
             "owner-portal-access.activation.v1", WriteLockPlan.None,
@@ -28,7 +28,7 @@ public static class OwnerRelationshipAccessWriteSupport
         RentalCommandDbContext db,
         RevokeOwnerPortalAccessCommand command)
     {
-        var handler = new RevokeOwnerPortalAccessHandler(db);
+        var handler = new RevokeOwnerPortalAccessRule(db);
         return new TransactionalWrite<RevokeOwnerPortalAccessCommand, RevokeOwnerPortalAccessMutationResult>(
             "owner-entity.portal-access.revoke", WriteIdempotencyPolicy.Required, command,
             "owner-portal-access.revocation.v1", WriteLockPlan.None,
@@ -39,11 +39,11 @@ public static class OwnerRelationshipAccessWriteSupport
         "Legacy owner relationship writes are retired; use the shared write executor.");
 }
 
-public sealed class ActivateOwnerPortalAccessHandler
+public sealed class ActivateOwnerPortalAccessRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ActivateOwnerPortalAccessHandler(RentalCommandDbContext db) => _db = db;
+    public ActivateOwnerPortalAccessRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ActivateOwnerPortalAccessMutationResult> ExecuteAsync(
         ActivateOwnerPortalAccessCommand command,
@@ -281,7 +281,7 @@ public sealed class ActivateOwnerPortalAccessHandler
                 WorkspaceMembership = invitationMembership,
                 InvitedUser = user,
                 InvitedByUserId = command.ActorUserId,
-                TokenHash = CreateWorkspaceMembershipHandler.HashInvitationToken(rawToken),
+                TokenHash = CreateWorkspaceMembershipRule.HashInvitationToken(rawToken),
                 CreatedAtUtc = changedAtUtc,
                 ExpiresAtUtc = changedAtUtc.AddDays(7),
             };
@@ -486,7 +486,7 @@ public sealed class ActivateOwnerPortalAccessHandler
         string rawToken,
         DateTime createdAtUtc)
     {
-        var tokenHash = CreateWorkspaceMembershipHandler.HashInvitationToken(rawToken);
+        var tokenHash = CreateWorkspaceMembershipRule.HashInvitationToken(rawToken);
         var link = $"{command.WebBaseUrl.TrimEnd('/')}/activate-team?token={Uri.EscapeDataString(rawToken)}";
         var greeting = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName;
         var subject = "Activate your Rental Command owner portal";
@@ -525,11 +525,11 @@ public sealed class ActivateOwnerPortalAccessHandler
     private sealed record PendingInvitation(DateTime ExpiresAtUtc);
 }
 
-public sealed class RevokeOwnerPortalAccessHandler
+public sealed class RevokeOwnerPortalAccessRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RevokeOwnerPortalAccessHandler(RentalCommandDbContext db) => _db = db;
+    public RevokeOwnerPortalAccessRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RevokeOwnerPortalAccessMutationResult> ExecuteAsync(
         RevokeOwnerPortalAccessCommand command,

@@ -74,12 +74,12 @@ public sealed class SimulationAtomicContractTests
     {
         var handlers = new[]
         {
-            typeof(SetSimulationClockHandler),
-            typeof(AdvanceSimulationClockHandler),
-            typeof(FreezeSimulationClockHandler),
-            typeof(UnfreezeSimulationClockHandler),
-            typeof(ResetSimulationClockHandler),
-            typeof(EnqueueSimulationWorkerCommandHandler),
+            typeof(SetSimulationClockRule),
+            typeof(AdvanceSimulationClockRule),
+            typeof(FreezeSimulationClockRule),
+            typeof(UnfreezeSimulationClockRule),
+            typeof(ResetSimulationClockRule),
+            typeof(EnqueueSimulationWorkerCommandRule),
         };
         handlers.All(handler =>
             handler.GetMethod("ExecuteAsync") is not null

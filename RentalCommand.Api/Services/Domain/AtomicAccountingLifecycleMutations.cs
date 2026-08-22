@@ -93,11 +93,11 @@ public sealed record SetAccountingDirectionResult(
     bool PushEnabled,
     DateTime? UpdatedAtUtc);
 
-public sealed class PrepareAccountingDisconnectHandler
+public sealed class PrepareAccountingDisconnectRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PrepareAccountingDisconnectHandler(RentalCommandDbContext db) => _db = db;
+    public PrepareAccountingDisconnectRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<PrepareAccountingDisconnectResult> ExecuteAsync(
         PrepareAccountingDisconnectCommand command,
@@ -194,11 +194,11 @@ public sealed class PrepareAccountingDisconnectHandler
         AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, _db, context, ct);
 }
 
-public sealed class FinalizeAccountingDisconnectHandler
+public sealed class FinalizeAccountingDisconnectRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public FinalizeAccountingDisconnectHandler(RentalCommandDbContext db) => _db = db;
+    public FinalizeAccountingDisconnectRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<FinalizeAccountingDisconnectResult> ExecuteAsync(
         FinalizeAccountingDisconnectCommand command,
@@ -285,11 +285,11 @@ public sealed class FinalizeAccountingDisconnectHandler
         AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, _db, context, ct);
 }
 
-public sealed class SetAccountingDirectionHandler
+public sealed class SetAccountingDirectionRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public SetAccountingDirectionHandler(RentalCommandDbContext db) => _db = db;
+    public SetAccountingDirectionRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<SetAccountingDirectionResult> ExecuteAsync(
         SetAccountingDirectionCommand command,

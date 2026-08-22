@@ -81,7 +81,7 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
         RentalCommandDbContext db,
         EnqueueMorningBriefingsCommand command)
     {
-        var handler = new EnqueueMorningBriefingsHandler(db);
+        var handler = new EnqueueMorningBriefingsRule(db);
         return new(
             Identity(command).CommandType,
             WriteIdempotencyPolicy.Required,
@@ -157,12 +157,12 @@ public sealed record EnqueueMorningBriefingsCommand(DateTime EvaluationUtc) : IA
 
 public sealed record EnqueueMorningBriefingsResult(int QueuedCount);
 
-public sealed class EnqueueMorningBriefingsHandler
+public sealed class EnqueueMorningBriefingsRule
 {
     private const string Purpose = "morning-briefing";
     private readonly RentalCommandDbContext _db;
 
-    public EnqueueMorningBriefingsHandler(RentalCommandDbContext db)
+    public EnqueueMorningBriefingsRule(RentalCommandDbContext db)
     {
         _db = db;
     }

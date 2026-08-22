@@ -168,7 +168,7 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
         {
             var operationKey = $"{active.PortfolioId}:{workOrderId}:{digest}";
             var outcome = await _writes.ExecuteAsync(operationKey,
-                AssignWorkOrderResponsibilityHandler.Write(command, _db, _accessRevisionGuard), ct);
+                AssignWorkOrderResponsibilityRule.Write(command, _db, _accessRevisionGuard), ct);
             return Ok(new
             {
                 outcome.Value,
@@ -208,7 +208,7 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
         {
             var operationKey = $"{active.PortfolioId}:{workOrderId}:{digest}";
             var outcome = await _writes.ExecuteAsync(operationKey,
-                CloseWorkOrderResponsibilityHandler.Write(command, _db, _accessRevisionGuard), ct);
+                CloseWorkOrderResponsibilityRule.Write(command, _db, _accessRevisionGuard), ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
         catch (StaleAccessRevisionException exception)

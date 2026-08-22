@@ -115,7 +115,7 @@ public sealed class TechnicianExperienceContractTests
             "Controllers", "TechnicianController.cs"));
         source.Should().Contain("new UpdateAssignedWorkOrderCommand(");
         source.Should().Contain("_writes.ExecuteAsync(");
-        source.Should().Contain("UpdateAssignedWorkOrderHandler.Write(command, _db)");
+        source.Should().Contain("UpdateAssignedWorkOrderRule.Write(command, _db)");
         source.Should().Contain("UpdateAssignedWorkOrderOutcome.Stale");
         source.Should().NotContain("assigned-update");
     }

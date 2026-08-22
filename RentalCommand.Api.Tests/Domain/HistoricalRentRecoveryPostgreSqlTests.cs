@@ -58,7 +58,7 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
         Task<AtomicCommandOutcome<RecoverHistoricalRentChargeResult>> Execute(
             RecoverHistoricalRentChargeCommand value)
         {
-            var handler = new RecoverHistoricalRentChargeHandler(db);
+            var handler = new RecoverHistoricalRentChargeRule(db);
             return writes.ExecuteAsync(
                 value.DeliveryIdempotencyKey,
                 TenantMoneyWriteSupport.Write(
@@ -260,7 +260,7 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
         Task<AtomicCommandOutcome<RecoverRefundedTenantAllocationResult>> Execute(
             RecoverRefundedTenantAllocationCommand value)
         {
-            var handler = new RecoverRefundedTenantAllocationHandler(db);
+            var handler = new RecoverRefundedTenantAllocationRule(db);
             return writes.ExecuteAsync(
                 value.DeliveryIdempotencyKey,
                 TenantMoneyWriteSupport.Write(

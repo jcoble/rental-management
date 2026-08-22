@@ -573,15 +573,15 @@ public sealed class LeaseManagementController : ManagementControllerBase
         where TCommand : notnull, ILeasePartyAccessCommand => command switch
         {
             AddEffectivePartyCommand value =>
-                AddEffectivePartyHandler.ExecuteAsync(_db, value, context, ct),
+                AddEffectivePartyRule.ExecuteAsync(_db, value, context, ct),
             EndEffectivePartyCommand value =>
-                EndEffectivePartyHandler.ExecuteAsync(_db, value, context, ct),
+                EndEffectivePartyRule.ExecuteAsync(_db, value, context, ct),
             ChangeEffectivePartyRoleCommand value =>
-                ChangeEffectivePartyRoleHandler.ExecuteAsync(_db, value, context, ct),
+                ChangeEffectivePartyRoleRule.ExecuteAsync(_db, value, context, ct),
             GrantTenantUserAccessCommand value =>
-                GrantTenantUserAccessHandler.ExecuteAsync(_db, value, context, ct),
+                GrantTenantUserAccessRule.ExecuteAsync(_db, value, context, ct),
             RevokeTenantUserAccessCommand value =>
-                RevokeTenantUserAccessHandler.ExecuteAsync(_db, value, context, ct),
+                RevokeTenantUserAccessRule.ExecuteAsync(_db, value, context, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
 
@@ -590,15 +590,15 @@ public sealed class LeaseManagementController : ManagementControllerBase
         where TCommand : notnull, ILeasePartyAccessCommand => command switch
         {
             AddEffectivePartyCommand value =>
-                AddEffectivePartyHandler.AuthorizeAsync(_db, value, context, ct),
+                AddEffectivePartyRule.AuthorizeAsync(_db, value, context, ct),
             EndEffectivePartyCommand value =>
-                EndEffectivePartyHandler.AuthorizeAsync(_db, value, context, ct),
+                EndEffectivePartyRule.AuthorizeAsync(_db, value, context, ct),
             ChangeEffectivePartyRoleCommand value =>
-                ChangeEffectivePartyRoleHandler.AuthorizeAsync(_db, value, context, ct),
+                ChangeEffectivePartyRoleRule.AuthorizeAsync(_db, value, context, ct),
             GrantTenantUserAccessCommand value =>
-                GrantTenantUserAccessHandler.AuthorizeAsync(_db, value, context, ct),
+                GrantTenantUserAccessRule.AuthorizeAsync(_db, value, context, ct),
             RevokeTenantUserAccessCommand value =>
-                RevokeTenantUserAccessHandler.AuthorizeAsync(_db, value, context, ct),
+                RevokeTenantUserAccessRule.AuthorizeAsync(_db, value, context, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
 

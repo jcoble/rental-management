@@ -416,7 +416,7 @@ public class AuthService : IAuthService
             tokenValid,
             CreateAuthIntentHash(parsedUserId.ToString(), token, "confirm-email"));
         var identity = AuthIdentity("auth.email.confirm", parsedUserId, operationKey);
-        var handler = new ConfirmAccountEmailHandler(_db);
+        var handler = new ConfirmAccountEmailRule(_db);
         var result = (await _writes.ExecuteAsync(identity.IdempotencyKey,
             AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct)).Value;
         if (result.Outcome is ConfirmAccountEmailOutcome.InvalidToken)
@@ -501,7 +501,7 @@ public class AuthService : IAuthService
             _userManager.PasswordHasher.HashPassword(user, newPassword),
             CreateAuthIntentHash(parsedUserId.ToString(), token, newPassword, "reset-password"));
         var identity = AuthIdentity("auth.password.reset", parsedUserId, operationKey);
-        var handler = new ResetAccountPasswordHandler(_db);
+        var handler = new ResetAccountPasswordRule(_db);
         var result = (await _writes.ExecuteAsync(identity.IdempotencyKey,
             AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct)).Value;
         if (result.Outcome != ResetAccountPasswordOutcome.Reset)
@@ -584,7 +584,7 @@ public class AuthService : IAuthService
         ChangePasswordResult changed;
         try
         {
-            var handler = new ChangePasswordHandler(_db);
+            var handler = new ChangePasswordRule(_db);
             changed = (await _writes.ExecuteAsync(
                 $"{active.UserId}:{active.AccessContextId}:{keyDigest}",
                 AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct)).Value;

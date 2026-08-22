@@ -40,7 +40,7 @@ public sealed class RentChargeService : IRentChargeService
                 runToken,
                 _timeProvider.GetUtcNow().UtcDateTime,
                 BatchSize);
-            var handler = new ApplyScheduledRentChargeBatchHandler(_db);
+            var handler = new ApplyScheduledRentChargeBatchRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 runToken.ToString("N"),
                 TenantMoneyWriteSupport.Write(

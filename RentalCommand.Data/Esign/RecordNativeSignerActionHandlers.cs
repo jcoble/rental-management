@@ -8,11 +8,11 @@ using RentalCommand.Core.Esign;
 
 namespace RentalCommand.Data.Esign;
 
-public sealed class RecordNativeSignatureHandler
+public sealed class RecordNativeSignatureRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RecordNativeSignatureHandler(RentalCommandDbContext db) => _db = db;
+    public RecordNativeSignatureRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<NativeSignerActionResult> ExecuteAsync(
         RecordNativeSignatureCommand command,
@@ -232,11 +232,11 @@ public sealed class RecordNativeSignatureHandler
     }
 }
 
-public sealed class RecordNativeDeclineHandler
+public sealed class RecordNativeDeclineRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RecordNativeDeclineHandler(RentalCommandDbContext db) => _db = db;
+    public RecordNativeDeclineRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<NativeSignerActionResult> ExecuteAsync(
         RecordNativeDeclineCommand command,
@@ -296,7 +296,7 @@ public sealed class RecordNativeDeclineHandler
                 ? $"{signer.NameSnapshot} declined to sign."
                 : $"{signer.NameSnapshot} declined to sign: {command.Reason.Trim()}",
         });
-        RecordNativeSignatureHandler.StageSignerAndRequestAudits(
+        RecordNativeSignatureRule.StageSignerAndRequestAudits(
             context, request, signer, "Signer declined the electronic signature request.");
 
         return new NativeSignerActionResult(
@@ -315,7 +315,7 @@ public sealed class RecordNativeDeclineHandler
         IAtomicCommandContext context,
         CancellationToken ct)
     {
-        RecordNativeSignatureHandler.ValidateToken(command.TokenHash);
+        RecordNativeSignatureRule.ValidateToken(command.TokenHash);
 
         var signerStillOwned = await _db.Set<SignatureSigner>()
             .AsNoTracking()

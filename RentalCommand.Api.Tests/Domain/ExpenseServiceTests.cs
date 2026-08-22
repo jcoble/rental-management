@@ -379,7 +379,7 @@ public class ExpenseServiceTests : IDisposable
             "missing-clock",
             "{}",
             default);
-        var handler = new AtomicMoneyMutationHandler(_db);
+        var handler = new AtomicMoneyMutationRule(_db);
 
         var act = () => handler.ExecuteAsync(
             command, Mock.Of<IAtomicCommandContext>(), CancellationToken.None);

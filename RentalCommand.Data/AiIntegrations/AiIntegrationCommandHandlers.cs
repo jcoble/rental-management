@@ -24,24 +24,24 @@ public static class AiIntegrationWriteSupport
         {
             ActivateWorkspaceLlmCredentialCommand value => Build(
                 "ai.integration.credential.activate", "ai.integration.status.v1", value,
-                new ActivateWorkspaceLlmCredentialHandler(db).ExecuteAsync,
-                new ActivateWorkspaceLlmCredentialHandler(db).AuthorizeReplayAsync),
+                new ActivateWorkspaceLlmCredentialRule(db).ExecuteAsync,
+                new ActivateWorkspaceLlmCredentialRule(db).AuthorizeReplayAsync),
             RotateWorkspaceLlmCredentialCommand value => Build(
                 "ai.integration.credential.rotate", "ai.integration.status.v1", value,
-                new RotateWorkspaceLlmCredentialHandler(db).ExecuteAsync,
-                new RotateWorkspaceLlmCredentialHandler(db).AuthorizeReplayAsync),
+                new RotateWorkspaceLlmCredentialRule(db).ExecuteAsync,
+                new RotateWorkspaceLlmCredentialRule(db).AuthorizeReplayAsync),
             RemoveWorkspaceLlmCredentialCommand value => Build(
                 "ai.integration.credential.remove", "ai.integration.remove.v1", value,
-                new RemoveWorkspaceLlmCredentialHandler(db).ExecuteAsync,
-                new RemoveWorkspaceLlmCredentialHandler(db).AuthorizeReplayAsync),
+                new RemoveWorkspaceLlmCredentialRule(db).ExecuteAsync,
+                new RemoveWorkspaceLlmCredentialRule(db).AuthorizeReplayAsync),
             RecordLlmUsageEvidenceCommand value => Build(
                 "ai.integration.usage.record", "ai.integration.usage.v1", value,
-                new RecordLlmUsageEvidenceHandler(db).ExecuteAsync,
-                new RecordLlmUsageEvidenceHandler(db).AuthorizeReplayAsync),
+                new RecordLlmUsageEvidenceRule(db).ExecuteAsync,
+                new RecordLlmUsageEvidenceRule(db).AuthorizeReplayAsync),
             PortfolioQaDeliveryCommand value => Build(
                 "portfolio.qa.delivery", "portfolio.qa.delivery.v1", value,
-                new PortfolioQaDeliveryHandler(db).ExecuteAsync,
-                new PortfolioQaDeliveryHandler(db).AuthorizeReplayAsync),
+                new PortfolioQaDeliveryRule(db).ExecuteAsync,
+                new PortfolioQaDeliveryRule(db).AuthorizeReplayAsync),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return (TransactionalWrite<TCommand, TResult>)write;
@@ -62,11 +62,11 @@ public static class AiIntegrationWriteSupport
         "Legacy AI integration writes are retired; use the shared write executor.");
 }
 
-public sealed class ActivateWorkspaceLlmCredentialHandler
+public sealed class ActivateWorkspaceLlmCredentialRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ActivateWorkspaceLlmCredentialHandler(RentalCommandDbContext db) => _db = db;
+    public ActivateWorkspaceLlmCredentialRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<AiIntegrationStatusResult> ExecuteAsync(
         ActivateWorkspaceLlmCredentialCommand command,
@@ -125,11 +125,11 @@ public sealed class ActivateWorkspaceLlmCredentialHandler
         new(true, row.Provider, row.ModelId, row.LastTestedAtUtc, row.UpdatedAtUtc);
 }
 
-public sealed class RotateWorkspaceLlmCredentialHandler
+public sealed class RotateWorkspaceLlmCredentialRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RotateWorkspaceLlmCredentialHandler(RentalCommandDbContext db) => _db = db;
+    public RotateWorkspaceLlmCredentialRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<AiIntegrationStatusResult> ExecuteAsync(
         RotateWorkspaceLlmCredentialCommand command,
@@ -163,7 +163,7 @@ public sealed class RotateWorkspaceLlmCredentialHandler
             command.Provider,
             command.ModelId,
             "Rotated workspace LLM credential."));
-        return ActivateWorkspaceLlmCredentialHandler.MapStatus(row);
+        return ActivateWorkspaceLlmCredentialRule.MapStatus(row);
     }
 
     public Task AuthorizeReplayAsync(
@@ -176,11 +176,11 @@ public sealed class RotateWorkspaceLlmCredentialHandler
             ct);
 }
 
-public sealed class RemoveWorkspaceLlmCredentialHandler
+public sealed class RemoveWorkspaceLlmCredentialRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RemoveWorkspaceLlmCredentialHandler(RentalCommandDbContext db) => _db = db;
+    public RemoveWorkspaceLlmCredentialRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RemoveWorkspaceLlmCredentialResult> ExecuteAsync(
         RemoveWorkspaceLlmCredentialCommand command,
@@ -224,11 +224,11 @@ public sealed class RemoveWorkspaceLlmCredentialHandler
             ct);
 }
 
-public sealed class RecordLlmUsageEvidenceHandler
+public sealed class RecordLlmUsageEvidenceRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RecordLlmUsageEvidenceHandler(RentalCommandDbContext db) => _db = db;
+    public RecordLlmUsageEvidenceRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RecordLlmUsageEvidenceResult> ExecuteAsync(
         RecordLlmUsageEvidenceCommand command,
@@ -289,11 +289,11 @@ public sealed class RecordLlmUsageEvidenceHandler
     }
 }
 
-public sealed class PortfolioQaDeliveryHandler
+public sealed class PortfolioQaDeliveryRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PortfolioQaDeliveryHandler(RentalCommandDbContext db) => _db = db;
+    public PortfolioQaDeliveryRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<PortfolioQaDeliveryResult> ExecuteAsync(
         PortfolioQaDeliveryCommand command,

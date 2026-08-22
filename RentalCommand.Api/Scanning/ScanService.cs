@@ -1030,9 +1030,9 @@ public sealed class ScanService : IScanService
                 $"{scope.PortfolioId}:{draftId}:{reasonDigest}",
                 ScanDraftWriteSupport.Write(
                     "scan-draft.reject", command, ScanDraftWriteSupport.RejectResultContract,
-                    (request, context, token) => RejectScanDraftHandler.ExecuteAsync(
+                    (request, context, token) => RejectScanDraftRule.ExecuteAsync(
                         _db, request, context, token),
-                    (request, context, token) => RejectScanDraftHandler.AuthorizeAsync(
+                    (request, context, token) => RejectScanDraftRule.AuthorizeAsync(
                         _db, request, context, token)),
                 ct);
             return result.Value.Rejected;

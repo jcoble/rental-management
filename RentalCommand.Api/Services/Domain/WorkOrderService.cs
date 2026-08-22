@@ -548,19 +548,19 @@ public class WorkOrderService : IWorkOrderService
 
     private Task<WorkOrderMutationResult> CreateWorkOrderAsync(
         CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        new CreateWorkOrderRule(_db).HandleAsync(command, context, ct);
+        new CreateWorkOrderRule(_db).ExecuteAsync(command, context, ct);
 
     private Task<WorkOrderMutationResult> UpdateWorkOrderAsync(
         UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        new UpdateWorkOrderRule(_db).HandleAsync(command, context, ct);
+        new UpdateWorkOrderRule(_db).ExecuteAsync(command, context, ct);
 
     private Task<WorkOrderMutationResult> DeleteWorkOrderAsync(
         DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        new DeleteWorkOrderRule(_db).HandleAsync(command, context, ct);
+        new DeleteWorkOrderRule(_db).ExecuteAsync(command, context, ct);
 
     private Task<WorkOrderMutationResult> AddCommentAsync(
         AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        new AddStaffWorkOrderCommentRule(_db).HandleAsync(command, context, ct);
+        new AddStaffWorkOrderCommentRule(_db).ExecuteAsync(command, context, ct);
 
     private Task AuthorizeReplayAsync(
         CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>

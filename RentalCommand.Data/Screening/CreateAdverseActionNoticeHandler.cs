@@ -11,11 +11,11 @@ using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Data.Screening;
 
-public sealed class PrepareAdverseActionNoticeHandler
+public sealed class PrepareAdverseActionNoticeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PrepareAdverseActionNoticeHandler(RentalCommandDbContext db) => _db = db;
+    public PrepareAdverseActionNoticeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<PrepareAdverseActionNoticeResult> ExecuteAsync(
         PrepareAdverseActionNoticeCommand command,
@@ -151,11 +151,11 @@ public sealed class PrepareAdverseActionNoticeHandler
 }
 
 /// <summary>Pure database finalizer for an adverse-action notice package.</summary>
-public sealed class CreateAdverseActionNoticeHandler
+public sealed class CreateAdverseActionNoticeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CreateAdverseActionNoticeHandler(RentalCommandDbContext db) => _db = db;
+    public CreateAdverseActionNoticeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<CreateAdverseActionNoticeResult> ExecuteAsync(
         CreateAdverseActionNoticeCommand command,

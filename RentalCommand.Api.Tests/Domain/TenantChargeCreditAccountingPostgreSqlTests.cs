@@ -339,7 +339,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
 
     private async Task<TenantChargeMutationResult> ExecuteChargeAsync(PostTenantChargeCommand command)
     {
-        var handler = new PostTenantChargeHandler(
+        var handler = new PostTenantChargeRule(
             _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         var outcome = await _writes.ExecuteAsync(
             command.DeliveryIdempotencyKey,
@@ -355,7 +355,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
     private async Task<AtomicCommandOutcome<TenantLedgerMutationResult>> ExecuteCreditOutcomeAsync(
         PostTenantCreditCommand command)
     {
-        var handler = new PostTenantCreditHandler(
+        var handler = new PostTenantCreditRule(
             _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         var outcome = await _writes.ExecuteAsync(
             command.DeliveryIdempotencyKey,
@@ -379,7 +379,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
 
     private async Task<RecordTenantReceiptResult> ExecuteReceiptAsync(RecordTenantReceiptCommand command)
     {
-        var handler = new RecordTenantReceiptHandler(
+        var handler = new RecordTenantReceiptRule(
             _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         var outcome = await _writes.ExecuteAsync(
             command.DeliveryIdempotencyKey,

@@ -86,7 +86,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
                 "prepared-decline",
                 null,
                 true);
-        var prepareHandler = new PrepareAdverseActionNoticeHandler(
+        var prepareHandler = new PrepareAdverseActionNoticeRule(
             _services.GetRequiredService<RentalCommandDbContext>());
         var prepared = await writes.ExecuteAsync("prepared-decline",
             ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
@@ -146,7 +146,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
         screening.UpdatedAt = now;
         await _db.SaveChangesAsync();
 
-        var finalizeHandler = new CreateAdverseActionNoticeHandler(
+        var finalizeHandler = new CreateAdverseActionNoticeRule(
             _services.GetRequiredService<RentalCommandDbContext>());
         var act = () => writes.ExecuteAsync("prepared-decline",
             ScreeningWriteSupport.Write(finalization, finalizeHandler.ExecuteAsync,
@@ -196,7 +196,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
                 "retry-prepared",
                 null,
                 true);
-        var prepareHandler = new PrepareAdverseActionNoticeHandler(
+        var prepareHandler = new PrepareAdverseActionNoticeRule(
             _services.GetRequiredService<RentalCommandDbContext>());
         var prepared = await writes.ExecuteAsync("retry-prepared",
             ScreeningWriteSupport.Write(prepareCommand, prepareHandler.ExecuteAsync,
@@ -241,7 +241,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             true,
             "adverse-action-retry-delivery",
             prepared.Value.GeneratedAtUtc);
-        var handler = new CreateAdverseActionNoticeHandler(
+        var handler = new CreateAdverseActionNoticeRule(
             _services.GetRequiredService<RentalCommandDbContext>());
         var write = ScreeningWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
         var first = await writes.ExecuteAsync("retry-finalize", write);
@@ -336,7 +336,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             PortfolioId, LegacyApplicationId, LegacyActorUserId, _scope.SessionId,
             _scope.AccessContextId, _scope.AccessRevision, "legacy-track", "Legacy provider",
             null, null, null, null, null, ApplicantScreeningStatus.Created, "legacy-track-delivery");
-        var trackHandler = new TrackExternalScreeningHandler(db);
+        var trackHandler = new TrackExternalScreeningRule(db);
         await ReplayLegacyReceiptAsync(db, writes, "screening.external.create",
             LegacyApplicationKey("legacy-track"), trackCommand, TrackFingerprint,
             "{\"Outcome\":1,\"Screening\":null}", ScreeningWriteSupport.MutationResultContract,
@@ -348,7 +348,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             "Legacy provider", "legacy-integrated-delivery");
         var integratedResult = new PrepareIntegratedScreeningResult(
             ScreeningMutationOutcome.NotFound, null, LegacyApplicationId, "legacy-integrated", null, null, null);
-        var integratedHandler = new PrepareIntegratedScreeningHandler(db);
+        var integratedHandler = new PrepareIntegratedScreeningRule(db);
         await ReplayLegacyReceiptAsync(db, writes, "screening.integrated.prepare",
             LegacyApplicationKey("legacy-integrated"), integratedCommand, PrepareIntegratedFingerprint,
             "{\"Outcome\":1,\"Screening\":null,\"ApplicationId\":1,\"OperationKey\":\"legacy-integrated\",\"ApplicantName\":null,\"ApplicantEmail\":null,\"ConsentAtUtc\":null}",
@@ -360,7 +360,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             _scope.AccessContextId, _scope.AccessRevision, "legacy-integrated-finalize", "legacy-provider",
             true, "legacy-reference", "https://legacy.example.test/report", LegacyNow, null,
             "Legacy CRA", "1 Legacy Way", "555-0100", "legacy-integrated-finalize-delivery");
-        var finalizeIntegratedHandler = new FinalizeIntegratedScreeningHandler(db);
+        var finalizeIntegratedHandler = new FinalizeIntegratedScreeningRule(db);
         await ReplayLegacyReceiptAsync(db, writes, "screening.integrated.finalize",
             LegacyApplicationKey("legacy-integrated-finalize"), finalizeIntegratedCommand,
             FinalizeIntegratedFingerprint, "{\"Outcome\":1,\"Screening\":null}",
@@ -372,7 +372,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             _scope.AccessContextId, _scope.AccessRevision, "legacy-external-update",
             ApplicantScreeningStatus.Completed, "legacy-updated-reference", null,
             "Legacy CRA", "1 Legacy Way", "555-0100", LegacyNow, "legacy-external-update-delivery");
-        var updateHandler = new UpdateExternalScreeningHandler(db);
+        var updateHandler = new UpdateExternalScreeningRule(db);
         await ReplayLegacyReceiptAsync(db, writes, "screening.external.update",
             LegacyApplicationKey("legacy-external-update"), updateCommand, UpdateExternalFingerprint,
             "{\"Outcome\":1,\"Screening\":null}", ScreeningWriteSupport.MutationResultContract,
@@ -382,7 +382,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             PortfolioId, LegacyApplicationId, 73, LegacyActorUserId, _scope.SessionId,
             _scope.AccessContextId, _scope.AccessRevision, "legacy-decision", ScreeningDecision.Decline,
             "Legacy decline", true, "legacy-decision-delivery");
-        var decisionHandler = new RecordScreeningDecisionHandler(db);
+        var decisionHandler = new RecordScreeningDecisionRule(db);
         await ReplayLegacyReceiptAsync(db, writes, "screening.decision",
             LegacyApplicationKey("legacy-decision"), decisionCommand, DecisionFingerprint,
             "{\"Outcome\":1,\"Screening\":null}", ScreeningWriteSupport.MutationResultContract,
@@ -392,7 +392,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             "legacy-provider", "legacy-delivery", "legacy-provider-reference", "screening.completed",
             ApplicantScreeningStatus.Completed, LegacyNow, null, "Legacy CRA", "1 Legacy Way", "555-0100",
             "legacy-provider-delivery");
-        var providerHandler = new ApplyScreeningProviderDeliveryHandler(db);
+        var providerHandler = new ApplyScreeningProviderDeliveryRule(db);
         await ReplayLegacyReceiptAsync(db, writes, "screening.provider-delivery",
             LegacyProviderDeliveryKey("legacy-provider", "legacy-delivery"), providerCommand,
             ProviderDeliveryFingerprint, "{\"Outcome\":1,\"Screening\":null}",
@@ -423,7 +423,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             DecisionFingerprint: null,
             SendToApplicant: false,
             GeneratedAtUtc: LegacyNow);
-        var adversePrepareHandler = new PrepareAdverseActionNoticeHandler(db);
+        var adversePrepareHandler = new PrepareAdverseActionNoticeRule(db);
         await ReplayLegacyReceiptAsync(db, writes, "adverse-action.prepare",
             LegacyApplicationKey("legacy-adverse-prepare"), adversePrepareCommand,
             AdversePrepareFingerprint,
@@ -440,7 +440,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             8, false, "legacy-adverse-finalize-delivery", LegacyNow);
         var adverseFinalizeResult = new CreateAdverseActionNoticeResult(
             42, LegacyApplicationId, "Legacy reason", "Legacy CRA", LegacyNow, 43, null);
-        var adverseFinalizeHandler = new CreateAdverseActionNoticeHandler(db);
+        var adverseFinalizeHandler = new CreateAdverseActionNoticeRule(db);
         await ReplayLegacyReceiptAsync(db, writes, "adverse-action.finalize",
             LegacyApplicationKey("legacy-adverse-finalize"), adverseFinalizeCommand,
             AdverseFinalizeFingerprint,

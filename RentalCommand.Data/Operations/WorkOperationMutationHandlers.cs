@@ -119,7 +119,7 @@ public sealed class CreateWorkOrderRule
 
     public CreateWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
-    public async Task<WorkOrderMutationResult> HandleAsync(
+    public async Task<WorkOrderMutationResult> ExecuteAsync(
         CreateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);
@@ -282,7 +282,7 @@ public sealed class UpdateWorkOrderRule
 
     public UpdateWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
-    public async Task<WorkOrderMutationResult> HandleAsync(
+    public async Task<WorkOrderMutationResult> ExecuteAsync(
         UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);
@@ -664,7 +664,7 @@ public sealed class DeleteWorkOrderRule
 
     public DeleteWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
-    public async Task<WorkOrderMutationResult> HandleAsync(
+    public async Task<WorkOrderMutationResult> ExecuteAsync(
         DeleteWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
@@ -703,7 +703,7 @@ public sealed class CreateTenantWorkOrderRule
 
     public CreateTenantWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
-    public async Task<WorkOrderMutationResult> HandleAsync(
+    public async Task<WorkOrderMutationResult> ExecuteAsync(
         CreateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);
@@ -771,7 +771,7 @@ public sealed class AddStaffWorkOrderCommentRule
 
     public AddStaffWorkOrderCommentRule(RentalCommandDbContext db) => _db = db;
 
-    public async Task<WorkOrderMutationResult> HandleAsync(
+    public async Task<WorkOrderMutationResult> ExecuteAsync(
         AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.EnsureComment(command.Body);
@@ -855,7 +855,7 @@ public sealed class AddTenantWorkOrderCommentRule
 
     public AddTenantWorkOrderCommentRule(RentalCommandDbContext db) => _db = db;
 
-    public async Task<WorkOrderMutationResult> HandleAsync(
+    public async Task<WorkOrderMutationResult> ExecuteAsync(
         AddTenantWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.EnsureComment(command.Body);
@@ -906,7 +906,7 @@ public sealed class UpdateTenantWorkOrderRule
 
     public UpdateTenantWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
-    public async Task<WorkOrderMutationResult> HandleAsync(
+    public async Task<WorkOrderMutationResult> ExecuteAsync(
         UpdateTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);
@@ -999,7 +999,7 @@ public sealed class CancelTenantWorkOrderRule
 
     public CancelTenantWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
-    public async Task<WorkOrderMutationResult> HandleAsync(
+    public async Task<WorkOrderMutationResult> ExecuteAsync(
         CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);

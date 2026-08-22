@@ -30,11 +30,11 @@ public sealed record PrepareAccountingConnectResult(
     string RedirectUri,
     DateTime ExpiresAtUtc);
 
-public sealed class PrepareAccountingConnectHandler
+public sealed class PrepareAccountingConnectRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public PrepareAccountingConnectHandler(RentalCommandDbContext db) => _db = db;
+    public PrepareAccountingConnectRule(RentalCommandDbContext db) => _db = db;
 
     private readonly TimeSpan StateTtl = TimeSpan.FromMinutes(10);
 
@@ -192,11 +192,11 @@ public sealed record CancelTenantAutopayResult(
     bool Applied,
     int TenantAccountId);
 
-public sealed class CancelTenantAutopayHandler
+public sealed class CancelTenantAutopayRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CancelTenantAutopayHandler(RentalCommandDbContext db) => _db = db;
+    public CancelTenantAutopayRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<CancelTenantAutopayResult> ExecuteAsync(
         CancelTenantAutopayCommand command,

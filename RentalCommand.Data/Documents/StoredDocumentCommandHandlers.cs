@@ -41,7 +41,7 @@ public static class StoredDocumentWriteSupport
 
 }
 
-public sealed class CreateStoredDocumentHandler
+public sealed class CreateStoredDocumentRule
 {
     public static async Task<CreateStoredDocumentResult> ExecuteAsync(
         RentalCommandDbContext db, CreateStoredDocumentCommand command,
@@ -212,7 +212,7 @@ public sealed class CreateStoredDocumentHandler
         JsonSerializer.Serialize(new Dictionary<string, object?> { ["Document"] = fileName });
 }
 
-public sealed class DeleteStoredDocumentHandler
+public sealed class DeleteStoredDocumentRule
 {
     public static async Task<DeleteStoredDocumentResult> ExecuteAsync(
         RentalCommandDbContext db, DeleteStoredDocumentCommand command,
@@ -289,8 +289,8 @@ public sealed class DeleteStoredDocumentHandler
                 checked((int)entityId),
                 AuditLogOperation.Updated,
                 UserId: command.UserId,
-                OldValues: CreateStoredDocumentHandler.DocumentValue(row.FileName),
-                NewValues: CreateStoredDocumentHandler.DocumentValue(null),
+                OldValues: CreateStoredDocumentRule.DocumentValue(row.FileName),
+                NewValues: CreateStoredDocumentRule.DocumentValue(null),
                 ChangeReason: $"Document removed: {row.FileName}"));
         }
 

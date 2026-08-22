@@ -54,7 +54,7 @@ public sealed class LateFeeService : ILateFeeService
                 _timeProvider.GetUtcNow().UtcDateTime,
                 BatchSize,
                 capsJson);
-            var handler = new ApplyScheduledLateFeeChargeBatchHandler(_db);
+            var handler = new ApplyScheduledLateFeeChargeBatchRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 runToken.ToString("N"),
                 TenantMoneyWriteSupport.Write(
