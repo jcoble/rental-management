@@ -4,14 +4,14 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.Data.Automation;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
 /// <summary>Real PostgreSQL proof for bounded scheduled-automation leases.</summary>
 public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private string _connectionString = string.Empty;
     private bool _dockerAvailable;
 
@@ -19,12 +19,7 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
         }
         catch

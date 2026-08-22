@@ -7,7 +7,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Import;
 using RentalCommand.Data;
 using RentalCommand.Data.Import;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -15,19 +15,14 @@ namespace RentalCommand.IntegrationTests;
 /// <summary>PostgreSQL regression coverage for CSV import authorization CTE alias scope.</summary>
 public sealed class AtomicCsvImportAliasPostgreSqlTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private bool _dockerAvailable;
 
     public async Task InitializeAsync()
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_csv_import_alias")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

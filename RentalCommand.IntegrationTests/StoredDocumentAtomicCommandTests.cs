@@ -20,7 +20,7 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Documents;
 using RentalCommand.Data.Outbox;
 using RentalCommand.Engine.Workers;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
@@ -31,7 +31,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     private const string ContentHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static readonly DateTime BusinessAtUtc =
         new(2027, 1, 14, 5, 0, 0, DateTimeKind.Utc);
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private int _portfolioId;
@@ -64,12 +64,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_stored_documents")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

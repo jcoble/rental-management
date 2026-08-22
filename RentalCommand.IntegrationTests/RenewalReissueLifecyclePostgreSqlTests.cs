@@ -8,7 +8,7 @@ using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Leasing;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -24,7 +24,7 @@ public sealed class RenewalReissueLifecyclePostgreSqlTests : IAsyncLifetime
         new(2027, 1, 1, 12, 0, 0, DateTimeKind.Utc);
     private static readonly DateOnly BoundaryOn = new(2027, 1, 1);
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
 
@@ -32,12 +32,7 @@ public sealed class RenewalReissueLifecyclePostgreSqlTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_renewal_reissue")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

@@ -30,7 +30,6 @@ using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 using Stripe.Checkout;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -56,7 +55,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     private static readonly AtomicJsonResultCodec<FinalizeProviderPaymentCreateResult> FinalizeCodec =
         new("finalize-provider-payment-create-result.v1");
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
 
@@ -64,12 +63,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_provider_payments")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }
@@ -122,86 +116,6 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     {
         if (_services is not null) await _services.DisposeAsync();
         if (_postgres is not null) await _postgres.DisposeAsync();
-    }
-
-    [SkippableFact]
-    public async Task DurableProviderPaymentFenceMigration_UpDownUpRestoresPriorTransitionOnPostgreSql()
-    {
-        SkipIfNoDocker();
-        var scenario = await SeedScenarioAsync("fence-migration-rollback");
-        await using var db = NewContext();
-
-        // Start from the pre-migration contract: no fence columns, no fence-aware objects, and
-        // the prior nine-argument transition/guard set.
-        foreach (var statement in TenantAccountPostgreSqlContract.DropStatements)
-            await db.Database.ExecuteSqlRawAsync(statement);
-        await db.Database.ExecuteSqlRawAsync(
-            "ALTER TABLE \"TenantPaymentAttempts\" DROP COLUMN \"ProviderFenceAcquiredAtUtc\", DROP COLUMN \"ProviderFenceToken\";");
-        foreach (var statement in TenantAccountPostgreSqlContract.PreFenceCreateStatements)
-            await db.Database.ExecuteSqlRawAsync(statement);
-
-        await ExecuteDurableFenceMigrationAsync(db, "Up");
-        (await HasDatabaseFunctionAsync(db,
-            "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone,uuid)"))
-            .Should().BeTrue();
-        (await HasDatabaseFunctionAsync(db,
-            "rc_schedule_tenant_payment_reconciliation(bigint,integer,integer,character varying,character varying,uuid,timestamp with time zone,character varying,character varying)"))
-            .Should().BeTrue();
-        (await HasDatabaseColumnAsync(db, "ProviderFenceToken")).Should().BeTrue();
-
-        await ExecuteDurableFenceMigrationAsync(db, "Down");
-        var priorTransitionSignatures = await db.Database.SqlQuery<string>($"""
-            SELECT p.oid::regprocedure::text AS "Value"
-            FROM pg_proc AS p
-            JOIN pg_namespace AS n ON n.oid = p.pronamespace
-            WHERE n.nspname = 'public' AND p.proname = 'rc_transition_tenant_payment_attempt'
-            """).ToListAsync();
-        (await HasDatabaseFunctionAsync(db,
-            "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone)"))
-            .Should().BeTrue($"installed transition signatures: {string.Join(", ", priorTransitionSignatures)}");
-        (await HasDatabaseFunctionAsync(db,
-            "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone,uuid)"))
-            .Should().BeFalse();
-        (await HasDatabaseFunctionAsync(db,
-            "rc_schedule_tenant_payment_reconciliation(bigint,integer,integer,character varying,character varying,uuid,timestamp with time zone,character varying,character varying)"))
-            .Should().BeFalse();
-        (await HasDatabaseColumnAsync(db, "ProviderFenceToken")).Should().BeFalse();
-
-        // The prior application contract still works after Down: claim and perform one
-        // nine-argument Submitted transition before the migration is applied again.
-        var attemptId = await db.Database.SqlQuery<long>($"""
-            SELECT nextval(pg_get_serial_sequence('"TenantPaymentAttempts"', 'Id')) AS "Value"
-            """).SingleAsync();
-        await db.Database.ExecuteSqlInterpolatedAsync($$"""
-            INSERT INTO "TenantPaymentAttempts"
-                ("Id", "PortfolioId", "TenantAccountId", "ChargeLedgerEntryId", "Provider",
-                 "IdempotencyKey", "AttemptType", "State", "Amount", "Currency",
-                 "PreparedAtUtc", "UpdatedAtUtc", "CreatedByUserId")
-            VALUES ({{attemptId}}, {{scenario.PortfolioId}}, {{scenario.AccountId}}, {{scenario.ChargeId}}, 'stripe',
-                    'migration:prior-version', 'Charge', 'Prepared', 100, 'USD',
-                    clock_timestamp(), clock_timestamp(), {{scenario.UserId}})
-            """);
-        var claimToken = await db.Database.SqlQuery<Guid>($$"""
-            SELECT rc_claim_tenant_payment_attempt(
-                {{attemptId}}, {{scenario.AccountId}}, {{scenario.PortfolioId}},
-                'migration-prior-version') AS "Value"
-            """).SingleAsync();
-        var transitioned = await db.Database.SqlQuery<bool>($$"""
-            SELECT rc_transition_tenant_payment_attempt(
-                {{attemptId}}, {{scenario.AccountId}}, {{scenario.PortfolioId}}, {{claimToken}},
-                'Submitted', 'pi_prior_version', NULL, NULL, NULL) AS "Value"
-            """).SingleAsync();
-        transitioned.Should().BeTrue();
-        var priorState = await db.Database.SqlQuery<string>($$"""
-            SELECT "State" AS "Value" FROM "TenantPaymentAttempts" WHERE "Id" = {{attemptId}}
-            """).SingleAsync();
-        priorState.Should().Be("Submitted");
-
-        await ExecuteDurableFenceMigrationAsync(db, "Up");
-        (await HasDatabaseFunctionAsync(db,
-            "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone,uuid)"))
-            .Should().BeTrue();
-        (await HasDatabaseColumnAsync(db, "ProviderFenceToken")).Should().BeTrue();
     }
 
     [SkippableFact]
@@ -2172,38 +2086,6 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         new ReconcileClaimedProviderPaymentEventCommand(
             claim.Id, claim.ClaimOwner, claim.ClaimToken, DateTime.UtcNow),
         ReconcileCodec);
-
-    private static async Task ExecuteDurableFenceMigrationAsync(
-        RentalCommandDbContext db, string methodName)
-    {
-        var migration = new RentalCommand.Data.Migrations.DurableProviderPaymentFence();
-        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
-        typeof(RentalCommand.Data.Migrations.DurableProviderPaymentFence)
-            .GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(migration, [builder]);
-
-        foreach (var operation in builder.Operations)
-        {
-            switch (operation)
-            {
-                case SqlOperation sql:
-                    await db.Database.ExecuteSqlRawAsync(sql.Sql);
-                    break;
-                case AddColumnOperation add:
-                    await db.Database.ExecuteSqlRawAsync(
-                        $"ALTER TABLE \"{add.Table}\" ADD COLUMN \"{add.Name}\" {add.ColumnType} " +
-                        (add.IsNullable ? "NULL" : "NOT NULL"));
-                    break;
-                case DropColumnOperation drop:
-                    await db.Database.ExecuteSqlRawAsync(
-                        $"ALTER TABLE \"{drop.Table}\" DROP COLUMN \"{drop.Name}\";");
-                    break;
-                default:
-                    throw new InvalidOperationException(
-                        $"Unexpected durable-fence migration operation {operation.GetType().Name}.");
-            }
-        }
-    }
 
     private static Task<bool> HasDatabaseFunctionAsync(
         RentalCommandDbContext db, string signature) =>

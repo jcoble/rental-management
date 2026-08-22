@@ -17,7 +17,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection4.Name)]
 public sealed class SimulationWriteExecutorReceiptTests(MigratedPostgreSqlFixture fixture)
 {
     private static readonly DateTime Now = new(2026, 8, 21, 12, 0, 0, DateTimeKind.Utc);

@@ -21,7 +21,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection3.Name)]
 public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
 {
     private static readonly DateTime Now = new(2026, 8, 21, 16, 0, 0, DateTimeKind.Utc);

@@ -18,7 +18,6 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Esign;
 using RentalCommand.TestCommon;
-using Testcontainers.PostgreSql;
 
 namespace RentalCommand.IntegrationTests;
 
@@ -26,7 +25,7 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
 {
     private const int ActorUserId = 81_500;
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private Scenario _scenario = default!;
@@ -36,12 +35,7 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_esign_resend")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

@@ -18,7 +18,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection4.Name)]
 public sealed class HistoricalPossessionReconciliationPostgreSqlTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;

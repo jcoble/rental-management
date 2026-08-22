@@ -17,7 +17,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -33,7 +33,7 @@ public sealed class CanonicalAuthorizationPostgreSqlTests : IAsyncLifetime
     private const string PlatformOperatorEmail = "operator@platform.example";
     private const string ValidPassword = "Rental-Command-2026!";
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
 
@@ -41,12 +41,7 @@ public sealed class CanonicalAuthorizationPostgreSqlTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_canonical_auth")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

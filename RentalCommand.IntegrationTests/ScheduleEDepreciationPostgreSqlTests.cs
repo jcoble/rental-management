@@ -7,7 +7,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Services;
 using RentalCommand.Data;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
@@ -18,7 +18,7 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class ScheduleEDepreciationPostgreSqlTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
 
@@ -26,12 +26,7 @@ public sealed class ScheduleEDepreciationPostgreSqlTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_schedule_e")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

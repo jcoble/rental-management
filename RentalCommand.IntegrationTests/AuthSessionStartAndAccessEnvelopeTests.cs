@@ -20,7 +20,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auth;
 using RentalCommand.Data.Authorization;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -33,7 +33,7 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 {
-    private const string ApiPassword = "auth-start-api-test-password";
+    private const string ApiPassword = SharedPostgreSqlDatabase.ApiPassword;
     private static readonly AtomicJsonResultCodec<LoginContextSelectionChallengeResult> ChallengeCodec =
         new("login-context-selection-challenge-result.v1");
     private static readonly AtomicJsonResultCodec<StartAuthSessionResult> StartCodec =
@@ -48,7 +48,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         new("auth-password-change-result:v1");
 
     private readonly DateTime _now = CurrentTestTimeUtc();
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private ServiceProvider? _runtimeServices;
     private AuthStartFailureInterceptor? _failureInterceptor;
@@ -68,12 +68,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_auth_start")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }
@@ -87,8 +82,6 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await using (var db = NewPlainContext())
         {
             await db.Database.MigrateAsync();
-            await db.Database.ExecuteSqlRawAsync(
-                $"ALTER ROLE rentalcommand_api PASSWORD '{ApiPassword}';");
             await SeedAsync(db);
         }
 

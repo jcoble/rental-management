@@ -8,7 +8,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Leasing;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -23,7 +23,7 @@ public sealed class LegalDocumentSourceVersionConcurrencyTests : IAsyncLifetime
     private static readonly DateTime CreatedAtUtc =
         new(2026, 7, 13, 12, 0, 0, DateTimeKind.Utc);
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
     private int _portfolioId;
@@ -35,12 +35,7 @@ public sealed class LegalDocumentSourceVersionConcurrencyTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

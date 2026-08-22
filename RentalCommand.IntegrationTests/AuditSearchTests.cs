@@ -11,7 +11,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -35,9 +35,8 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class AuditSearchTests : IAsyncLifetime
 {
-    // Built inside InitializeAsync (not as a field initializer): PostgreSqlBuilder.Build() validates
-    // the Docker endpoint eagerly, so building it here lets a missing daemon be caught and skipped.
-    private PostgreSqlContainer? _pg;
+    // Acquired inside InitializeAsync so a missing Docker daemon can be caught and skipped.
+    private SharedPostgreSqlDatabase? _pg;
 
     private bool _dockerAvailable;
     private string _ownerConnString = string.Empty;
@@ -48,12 +47,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
     {
         try
         {
-            _pg = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _pg = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _pg.StartAsync();
             _dockerAvailable = true;
         }

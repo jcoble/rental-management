@@ -29,7 +29,7 @@ using Xunit;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection2.Name)]
 public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
 {
     private static readonly DateTime BusinessNowUtc = new(2027, 1, 25, 5, 0, 0, DateTimeKind.Utc);
@@ -1548,8 +1548,26 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     private sealed class InjectedOutboxFailure : Exception;
 }
 
-[CollectionDefinition(Name, DisableParallelization = true)]
+[CollectionDefinition(Name)]
 public sealed class RoleAuthorityPostgreSqlCollection : ICollectionFixture<MigratedPostgreSqlFixture>
 {
     public const string Name = "Role authority PostgreSQL";
+}
+
+[CollectionDefinition(Name)]
+public sealed class RoleAuthorityPostgreSqlCollection2 : ICollectionFixture<MigratedPostgreSqlFixture>
+{
+    public const string Name = "Role authority PostgreSQL 2";
+}
+
+[CollectionDefinition(Name)]
+public sealed class RoleAuthorityPostgreSqlCollection3 : ICollectionFixture<MigratedPostgreSqlFixture>
+{
+    public const string Name = "Role authority PostgreSQL 3";
+}
+
+[CollectionDefinition(Name)]
+public sealed class RoleAuthorityPostgreSqlCollection4 : ICollectionFixture<MigratedPostgreSqlFixture>
+{
+    public const string Name = "Role authority PostgreSQL 4";
 }
