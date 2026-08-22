@@ -10,6 +10,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Atomic;
@@ -924,7 +925,7 @@ public class BankingServiceTests : IAsyncLifetime
         var executedSql = new List<string>();
         await using var ctx = await _fixture.CreateContextAsync(
             [new RecordingCommandInterceptor(executedSql)]);
-        var sut = CreateServiceFor(ctx);
+        var sut = CreateServiceFor(ctx, executedSql: executedSql);
         var scope = ctx.Db.SeedAdministratorScope(1, "bank-transfer-match");
         var date = new DateTime(2026, 06, 03, 0, 0, 0, DateTimeKind.Utc);
         var transfer = SeedTenantTransfer(ctx, date, 325.15m, TenantLedgerEntryType.TransferOut, TenantLedgerDirection.Debit);
@@ -1473,7 +1474,7 @@ public class BankingServiceTests : IAsyncLifetime
         var executedSql = new List<string>();
         await using var ctx = await _fixture.CreateContextAsync(
             [new RecordingCommandInterceptor(executedSql)]);
-        var sut = CreateServiceFor(ctx);
+        var sut = CreateServiceFor(ctx, executedSql: executedSql);
         var older = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
         var newer = new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc);
         ctx.Db.BankConnections.AddRange(
@@ -1517,7 +1518,7 @@ public class BankingServiceTests : IAsyncLifetime
         var executedSql = new List<string>();
         await using var ctx = await _fixture.CreateContextAsync(
             [new RecordingCommandInterceptor(executedSql)]);
-        var sut = CreateServiceFor(ctx);
+        var sut = CreateServiceFor(ctx, executedSql: executedSql);
         var now = new DateTime(2026, 06, 03, 0, 0, 0, DateTimeKind.Utc);
         ctx.Db.BankConnections.AddRange(
             new BankConnection
@@ -1559,7 +1560,7 @@ public class BankingServiceTests : IAsyncLifetime
         var executedSql = new List<string>();
         await using var ctx = await _fixture.CreateContextAsync(
             [new RecordingCommandInterceptor(executedSql)]);
-        var sut = CreateServiceFor(ctx);
+        var sut = CreateServiceFor(ctx, executedSql: executedSql);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
         var payment = SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-target");
         SeedRentPaymentInto(ctx, "Old", "Candidate", 1400m, postedAt.AddMonths(-6), "L-old");
@@ -1612,7 +1613,7 @@ public class BankingServiceTests : IAsyncLifetime
         var executedSql = new List<string>();
         await using var ctx = await _fixture.CreateContextAsync(
             [new RecordingCommandInterceptor(executedSql)]);
-        var sut = CreateServiceFor(ctx);
+        var sut = CreateServiceFor(ctx, executedSql: executedSql);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
         var property = SeedRouteProperty(ctx, "Review queue ranking");
         SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily", property);
@@ -1646,7 +1647,7 @@ public class BankingServiceTests : IAsyncLifetime
         var executedSql = new List<string>();
         await using var ctx = await _fixture.CreateContextAsync(
             [new RecordingCommandInterceptor(executedSql)]);
-        var sut = CreateServiceFor(ctx);
+        var sut = CreateServiceFor(ctx, executedSql: executedSql);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
         var emily = SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
         var carlos = SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1450m, postedAt.AddDays(1), "L-carlos");
@@ -1685,7 +1686,7 @@ public class BankingServiceTests : IAsyncLifetime
         var executedSql = new List<string>();
         await using var ctx = await _fixture.CreateContextAsync(
             [new RecordingCommandInterceptor(executedSql)]);
-        var sut = CreateServiceFor(ctx);
+        var sut = CreateServiceFor(ctx, executedSql: executedSql);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
         var allowed = SeedRentPaymentInto(ctx, "Allowed", "Tenant", 1400m, postedAt, "L-allowed");
         var denied = SeedRentPaymentInto(ctx, "Denied", "Tenant", 1550m, postedAt, "L-denied");
@@ -1742,7 +1743,7 @@ public class BankingServiceTests : IAsyncLifetime
         var executedSql = new List<string>();
         await using var ctx = await _fixture.CreateContextAsync(
             [new RecordingCommandInterceptor(executedSql)]);
-        var sut = CreateServiceFor(ctx);
+        var sut = CreateServiceFor(ctx, executedSql: executedSql);
         var connection = SeedBankConnectionInto(ctx);
         SeedBankTransactionInto(ctx, connection.Id, "txn-1", new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc), "Unmatched");
         SeedBankTransactionInto(ctx, connection.Id, "txn-2", new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc), "Matched");
@@ -2310,18 +2311,23 @@ public class BankingServiceTests : IAsyncLifetime
         return receipt;
     }
 
-    private BankingService CreateServiceFor(MigratedPostgreSqlTestContext ctx, PlaidOptions? options = null)
-        => CreateServiceFor(ctx.Db, ctx.ConnectionString, options);
+    private BankingService CreateServiceFor(
+        MigratedPostgreSqlTestContext ctx,
+        PlaidOptions? options = null,
+        List<string>? executedSql = null) =>
+        CreateServiceFor(ctx.Db, ctx.ConnectionString, options, executedSql);
 
     private BankingService CreateServiceFor(
         RentalCommand.Data.RentalCommandDbContext db,
         string connectionString,
-        PlaidOptions? options = null)
+        PlaidOptions? options = null,
+        List<string>? executedSql = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult, PreparePlaidTokenExchangeHandler>();
         services.AddAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult, AdmitPlaidTokenExchangeHandler>();
         services.AddAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult, RecordPlaidTokenExchangeReceiptHandler>();
@@ -2331,16 +2337,21 @@ public class BankingServiceTests : IAsyncLifetime
         services.AddAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult, ReconcileBankTransactionHandler>();
         services.AddAtomicCommandHandler<RouteBankTransactionCommand, RouteBankTransactionResult, RouteBankTransactionHandler>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
-            builder.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
+        {
+            builder.UseNpgsql(db.Database.GetDbConnection(), contextOwnsConnection: false);
+            if (executedSql is not null)
+                builder.AddInterceptors(new RecordingCommandInterceptor(executedSql));
+            builder.UseAtomicPersistenceKernel(provider);
+        });
         var provider = services.BuildServiceProvider();
         var scope = provider.CreateScope();
         _atomicHosts.Add(scope);
         _atomicHosts.Add(provider);
         return new BankingService(
-            db,
+            scope.ServiceProvider.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
             new EphemeralDataProtectionProvider(),
             _plaid.Object,
-            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
             Options.Create(options ?? new PlaidOptions
             {
                 Environment = "sandbox",

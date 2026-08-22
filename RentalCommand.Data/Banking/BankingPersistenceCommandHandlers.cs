@@ -11,6 +11,100 @@ using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Banking;
 
+public static class BankingWriteSupport
+{
+    public const string PlaidConnectionResultContract = "banking.plaid.connection.result.v1";
+    public const string PlaidExchangePrepareResultContract = "banking.plaid.exchange.prepare.result.v1";
+    public const string PlaidExchangeAdmitResultContract = "banking.plaid.exchange.admit.result.v1";
+    public const string PlaidExchangeReceiptResultContract = "banking.plaid.exchange.receipt.result.v1";
+    public const string PlaidSyncResultContract = "banking.plaid.sync.result.v1";
+    public const string ImportResultContract = "banking.import.result.v1";
+    public const string ReconciliationResultContract = "banking.reconciliation.result.v1";
+    public const string RoutingResultContract = "banking.routing.result.v1";
+
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        RentalCommandDbContext db,
+        TCommand command)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        object write = command switch
+        {
+            PreparePlaidTokenExchangeCommand value => Build(
+                "banking.plaid.exchange.prepare", PlaidExchangePrepareResultContract,
+                new WriteLockPlan(WriteLockProtocol.BankingPrepareExchange,
+                    WriteLock.For("AuthSession", value.AuthSessionId),
+                    WriteLock.For("WorkspaceAccessContext", value.AccessContextId),
+                    WriteLock.For("BankConnection", ApplyPlaidConnectionHandler.StableGuid(
+                        value.PortfolioId, "plaid-exchange", value.ClientOperationId))),
+                value, new PreparePlaidTokenExchangeHandler(db).ExecuteAsync,
+                new PreparePlaidTokenExchangeHandler(db).AuthorizeReplayAsync),
+            AdmitPlaidTokenExchangeCommand value => Build(
+                "banking.plaid.exchange.admit", PlaidExchangeAdmitResultContract,
+                Connection(value.ExchangeAttemptId), value,
+                new AdmitPlaidTokenExchangeHandler(db).ExecuteAsync,
+                new AdmitPlaidTokenExchangeHandler(db).AuthorizeReplayAsync),
+            RecordPlaidTokenExchangeReceiptCommand value => Build(
+                "banking.plaid.exchange.receipt", PlaidExchangeReceiptResultContract,
+                Connection(value.ExchangeAttemptId), value,
+                new RecordPlaidTokenExchangeReceiptHandler(db).ExecuteAsync,
+                new RecordPlaidTokenExchangeReceiptHandler(db).AuthorizeReplayAsync),
+            ApplyPlaidConnectionCommand value => Build(
+                "banking.plaid.connection.apply", PlaidConnectionResultContract,
+                new WriteLockPlan(WriteLockProtocol.BankingApplyConnection,
+                    WriteLock.For("BankConnection", value.ExchangeAttemptId)),
+                value, new ApplyPlaidConnectionHandler(db).ExecuteAsync,
+                new ApplyPlaidConnectionHandler(db).AuthorizeReplayAsync),
+            ApplyPlaidSyncCommand value => Build(
+                "banking.plaid.sync.apply", PlaidSyncResultContract,
+                Connection(value.ConnectionId), value,
+                new ApplyPlaidSyncHandler(db).ExecuteAsync,
+                new ApplyPlaidSyncHandler(db).AuthorizeReplayAsync),
+            ImportBankTransactionsCommand value => Build(
+                "banking.import.apply", ImportResultContract,
+                Connection(ApplyPlaidConnectionHandler.StableGuid(
+                    value.PortfolioId, value.Provider, value.InstitutionName,
+                    value.AccountName, value.AccountMask)), value,
+                new ImportBankTransactionsHandler(db).ExecuteAsync,
+                new ImportBankTransactionsHandler(db).AuthorizeReplayAsync),
+            ReconcileBankTransactionCommand value => Build(
+                "banking.transaction.reconcile", ReconciliationResultContract,
+                new WriteLockPlan(WriteLockProtocol.BankingReconciliation,
+                    WriteLock.For("AuthSession", value.AuthSessionId),
+                    WriteLock.For("WorkspaceAccessContext", value.AccessContextId)),
+                value, new ReconcileBankTransactionHandler(db).ExecuteAsync,
+                new ReconcileBankTransactionHandler(db).AuthorizeReplayAsync),
+            RouteBankTransactionCommand value => Build(
+                "banking.transaction.route", RoutingResultContract,
+                new WriteLockPlan(WriteLockProtocol.BankingRoute,
+                    WriteLock.For("AuthSession", value.AuthSessionId),
+                    WriteLock.For("WorkspaceAccessContext", value.AccessContextId),
+                    WriteLock.For("BankTransaction", value.TransactionId)),
+                value, new RouteBankTransactionHandler(db).ExecuteAsync,
+                new RouteBankTransactionHandler(db).AuthorizeReplayAsync),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return (TransactionalWrite<TCommand, TResult>)write;
+    }
+
+    private static WriteLockPlan Connection(int id) => new(
+        WriteLockProtocol.BankingConnection, WriteLock.For("BankConnection", id));
+
+    private static WriteLockPlan Connection(Guid id) => new(
+        WriteLockProtocol.BankingConnection, WriteLock.For("BankConnection", id));
+
+    private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
+        string operationName, string resultContract, WriteLockPlan lockPlan, TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => new(operationName, WriteIdempotencyPolicy.Required,
+            command, resultContract, lockPlan, executeAsync, authorizeReplayAsync);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic banking writes are retired; use the shared write executor.");
+}
+
 public sealed class PreparePlaidTokenExchangeHandler
     : IAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult>
 {
@@ -21,15 +115,14 @@ public sealed class PreparePlaidTokenExchangeHandler
     public async Task<PreparePlaidTokenExchangeResult> HandleAsync(
         PreparePlaidTokenExchangeCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
+
+    public async Task<PreparePlaidTokenExchangeResult> ExecuteAsync(
+        PreparePlaidTokenExchangeCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         BankingAuthorizationSupport.Validate(command);
-        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync(
-            "BankConnection",
-            ApplyPlaidConnectionHandler.StableGuid(command.PortfolioId, "plaid-exchange", command.ClientOperationId),
-            ct);
         var authorizationNow = await context.ReadDatabaseClockUtcAsync(ct);
         if (!await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
                 command.PortfolioId, command.ActorUserId, command.AuthSessionId,
@@ -92,9 +185,13 @@ public sealed class AdmitPlaidTokenExchangeHandler
     public async Task<AdmitPlaidTokenExchangeResult> HandleAsync(
         AdmitPlaidTokenExchangeCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
+
+    public async Task<AdmitPlaidTokenExchangeResult> ExecuteAsync(
+        AdmitPlaidTokenExchangeCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await context.AcquireLockAsync("BankConnection", command.ExchangeAttemptId, ct);
         var exchange = await _db.Set<PlaidTokenExchangeAttempt>()
             .SingleOrDefaultAsync(row => row.Id == command.ExchangeAttemptId
                 && row.PortfolioId == command.PortfolioId, ct);
@@ -151,9 +248,13 @@ public sealed class RecordPlaidTokenExchangeReceiptHandler
     public async Task<RecordPlaidTokenExchangeReceiptResult> HandleAsync(
         RecordPlaidTokenExchangeReceiptCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
+
+    public async Task<RecordPlaidTokenExchangeReceiptResult> ExecuteAsync(
+        RecordPlaidTokenExchangeReceiptCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await context.AcquireLockAsync("BankConnection", command.ExchangeAttemptId, ct);
         var exchange = await _db.Set<PlaidTokenExchangeAttempt>()
             .SingleOrDefaultAsync(row => row.Id == command.ExchangeAttemptId
                 && row.PortfolioId == command.PortfolioId, ct);
@@ -217,9 +318,13 @@ public sealed class ApplyPlaidConnectionHandler
     public async Task<ApplyPlaidConnectionResult> HandleAsync(
         ApplyPlaidConnectionCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
+
+    public async Task<ApplyPlaidConnectionResult> ExecuteAsync(
+        ApplyPlaidConnectionCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await context.AcquireLockAsync("BankConnection", command.ExchangeAttemptId, ct);
         var exchange = await _db.Set<PlaidTokenExchangeAttempt>()
             .SingleOrDefaultAsync(row => row.Id == command.ExchangeAttemptId
                 && row.PortfolioId == command.PortfolioId, ct)
@@ -338,6 +443,11 @@ public sealed class ApplyPlaidSyncHandler
     public async Task<ApplyPlaidSyncResult> HandleAsync(
         ApplyPlaidSyncCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
+
+    public async Task<ApplyPlaidSyncResult> ExecuteAsync(
+        ApplyPlaidSyncCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.AddedInputCount < command.Added.Count
@@ -351,7 +461,6 @@ public sealed class ApplyPlaidSyncHandler
             throw new InvalidOperationException($"A Plaid sync result cannot exceed {MaxBatch} rows per change set.");
         }
 
-        await context.AcquireLockAsync("BankConnection", command.ConnectionId, ct);
         var connection = await _db.Set<BankConnection>()
             .SingleOrDefaultAsync(row => row.Id == command.ConnectionId
                 && row.PortfolioId == command.PortfolioId
@@ -527,6 +636,11 @@ public sealed class ImportBankTransactionsHandler
     public async Task<ImportBankTransactionsResult> HandleAsync(
         ImportBankTransactionsCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
+
+    public async Task<ImportBankTransactionsResult> ExecuteAsync(
+        ImportBankTransactionsCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.InputCount < 0
@@ -540,11 +654,6 @@ public sealed class ImportBankTransactionsHandler
         }
         ValidateStatement(command.Statement);
 
-        await context.AcquireLockAsync(
-            "BankConnection",
-            ApplyPlaidConnectionHandler.StableGuid(
-                command.PortfolioId, command.Provider, command.InstitutionName, command.AccountName, command.AccountMask),
-            ct);
         var existingStatement = command.Statement is null
             ? null
             : await _db.Set<BankStatement>()
@@ -756,11 +865,14 @@ public sealed class ReconcileBankTransactionHandler
     public async Task<ReconcileBankTransactionResult> HandleAsync(
         ReconcileBankTransactionCommand command,
         IAtomicCommandContext context,
+        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
+
+    public async Task<ReconcileBankTransactionResult> ExecuteAsync(
+        ReconcileBankTransactionCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         BankingAuthorizationSupport.Validate(command);
-        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
         var discoveredClearTargets = command.Action == BankReconciliationAction.Clear
             ? await _db.Set<BankTransaction>()
                 .Where(row => row.Id == command.TransactionId && row.PortfolioId == command.PortfolioId)
@@ -1460,12 +1572,13 @@ public sealed class RouteBankTransactionHandler
     public RouteBankTransactionHandler(RentalCommandDbContext db) => _db = db;
 
     public async Task<RouteBankTransactionResult> HandleAsync(
+        RouteBankTransactionCommand command, IAtomicCommandContext context,
+        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
+
+    public async Task<RouteBankTransactionResult> ExecuteAsync(
         RouteBankTransactionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         BankingAuthorizationSupport.Validate(command);
-        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
-        await context.AcquireLockAsync("BankTransaction", command.TransactionId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
 
         var transaction = await _db.Set<BankTransaction>()
