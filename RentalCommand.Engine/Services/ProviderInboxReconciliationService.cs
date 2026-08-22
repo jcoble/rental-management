@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Logging;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Payments;
+using RentalCommand.Data;
 using RentalCommand.Data.Payments;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -9,22 +11,22 @@ public sealed class ProviderInboxReconciliationService
 {
     internal const int BatchSize = 20;
     internal static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
-    private static readonly AtomicJsonResultCodec<ReconcileClaimedProviderPaymentEventResult> ResultCodec =
-        new("reconcile-claimed-provider-payment-event-result.v1");
-
     private readonly IProviderInboxClaimStore _claimStore;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IJobStepWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ProviderInboxReconciliationService> _logger;
 
     public ProviderInboxReconciliationService(
         IProviderInboxClaimStore claimStore,
-        IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        IJobStepWriteExecutor writes,
         TimeProvider timeProvider,
         ILogger<ProviderInboxReconciliationService> logger)
     {
         _claimStore = claimStore;
-        _atomic = atomic;
+        _db = db;
+        _writes = writes;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -41,17 +43,16 @@ public sealed class ProviderInboxReconciliationService
             try
             {
                 var reconciledAt = _timeProvider.GetUtcNow().UtcDateTime;
-                var outcome = await _atomic.ExecuteAsync(
-                    new AtomicCommandIdentity(
-                        "payments.provider-inbox.reconcile",
-                        $"{claim.Id}:{claim.ClaimToken:N}"),
-                    new ReconcileClaimedProviderPaymentEventCommand(
+                var key = $"{claim.Id}:{claim.ClaimToken:N}";
+                var command = new ReconcileClaimedProviderPaymentEventCommand(
                         claim.Id,
                         claim.ClaimOwner,
                         claim.ClaimToken,
-                        reconciledAt),
-                    ResultCodec,
-                    ct);
+                        reconciledAt);
+                var outcome = await _writes.ExecuteAsync(key,
+                    ProviderPaymentWriteSupport.Write<ReconcileClaimedProviderPaymentEventCommand,
+                        ReconcileClaimedProviderPaymentEventResult>(_db,
+                            "payments.provider-inbox.reconcile", command), ct);
                 if (outcome.Value.Outcome == ReconcileProviderPaymentEventOutcome.Applied)
                 {
                     completed++;

@@ -8,6 +8,8 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Payments;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -17,17 +19,8 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class InteractivePaymentReconciliationService
 {
-    private static readonly AtomicJsonResultCodec<SubmitProviderPaymentCreateResult> SubmitCodec =
-        new("submit-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<FinalizeProviderPaymentCreateResult> FinalizeCodec =
-        new("finalize-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<FailProviderPaymentCreateResult> FailCodec =
-        new("fail-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<ScheduleProviderPaymentReconciliationResult>
-        ScheduleCodec = new("schedule-provider-payment-reconciliation-result.v1");
-
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IJobStepWriteExecutor _writes;
     private readonly IInteractivePaymentProviderClient _provider;
     private readonly TimeProvider _timeProvider;
     private readonly InteractivePaymentReconciliationOptions _options;
@@ -36,7 +29,7 @@ public sealed class InteractivePaymentReconciliationService
 
     public InteractivePaymentReconciliationService(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic,
+        IJobStepWriteExecutor writes,
         IInteractivePaymentProviderClient provider,
         TimeProvider timeProvider,
         IOptions<InteractivePaymentReconciliationOptions> options,
@@ -44,7 +37,7 @@ public sealed class InteractivePaymentReconciliationService
         IServiceScopeFactory scopeFactory)
     {
         _db = db;
-        _atomic = atomic;
+        _writes = writes;
         _provider = provider;
         _timeProvider = timeProvider;
         _options = options.Value;
@@ -120,7 +113,7 @@ public sealed class InteractivePaymentReconciliationService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var isolated = new InteractivePaymentReconciliationService(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
             scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>(),
             _timeProvider,
             Options.Create(_options),
@@ -258,12 +251,12 @@ public sealed class InteractivePaymentReconciliationService
         var state = MapProviderState(provider.Status);
         if (current.State == TenantPaymentAttemptState.Prepared)
         {
-            var submitted = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("payments.provider-create.submit", current.IdempotencyKey),
-                new SubmitProviderPaymentCreateCommand(
+            var command = new SubmitProviderPaymentCreateCommand(
                     current.PortfolioId, current.TenantAccountId, current.PaymentAttemptId,
-                    current.Provider, current.IdempotencyKey, now),
-                SubmitCodec, ct);
+                    current.Provider, current.IdempotencyKey, now);
+            var submitted = await _writes.ExecuteAsync(current.IdempotencyKey,
+                ProviderPaymentWriteSupport.Write<SubmitProviderPaymentCreateCommand,
+                    SubmitProviderPaymentCreateResult>(_db, "payments.provider-create.submit", command), ct);
             var result = submitted.Value;
             if (result.Outcome is SubmitProviderPaymentCreateOutcome.Canceled
                 or SubmitProviderPaymentCreateOutcome.Failed
@@ -280,14 +273,14 @@ public sealed class InteractivePaymentReconciliationService
                 return;
         }
 
-        await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity($"payments.provider-create.finalize:{state}",
-                current.IdempotencyKey),
-            new FinalizeProviderPaymentCreateCommand(
+        var finalizeCommand = new FinalizeProviderPaymentCreateCommand(
                 current.PortfolioId, current.TenantAccountId, current.PaymentAttemptId,
                 current.Provider, current.IdempotencyKey, providerObjectId, state, null, now,
-                current.ProviderFenceToken),
-            FinalizeCodec, ct);
+                current.ProviderFenceToken);
+        await _writes.ExecuteAsync(current.IdempotencyKey,
+            ProviderPaymentWriteSupport.Write<FinalizeProviderPaymentCreateCommand,
+                FinalizeProviderPaymentCreateResult>(_db, $"payments.provider-create.finalize:{state}",
+                    finalizeCommand), ct);
 
         if (state == TenantPaymentAttemptState.Submitted)
         {
@@ -299,13 +292,12 @@ public sealed class InteractivePaymentReconciliationService
     private async Task<Candidate> EnsureSubmittedFenceAsync(
         Candidate candidate, DateTime now, CancellationToken ct)
     {
-        var ensured = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-reconciliation.ensure-fence",
-                candidate.IdempotencyKey),
-            new SubmitProviderPaymentCreateCommand(
+        var command = new SubmitProviderPaymentCreateCommand(
                 candidate.PortfolioId, candidate.TenantAccountId, candidate.PaymentAttemptId,
-                candidate.Provider, candidate.IdempotencyKey, now),
-            SubmitCodec, ct);
+                candidate.Provider, candidate.IdempotencyKey, now);
+        var ensured = await _writes.ExecuteAsync(candidate.IdempotencyKey,
+            ProviderPaymentWriteSupport.Write<SubmitProviderPaymentCreateCommand,
+                SubmitProviderPaymentCreateResult>(_db, "payments.provider-reconciliation.ensure-fence", command), ct);
         return candidate with
         {
             State = ensured.Value.State,
@@ -317,15 +309,15 @@ public sealed class InteractivePaymentReconciliationService
     private async Task ExpireWithoutProviderObjectAsync(
         Candidate candidate, DateTime now, CancellationToken ct)
     {
-        await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-reconciliation.expire",
-                $"{candidate.PaymentAttemptId}:{candidate.IdempotencyKey}"),
-            new FailProviderPaymentCreateCommand(
+        var key = $"{candidate.PaymentAttemptId}:{candidate.IdempotencyKey}";
+        var command = new FailProviderPaymentCreateCommand(
                 candidate.PortfolioId, candidate.TenantAccountId, candidate.PaymentAttemptId,
                 candidate.Provider, candidate.IdempotencyKey, "PROVIDER_RECONCILE_EXPIRED",
                 "Provider reconciliation found no accepted payment after the expiry policy.",
-                now, candidate.ProviderFenceToken),
-            FailCodec, ct);
+                now, candidate.ProviderFenceToken);
+        await _writes.ExecuteAsync(key,
+            ProviderPaymentWriteSupport.Write<FailProviderPaymentCreateCommand,
+                FailProviderPaymentCreateResult>(_db, "payments.provider-reconciliation.expire", command), ct);
     }
 
     private async Task ScheduleRetryAsync(
@@ -339,14 +331,15 @@ public sealed class InteractivePaymentReconciliationService
             ? _options.RetryDelay
             : TimeSpan.FromMilliseconds(1);
         var nextAttemptAtUtc = now + delay;
-        await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-reconciliation.schedule",
-                $"{candidate.PaymentAttemptId}:{failureCode}:{nextAttemptAtUtc.Ticks}"),
-            new ScheduleProviderPaymentReconciliationCommand(
+        var key = $"{candidate.PaymentAttemptId}:{failureCode}:{nextAttemptAtUtc.Ticks}";
+        var command = new ScheduleProviderPaymentReconciliationCommand(
                 candidate.PortfolioId, candidate.TenantAccountId, candidate.PaymentAttemptId,
                 candidate.Provider, candidate.IdempotencyKey, candidate.ProviderFenceToken,
-                nextAttemptAtUtc, failureCode, Truncate(failureReason, 2000), now),
-            ScheduleCodec, ct);
+                nextAttemptAtUtc, failureCode, Truncate(failureReason, 2000), now);
+        await _writes.ExecuteAsync(key,
+            ProviderPaymentWriteSupport.Write<ScheduleProviderPaymentReconciliationCommand,
+                ScheduleProviderPaymentReconciliationResult>(_db, "payments.provider-reconciliation.schedule",
+                    command), ct);
     }
 
     private static InteractiveProviderAttempt ToProviderAttempt(Candidate candidate) =>
