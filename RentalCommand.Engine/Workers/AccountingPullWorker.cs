@@ -1,8 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Workers;
 
@@ -29,6 +31,7 @@ public sealed class AccountingPullWorker : EngineWorkerBase
         var db = scoped.GetRequiredService<RentalCommandDbContext>();
         var import = scoped.GetRequiredService<AccountingImportService>();
         var claims = scoped.GetRequiredService<IAccountingConnectionClaimStore>();
+        var writes = scoped.GetRequiredService<IJobStepWriteExecutor>();
         var logger = scoped.GetRequiredService<ILogger<AccountingPullWorker>>();
         var batch = await claims.ClaimPullAsync(_claimOwner, ClaimLease, BatchSize, ct);
         var processed = 0;
@@ -40,8 +43,15 @@ public sealed class AccountingPullWorker : EngineWorkerBase
             db.Attach(claim.Connection);
             try
             {
-                var summary = await import.ImportAsync(claim.Connection, since: null, ct, claim.Fence);
-                processed += summary.PaymentsImported + summary.ExpensesImported;
+                var command = await import.PullAsync(claim.Connection, since: null, ct, claim.Fence);
+                var identity = new AtomicCommandIdentity(
+                    "accounting.pull.apply",
+                    $"{claim.Connection.Id}:{claim.Fence.ClaimToken:N}:{command.ProviderBatchIdentity}");
+                var handler = new ApplyAccountingPullResultHandler(db);
+                var outcome = await writes.ExecuteAsync(identity.IdempotencyKey,
+                    AccountingWriteSupport.Write(
+                        command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
+                processed += outcome.Value.PaymentsImported + outcome.Value.ExpensesImported;
 
                 db.ChangeTracker.Clear();
             }
