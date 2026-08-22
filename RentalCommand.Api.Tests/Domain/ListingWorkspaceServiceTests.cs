@@ -21,7 +21,6 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
     private readonly SqliteTestContext _context = new();
-    private readonly CapturingAtomicUnitOfWork _atomic = new();
     private readonly CapturingRequestWriteExecutor _writes = new();
     private readonly ListingWorkspaceService _service;
 
@@ -33,7 +32,6 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
             new ListingChannelAdapterResolver([new DisabledZillowListingChannelAdapter()]),
             NullLogger<ListingWorkspaceService>.Instance,
             TimeProvider.System,
-            _atomic,
             _writes);
 
     public void Dispose() => _context.Dispose();
@@ -97,8 +95,8 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         await _service.IngestSignalAsync(
             Scope(), listing.UnitId, publicationId, "message-1", request);
 
-        _atomic.LastIdentity!.CommandType.Should().Be("listing-workspace.signal.ingest");
-        _atomic.LastCommand.Should().BeEquivalentTo(new IngestExternalListingSignalCommand(
+        _writes.LastOperationName.Should().Be("listing-workspace.signal.ingest");
+        _writes.LastCommand.Should().BeEquivalentTo(new IngestExternalListingSignalCommand(
             PortfolioId, listing.UnitId, Scope().UserId, Scope().SessionId,
             Scope().AccessContextId, Scope().AccessRevision, publicationId, "message-1",
             "StatusChanged", null, null, "Active"));
@@ -206,40 +204,6 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
     private static WorkspaceReadScope Scope() =>
         new(PortfolioId, 42, Guid.Parse("18e99783-e913-401d-8158-a7feb002667a"), 71, 4);
 
-    private sealed class CapturingAtomicUnitOfWork : IAtomicUnitOfWork
-    {
-        public AtomicCommandIdentity? LastIdentity { get; private set; }
-        public object? LastCommand { get; private set; }
-
-        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity,
-            TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData
-            where TResult : notnull
-        {
-            LastIdentity = identity.BindRequest(command);
-            LastCommand = command;
-            object result = typeof(TResult) == typeof(ListingWorkspaceMutationResult)
-                ? new ListingWorkspaceMutationResult(ListingWorkspaceMutationOutcome.Applied,
-                    PortfolioId, ResolveUnitId(command), 1)
-                : typeof(TResult) == typeof(IngestExternalListingSignalResult)
-                    ? new IngestExternalListingSignalResult(
-                        true, 7, "StatusChanged", null, null, "Active",
-                        ExternalListingSignalDisposition.Unconfirmed, DateTime.UtcNow)
-                    : throw new NotSupportedException($"Unexpected result type {typeof(TResult).Name}.");
-            return Task.FromResult(new AtomicCommandOutcome<TResult>(
-                (TResult)result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
-        }
-
-        private static int ResolveUnitId<TCommand>(TCommand command) => command switch
-        {
-            IListingWorkspaceAtomicCommand listing => listing.UnitId,
-            _ => throw new NotSupportedException($"Unexpected command type {typeof(TCommand).Name}."),
-        };
-    }
-
     private sealed class CapturingRequestWriteExecutor : IRequestWriteExecutor
     {
         public string? LastIdempotencyKey { get; private set; }
@@ -262,6 +226,10 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
                     PortfolioId,
                     ((IListingWorkspaceAtomicCommand)(object)write.Request).UnitId,
                     1)
+                : typeof(TResult) == typeof(IngestExternalListingSignalResult)
+                    ? new IngestExternalListingSignalResult(
+                        true, 7, "StatusChanged", null, null, "Active",
+                        ExternalListingSignalDisposition.Unconfirmed, DateTime.UtcNow)
                 : throw new NotSupportedException($"Unexpected result type {typeof(TResult).Name}.");
             return Task.FromResult(new AtomicCommandOutcome<TResult>(
                 (TResult)result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
