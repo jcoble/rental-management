@@ -135,7 +135,7 @@ public sealed class PortalServiceLeaseTests : IDisposable
             .Options);
 }
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name2)]
 public sealed class PortalServiceLeasePostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

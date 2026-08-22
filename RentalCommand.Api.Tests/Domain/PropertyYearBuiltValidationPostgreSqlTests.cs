@@ -19,7 +19,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public sealed class PropertyYearBuiltValidationPostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

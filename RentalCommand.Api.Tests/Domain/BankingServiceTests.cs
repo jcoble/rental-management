@@ -27,7 +27,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name4)]
 public class BankingServiceTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;

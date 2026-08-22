@@ -15,7 +15,7 @@ using RentalCommand.Core.Time;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public sealed class AccountingReadModelPostgreSqlTests
 {
     private readonly MigratedPostgreSqlFixture _fixture;

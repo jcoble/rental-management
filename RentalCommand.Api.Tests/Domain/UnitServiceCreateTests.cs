@@ -20,7 +20,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// <see cref="UnitService.UpdateAsync"/> — a clear, field-specific 409 instead of the opaque
 /// unique-index conflict the DB would otherwise surface.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public class UnitServiceCreateTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

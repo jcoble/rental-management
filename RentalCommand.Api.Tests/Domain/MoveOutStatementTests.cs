@@ -21,7 +21,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Proves that move-out statements are assembled from the canonical lease relationship and
 /// append-only deposit subledger, including immutable reversals and account-keyed photos.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name2)]
 public sealed class MoveOutStatementTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

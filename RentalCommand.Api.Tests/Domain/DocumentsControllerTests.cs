@@ -23,7 +23,7 @@ using SkiaSharp;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public sealed class DocumentsControllerTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

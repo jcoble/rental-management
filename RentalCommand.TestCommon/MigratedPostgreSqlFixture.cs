@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
@@ -8,30 +9,40 @@ using Testcontainers.PostgreSql;
 namespace RentalCommand.TestCommon;
 
 /// <summary>
-/// Starts one PostgreSQL container, migrates a template database once, and clones an isolated
-/// database for each test. PostgreSQL-only persistence tests therefore exercise the production
-/// provider without paying the migration cost for every fact.
+/// Shares one PostgreSQL container across the test process, migrates a template database once,
+/// and clones an isolated database for each test. PostgreSQL-only persistence tests therefore
+/// exercise the production provider without paying the migration cost for every fact.
 /// </summary>
 public sealed class MigratedPostgreSqlFixture : IAsyncLifetime
 {
     private const string TemplateDatabase = "rentalcommand_test_template";
+    private static readonly Lazy<Task<PostgreSqlContainer>> SharedPostgres = new(StartPostgresAsync);
     private PostgreSqlContainer? _postgres;
     private string _adminConnectionString = string.Empty;
 
     public async Task InitializeAsync()
     {
-        _postgres = new PostgreSqlBuilder()
+        _postgres = await SharedPostgres.Value;
+        _adminConnectionString = BuildConnectionString("postgres");
+    }
+
+    private static async Task<PostgreSqlContainer> StartPostgresAsync()
+    {
+        var postgres = new PostgreSqlBuilder()
             .WithImage("postgres:16-alpine")
+            .WithCreateParameterModifier(parameters => parameters.Platform = DockerPlatform)
+            .WithTmpfsMount("/var/lib/postgresql/data")
+            .WithCommand("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off")
             .WithDatabase("postgres")
             .WithUsername("postgres")
             .WithPassword("postgres")
             .Build();
-        await _postgres.StartAsync();
+        await postgres.StartAsync();
 
-        _adminConnectionString = BuildConnectionString("postgres");
-        await ExecuteAdminCommandAsync($"CREATE DATABASE \"{TemplateDatabase}\"");
+        var adminConnectionString = BuildConnectionString(postgres, "postgres");
+        await ExecuteAdminCommandAsync(adminConnectionString, $"CREATE DATABASE \"{TemplateDatabase}\"");
 
-        var templateConnectionString = BuildConnectionString(TemplateDatabase);
+        var templateConnectionString = BuildConnectionString(postgres, TemplateDatabase);
         await using var db = CreateDbContext(templateConnectionString);
         await db.Database.MigrateAsync();
         var seededAt = DateTime.UtcNow;
@@ -61,7 +72,17 @@ public sealed class MigratedPostgreSqlFixture : IAsyncLifetime
         {
             throw new InvalidOperationException("The migrated test template must seed Portfolio and User Id 1.");
         }
+
+        return postgres;
     }
+
+    private static string DockerPlatform => RuntimeInformation.ProcessArchitecture switch
+    {
+        Architecture.Arm64 => "linux/arm64",
+        Architecture.X64 => "linux/amd64",
+        _ => throw new PlatformNotSupportedException(
+            $"PostgreSQL tests do not support {RuntimeInformation.ProcessArchitecture} hosts."),
+    };
 
     public async Task<MigratedPostgreSqlTestContext> CreateContextAsync(
         IEnumerable<IInterceptor>? interceptors = null)
@@ -77,17 +98,14 @@ public sealed class MigratedPostgreSqlFixture : IAsyncLifetime
             () => DropDatabaseAsync(databaseName));
     }
 
-    public async Task DisposeAsync()
-    {
-        if (_postgres is not null)
-        {
-            await _postgres.DisposeAsync();
-        }
-    }
+    public Task DisposeAsync() => Task.CompletedTask;
 
     private string BuildConnectionString(string databaseName)
+        => BuildConnectionString(_postgres!, databaseName);
+
+    private static string BuildConnectionString(PostgreSqlContainer postgres, string databaseName)
     {
-        var builder = new NpgsqlConnectionStringBuilder(_postgres!.GetConnectionString())
+        var builder = new NpgsqlConnectionStringBuilder(postgres.GetConnectionString())
         {
             Database = databaseName,
             Pooling = false,
@@ -115,8 +133,11 @@ public sealed class MigratedPostgreSqlFixture : IAsyncLifetime
     }
 
     private async Task ExecuteAdminCommandAsync(string sql)
+        => await ExecuteAdminCommandAsync(_adminConnectionString, sql);
+
+    private static async Task ExecuteAdminCommandAsync(string connectionString, string sql)
     {
-        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(sql, connection);
         await command.ExecuteNonQueryAsync();

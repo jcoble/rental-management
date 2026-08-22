@@ -14,7 +14,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Focused Unit Command Center tests against the migrated PostgreSQL schema and its canonical
 /// LeaseManagement, Agreement, Party, Account, ledger, and operational-period read models.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name2)]
 public class UnitDashboardServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

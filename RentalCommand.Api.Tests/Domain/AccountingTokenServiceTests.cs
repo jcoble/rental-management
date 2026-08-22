@@ -23,7 +23,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// and blanks the tokens — never a silent failure. Tests the shared <see cref="AccountingTokenService"/>
 /// directly (the worker is a thin DB-claim + advisory-lock wrapper around it).
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name4)]
 public sealed class AccountingTokenServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

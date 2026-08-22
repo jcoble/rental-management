@@ -14,7 +14,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public sealed class SandboxLifecyclePostgreSqlTests
 {
     private readonly MigratedPostgreSqlFixture _fixture;

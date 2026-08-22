@@ -24,7 +24,7 @@ namespace RentalCommand.Api.Tests.Scanning;
 /// Tests for the bulk-scan batch endpoints on <see cref="ScanController"/>. Uses migrated PostgreSQL
 /// so authorization, conditional-count, paging, and projection SQL run under the production runtime role.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name4)]
 public class ScanBatchControllerTests : IAsyncLifetime
 {
     private const int PortfolioId = 42;

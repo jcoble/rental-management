@@ -25,7 +25,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public class ConversationNotificationTests : IAsyncLifetime
 {
     private readonly List<string> _commands = [];

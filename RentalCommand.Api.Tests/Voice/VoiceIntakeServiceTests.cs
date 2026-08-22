@@ -20,7 +20,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Voice;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name4)]
 public class VoiceIntakeServiceTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;

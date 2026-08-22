@@ -22,7 +22,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Scanning;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name2)]
 public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 42;

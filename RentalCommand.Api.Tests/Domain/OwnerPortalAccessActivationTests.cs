@@ -28,7 +28,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

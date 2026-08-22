@@ -24,7 +24,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Scanning;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public class ScanControllerTests : IAsyncLifetime
 {
     private static readonly Guid SessionId =

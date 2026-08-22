@@ -16,7 +16,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
