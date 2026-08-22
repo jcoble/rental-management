@@ -107,7 +107,7 @@
 	};
 
 	function invalidate() {
-		queryClient.invalidateQueries({ queryKey: ['application', id] });
+		queryClient.invalidateQueries({ queryKey: ['application', applicationQueryScope, id] });
 		queryClient.invalidateQueries({ queryKey: ['applications'] });
 	}
 
@@ -180,7 +180,7 @@
 			feeOperationKey = null;
 			showRecordFee = false;
 			showSuccess('Application fee recorded.');
-			queryClient.invalidateQueries({ queryKey: ['application', id] });
+			queryClient.invalidateQueries({ queryKey: ['application', applicationQueryScope, id] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-transactions'] });
 		},
