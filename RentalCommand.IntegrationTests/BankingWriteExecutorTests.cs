@@ -1,11 +1,16 @@
+using Microsoft.AspNetCore.DataProtection;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Moq;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -23,15 +28,15 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
     private static readonly Guid SessionId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid ExchangeId = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
-    // Frozen legacy fingerprints computed once from the banking command DTO shapes at c9dae23c.
+    // Frozen legacy fingerprints computed once from caller-reachable banking commands at c9dae23c.
     // These values must never be regenerated from the current command model or a current helper.
-    private const string PrepareFingerprint = "9325cd089ea0db489b615e80829b88a097241aa0d3768c00cb33ae07ba5c2306";
+    private const string PrepareFingerprint = "10aaaaa4930e65eb179a8070cd0e9430ad2d1b54f3e038e0728a331f3c4a669c";
     private const string AdmitFingerprint = "fe07fac3a2c4fdb08bd17cc8f485a1d03ff6a6c8896e82fab23c3b3eb93745e4";
-    private const string ReceiptFingerprint = "b660754976998f49e70016a85c07fb97cb6af775fb3f078e17b5bf667d8adef1";
+    private const string ReceiptFingerprint = "1f4425d6318d439343532a9eb918e22a364812c03301ee344c7247eccd1282ab";
     private const string ConnectionFingerprint = "fe07fac3a2c4fdb08bd17cc8f485a1d03ff6a6c8896e82fab23c3b3eb93745e4";
-    private const string SyncFingerprint = "fe9db51249f914c1f6015367121054c9d8b84fc39fd168a18ab3227b4cd17af7";
-    private const string ImportFingerprint = "483292435c527947f4e5e8be719036579e7c13a810bb5d3b614ac10e79b2e787";
-    private const string ReconcileFingerprint = "143f0dfba0b6ee4bbc1432f861d67624a4994886e589428799a7f7483f1d3cbe";
+    private const string SyncFingerprint = "0934c5515c854bc26651852fea2c8a3c2bb768a48013e79665198b69667d049a";
+    private const string ImportFingerprint = "0963c107033347b1ba50dbf5cc8c38f1ae7f73de9a7d709c89c1461a0aac5c52";
+    private const string ReconcileFingerprint = "01fc85703ce95860dcac62b3708fb433e878029d7b0040b9df2b5674f6619886";
     private const string RouteFingerprint = "d64db0fc96f7ee1e395bd2745652ce23857051eb718c668b0aef71bf9327a221";
 
     [Fact]
@@ -99,37 +104,135 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
     {
         await using var database = await fixture.CreateContextAsync();
         await SeedReplayStateAsync(database.Db);
-        await using var services = Services(database.ConnectionString);
+        var plaid = new Mock<IPlaidBankingProvider>();
+        plaid.Setup(value => value.ExchangePublicTokenAsync(
+                It.IsAny<PlaidRuntimeSettings>(), "public-token", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PlaidExchangeResult("access-token", "item-id", "provider-request"));
+        plaid.Setup(value => value.SyncTransactionsAsync(
+                It.IsAny<PlaidRuntimeSettings>(), "access-token", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PlaidTransactionsSyncResult(
+                "cursor-next",
+                [new PlaidSyncedTransaction(
+                    "provider-transaction", "account-id", Now, null, "Bank transaction", null,
+                    -25m, "USD", null, null!)],
+                [], [], "provider-request"));
+        await using var services = Services(database.ConnectionString, plaid.Object);
+        // Frozen caller digests calculated once from the concrete inputs below; never regenerate.
+        const string prepareKey =
+            "8:43630806754633734D13710D2E8E0EB5D69FBFBA66B94EB8FF337558BAB37388";
+        const string syncKey =
+            "8:810:2393429A406F72713F04DCEAB858AC03A88A051576680A500E91E5EB468C3F56";
+        const string importKey =
+            "8:A951CCB6D1493A26E6CBA360A076E3E287616CFA970D5F0C709367630A0E4A7B";
+        var exchangeKey = $"8:{ExchangeId:N}";
 
-        await ReplayAsync(services,
-            "8:43630806754633734D13710D2E8E0EB5D69FBFBA66B94EB8FF337558BAB37388",
-            Prepare(), PrepareFingerprint,
+        await SeedReceiptAsync(services, "banking.plaid.exchange.prepare", prepareKey,
+            PrepareFingerprint, BankingWriteSupport.PlaidExchangePrepareResultContract,
             "{\"Outcome\":0,\"ExchangeAttemptId\":\"22222222-2222-2222-2222-222222222222\"}",
-            new PreparePlaidTokenExchangeResult(PreparePlaidTokenExchangeOutcome.Prepared, ExchangeId));
-        await ReplayAsync(services, $"8:{ExchangeId:N}", Admit(), AdmitFingerprint,
+            Now);
+        await SeedReceiptAsync(services, "banking.plaid.exchange.admit", exchangeKey,
+            AdmitFingerprint, BankingWriteSupport.PlaidExchangeAdmitResultContract,
             "{\"Outcome\":0,\"ExchangeAttemptId\":\"22222222-2222-2222-2222-222222222222\"}",
-            new AdmitPlaidTokenExchangeResult(AdmitPlaidTokenExchangeOutcome.Admitted, ExchangeId));
-        await ReplayAsync(services, $"8:{ExchangeId:N}", Receipt(), ReceiptFingerprint,
+            Now);
+        await SeedReceiptAsync(services, "banking.plaid.exchange.receipt", exchangeKey,
+            ReceiptFingerprint, BankingWriteSupport.PlaidExchangeReceiptResultContract,
             "{\"Outcome\":0,\"ExchangeAttemptId\":\"22222222-2222-2222-2222-222222222222\"}",
-            new RecordPlaidTokenExchangeReceiptResult(
-                RecordPlaidTokenExchangeReceiptOutcome.Recorded, ExchangeId));
-        await ReplayAsync(services, $"8:{ExchangeId:N}", Connection(), ConnectionFingerprint,
+            Now);
+        await SeedReceiptAsync(services, "banking.plaid.connection.apply", exchangeKey,
+            ConnectionFingerprint, BankingWriteSupport.PlaidConnectionResultContract,
             "{\"ConnectionId\":810,\"Created\":true}",
-            new ApplyPlaidConnectionResult(810, true));
-        await ReplayAsync(services,
-            "8:810:2393429A406F72713F04DCEAB858AC03A88A051576680A500E91E5EB468C3F56",
-            Sync(), SyncFingerprint,
+            Now);
+        await SeedReceiptAsync(services, "banking.plaid.sync.apply", syncKey,
+            SyncFingerprint, BankingWriteSupport.PlaidSyncResultContract,
             "{\"Outcome\":0,\"ConnectionId\":810,\"ImportedCount\":1,\"SkippedCount\":0,\"AffectedTransactionIds\":[812]}",
-            new ApplyPlaidSyncResult(ApplyPlaidSyncOutcome.Applied, 810, 1, 0, [812]));
-        await ReplayAsync(services, $"8:{new string('A', 64)}", Import(), ImportFingerprint,
+            Now);
+        await SeedReceiptAsync(services, "banking.import.apply", importKey,
+            ImportFingerprint, BankingWriteSupport.ImportResultContract,
             "{\"ConnectionId\":811,\"ImportedCount\":1,\"SkippedCount\":0,\"ImportedTransactionIds\":[812],\"StatementId\":null,\"StatementPeriodStart\":null,\"StatementPeriodEnd\":null,\"StatementOpeningBalance\":null,\"StatementClosingBalance\":null,\"StatementMovement\":null,\"StatementIsoCurrencyCode\":null}",
-            new ImportBankTransactionsResult(811, 1, 0, [812]));
-        await ReplayAsync(services, "8:9:812: reconcile exact ", Reconcile(), ReconcileFingerprint,
+            Now);
+        await SeedReceiptAsync(services, "banking.transaction.reconcile",
+            "8:9:812: reconcile exact ", ReconcileFingerprint,
+            BankingWriteSupport.ReconciliationResultContract,
             "{\"Outcome\":2,\"TransactionId\":812,\"Transaction\":null}",
-            new ReconcileBankTransactionResult(ReconcileBankTransactionOutcome.TransactionNotFound, 812));
-        await ReplayAsync(services, "8:9:812: route exact ", Route(), RouteFingerprint,
+            Now);
+        await SeedReceiptAsync(services, "banking.transaction.route", "8:9:812: route exact ",
+            RouteFingerprint, BankingWriteSupport.RoutingResultContract,
             "{\"Outcome\":0,\"TransactionId\":812}",
-            new RouteBankTransactionResult(RouteBankTransactionOutcome.Applied, 812));
+            Now);
+
+        await using var callerScope = services.CreateAsyncScope();
+        var service = callerScope.ServiceProvider.GetRequiredService<BankingService>();
+        var request = ExchangeRequest();
+        (await service.ExchangePlaidPublicTokenAsync(FrozenScope(), request)).Id.Should().Be(810);
+
+        var db = callerScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        await db.PlaidTokenExchangeAttempts.Where(row => row.Id == ExchangeId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.Status, "Prepared")
+                .SetProperty(row => row.RemoteAdmittedAtUtc, (DateTime?)null)
+                .SetProperty(row => row.RemoteReceiptRecordedAtUtc, (DateTime?)null)
+                .SetProperty(row => row.CompletedAtUtc, (DateTime?)null));
+        await FluentActions.Invoking(() => service.ExchangePlaidPublicTokenAsync(FrozenScope(), request))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already owned by an admitted request*");
+
+        (await service.ImportAsync(8, ImportRequest())).ImportedCount.Should().Be(1);
+        (await service.IgnoreTransactionAsync(FrozenScope(), 812,
+            new BankTransactionMutationRequest
+            {
+                OperationKey = " reconcile exact ", ExpectedUpdatedAtUtc = Now,
+            })).Should().BeNull();
+        (await service.RouteTransactionAsync(FrozenScope(), 812,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = " route exact ", ExpectedUpdatedAtUtc = Now,
+            })).Should().NotBeNull();
+        (await service.SyncPlaidConnectionAsync(8, 810))!.ImportedCount.Should().Be(1);
+
+        db.ChangeTracker.Clear();
+        (await db.AtomicCommandReceipts.CountAsync(row => row.CommandType.StartsWith("banking.")))
+            .Should().Be(8);
+        (await db.PlaidTokenExchangeAttempts.CountAsync(row => row.Id == ExchangeId)).Should().Be(1);
+        (await db.BankConnections.CountAsync(row => row.PortfolioId == 8)).Should().Be(2);
+        (await db.BankTransactions.CountAsync(row => row.PortfolioId == 8)).Should().Be(1);
+        (await db.BankTransactions.CountAsync(row => row.Id == 812
+            && row.PropertyId == null && row.MatchStatus == "Unmatched")).Should().Be(1);
+
+        await using var receiptDatabase = await fixture.CreateContextAsync();
+        await SeedReplayStateAsync(receiptDatabase.Db);
+        await receiptDatabase.Db.PlaidTokenExchangeAttempts.Where(row => row.Id == ExchangeId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.Status, "Prepared")
+                .SetProperty(row => row.RemoteAdmittedAtUtc, (DateTime?)null)
+                .SetProperty(row => row.RemoteReceiptRecordedAtUtc, (DateTime?)null)
+                .SetProperty(row => row.CompletedAtUtc, (DateTime?)null));
+        await using var receiptServices = Services(receiptDatabase.ConnectionString, plaid.Object);
+        await SeedReceiptAsync(receiptServices, "banking.plaid.exchange.prepare", prepareKey,
+            PrepareFingerprint, BankingWriteSupport.PlaidExchangePrepareResultContract,
+            "{\"Outcome\":0,\"ExchangeAttemptId\":\"22222222-2222-2222-2222-222222222222\"}", Now);
+        await SeedReceiptAsync(receiptServices, "banking.plaid.exchange.receipt", exchangeKey,
+            ReceiptFingerprint, BankingWriteSupport.PlaidExchangeReceiptResultContract,
+            "{\"Outcome\":0,\"ExchangeAttemptId\":\"22222222-2222-2222-2222-222222222222\"}", Now);
+        await SeedReceiptAsync(receiptServices, "banking.plaid.connection.apply", exchangeKey,
+            ConnectionFingerprint, BankingWriteSupport.PlaidConnectionResultContract,
+            "{\"ConnectionId\":810,\"Created\":true}", Now);
+        await SeedReceiptAsync(receiptServices, "banking.plaid.sync.apply", syncKey,
+            SyncFingerprint, BankingWriteSupport.PlaidSyncResultContract,
+            "{\"Outcome\":0,\"ConnectionId\":810,\"ImportedCount\":1,\"SkippedCount\":0,\"AffectedTransactionIds\":[812]}", Now);
+        await using var receiptScope = receiptServices.CreateAsyncScope();
+        await FluentActions.Invoking(() => receiptScope.ServiceProvider.GetRequiredService<BankingService>()
+                .ExchangePlaidPublicTokenAsync(FrozenScope(), request))
+            .Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*applied Plaid connection exchange is unavailable*");
+        var receiptDb = receiptScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        (await receiptDb.AtomicCommandReceipts.CountAsync(row => row.CommandType.StartsWith("banking.")))
+            .Should().Be(5, "admission executes once while the other four stages replay");
+        (await receiptDb.BankConnections.CountAsync(row => row.PortfolioId == 8)).Should().Be(2);
+        (await receiptDb.BankTransactions.CountAsync(row => row.PortfolioId == 8)).Should().Be(1);
+        plaid.Verify(value => value.ExchangePublicTokenAsync(
+            It.IsAny<PlaidRuntimeSettings>(), "public-token", It.IsAny<CancellationToken>()), Times.Once);
+        plaid.Verify(value => value.SyncTransactionsAsync(
+            It.IsAny<PlaidRuntimeSettings>(), "access-token", null, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -143,11 +246,13 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
                 .SetProperty(row => row.RevokedAtUtc, Now));
         await using var services = Services(database.ConnectionString);
 
-        var action = () => ReplayAsync(services,
+        await SeedReceiptAsync(services, "banking.plaid.exchange.prepare",
             "8:43630806754633734D13710D2E8E0EB5D69FBFBA66B94EB8FF337558BAB37388",
-            Prepare(), PrepareFingerprint,
-            "{\"Outcome\":0,\"ExchangeAttemptId\":\"22222222-2222-2222-2222-222222222222\"}",
-            new PreparePlaidTokenExchangeResult(PreparePlaidTokenExchangeOutcome.Prepared, ExchangeId));
+            PrepareFingerprint, BankingWriteSupport.PlaidExchangePrepareResultContract,
+            "{\"Outcome\":0,\"ExchangeAttemptId\":\"22222222-2222-2222-2222-222222222222\"}", Now);
+        await using var scope = services.CreateAsyncScope();
+        var action = () => scope.ServiceProvider.GetRequiredService<BankingService>()
+            .ExchangePlaidPublicTokenAsync(FrozenScope(), ExchangeRequest());
 
         await action.Should().ThrowAsync<UnauthorizedAccessException>();
     }
@@ -218,32 +323,25 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
         acquired.Should().Equal(expectedLocks);
     }
 
-    private static async Task ReplayAsync<TCommand, TResult>(
+    private static async Task SeedReceiptAsync(
         ServiceProvider services,
+        string operation,
         string key,
-        TCommand command,
         string fingerprint,
+        string contract,
         string resultJson,
-        TResult expected)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
+        DateTime completedAt)
     {
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var write = BankingWriteSupport.Write<TCommand, TResult>(db, command);
         db.AtomicCommandReceipts.Add(new AtomicCommandReceipt
         {
-            Id = Guid.NewGuid(), AttemptId = Guid.NewGuid(), CommandType = write.OperationName,
+            Id = Guid.NewGuid(), AttemptId = Guid.NewGuid(), CommandType = operation,
             IdempotencyKey = key, RequestFingerprint = fingerprint,
-            Status = AtomicCommandReceiptStatus.Completed, ResultContract = write.ResultContract,
-            ResultJson = resultJson, StartedAt = Now, CompletedAt = Now,
+            Status = AtomicCommandReceiptStatus.Completed, ResultContract = contract,
+            ResultJson = resultJson, StartedAt = completedAt, CompletedAt = completedAt,
         });
         await db.SaveChangesAsync();
-
-        var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
-            .ExecuteExactAsync(key, write);
-        outcome.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        outcome.Value.Should().BeEquivalentTo(expected);
     }
 
     private static async Task SeedReplayStateAsync(RentalCommandDbContext db)
@@ -294,7 +392,14 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
             new BankConnection
             {
                 Id = 810, PortfolioId = 8, Provider = "Plaid", InstitutionName = "Plaid bank",
-                AccountName = "Checking", Status = "Active", CreatedAt = Now, UpdatedAt = Now,
+                AccountName = "Checking", AccountMask = "1234", AccountType = "depository",
+                AccountSubtype = "checking", Status = "Active",
+                ExternalAccountIdCipherText = "cHJvdGVjdGVkOmFjY291bnQtaWQ",
+                ExternalAccountIdHash = "61F852A6454401360C03BCBC609F4662CC767F009F206550448439DE3F4A7FB2",
+                ExternalItemIdCipherText = "cHJvdGVjdGVkOml0ZW0taWQ",
+                ExternalItemIdHash = "86B30AD6DB41093E7E36E495C42F2E7BF9CCBFEF54E7189C3A5AEB7A9CCC7E1E",
+                ExternalAccessTokenCipherText = "cHJvdGVjdGVkOmFjY2Vzcy10b2tlbg",
+                CreatedAt = Now, UpdatedAt = Now,
             },
             new BankConnection
             {
@@ -306,13 +411,18 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
         db.Add(new PlaidTokenExchangeAttempt
         {
             Id = ExchangeId, PortfolioId = 8, ClientOperationId = "client-operation",
-            RequestHash = new string('1', 64), PublicTokenHash = new string('2', 64),
+            RequestHash = "CD5B6A33C0C6C7407D4DE04A91005296C64B5B2AEBF8F65B91200E77E4DA799F",
+            PublicTokenHash = "0A11C586276E130D0BCD50C28EA06B6AEB63F2E99D0E41C56CF4E4178AE2590A",
             InstitutionName = "Plaid bank", AccountName = "Checking",
-            ExternalAccountIdCipherText = "account-cipher", ExternalAccountIdHash = new string('3', 64),
+            AccountMask = "1234", AccountType = "depository", AccountSubtype = "checking",
+            ExternalAccountIdCipherText = "cHJvdGVjdGVkOmFjY291bnQtaWQ",
+            ExternalAccountIdHash = "61F852A6454401360C03BCBC609F4662CC767F009F206550448439DE3F4A7FB2",
             Status = "Completed", PreparedAtUtc = Now, RemoteAdmittedAtUtc = Now,
             RemoteReceiptRecordedAtUtc = Now, CompletedAtUtc = Now,
-            ProviderRequestIdentity = "provider-request", ExternalItemIdCipherText = "item-cipher",
-            ExternalItemIdHash = new string('4', 64), ExternalAccessTokenCipherText = "token-cipher",
+            ProviderRequestIdentity = "provider-request",
+            ExternalItemIdCipherText = "cHJvdGVjdGVkOml0ZW0taWQ",
+            ExternalItemIdHash = "86B30AD6DB41093E7E36E495C42F2E7BF9CCBFEF54E7189C3A5AEB7A9CCC7E1E",
+            ExternalAccessTokenCipherText = "cHJvdGVjdGVkOmFjY2Vzcy10b2tlbg",
             BankConnectionId = 810,
         });
         db.Add(new BankTransaction
@@ -325,14 +435,23 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
         await db.SaveChangesAsync();
     }
 
-    private static ServiceProvider Services(string connectionString)
+    private static ServiceProvider Services(
+        string connectionString,
+        IPlaidBankingProvider? plaid = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider(Now));
+        services.AddSingleton<IDataProtectionProvider, FixedDataProtectionProvider>();
+        services.AddSingleton(plaid ?? Mock.Of<IPlaidBankingProvider>());
+        services.AddSingleton(Options.Create(new PlaidOptions
+        {
+            Environment = "sandbox", ClientId = "client-id", Secret = "secret",
+        }));
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddScoped<BankingService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider();
@@ -343,25 +462,79 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
 
     private static PreparePlaidTokenExchangeCommand Prepare() => new(
         8, 7, SessionId, 9, 3, CapabilityKeys.BankConnectionsManage, "client-operation",
-        new string('1', 64), new string('2', 64), "Plaid bank", "Checking", "1234",
-        "depository", "checking", "account-cipher", new string('3', 64), Now);
+        "CD5B6A33C0C6C7407D4DE04A91005296C64B5B2AEBF8F65B91200E77E4DA799F",
+        "0A11C586276E130D0BCD50C28EA06B6AEB63F2E99D0E41C56CF4E4178AE2590A",
+        "Plaid bank", "Checking", "1234", "depository", "checking",
+        "cHJvdGVjdGVkOmFjY291bnQtaWQ",
+        "61F852A6454401360C03BCBC609F4662CC767F009F206550448439DE3F4A7FB2", Now);
     private static AdmitPlaidTokenExchangeCommand Admit() => new(8, ExchangeId, Now);
     private static RecordPlaidTokenExchangeReceiptCommand Receipt() => new(
-        8, ExchangeId, "provider-request", "item-cipher", new string('4', 64), "token-cipher", Now);
+        8, ExchangeId, "provider-request", "cHJvdGVjdGVkOml0ZW0taWQ",
+        "86B30AD6DB41093E7E36E495C42F2E7BF9CCBFEF54E7189C3A5AEB7A9CCC7E1E",
+        "cHJvdGVjdGVkOmFjY2Vzcy10b2tlbg", Now);
     private static ApplyPlaidConnectionCommand Connection() => new(8, ExchangeId, Now);
     private static ApplyPlaidSyncCommand Sync() => new(
-        8, 810, null, "cursor-next", [TransactionInput()], 1, [], 0, [], "provider-request", Now);
+        8, 810, null, "cHJvdGVjdGVkOmN1cnNvci1uZXh0",
+        [TransactionInput()], 1, [], 0, [], "provider-request", Now);
     private static ImportBankTransactionsCommand Import() => new(
         8, "Manual", "Manual bank", "Operating", "1234", "depository", "checking",
-        [TransactionInput()], 1, new string('A', 64), Now);
+        [TransactionInput()], 1,
+        "A951CCB6D1493A26E6CBA360A076E3E287616CFA970D5F0C709367630A0E4A7B", Now);
     private static ReconcileBankTransactionCommand Reconcile() => new(
         8, 812, BankReconciliationAction.Ignore, null, null, null, null, null, null, null,
-        Now, Now, 7, SessionId, 9, 3, CapabilityKeys.MoneyReconciliationOperate,
+        Now, Now, 7, SessionId, 9, 3, CapabilityKeys.MoneyReconciliationDestructive,
         " reconcile exact ");
     private static RouteBankTransactionCommand Route() => new(
         8, 812, null, Now, Now, 7, SessionId, 9, 3, " route exact ");
     private static BankTransactionInput TransactionInput() => new(
         "provider-transaction", Now, null, "Bank transaction", null, 25m, "USD", null, null);
+
+    private static WorkspaceReadScope FrozenScope() => new(8, 7, SessionId, 9, 3);
+
+    private static ExchangePlaidPublicTokenRequest ExchangeRequest() => new()
+    {
+        ClientOperationId = "client-operation",
+        PublicToken = "public-token",
+        InstitutionName = "Plaid bank",
+        AccountId = "account-id",
+        AccountName = "Checking",
+        AccountMask = "1234",
+        AccountType = "depository",
+        AccountSubtype = "checking",
+    };
+
+    private static ImportBankTransactionsRequest ImportRequest() => new()
+    {
+        Provider = "Manual",
+        InstitutionName = "Manual bank",
+        AccountName = "Operating",
+        AccountMask = "1234",
+        AccountType = "depository",
+        AccountSubtype = "checking",
+        Transactions =
+        [
+            new ImportBankTransactionItem
+            {
+                ProviderTransactionId = "provider-transaction",
+                PostedAt = Now,
+                Description = "Bank transaction",
+                Amount = 25m,
+                IsoCurrencyCode = "USD",
+            },
+        ],
+    };
+
+    private sealed class FixedTimeProvider(DateTime now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(now);
+    }
+
+    private sealed class FixedDataProtectionProvider : IDataProtectionProvider, IDataProtector
+    {
+        public IDataProtector CreateProtector(string purpose) => this;
+        public byte[] Protect(byte[] plaintext) => "protected:"u8.ToArray().Concat(plaintext).ToArray();
+        public byte[] Unprotect(byte[] protectedData) => protectedData["protected:"u8.Length..];
+    }
 
     private sealed class TestActor : ICurrentActor
     {
