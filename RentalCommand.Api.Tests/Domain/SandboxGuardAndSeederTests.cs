@@ -18,6 +18,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Sandbox;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
@@ -421,6 +422,100 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         atomicDb.ChangeTracker.Clear();
 
         var forbidden = () => seeder.SeedPortfolioAsync(999, operationKey, CancellationToken.None);
+        await forbidden.Should().ThrowAsync<UnauthorizedAccessException>();
+    }
+
+    [Fact]
+    public async Task CompleteLegalArtifacts_FrozenLegacyReceiptsReplayWithoutReexecutionAndReauthorize()
+    {
+        var businessNowUtc = new DateTime(2099, 8, 21, 12, 0, 0, DateTimeKind.Utc);
+        var (writes, atomicContext, _, atomicDb) = BuildAtomicServices(_ctx.Db);
+        var legalDocuments = new DemoLegalTestDependencies(atomicDb);
+        legalDocuments.AdmissionIdsByPurpose["demo-legal-issued"] =
+            Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        legalDocuments.AdmissionIdsByPurpose["demo-legal-executed"] =
+            Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var seeder = new DemoDataSeeder(
+            atomicDb, NullLogger<DemoDataSeeder>.Instance,
+            new FixedDemoTimeProvider(businessNowUtc), writes, atomicContext,
+            legalDocuments, legalDocuments, legalDocuments, legalDocuments, legalDocuments);
+
+        var setupCommand = new SeedDemoPortfolioCommand(
+            1, false, businessNowUtc, "frozen-demo-legal-setup");
+        await writes.ExecuteExactAsync(
+            "portfolio:1:frozen-demo-legal-setup",
+            DemoSeedCommandHandler.Write(atomicDb, setupCommand), CancellationToken.None);
+        var candidateAgreements = await atomicDb.LeaseAgreements
+            .Where(agreement => agreement.PortfolioId == 1
+                && agreement.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-"))
+            .OrderBy(agreement => agreement.AgreementNumber)
+            .ToListAsync();
+        candidateAgreements.Should().HaveCountGreaterThan(1);
+        foreach (var agreement in candidateAgreements.Skip(1))
+        {
+            agreement.AgreementNumber = $"IGNORED-{agreement.AgreementNumber}";
+        }
+        await atomicDb.SaveChangesAsync();
+        atomicDb.ChangeTracker.Clear();
+
+        var intent = (await CanonicalDemoLeaseSeeder.BuildLegalDocumentIntentsAsync(
+            atomicDb, 1, 1, CancellationToken.None)).Should().ContainSingle().Subject;
+        intent.AgreementId.Should().Be(1);
+        var issuedBytes = Encoding.ASCII.GetBytes("%PDF-issued-demo");
+        var executedBytes = Encoding.ASCII.GetBytes("%PDF-executed-demo");
+        var issuedHash = Convert.ToHexString(SHA256.HashData(issuedBytes)).ToLowerInvariant();
+        var executedHash = Convert.ToHexString(SHA256.HashData(executedBytes)).ToLowerInvariant();
+        var issuedFileName = $"{intent.RenderData.AgreementNumber}-issued.pdf";
+        var executedFileName = $"{intent.RenderData.AgreementNumber}-executed.pdf";
+        var issuanceFingerprint = LegalDocumentIssuanceBinding.Create(
+            nameof(LeaseAgreement), 1, intent.LeaseManagementId, intent.AgreementId,
+            intent.DraftRevision, intent.DocumentSourceVersionId, intent.TermsSchemaVersion,
+            intent.TermsPayload, issuedHash, issuedBytes.LongLength, issuedFileName);
+        var legalCommand = new FinalizeDemoLegalDocumentCommand(
+            1, 1, intent.AgreementId,
+            Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            $"demo-tests/1/demo-legal-issued/{issuedFileName}", issuanceFingerprint,
+            issuedFileName, issuedBytes.LongLength, issuedHash, issuanceFingerprint,
+            Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            $"demo-tests/1/demo-legal-executed/{executedFileName}", executedHash,
+            executedFileName, executedBytes.LongLength, executedHash,
+            intent.IssuedAtUtc, intent.ExecutedAtUtc);
+        // Frozen base-caller fingerprints calculated once from these legacy commands; never regenerate.
+        const string legalFingerprint = "9bcf822e569a524e908d7d0a76566acbc197db0a833c38158d4356d3277bf2bc";
+        const string addendumFingerprint = "c9e1334bcb93cc847e3db4dc6437c3d4b66ef78607649f8e2782502ce8e86157";
+        AtomicCommandFingerprint.Create(legalCommand).Should().Be(legalFingerprint);
+        AtomicCommandFingerprint.Create(new EnsureDemoLeaseAddendumTemplateCommand(
+            1, 1, businessNowUtc)).Should().Be(addendumFingerprint);
+
+        atomicDb.AtomicCommandReceipts.AddRange(
+            FrozenReceipt("sandbox.demo-legal-finalize", "portfolio:1:agreement:1:v1",
+                legalFingerprint, "demo-legal-document-finalize-result:v2",
+                "{\"PortfolioId\":1,\"AgreementId\":1,\"IssuedArtifactId\":9901,\"ExecutedArtifactId\":9902,\"AlreadyFinalized\":false,\"Skipped\":false}"),
+            FrozenReceipt("sandbox.demo-addendum-template",
+                "portfolio:1:standard-lease-addendum-template:v2", addendumFingerprint,
+                "demo-lease-addendum-template-result:v1",
+                "{\"PortfolioId\":1,\"DocumentTemplateId\":9903,\"AlreadyPresent\":false,\"ReusedIssuedLeasePdf\":true}"));
+        await atomicDb.SaveChangesAsync();
+        atomicDb.ChangeTracker.Clear();
+        var artifactRows = await atomicDb.LegalDocumentArtifacts.CountAsync();
+        var templateRows = await atomicDb.DocumentTemplates.CountAsync();
+        var outboxRows = await atomicDb.OutboxMessages.CountAsync();
+
+        await seeder.CompleteLegalArtifactsAsync(1, CancellationToken.None);
+
+        (await atomicDb.LegalDocumentArtifacts.CountAsync()).Should().Be(artifactRows);
+        (await atomicDb.DocumentTemplates.CountAsync()).Should().Be(templateRows);
+        (await atomicDb.OutboxMessages.CountAsync()).Should().Be(outboxRows);
+        (await atomicDb.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "sandbox.demo-legal-finalize"
+            || receipt.CommandType == "sandbox.demo-addendum-template")).Should().Be(2);
+
+        var access = await atomicDb.WorkspaceAccessContexts
+            .SingleAsync(context => context.PortfolioId == 1 && context.UserId == 1);
+        access.Status = WorkspaceAccessContextStatus.Revoked;
+        access.RevokedAtUtc = businessNowUtc;
+        await atomicDb.SaveChangesAsync();
+        var forbidden = () => seeder.CompleteLegalArtifactsAsync(1, CancellationToken.None);
         await forbidden.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
@@ -1226,6 +1321,21 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             legalDocuments), legalDocuments);
     }
 
+    private static AtomicCommandReceipt FrozenReceipt(
+        string operation, string key, string fingerprint, string contract, string resultJson) => new()
+        {
+            Id = Guid.NewGuid(),
+            AttemptId = Guid.NewGuid(),
+            CommandType = operation,
+            IdempotencyKey = key,
+            RequestFingerprint = fingerprint,
+            Status = AtomicCommandReceiptStatus.Completed,
+            ResultContract = contract,
+            ResultJson = resultJson,
+            StartedAt = DateTime.UnixEpoch,
+            CompletedAt = DateTime.UnixEpoch,
+        };
+
     private (IRequestWriteExecutor Writes, IAtomicCommandContext Context, IPendingFileUploadStore PendingUploads, RentalCommandDbContext Db)
         BuildAtomicServices(
         RentalCommandDbContext db,
@@ -1273,6 +1383,11 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         public int? UserId => 1;
         public string? ActorLabel => "test:demo-seed";
         public string? IpAddress => "127.0.0.1";
+    }
+
+    private sealed class FixedDemoTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
     }
 
     private static void SeedAdministeringAccess(RentalCommandDbContext db)
@@ -1477,6 +1592,8 @@ internal sealed class DemoLegalTestDependencies :
         new(StringComparer.Ordinal);
     public Dictionary<string, string> OperationIdsByPurpose { get; } =
         new(StringComparer.Ordinal);
+    public Dictionary<string, Guid> AdmissionIdsByPurpose { get; } =
+        new(StringComparer.Ordinal);
 
     public DemoLegalTestDependencies(RentalCommandDbContext db) => _db = db;
 
@@ -1533,7 +1650,7 @@ internal sealed class DemoLegalTestDependencies :
         {
             existing = new PendingFileUpload
             {
-                Id = Guid.NewGuid(),
+                Id = AdmissionIdsByPurpose.GetValueOrDefault(purpose, Guid.NewGuid()),
                 PortfolioId = portfolioId,
                 ActorScopeId = actorScopeId,
                 Purpose = purpose,
