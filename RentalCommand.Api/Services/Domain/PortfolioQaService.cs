@@ -10,6 +10,8 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.AiIntegrations;
+using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -22,9 +24,7 @@ public class PortfolioQaService : IPortfolioQaService
     private readonly IKnowledgeBaseService _kb;
     private readonly ILogger<PortfolioQaService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
-    private static readonly AtomicJsonResultCodec<PortfolioQaDeliveryResult> DeliveryCodec =
-        new("portfolio.qa.delivery.v1");
+    private readonly IRequestWriteExecutor _writes;
 
     // Compact JSON serializer — no indentation to minimise tokens.
     private static readonly JsonSerializerOptions _json = new()
@@ -135,7 +135,7 @@ public class PortfolioQaService : IPortfolioQaService
         IKnowledgeBaseService kb,
         ILogger<PortfolioQaService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _llm = llm;
@@ -143,7 +143,7 @@ public class PortfolioQaService : IPortfolioQaService
         _kb = kb;
         _logger = logger;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     // ---------------------------------------------------------------------------
@@ -521,11 +521,10 @@ public class PortfolioQaService : IPortfolioQaService
                 $"portfolio-qa:{portfolioId}:{operationId}:email",
                 $"portfolio-qa:{portfolioId}:{operationId}:sms",
                 _timeProvider.GetUtcNow().UtcDateTime);
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("portfolio.qa.delivery", $"{portfolioId}:{operationId}"),
-                command,
-                DeliveryCodec,
-                ct);
+            var outcome = await _writes.ExecuteExactAsync(
+                $"{portfolioId}:{operationId}",
+                AiIntegrationWriteSupport.Write<PortfolioQaDeliveryCommand, PortfolioQaDeliveryResult>(
+                    _db, command), ct);
             var delivered = outcome.Value.DeliveredChannels.ToList();
             return delivered.Count == 0 ? null : delivered;
         }

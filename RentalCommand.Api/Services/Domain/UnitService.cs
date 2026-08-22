@@ -23,7 +23,6 @@ public class UnitService : IUnitService
 
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor? _writes;
     private readonly UnitCrudWriteRules _crudRules;
 
@@ -32,12 +31,10 @@ public class UnitService : IUnitService
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic,
         IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _atomic = atomic;
         _writes = writes;
         _crudRules = new UnitCrudWriteRules(db);
     }
@@ -1229,8 +1226,6 @@ public class UnitService : IUnitService
             RentalCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found;
     }
-
-    private IAtomicUnitOfWork Atomic => _atomic;
 
     private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
         "Unit changes must use the shared write executor.");

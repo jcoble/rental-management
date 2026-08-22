@@ -41,7 +41,13 @@ public sealed class AtomicGuidedTenantSetupHandler
 
     private const int MaximumBatchSize = 25;
 
-    public async Task<AtomicGuidedTenantSetupResult> HandleAsync(
+    public Task<AtomicGuidedTenantSetupResult> HandleAsync(
+        AtomicGuidedTenantSetupCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw new InvalidOperationException(
+            "Legacy guided tenant setup writes are retired; use the shared write executor.");
+
+    public async Task<AtomicGuidedTenantSetupResult> ExecuteAsync(
         AtomicGuidedTenantSetupCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -238,6 +244,16 @@ public static class AtomicGuidedTenantSetup
 {
     public static readonly AtomicJsonResultCodec<AtomicGuidedTenantSetupResult> Codec =
         new("rental.guided-tenant-setup.v1");
+
+    public static TransactionalWrite<AtomicGuidedTenantSetupCommand, AtomicGuidedTenantSetupResult> Write(
+        RentalCommandDbContext db,
+        AtomicGuidedTenantSetupCommand command)
+    {
+        var handler = new AtomicGuidedTenantSetupHandler(db);
+        return new TransactionalWrite<AtomicGuidedTenantSetupCommand, AtomicGuidedTenantSetupResult>(
+            Identity(command).CommandType, WriteIdempotencyPolicy.Required, command, Codec.ContractName,
+            WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
 
     public static AtomicGuidedTenantSetupCommand Command(
         WorkspaceReadScope scope,

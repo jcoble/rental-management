@@ -54,11 +54,11 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
-        _db = _ctx.Db;
+        _ctx = await _fixture.CreateContextAsync();
         _services = AtomicDomainTestKernel.CreateForInspectionsPostgreSql(
             _ctx.ConnectionString,
-            [_reopenProgressionGate]);
+            [_reopenProgressionGate, new RecordingCommandInterceptor(_executedSql)]);
+        _db = _services.GetRequiredService<RentalCommandDbContext>();
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(InspectionChecklistServiceTests));
 
         _service = new InspectionService(
@@ -69,7 +69,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             TimeProvider.System,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
     }
 
     public async Task DisposeAsync()
@@ -784,7 +784,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             logger,
             clock,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
 
@@ -849,7 +849,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
@@ -911,7 +911,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             TimeProvider.System,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
@@ -947,7 +947,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             retryScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             TimeProvider.System,
-            retryScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+            retryScope.ServiceProvider.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         var secondError = await Record.ExceptionAsync(() => retryService.CompleteAuthorizedAsync(
             _scope, created.Id, userId: 7, operationKey));
 
@@ -985,7 +985,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
@@ -1029,7 +1029,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
@@ -1051,12 +1051,12 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         completed!.ReportStoredFileId.Should().NotBeNull();
         var contaminatedReportId = completed.ReportStoredFileId.Value;
         var contaminatedReportUploadedAtUtc = originalBusinessNowUtc.AddMinutes(3);
-        await _db.Inspections
+        await _ctx.Db.Inspections
             .Where(inspection => inspection.Id == created.Id && inspection.PortfolioId == PortfolioId)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(inspection => inspection.CompletedAt, (DateTime?)originalBusinessNowUtc)
                 .SetProperty(inspection => inspection.UpdatedAt, originalBusinessNowUtc));
-        await _db.StoredFiles
+        await _ctx.Db.StoredFiles
             .Where(file => file.Id == contaminatedReportId && file.PortfolioId == PortfolioId)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(file => file.UploadedAt, contaminatedReportUploadedAtUtc));
@@ -1136,7 +1136,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
@@ -1204,7 +1204,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
@@ -1263,7 +1263,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest

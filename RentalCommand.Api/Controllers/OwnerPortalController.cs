@@ -3,8 +3,11 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Owners;
+using RentalCommand.Data;
+using RentalCommand.Data.Owners;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -20,23 +23,21 @@ public sealed class OwnerPortalController : AuthenticatedPortfolioControllerBase
     private readonly IOwnerPortalService _portal;
     private readonly IOwnerStatementService _statements;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
-
-    private static readonly AtomicJsonResultCodec<OwnerPortalCommandResult> ApprovalCodec =
-        new("owner-portal.approval-decision.v1");
-    private static readonly AtomicJsonResultCodec<OwnerPortalCommandResult> ReplyCodec =
-        new("owner-portal.message-reply.v1");
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
 
     public OwnerPortalController(
         IOwnerPortalService portal,
         IOwnerStatementService statements,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes)
     {
         _portal = portal;
         _statements = statements;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _db = db;
+        _writes = writes;
     }
 
     [HttpGet("overview")]
@@ -93,8 +94,6 @@ public sealed class OwnerPortalController : AuthenticatedPortfolioControllerBase
         CancellationToken ct) => ExecuteOwnerCommand(
         notificationId,
         idempotencyKey,
-        "owner-portal.approval-decision",
-        ApprovalCodec,
         (active, digest) => new DecideOwnerApprovalCommand(
             active.PortfolioId,
             active.UserId,
@@ -115,8 +114,6 @@ public sealed class OwnerPortalController : AuthenticatedPortfolioControllerBase
         CancellationToken ct) => ExecuteOwnerCommand(
         notificationId,
         idempotencyKey,
-        "owner-portal.message-reply",
-        ReplyCodec,
         (active, digest) => new ReplyToOwnerMessageCommand(
             active.PortfolioId,
             active.UserId,
@@ -131,8 +128,6 @@ public sealed class OwnerPortalController : AuthenticatedPortfolioControllerBase
     private async Task<IActionResult> ExecuteOwnerCommand<TCommand>(
         int notificationId,
         string? idempotencyKey,
-        string commandType,
-        AtomicJsonResultCodec<OwnerPortalCommandResult> codec,
         Func<RentalCommand.Core.Authorization.ActiveAccessContext, string, TCommand> createCommand,
         CancellationToken ct)
         where TCommand : notnull, IAtomicCommandData
@@ -144,13 +139,10 @@ public sealed class OwnerPortalController : AuthenticatedPortfolioControllerBase
             .ToLowerInvariant();
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    commandType,
-                    $"{active.PortfolioId}:{notificationId}:{digest}"),
-                createCommand(active, digest),
-                codec,
-                ct);
+            var command = createCommand(active, digest);
+            var outcome = await _writes.ExecuteExactAsync(
+                $"{active.PortfolioId}:{notificationId}:{digest}",
+                OwnerPortalWriteSupport.Write(_db, command), ct);
             return Ok(new OwnerPortalCommandResponse(
                 outcome.Value.SourceNotificationId,
                 outcome.Value.OwnerEntityId,

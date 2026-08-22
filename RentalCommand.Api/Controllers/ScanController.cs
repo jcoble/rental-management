@@ -33,7 +33,6 @@ public class ScanController : ManagementControllerBase
 {
     private readonly IScanService _scan;
     private readonly IScanUploadService _uploads;
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor _writes;
     private readonly IScanConfirmationTargetWriter _confirmationTargetWriter;
     private readonly RentalCommandDbContext _db;
@@ -63,7 +62,6 @@ public class ScanController : ManagementControllerBase
     public ScanController(
         IScanService scan,
         IScanUploadService uploads,
-        IAtomicUnitOfWork atomic,
         IRequestWriteExecutor writes,
         IScanConfirmationTargetWriter confirmationTargetWriter,
         RentalCommandDbContext db,
@@ -73,7 +71,6 @@ public class ScanController : ManagementControllerBase
     {
         _scan = scan;
         _uploads = uploads;
-        _atomic = atomic;
         _writes = writes;
         _confirmationTargetWriter = confirmationTargetWriter;
         _db = db;

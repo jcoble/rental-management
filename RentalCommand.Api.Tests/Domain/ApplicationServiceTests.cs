@@ -77,7 +77,6 @@ public class ApplicationServiceTests : IDisposable
         _sut = new ApplicationService(
             _db, _files.Object, Mock.Of<IDataUpdateService>(), _audit,
             TimeProvider.System,
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
             _services.GetRequiredService<IRequestWriteExecutor>());
     }
 
@@ -987,7 +986,6 @@ public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>(),
             Mock.Of<IRequestWriteExecutor>());
     }
 

@@ -21,14 +21,8 @@ namespace RentalCommand.Api.Services.Domain;
 public class OwnerEntityService : IOwnerEntityService
 {
     private const string EntityType = "OwnerEntity";
-    private static readonly AtomicJsonResultCodec<ActivateOwnerPortalAccessMutationResult> OwnerActivationCodec =
-        new("owner-portal-access.activation.v1");
-    private static readonly AtomicJsonResultCodec<RevokeOwnerPortalAccessMutationResult> OwnerRevocationCodec =
-        new("owner-portal-access.revocation.v1");
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAtomicUnitOfWork? _atomic;
     private readonly IRequestWriteExecutor? _writes;
     private readonly TimeProvider _timeProvider;
     private readonly string _webBaseUrl;
@@ -37,14 +31,12 @@ public class OwnerEntityService : IOwnerEntityService
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null,
         IConfiguration? configuration = null,
         IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
-        _atomic = atomic;
         _writes = writes;
         _webBaseUrl = configuration?["App:WebBaseUrl"] ?? "https://localhost:5667";
     }
@@ -244,13 +236,9 @@ public class OwnerEntityService : IOwnerEntityService
             StableGuid($"{scope.PortfolioId}:owner-portal:{id}"),
             _webBaseUrl);
         var keyDigest = Digest(operationKey);
-        var outcome = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "owner-entity.portal-access.activate",
-                $"{scope.PortfolioId}:{id}:{keyDigest}"),
-            command,
-            OwnerActivationCodec,
-            ct);
+        var outcome = await RequireWrites().ExecuteExactAsync(
+            $"{scope.PortfolioId}:{id}:{keyDigest}",
+            OwnerRelationshipAccessWriteSupport.Write(_db, command), ct);
         return outcome.Value.Outcome switch
         {
             ActivateOwnerPortalAccessMutationOutcome.Activated => Activation(
@@ -364,13 +352,9 @@ public class OwnerEntityService : IOwnerEntityService
             scope.AccessRevision,
             _timeProvider.UtcNow(),
             $"owner-entity.portal-access.revoke:{scope.PortfolioId}:{id}:{keyDigest}");
-        var outcome = await Atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "owner-entity.portal-access.revoke",
-                $"{scope.PortfolioId}:{id}:{keyDigest}"),
-            command,
-            OwnerRevocationCodec,
-            ct);
+        var outcome = await RequireWrites().ExecuteExactAsync(
+            $"{scope.PortfolioId}:{id}:{keyDigest}",
+            OwnerRelationshipAccessWriteSupport.Write(_db, command), ct);
         var replayed = outcome.Disposition == AtomicCommandDisposition.Replayed;
         return outcome.Value.Outcome switch
         {
@@ -441,9 +425,6 @@ public class OwnerEntityService : IOwnerEntityService
                        .Select(access => (int?)access.Id)
                        .FirstOrDefault());
     }
-
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Owner changes must use the standard save process.");
 
     private IRequestWriteExecutor RequireWrites() =>
         _writes ?? throw new InvalidOperationException(

@@ -134,7 +134,7 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<IAtomicUnitOfWork>());
+            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         _commands.Clear();
         var unitPage = await unitService.ListWithHealthPageAsync(scope, new UnitHealthListQuery
         {

@@ -11,6 +11,34 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Authorization;
 
+public static class OwnerRelationshipAccessWriteSupport
+{
+    public static TransactionalWrite<ActivateOwnerPortalAccessCommand, ActivateOwnerPortalAccessMutationResult> Write(
+        RentalCommandDbContext db,
+        ActivateOwnerPortalAccessCommand command)
+    {
+        var handler = new ActivateOwnerPortalAccessHandler(db);
+        return new TransactionalWrite<ActivateOwnerPortalAccessCommand, ActivateOwnerPortalAccessMutationResult>(
+            "owner-entity.portal-access.activate", WriteIdempotencyPolicy.Required, command,
+            "owner-portal-access.activation.v1", WriteLockPlan.None,
+            handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public static TransactionalWrite<RevokeOwnerPortalAccessCommand, RevokeOwnerPortalAccessMutationResult> Write(
+        RentalCommandDbContext db,
+        RevokeOwnerPortalAccessCommand command)
+    {
+        var handler = new RevokeOwnerPortalAccessHandler(db);
+        return new TransactionalWrite<RevokeOwnerPortalAccessCommand, RevokeOwnerPortalAccessMutationResult>(
+            "owner-entity.portal-access.revoke", WriteIdempotencyPolicy.Required, command,
+            "owner-portal-access.revocation.v1", WriteLockPlan.None,
+            handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy owner relationship writes are retired; use the shared write executor.");
+}
+
 public sealed class ActivateOwnerPortalAccessHandler
     : IAtomicCommandHandler<ActivateOwnerPortalAccessCommand, ActivateOwnerPortalAccessMutationResult>
 {
@@ -18,7 +46,12 @@ public sealed class ActivateOwnerPortalAccessHandler
 
     public ActivateOwnerPortalAccessHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ActivateOwnerPortalAccessMutationResult> HandleAsync(
+    public Task<ActivateOwnerPortalAccessMutationResult> HandleAsync(
+        ActivateOwnerPortalAccessCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw OwnerRelationshipAccessWriteSupport.RetiredPath();
+
+    public async Task<ActivateOwnerPortalAccessMutationResult> ExecuteAsync(
         ActivateOwnerPortalAccessCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -505,7 +538,12 @@ public sealed class RevokeOwnerPortalAccessHandler
 
     public RevokeOwnerPortalAccessHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RevokeOwnerPortalAccessMutationResult> HandleAsync(
+    public Task<RevokeOwnerPortalAccessMutationResult> HandleAsync(
+        RevokeOwnerPortalAccessCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw OwnerRelationshipAccessWriteSupport.RetiredPath();
+
+    public async Task<RevokeOwnerPortalAccessMutationResult> ExecuteAsync(
         RevokeOwnerPortalAccessCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

@@ -44,7 +44,6 @@ public sealed class ScanService : IScanService
         CapabilityKeys.LeasingAgreementsPrepare,
     ];
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor _writes;
     private readonly ILogger<ScanService> _logger;
     private readonly TimeProvider _timeProvider;
@@ -59,13 +58,11 @@ public sealed class ScanService : IScanService
 
     public ScanService(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic,
         IRequestWriteExecutor writes,
         ILogger<ScanService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
-        _atomic = atomic;
         _writes = writes;
         _logger = logger;
         _timeProvider = timeProvider;

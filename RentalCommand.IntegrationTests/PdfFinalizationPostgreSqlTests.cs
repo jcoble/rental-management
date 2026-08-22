@@ -170,10 +170,10 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
             new UpdateInspectionRequest { Status = InspectionStatus.Scheduled },
             now);
         await using var serviceScope = _services.CreateAsyncScope();
-        var result = await serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
-            AtomicInspectionMutation.Identity(command),
-            command,
-            AtomicInspectionMutation.Codec);
+        var result = await serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(
+                serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(), command));
 
         result.Value.Applied.Should().BeTrue();
         var reopened = await _db.Inspections.AsNoTracking().SingleAsync(entity => entity.Id == inspection.Id);

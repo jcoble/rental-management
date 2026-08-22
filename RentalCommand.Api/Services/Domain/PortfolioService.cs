@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Data;
@@ -11,14 +12,14 @@ namespace RentalCommand.Api.Services.Domain;
 public class PortfolioService : IPortfolioService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public PortfolioService(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public async Task<IReadOnlyList<PortfolioResponse>> ListForUserAsync(int portfolioId, CancellationToken ct = default)
@@ -121,8 +122,9 @@ public class PortfolioService : IPortfolioService
         }
         var command = AtomicWorkspaceCoreMutation.Command(
             scope, AtomicWorkspaceCoreMutationOperation.UpdatePortfolio, operationKey, request);
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicWorkspaceCoreMutation.Identity(command), command, AtomicWorkspaceCoreMutation.Codec, ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            AtomicWorkspaceCoreMutation.Identity(command).IdempotencyKey,
+            AtomicWorkspaceCoreMutation.Write(_db, command), ct);
         return outcome.Value.Found && outcome.Value.ResponseJson is not null
             ? JsonSerializer.Deserialize<PortfolioResponse>(outcome.Value.ResponseJson)
             : null;
@@ -140,8 +142,9 @@ public class PortfolioService : IPortfolioService
         }
         var command = AtomicWorkspaceCoreMutation.Command(
             scope, AtomicWorkspaceCoreMutationOperation.DeletePortfolio, operationKey, new { });
-        var outcome = await _atomic.ExecuteAsync(
-            AtomicWorkspaceCoreMutation.Identity(command), command, AtomicWorkspaceCoreMutation.Codec, ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            AtomicWorkspaceCoreMutation.Identity(command).IdempotencyKey,
+            AtomicWorkspaceCoreMutation.Write(_db, command), ct);
         return outcome.Value.Found;
     }
 
