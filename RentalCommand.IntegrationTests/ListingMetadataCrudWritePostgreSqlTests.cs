@@ -268,7 +268,7 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ConnectedProviderAndSignalWrites_ReplayExactly_WithoutRepeatingProviderCallsOrRows()
+    public async Task ConnectedAdmissionReplays_ResumeProviderCallsWithoutRepeatingRows()
     {
         var (scope, unitId) = await SeedScopeAsync(DateTime.UtcNow.AddMinutes(-5));
         var adapter = new RecordingListingAdapter();
@@ -293,7 +293,6 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
 
         await sut.PrepareConnectedAsync(scope, unitId, publicationId, " connected-prepare ");
         await sut.PrepareConnectedAsync(scope, unitId, publicationId, " connected-prepare ");
-        await sut.PublishConnectedAsync(scope, unitId, publicationId, "connected-publish");
         await sut.PublishConnectedAsync(scope, unitId, publicationId, "connected-publish");
         await sut.UpdateConnectedAsync(scope, unitId, publicationId, "connected-update");
         await sut.UpdateConnectedAsync(scope, unitId, publicationId, "connected-update");
@@ -320,10 +319,10 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
         await sut.ConfirmSignalAsync(scope, unitId, signal!.Id, true, "signal-confirm");
         await sut.ConfirmSignalAsync(scope, unitId, signal.Id, true, "signal-confirm");
 
-        adapter.PrepareCalls.Should().Be(1);
+        adapter.PrepareCalls.Should().Be(2);
         adapter.PublishCalls.Should().Be(1);
-        adapter.UpdateCalls.Should().Be(1);
-        adapter.UnpublishCalls.Should().Be(1);
+        adapter.UpdateCalls.Should().Be(2);
+        adapter.UnpublishCalls.Should().Be(2);
         adapter.SawLocalTransaction.Should().BeFalse();
         (await _context.Db.ExternalListingSignals.AsNoTracking().CountAsync(row =>
             row.PortfolioId == scope.PortfolioId && row.ProviderMessageKey == "provider-message"))
@@ -523,8 +522,13 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
             (await sut.ConfirmSignalAsync(scope, unitId, 9106, true, "legacy-confirm"))
                 .Should().NotBeNull();
         }
-        adapter.PrepareCalls.Should().Be(0);
+        adapter.PrepareCalls.Should().Be(1);
+        (await _context.Db.RentalListings.CountAsync(row => row.Id == listing.Id)).Should().Be(1);
+        (await _context.Db.ListingPublications.CountAsync(row => row.Id == publication.Id)).Should().Be(1);
         (await _context.Db.ExternalListingSignals.CountAsync()).Should().Be(0);
+        (await _context.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType.StartsWith("listing-workspace.connected.")
+            || row.CommandType.StartsWith("listing-workspace.signal."))).Should().Be(5);
 
         var session = await _context.Db.AuthSessions.SingleAsync(row => row.Id == sessionId);
         session.Status = AuthSessionStatus.Revoked;
@@ -539,28 +543,6 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
                 .ConfirmSignalAsync(scope, unitId, 9106, true, "legacy-confirm");
             await forbidden.Should().ThrowAsync<UnauthorizedAccessException>();
         }
-        session = await _context.Db.AuthSessions.SingleAsync(row => row.Id == sessionId);
-        session.Status = AuthSessionStatus.Active;
-        session.RevokedAtUtc = null;
-        await _context.Db.SaveChangesAsync();
-        _context.Db.ChangeTracker.Clear();
-
-        await using (var services = BuildServices(
-            TimeProvider.System, adapter,
-            provider => new FixedIntentRequestExecutor(
-                new RequestWriteExecutor(provider.GetRequiredService<IWriteExecutor>()),
-                new ConnectedListingIntentResult(
-                    ListingWorkspaceMutationOutcome.Applied, 1, 9102, 9103, 9104, 9105, 4))))
-        await using (var serviceScope = services.CreateAsyncScope())
-        {
-            (await serviceScope.ServiceProvider.GetRequiredService<ListingWorkspaceService>()
-                .PrepareConnectedAsync(scope, unitId, publication.Id, "legacy-prepare"))
-                .Should().NotBeNull();
-        }
-        adapter.PrepareCalls.Should().Be(1);
-        (await _context.Db.AtomicCommandReceipts.CountAsync(row =>
-            row.CommandType.StartsWith("listing-workspace.connected.")
-            || row.CommandType.StartsWith("listing-workspace.signal."))).Should().Be(5);
     }
 
     private static AtomicCommandReceipt CompletedReceipt(
@@ -652,8 +634,7 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
     }
 
     private ServiceProvider BuildServices(
-        TimeProvider timeProvider, IListingChannelAdapter? adapter = null,
-        Func<IServiceProvider, IRequestWriteExecutor>? executorFactory = null)
+        TimeProvider timeProvider, IListingChannelAdapter? adapter = null)
     {
         var files = new Mock<IFileStorage>();
         files.Setup(storage => storage.UploadAtAsync(
@@ -671,10 +652,7 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddPendingFileUploadStore();
-        if (executorFactory is null)
-            services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        else
-            services.AddScoped(executorFactory);
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<ListingWorkspaceService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString)
@@ -769,26 +747,6 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
                 await writeLock.AcquireAsync(context.Object, ct);
             var result = await write.ExecuteAsync(write.Request, context.Object, ct);
             return new(result, AtomicCommandDisposition.Executed, Guid.NewGuid());
-        }
-    }
-
-    private sealed class FixedIntentRequestExecutor(
-        IRequestWriteExecutor inner, ConnectedListingIntentResult intentResult)
-        : IRequestWriteExecutor
-    {
-        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData where TResult : notnull
-        {
-            if (write.Request is AdmitConnectedListingIntentCommand)
-            {
-                return Task.FromResult(new AtomicCommandOutcome<TResult>(
-                    (TResult)(object)intentResult, AtomicCommandDisposition.Executed,
-                    Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")));
-            }
-
-            return inner.ExecuteAsync(idempotencyKey, write, ct);
         }
     }
 

@@ -498,8 +498,6 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         var admitted = await AdmitConnectedIntentAsync(
             scope, snapshot, operationId, ConnectedListingIntentOperation.Prepare, ct);
         if (admitted is null) return null;
-        if (admitted.Replayed)
-            return await GetAsync(scope.PortfolioId, unitId, ct);
         var adapter = RequireAvailableAdapter(snapshot.ProviderKey);
         ListingPreparedPackage prepared;
         try
@@ -564,8 +562,6 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         var admitted = await AdmitConnectedIntentAsync(scope, snapshot, operationId, intentOperation, ct);
         if (admitted is null)
             return null;
-        if (admitted.Replayed)
-            return await GetAsync(scope.PortfolioId, unitId, ct);
         var adapter = RequireAvailableAdapter(snapshot.ProviderKey);
         var preparedPackageKey = operation == ConnectedListingOperation.Publish
             ? DecodePreparedPackageKey(snapshot.PreparedPackageKey, snapshot.Package.ContentVersion)
@@ -623,9 +619,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             || outcome.Value.PublicationId != snapshot.Package.PublicationId
             || outcome.Value.ContentVersion != snapshot.Package.ContentVersion)
             throw new AtomicReceiptInvariantException("Connected listing admission receipt does not match the provider snapshot.");
-        return new ConnectedIntentAdmission(
-            outcome.AttemptId, identity, scope.UserId,
-            outcome.Disposition == AtomicCommandDisposition.Replayed);
+        return new ConnectedIntentAdmission(outcome.AttemptId, identity, scope.UserId);
     }
 
     private IListingChannelAdapter RequireAvailableAdapter(string providerKey)
@@ -843,7 +837,6 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private sealed record ConnectedIntentAdmission(
         Guid AttemptId,
         AtomicCommandIdentity Identity,
-        int ActorUserId,
-        bool Replayed);
+        int ActorUserId);
     private enum ConnectedListingOperation { Publish, Update, Unpublish }
 }
