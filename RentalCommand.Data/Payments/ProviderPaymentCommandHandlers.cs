@@ -75,7 +75,7 @@ public static class ProviderPaymentWriteSupport
             executeAsync, authorizeReplayAsync);
 
     private static WriteLockPlan TenantAccount(int id) => new(
-        WriteLockProtocol.TenantAccount, WriteLock.For("TenantAccount", id));
+        WriteLockProtocol.TenantAccount, id);
 
     internal static InvalidOperationException RetiredPath() => new(
         "Legacy atomic provider-payment writes are retired; use the shared write executor.");

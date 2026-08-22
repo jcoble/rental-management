@@ -60,9 +60,9 @@ public static class EvictionCrudWriteSupport
 
     private static WriteLockPlan AuthorizationPlan(int portfolioId, StaffOperationActor actor) =>
         new(WriteLockProtocol.AuthorizationScope,
-            WriteLock.For("AuthSession", actor.AuthSessionId),
-            WriteLock.For("WorkspaceAccessContext", actor.AccessContextId),
-            WriteLock.For("Portfolio", portfolioId));
+            actor.AuthSessionId,
+            actor.AccessContextId,
+            portfolioId);
 
 }
 

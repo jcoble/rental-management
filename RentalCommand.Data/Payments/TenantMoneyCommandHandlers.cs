@@ -80,27 +80,27 @@ public static class TenantMoneyWriteSupport
         {
             RecoverOpeningSecurityDepositsCommand opening => new WriteLockPlan(
                 WriteLockProtocol.Portfolio,
-                WriteLock.For("Portfolio", opening.PortfolioId)),
+                opening.PortfolioId),
             RecoverLateFeeChargesCommand lateFees => new WriteLockPlan(
                 WriteLockProtocol.Portfolio,
-                WriteLock.For("Portfolio", lateFees.PortfolioId)),
+                lateFees.PortfolioId),
             CreateRecurringTenantChargeCommand create => new WriteLockPlan(
                 WriteLockProtocol.TenantAccount,
-                WriteLock.For("TenantAccount", create.TenantAccountId)),
+                create.TenantAccountId),
             UpdateRecurringTenantChargeCommand update => new WriteLockPlan(
                 WriteLockProtocol.TenantAccountRecurringCharge,
-                WriteLock.For("TenantAccount", update.TenantAccountId),
-                WriteLock.For("RecurringTenantCharge", update.RecurringTenantChargeId)),
+                update.TenantAccountId,
+                update.RecurringTenantChargeId),
             DeactivateRecurringTenantChargeCommand deactivate => new WriteLockPlan(
                 WriteLockProtocol.TenantAccountRecurringCharge,
-                WriteLock.For("TenantAccount", deactivate.TenantAccountId),
-                WriteLock.For("RecurringTenantCharge", deactivate.RecurringTenantChargeId)),
+                deactivate.TenantAccountId,
+                deactivate.RecurringTenantChargeId),
             ApplyScheduledRentChargeBatchCommand => WriteLockPlan.None,
             ApplyScheduledLateFeeChargeBatchCommand => WriteLockPlan.None,
             ApplyRecurringTenantChargeBatchCommand => WriteLockPlan.None,
             ITenantMoneyCommand tenantMoney => new WriteLockPlan(
                 WriteLockProtocol.TenantAccount,
-                WriteLock.For("TenantAccount", tenantMoney.TenantAccountId)),
+                tenantMoney.TenantAccountId),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return new(

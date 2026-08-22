@@ -44,7 +44,7 @@ public static class ApplicationFinanceWriteSupport
             ResultContract,
             new WriteLockPlan(
                 WriteLockProtocol.RentalApplication,
-                WriteLock.For("RentalApplication", applicationId)),
+                applicationId),
             executeAsync,
             authorizeReplayAsync);
 

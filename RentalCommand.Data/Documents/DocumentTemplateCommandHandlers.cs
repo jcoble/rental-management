@@ -54,9 +54,9 @@ public static class DocumentTemplateWriteSupport
         }
         return new(operationName, WriteIdempotencyPolicy.Required, command, ResultContract,
             new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
-                WriteLock.For("AuthSession", actor.AuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", actor.AccessContextId),
-                WriteLock.For("Portfolio", portfolioId)),
+                actor.AuthSessionId,
+                actor.AccessContextId,
+                portfolioId),
             executeAsync, authorizeReplayAsync);
     }
 

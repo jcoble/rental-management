@@ -1727,9 +1727,9 @@ public static class AtomicMoneyMutation
             Codec.ContractName,
             new WriteLockPlan(
                 WriteLockProtocol.AuthorizationScope,
-                WriteLock.For("AuthSession", command.AuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
-                WriteLock.For("Portfolio", command.PortfolioId)),
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.PortfolioId),
             handler.ExecuteAsync,
             handler.AuthorizeReplayAsync);
     }

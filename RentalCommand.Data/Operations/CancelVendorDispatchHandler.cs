@@ -27,7 +27,7 @@ public sealed class CancelVendorDispatchHandler
         return new TransactionalWrite<CancelVendorDispatchCommand, CancelVendorDispatchResult>(
             "vendor-dispatch.cancel", WriteIdempotencyPolicy.Required, command, ResultContract,
             new WriteLockPlan(WriteLockProtocol.WorkOrder,
-                WriteLock.For("WorkOrder", command.WorkOrderId)),
+                command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
