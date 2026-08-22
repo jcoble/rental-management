@@ -192,4 +192,141 @@ internal static class AccountingFoundationModelConfiguration
             });
         });
     }
+
+    internal static void ConfigureAccountingIntegrations(this ModelBuilder modelBuilder)
+    {
+        // --- Accounting-integration backbone (provider-agnostic; QuickBooks is provider #1) ---
+        modelBuilder.Entity<AccountingConnection>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(e => e.ExternalAccountId).HasMaxLength(200);
+            entity.Property(e => e.CompanyName).HasMaxLength(200);
+            // OAuth tokens at rest: encrypted cipher text only (AC-4), sized like the BankConnection columns.
+            entity.Property(e => e.AccessTokenCipherText).HasMaxLength(4000);
+            entity.Property(e => e.RefreshTokenCipherText).HasMaxLength(4000);
+            entity.Property(e => e.LastPulledAtJson).HasColumnType("jsonb");
+            entity.Property(e => e.LastError).HasMaxLength(2000);
+            entity.Property(e => e.PullClaimOwner).HasMaxLength(200);
+            entity.Property(e => e.TokenRotationClaimOwner).HasMaxLength(200);
+            entity.Property(e => e.TokenRotationState).HasConversion<int>();
+            entity.HasIndex(e => e.PortfolioId);
+            // One row per portfolio per provider.
+            entity.HasIndex(e => new { e.PortfolioId, e.Provider }).IsUnique();
+            // #10 Both accounting workers scan cross-portfolio by Status (and the token-refresh worker by
+            // TokenExpiresAt). (Status, TokenExpiresAt) serves both without a leading PortfolioId the
+            // cross-portfolio scan doesn't filter on.
+            entity.HasIndex(e => new { e.Status, e.TokenExpiresAt })
+                  .HasDatabaseName("IX_AccountingConnections_Status_TokenExpiresAt");
+            entity.HasIndex(e => new { e.Status, e.PullEnabled, e.NextPullAtUtc, e.Id })
+                  .HasDatabaseName("IX_AccountingConnections_PullEligibility");
+            entity.HasIndex(e => new { e.PullClaimExpiresAtUtc, e.Id })
+                  .HasDatabaseName("IX_AccountingConnections_ExpiredPullClaim")
+                  .HasFilter("\"PullClaimToken\" IS NOT NULL");
+            entity.HasIndex(e => new { e.TokenRotationClaimExpiresAtUtc, e.Id })
+                  .HasDatabaseName("IX_AccountingConnections_ExpiredTokenRotationClaim")
+                  .HasFilter("\"TokenRotationClaimToken\" IS NOT NULL");
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<OAuthState>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).HasConversion<int>();
+            entity.Property(e => e.StateToken).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.RedirectUri).IsRequired().HasMaxLength(2048);
+            entity.Property(e => e.CodeVerifier).HasMaxLength(256);
+            // Single-use lookup key — unique so a replayed state can never match two rows.
+            entity.HasIndex(e => e.StateToken).IsUnique();
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.ExpiresAt);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AccountingEntityMapping>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.LocalEntityType).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.LocalEnumValue).HasMaxLength(80);
+            entity.Property(e => e.ExternalType).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.ExternalId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.ExternalDisplayName).HasMaxLength(300);
+            entity.Property(e => e.Confidence).HasPrecision(5, 4);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.AccountingConnectionId);
+            // One mapping per external entity per connection (confirmed or suggested).
+            entity.HasIndex(e => new { e.PortfolioId, e.AccountingConnectionId, e.ExternalType, e.ExternalId })
+                .IsUnique();
+            entity.HasOne(e => e.AccountingConnection)
+                .WithMany()
+                .HasForeignKey(e => e.AccountingConnectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AccountingMappingPromotionJob>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.AccountingEntityMappingId, e.MappingRevision }).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.CompletedAtUtc, e.Id });
+            entity.HasOne(e => e.AccountingEntityMapping)
+                .WithMany()
+                .HasForeignKey(e => e.AccountingEntityMappingId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.AccountingConnection)
+                .WithMany()
+                .HasForeignKey(e => e.AccountingConnectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AccountingSyncMap>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Direction).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.ExternalType).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.ExternalId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.LocalEntityType).HasMaxLength(40);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.LastError).HasMaxLength(2000);
+            // Raw external payload stashed for a confirm-driven retry (Postgres jsonb; mapped to TEXT on SQLite).
+            entity.Property(e => e.MetadataJson).HasColumnType("jsonb");
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.AccountingConnectionId);
+            // The idempotency ledger key (AC-5): one row per external txn per direction.
+            entity.HasIndex(e => new { e.PortfolioId, e.AccountingConnectionId, e.Direction, e.ExternalType, e.ExternalId })
+                .IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.AccountingConnectionId, e.ExternalType, e.Id })
+                .HasDatabaseName("IX_AccountingSyncMaps_ParkedPromotion")
+                .HasFilter("\"LocalEntityId\" IS NULL AND \"Direction\" = 'Import' AND \"Status\" IN ('NeedsReview', 'Unmatched')");
+            entity.HasOne(e => e.AccountingConnection)
+                .WithMany()
+                .HasForeignKey(e => e.AccountingConnectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AccountingParkedTransaction>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_accounting_parked_transactions");
+        });
+
+    }
 }

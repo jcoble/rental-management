@@ -177,4 +177,134 @@ internal static class WorkOrderResponsibilityModelConfiguration
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }
+
+    internal static void ConfigureWorkOrders(this ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<WorkOrder>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).IsRequired().HasMaxLength(4000);
+            entity.Property(e => e.Category).HasMaxLength(120);
+            entity.Property(e => e.EstimatedCost).HasPrecision(18, 2);
+            entity.Property(e => e.ActualCost).HasPrecision(18, 2);
+            entity.Property(e => e.CreatedBy).HasMaxLength(120);
+            entity.Property(e => e.TechnicianAccessInstructions).HasMaxLength(2000);
+            entity.Property(e => e.SubmittedByLabel).HasMaxLength(120);
+            entity.Property(e => e.RequesterName).HasMaxLength(200);
+            entity.Property(e => e.RequesterPhone).HasMaxLength(64);
+            entity.Property(e => e.RequesterEmail).HasMaxLength(320);
+            entity.Property(e => e.EntryNotes).HasMaxLength(2000);
+            entity.Property(e => e.PetWarnings).HasMaxLength(2000);
+            entity.Property(e => e.AccessWarnings).HasMaxLength(2000);
+            entity.Property(e => e.ChronologyRepairOriginalUpdatedAtUtc);
+            entity.Property(e => e.Priority).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
+            // Full scan-extraction superset for work orders created from a scan draft (Postgres jsonb).
+            entity.Property(e => e.ExtractedData).HasColumnType("jsonb");
+            // ScheduledFor + ScheduledWindowEnd bracket the tenant-facing arrival window.
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.PropertyId);
+            entity.HasIndex(e => e.UnitId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.LeaseManagementId);
+            entity.HasIndex(e => e.VendorId);
+            entity.HasIndex(e => e.RecurringMaintenanceTaskId);
+            entity.HasIndex(e => e.Priority);
+            entity.HasIndex(e => e.Status);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.WorkOrders)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany(p => p.WorkOrders)
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Unit)
+                .WithMany(u => u.WorkOrders)
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Tenant)
+                .WithMany(t => t.WorkOrders)
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.LeaseManagement)
+                .WithMany(l => l.WorkOrders)
+                .HasForeignKey(e => e.LeaseManagementId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Vendor)
+                .WithMany(v => v.WorkOrders)
+                .HasForeignKey(e => e.VendorId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.RecurringMaintenanceTask)
+                .WithMany(t => t.WorkOrders)
+                .HasForeignKey(e => e.RecurringMaintenanceTaskId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<WorkOrderStatusEvent>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.FromStatus).HasConversion<int>();
+            entity.Property(e => e.ToStatus).HasConversion<int>();
+            entity.Property(e => e.Kind).HasMaxLength(32).HasDefaultValue("Status");
+            entity.Property(e => e.Visibility).HasMaxLength(32).HasDefaultValue("Public");
+            entity.Property(e => e.ChronologyRepairOriginalCreatedAtUtc);
+            entity.Property(e => e.Note).HasMaxLength(2000);
+            entity.Property(e => e.ChangedByLabel).HasMaxLength(120);
+            entity.HasIndex(e => e.WorkOrderId);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasOne(e => e.WorkOrder)
+                .WithMany(w => w.StatusEvents)
+                .HasForeignKey(e => e.WorkOrderId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RecurringMaintenanceTask>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).HasMaxLength(4000);
+            entity.Property(e => e.Category).HasMaxLength(120);
+            entity.Property(e => e.IsActive).HasDefaultValue(true);
+            entity.Property(e => e.EstimatedCost).HasPrecision(18, 2);
+            // Stored as the string enum name to match the app-wide string-enum convention.
+            entity.Property(e => e.RecurrenceInterval).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.Priority).HasConversion<int>();
+            entity.Property(e => e.WorkerClaimOwner).HasMaxLength(200);
+            entity.Property(e => e.WorkerClaimLastFailureReason).HasMaxLength(2000);
+            // The worker's hot path: scan active, not-yet-deleted tasks that are due. The query filter
+            // already excludes soft-deleted rows; this index serves the (active, due) scan per portfolio.
+            entity.HasIndex(e => new { e.PortfolioId, e.IsActive, e.NextDueDate });
+            // #9 The generation sweep is CROSS-portfolio: WHERE IsActive AND NextDueDate <= today. The
+            // (PortfolioId, IsActive, NextDueDate) index above leads with a column the sweep doesn't
+            // filter (a skip-scan), so add (IsActive, NextDueDate) for the sweep to range-scan directly.
+            entity.HasIndex(e => new { e.IsActive, e.NextDueDate })
+                  .HasDatabaseName("IX_RecurringMaintenanceTasks_Active_NextDueDate");
+            entity.HasIndex(e => new { e.IsActive, e.NextDueDate, e.WorkerClaimExpiresAtUtc, e.Id })
+                  .HasDatabaseName("IX_RecurringMaintenanceTasks_GenerationClaim");
+            entity.HasIndex(e => e.PropertyId);
+            entity.HasIndex(e => e.UnitId);
+            entity.HasIndex(e => e.VendorId);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.RecurringMaintenanceTasks)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Vendor)
+                .WithMany()
+                .HasForeignKey(e => e.VendorId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+    }
 }
