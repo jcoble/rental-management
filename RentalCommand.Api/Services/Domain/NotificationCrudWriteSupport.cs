@@ -20,8 +20,8 @@ internal static class NotificationCrudWriteSupport
     public const string ResultContract = "rental.notification-mutation.v1";
 
     public static string IdempotencyKey(NotificationCrudWriteRequest request) =>
-        TransactionalWriteDefaults.IdempotencyKey(
-            request, request.Domain, request.EntityId, request.ResourceKey);
+        $"{request.PortfolioId}:{request.AccessContextId}:{request.Domain}:" +
+        $"{request.EntityId}:{request.ResourceKey}:{request.DeliveryIdempotencyKey}";
 
     public static TransactionalWrite<NotificationCrudWriteRequest, AtomicNotificationMutationResult> Write(
         NotificationCrudWriteRequest request,
@@ -30,36 +30,39 @@ internal static class NotificationCrudWriteSupport
         Func<NotificationCrudWriteRequest, IAtomicCommandContext, CancellationToken, Task>
             authorizeReplayAsync) =>
         TransactionalWriteDefaults.AuthorizationScoped(
-            TransactionalWriteDefaults.OperationName("rental.notification", request.Domain),
+            $"rental.notification.{request.Domain.ToString().ToLowerInvariant()}",
             request,
             ResultContract,
             executeAsync,
             authorizeReplayAsync);
 
-    public static Task<DateTime> BeginExecutionAsync(
+    public static async Task<DateTime> BeginExecutionAsync(
         NotificationCrudWriteRequest request,
         RentalCommandDbContext db,
         IAtomicCommandContext context,
-        CancellationToken ct) =>
-        TransactionalWriteDefaults.BeginExecutionAsync(
-            request,
-            context,
-            Validate,
-            (databaseNow, token) => AuthorizeAsync(request, db, databaseNow, token),
-            "Notification time must use UTC.",
-            ct);
+        CancellationToken ct)
+    {
+        TransactionalWriteDefaults.ValidateAuthorizationScope(request);
+        Validate(request);
+        var databaseNow = await context.ReadDatabaseClockUtcAsync(ct);
+        var mutationNow = request.BusinessNowUtc == default ? databaseNow
+            : request.BusinessNowUtc.Kind == DateTimeKind.Utc ? request.BusinessNowUtc
+            : throw new ArgumentException("Notification time must use UTC.");
+        context.UseDatabaseWallClockForAudit(mutationNow);
+        await AuthorizeAsync(request, db, databaseNow, ct);
+        return mutationNow;
+    }
 
-    public static Task AuthorizeReplayAsync(
+    public static async Task AuthorizeReplayAsync(
         NotificationCrudWriteRequest request,
         RentalCommandDbContext db,
         IAtomicCommandContext context,
-        CancellationToken ct) =>
-        TransactionalWriteDefaults.AuthorizeReplayAsync(
-            request,
-            context,
-            Validate,
-            (databaseNow, token) => AuthorizeAsync(request, db, databaseNow, token),
-            ct);
+        CancellationToken ct)
+    {
+        TransactionalWriteDefaults.ValidateAuthorizationScope(request);
+        Validate(request);
+        await AuthorizeAsync(request, db, await context.ReadDatabaseClockUtcAsync(ct), ct);
+    }
 
     private static async Task AuthorizeAsync(
         NotificationCrudWriteRequest request,
