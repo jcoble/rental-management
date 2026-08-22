@@ -22,7 +22,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// in-portfolio property filter (IDOR guard). Database scenarios run against the migrated PostgreSQL
 /// schema and production API role so views, functions, RLS policies, and provider translation are covered.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public class ReportsServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

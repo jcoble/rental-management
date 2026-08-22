@@ -17,7 +17,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// expected values — is caught. The per-owner report totals are the sum of the rounded per-line values
 /// (so the statement foots to the cent); the heavy payment/expense aggregation still runs in SQL.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name4)]
 public class OwnerStatementServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

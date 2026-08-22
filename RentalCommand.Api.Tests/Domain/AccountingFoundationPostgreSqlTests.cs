@@ -15,7 +15,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name4)]
 public sealed class AccountingFoundationPostgreSqlTests
 {
     private static readonly AtomicJsonResultCodec<ConcurrentJournalPostingResult> ConcurrentPostingCodec =

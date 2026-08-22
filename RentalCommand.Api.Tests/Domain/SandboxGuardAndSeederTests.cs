@@ -35,7 +35,7 @@ namespace RentalCommand.Api.Tests.Domain;
 ///     reconciles only recognized DEMO-LM facts, and never touches the sandbox flag.
 ///   * Stripe checkout is suppressed (NotEnabled, no Stripe call) while a portfolio is sandbox.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name2)]
 public class SandboxGuardAndSeederTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;

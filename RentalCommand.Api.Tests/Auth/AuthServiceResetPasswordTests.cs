@@ -25,7 +25,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
 {
     private const string ResetToken = "reset-token";

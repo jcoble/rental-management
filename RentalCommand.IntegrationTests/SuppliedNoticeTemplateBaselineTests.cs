@@ -23,7 +23,7 @@ using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -35,7 +35,7 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
     private ServiceProvider? _services;
@@ -44,12 +44,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_supplied_notices")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

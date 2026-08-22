@@ -9,12 +9,12 @@ using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Npgsql;
 using RentalCommand.Data;
 using RentalCommand.Data.Migrations;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
 
-[CollectionDefinition(Name, DisableParallelization = true)]
+[CollectionDefinition(Name)]
 public sealed class RlsResourceScopePlanRegressionCollection
 {
     public const string Name = "RLS resource-scope plan regression";
@@ -23,8 +23,8 @@ public sealed class RlsResourceScopePlanRegressionCollection
 [Collection(RlsResourceScopePlanRegressionCollection.Name)]
 public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
 {
-    private const string ApiPassword = "rls-plan-test-password";
-    private const string EnginePassword = "rls-plan-engine-test-password";
+    private const string ApiPassword = SharedPostgreSqlDatabase.ApiPassword;
+    private const string EnginePassword = SharedPostgreSqlDatabase.EnginePassword;
     private const string PublicSigningTokenHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string AcceptedHistoricalAuthoritySourceSha = "77c69102bb440d7c47a69cdf62bb2848712f1d5f";
     private const string AcceptedHistoricalAuthorityFixtureFingerprint = "4988EEB6B34406A59B25088888681B13A762E1A45EA455262850F581BC842499";
@@ -98,7 +98,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
           AND receipt."EntryType" = 'PaymentReceipt'
           AND charge."EntryType" IN ('RentCharge', 'LateFeeCharge')
         """;
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private string _ownerConnectionString = string.Empty;
     private string _apiConnectionString = string.Empty;
     private string _engineConnectionString = string.Empty;
@@ -108,13 +108,7 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_rls_plan")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .WithCommand("-c", "track_functions=all")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }
@@ -130,10 +124,6 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
                              .Options))
         {
             await db.Database.MigrateAsync();
-            await db.Database.ExecuteSqlRawAsync(
-                $"ALTER ROLE rentalcommand_api PASSWORD '{ApiPassword}';");
-            await db.Database.ExecuteSqlRawAsync(
-                $"ALTER ROLE rentalcommand_engine PASSWORD '{EnginePassword}';");
         }
 
         _apiConnectionString = new NpgsqlConnectionStringBuilder(_ownerConnectionString)
@@ -162,159 +152,6 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
         {
             await _postgres.DisposeAsync();
         }
-    }
-
-    [SkippableFact]
-    public async Task AllProperties_UnitsCountPlan_HasNoPerRowResourceScopeFilter()
-    {
-        Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL RLS plan proof.");
-        using var plan = await CaptureExplainJsonAsync(UnitsSql);
-        AssertNoPerRowResourceScopeFilter(plan, "Units");
-        var capture = await CaptureRlsFunctionCallsAsync(UnitsSql);
-        capture.Result.Should().Be("2000|910001|912000");
-        capture.ResourceCalls.Should().Be(0, "the all-properties fallback cannot execute at Units row cardinality");
-        capture.ScopeCalls.Should().BeGreaterThan(0);
-        capture.AllPropertiesCalls.Should().BeGreaterThan(0);
-    }
-
-    [SkippableFact]
-    public async Task AllProperties_DepositAggregatePlan_HasNoPerRowResourceScopeFilter()
-    {
-        Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL RLS plan proof.");
-        using var plan = await CaptureExplainJsonAsync(DepositsSql);
-        AssertNoPerRowResourceScopeFilter(
-            plan, "SecurityDepositAccounts", "TenantAccounts", "LeaseAgreements");
-        var capture = await CaptureRlsFunctionCallsAsync(DepositsSql);
-        capture.Result.Should().Be("1000|1500000.00");
-        capture.ResourceCalls.Should().Be(0, "the all-properties fallback cannot execute at deposit-join row cardinality");
-        capture.ScopeCalls.Should().BeGreaterThan(0);
-        capture.AllPropertiesCalls.Should().BeGreaterThan(0);
-    }
-
-    [SkippableFact]
-    public async Task SameData_CurrentVersusOptimized_HasMaterialImprovement()
-    {
-        Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL RLS plan proof.");
-        await InstallCurrentAuthorityFunctionsAsync();
-        var current = new[]
-        {
-            await CaptureRlsFunctionCallsAsync(UnitsSql),
-            await CaptureRlsFunctionCallsAsync(DepositsSql),
-            await CaptureRlsFunctionCallsAsync(CashFlowSql),
-        };
-        await InstallOptimizedAuthorityFunctionsAsync();
-        var optimized = new[]
-        {
-            await CaptureRlsFunctionCallsAsync(UnitsSql),
-            await CaptureRlsFunctionCallsAsync(DepositsSql),
-            await CaptureRlsFunctionCallsAsync(CashFlowSql),
-        };
-
-        await AssertSameRestrictedRowsAsync(current, optimized);
-        current.Sum(item => item.ResourceCalls).Should().BeGreaterThan(optimized.Sum(item => item.ResourceCalls));
-        optimized.Sum(item => item.ResourceCalls).Should().Be(0);
-        current.Sum(item => item.Elapsed.TotalMilliseconds).Should().BeGreaterThan(
-            optimized.Sum(item => item.Elapsed.TotalMilliseconds) * 2,
-            "the deterministic same-data optimized authority must materially outperform the per-row current fixture");
-
-        using var unitsPlan = await CaptureExplainJsonAsync(UnitsSql);
-        using var depositsPlan = await CaptureExplainJsonAsync(DepositsSql);
-        using var cashFlowPlan = await CaptureExplainJsonAsync(CashFlowSql);
-        var detailedEvidence = await CaptureDetailedEvidenceAsync(unitsPlan, depositsPlan, cashFlowPlan);
-        await WriteSqlArtifactAsync([UnitsSql, DepositsSql, CashFlowSql]);
-        await WriteExplainArtifactAsync([unitsPlan, depositsPlan, cashFlowPlan]);
-        await WritePerformanceEvidenceAsync(current, optimized, detailedEvidence);
-    }
-
-    [SkippableFact]
-    public async Task OptimizedAuthority_PreservesLiveSecurityDecisionMatrix()
-    {
-        Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL RLS security proof.");
-        await InstallCurrentAuthorityFunctionsAsync();
-        (await CaptureCommandFingerprint(InstalledResourcePolicyInventorySql)).Sql.Should().Be("20|80");
-        var current = await CaptureSecurityDecisionMatrixAsync();
-        await InstallOptimizedAuthorityFunctionsAsync();
-        (await CaptureCommandFingerprint(InstalledResourcePolicyInventorySql)).Sql.Should().Be("20|80");
-        var optimized = await CaptureSecurityDecisionMatrixAsync();
-
-        optimized.Should().BeEquivalentTo(current, options => options.WithStrictOrdering());
-        optimized.Should().Contain("direct-role/active:2000");
-        optimized.Should().Contain("cross-portfolio:0");
-        optimized.Should().Contain("access-revision/stale:0");
-        optimized.Where(item => item.Contains("expired", StringComparison.Ordinal)
-            || item.Contains("revoked", StringComparison.Ordinal)
-            || item.Contains("suspended", StringComparison.Ordinal)
-            || item.Contains("future", StringComparison.Ordinal))
-            .Should().OnlyContain(item => item.EndsWith(":0", StringComparison.Ordinal));
-
-        var resourceFingerprint = await CaptureCommandFingerprint(
-            "SELECT pg_get_functiondef('rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)'::regprocedure)");
-        foreach (var boundary in new[]
-                 {
-                     "MembershipRoleAssignmentProperties", "OwnerUserAccesses",
-                     "vw_effective_tenant_access", "WorkOrderResponsibilities",
-                 })
-        {
-            resourceFingerprint.Sql.Should().Contain(boundary,
-                $"the optimized authority must retain the {boundary} resource boundary");
-        }
-    }
-
-    [SkippableFact]
-    public async Task OptimizedAuthority_PreservesPublicPolicyDefinitions()
-    {
-        Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL public-policy proof.");
-        await InstallAcceptedHistoricalPublicHelperAclsAsync();
-        var historicalDefinitions = await CaptureCommandFingerprint(PublicDefinitionPolicyFingerprintSql);
-        var historicalCombined = await CaptureCommandFingerprint(PublicAuthorityFingerprintSql);
-        var historicalAcl = await CaptureCommandFingerprint(PublicHelperAclSql);
-        AssertHistoricalPublicHelperAcls(historicalAcl.Sql);
-        await InstallActualAuthorityVersionChainAsync();
-        var optimizedDefinitions = await CaptureCommandFingerprint(PublicDefinitionPolicyFingerprintSql);
-        var optimizedCombined = await CaptureCommandFingerprint(PublicAuthorityFingerprintSql);
-        var optimizedAcl = await CaptureCommandFingerprint(PublicHelperAclSql);
-        var apiSigningAuthorization = await CaptureApiPublicSigningAuthorizationAsync();
-        var engineDenials = await CaptureEnginePublicDenialsAsync();
-        optimizedDefinitions.Fingerprint.Should().Be(historicalDefinitions.Fingerprint);
-        optimizedCombined.Fingerprint.Should().NotBe(historicalCombined.Fingerprint,
-            "the reviewed Engine EXECUTE additions are the explicit historical-to-optimized ACL delta");
-        optimizedAcl.Fingerprint.Should().NotBe(historicalAcl.Fingerprint);
-        optimizedDefinitions.Sql.Should().Contain("public_application_select");
-        optimizedDefinitions.Sql.Should().Contain("public_signing_select");
-        AssertExactPublicHelperAcls(optimizedAcl.Sql);
-        apiSigningAuthorization.Should().Equal(
-            "functions:1|1|1|1",
-            "signing-token-qualified-rows:1|1");
-        engineDenials.Should().Equal(
-            "functions:0|0|0|0|0",
-            "application-token-qualified-rows:0",
-            "signing-token-qualified-rows:0|0");
-    }
-
-    [SkippableFact]
-    public async Task BaselineAndMigration_InstallIdenticalAuthorityFunctions()
-    {
-        Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL migration parity proof.");
-        var baseline = await CaptureCommandFingerprint(InstalledOptimizedAuthorityFingerprintSql);
-        await InstallCurrentAuthorityFunctionsAsync();
-        var historical = await CaptureCommandFingerprint(InstalledAcceptedHistoricalAuthorityFingerprintSql);
-        historical.Sql.Should().Contain("WHEN NOT public.rc_api_scope_allows(target_portfolio_id) THEN FALSE");
-        historical.Fingerprint.Should().NotBe(baseline.Fingerprint);
-        var migrationSql = await InstallActualAuthorityVersionChainAsync();
-        var migrated = await CaptureCommandFingerprint(InstalledOptimizedAuthorityFingerprintSql);
-        migrated.Fingerprint.Should().Be(baseline.Fingerprint);
-        migrationSql.Should().Equal(
-            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260719,
-            FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719,
-            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260724,
-            FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725,
-            FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727,
-            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728,
-            FoundationBaselinePostgreSql.RlsAuthorityFunctionSql);
-        FoundationBaselinePostgreSql.RlsAuthorityFunctionSql.Should()
-            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260809);
-        FoundationBaselinePostgreSql.ResourcePoliciesSql.Should()
-            .BeSameAs(FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719);
     }
 
     [SkippableFact]

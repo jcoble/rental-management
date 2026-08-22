@@ -15,7 +15,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auth;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -39,7 +39,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
     private int _accessContextId;
     private int _membershipId;
     private int _assignmentId;
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private ReuseFailureInterceptor? _failureInterceptor;
     private SqlCaptureInterceptor? _sqlCapture;
@@ -50,12 +50,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_session_refresh")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

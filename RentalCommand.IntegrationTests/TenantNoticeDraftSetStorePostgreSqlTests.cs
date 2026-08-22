@@ -19,7 +19,7 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Writes;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -27,7 +27,7 @@ namespace RentalCommand.IntegrationTests;
 /// <summary>PostgreSQL-only proof for the set-based tenant-notice draft command.</summary>
 public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
     private ServiceProvider? _services;
@@ -36,12 +36,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_notice_draft_sets")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

@@ -14,7 +14,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection4.Name)]
 public sealed class PrepareMoveInPostgreSqlTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<PrepareMoveInResult> Codec =

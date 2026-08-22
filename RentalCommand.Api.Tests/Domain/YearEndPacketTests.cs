@@ -16,7 +16,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// <see cref="ScheduleEService"/> computation for the same year, and that the generator produces a
 /// non-empty PDF.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public class YearEndPacketTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

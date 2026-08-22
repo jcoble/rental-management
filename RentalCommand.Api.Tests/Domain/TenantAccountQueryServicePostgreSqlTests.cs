@@ -13,7 +13,7 @@ using Xunit.Abstractions;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name2)]
 public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

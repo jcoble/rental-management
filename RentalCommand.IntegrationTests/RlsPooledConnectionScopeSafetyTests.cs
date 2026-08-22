@@ -20,10 +20,10 @@ namespace RentalCommand.IntegrationTests;
 /// API pool. The test intentionally disables Npgsql's reset-on-close safety net: every successful
 /// logical open must therefore replace all five coordinates through <see cref="RlsConnectionInterceptor"/>.
 /// </summary>
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection4.Name)]
 public sealed class RlsPooledConnectionScopeSafetyTests : IAsyncLifetime
 {
-    private const string ApiPassword = "pooled-rls-test-password";
+    private const string ApiPassword = SharedPostgreSqlDatabase.ApiPassword;
 
     private readonly MigratedPostgreSqlFixture _fixture;
     private readonly HttpContextAccessor _httpContextAccessor = new();
@@ -40,9 +40,6 @@ public sealed class RlsPooledConnectionScopeSafetyTests : IAsyncLifetime
     {
         _owner = await _fixture.CreateContextAsync();
         _rls = new RlsConnectionInterceptor(_httpContextAccessor);
-
-        await _owner.Db.Database.ExecuteSqlRawAsync(
-            $"ALTER ROLE {DatabaseRuntimeIdentity.ApiRole} PASSWORD '{ApiPassword}'");
 
         var now = DateTime.UtcNow;
         var portfolioA = await _owner.Db.Portfolios.SingleAsync(row => row.Id == 1);

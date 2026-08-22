@@ -14,7 +14,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -25,7 +25,7 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
 
@@ -33,12 +33,7 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_csv_payment_import")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

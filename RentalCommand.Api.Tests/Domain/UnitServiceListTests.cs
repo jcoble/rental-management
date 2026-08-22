@@ -15,7 +15,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public class UnitServiceListTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

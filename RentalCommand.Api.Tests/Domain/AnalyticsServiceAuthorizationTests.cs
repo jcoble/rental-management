@@ -12,7 +12,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name2)]
 public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

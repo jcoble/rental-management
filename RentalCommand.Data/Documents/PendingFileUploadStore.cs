@@ -108,7 +108,8 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
                  {{requestFingerprint}}, {{storagePath}}, {{safeName}}, {{contentType}}, {{sizeBytes}},
                  {{(int)PendingFileUploadState.Prepared}},
                  (SELECT now_utc FROM clock), (SELECT now_utc FROM clock))
-              ON CONFLICT ("PortfolioId", "ActorScopeId", "Purpose", "OperationKeyHash") DO NOTHING
+              ON CONFLICT ("PortfolioId", "ActorScopeId", "Purpose", "OperationKeyHash")
+              DO UPDATE SET "OperationKeyHash" = EXCLUDED."OperationKeyHash"
               RETURNING "Id", "StoragePath", "State", "StoredFileId", "RequestFingerprint"
             )
             SELECT inserted."Id",

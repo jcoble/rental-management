@@ -955,7 +955,7 @@ internal sealed class ApplicationTestDbContext : SqliteCompatibleRentalCommandDb
     public ApplicationTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

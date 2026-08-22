@@ -18,7 +18,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
@@ -26,7 +26,7 @@ namespace RentalCommand.IntegrationTests;
 public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
 {
     private readonly DateTime _now = new(2026, 7, 23, 12, 0, 0, DateTimeKind.Utc);
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private IServiceScope? _serviceScope;
     private bool _dockerAvailable;
@@ -44,12 +44,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_expense_allocations")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

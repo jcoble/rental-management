@@ -17,7 +17,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// excluded) and computed DEPRECIATION, and applies the deterministic legacy double-count exclusion
 /// (a loan present → drop manual MortgageInterest; computed depreciation → drop manual Depreciation).
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name4)]
 public class ScheduleEServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

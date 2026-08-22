@@ -20,14 +20,14 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Auditing;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
 /// <summary>Real PostgreSQL proof for bounded accounting worker claims and ownership fencing.</summary>
 public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private string _connectionString = string.Empty;
     private bool _dockerAvailable;
     private readonly IDataProtectionProvider _dataProtection = new EphemeralDataProtectionProvider();
@@ -36,12 +36,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
         }
         catch
