@@ -83,7 +83,7 @@ public static Task<bool> SelectAsync(
                               AND envelope."PortfolioId" = context."PortfolioId"
                               AND jsonb_exists(
                                   envelope."EnvelopeJson"::jsonb -> 'availableExperiences',
-                                  {experienceName})))
+                                  {experienceName}))) AS "Value"
                 """)
             .SingleAsync(ct);
     }
