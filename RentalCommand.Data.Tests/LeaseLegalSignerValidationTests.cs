@@ -40,6 +40,27 @@ public sealed class LeaseLegalSignerValidationTests
         act.Should().NotThrow();
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(32)]
+    public void Agreement_draft_rejects_rent_due_days_outside_the_valid_range(short rentDueDay)
+    {
+        var act = () => LeaseAgreementDraftCommandSupport.ValidateEditShape(Agreement(rentDueDay));
+
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("RentDueDay must be between 1 and 31.");
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(31)]
+    public void Agreement_draft_accepts_boundary_rent_due_days(short rentDueDay)
+    {
+        var act = () => LeaseAgreementDraftCommandSupport.ValidateEditShape(Agreement(rentDueDay));
+
+        act.Should().NotThrow();
+    }
+
     [Fact]
     public void Addendum_draft_rejects_a_mixed_required_and_optional_signer_snapshot()
     {
@@ -93,6 +114,13 @@ public sealed class LeaseLegalSignerValidationTests
     private static LeaseAgreementDraftSignerInput AgreementSigner(
         int? partyId, int? tenantId, LeaseLegalSignerRole role, string email, bool required, short order) =>
         new(partyId, tenantId, role, role.ToString(), email, order, required);
+
+    private static EditLeaseAgreementDraftCommand Agreement(short rentDueDay) => new(
+        1, 2, 3, 1, "A-1", LeaseAgreementTermType.FixedTerm,
+        new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31), new DateOnly(2026, 1, 1),
+        1000m, rentDueDay, 1000m, 25m, 5, 1, "{}", null,
+        [AgreementSigner(10, 20, LeaseLegalSignerRole.PrimaryTenant, "tenant@example.com", true, 1)],
+        5, Guid.NewGuid(), 6, 1, "agreement-edit:test");
 
     private static LeaseAddendumDraftSignerInput AddendumSigner(
         int? partyId, int? tenantId, LeaseLegalSignerRole role, string email, bool required, short order) =>
