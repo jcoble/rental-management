@@ -79,7 +79,6 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<IAtomicUnitOfWork>(),
             Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         _commands.Clear();
 
@@ -251,7 +250,6 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<IAtomicUnitOfWork>(),
             Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         _commands.Clear();
 

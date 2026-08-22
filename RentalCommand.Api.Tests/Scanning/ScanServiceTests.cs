@@ -67,7 +67,6 @@ public class ScanServiceTests : IDisposable
 
         _sut = new ScanService(
             _db,
-            new ScanRejectAtomicUnitOfWork(_db),
             new ScanRejectRequestWriteExecutor(_db),
             NullLogger<ScanService>.Instance,
             _timeProvider);
@@ -102,7 +101,6 @@ public class ScanServiceTests : IDisposable
                 .Options);
         var translationService = new ScanService(
             translationDb,
-            new ScanRejectAtomicUnitOfWork(translationDb),
             new ScanRejectRequestWriteExecutor(translationDb),
             NullLogger<ScanService>.Instance,
             TimeProvider.System);

@@ -154,10 +154,10 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
         _ctx.Db.SaveChanges();
 
-        var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
-        var (atomic, atomicContext, _) = BuildAtomicServices(_ctx.Db);
+        var (atomic, atomicContext, _, atomicDb) = BuildAtomicServices(_ctx.Db);
+        var legalDocuments = new DemoLegalTestDependencies(atomicDb);
         var seeder = new DemoDataSeeder(
-            _ctx.Db,
+            atomicDb,
             NullLogger<DemoDataSeeder>.Instance,
             TimeProvider.System,
             atomic,
@@ -169,6 +169,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             legalDocuments);
         await seeder.SeedPortfolioAsync(
             2, "seed-arbitrary-portfolio", CancellationToken.None);
+        _ctx.Db.ChangeTracker.Clear();
 
         // Demo data landed under portfolio 2, all FK'd correctly.
         (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
@@ -315,10 +316,10 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     [Fact]
     public async Task SeedPortfolio_ExactOperationRetryReplaysOnce()
     {
-        var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
-        var (atomic, atomicContext, _) = BuildAtomicServices(_ctx.Db);
+        var (atomic, atomicContext, _, atomicDb) = BuildAtomicServices(_ctx.Db);
+        var legalDocuments = new DemoLegalTestDependencies(atomicDb);
         var seeder = new DemoDataSeeder(
-            _ctx.Db,
+            atomicDb,
             NullLogger<DemoDataSeeder>.Instance,
             TimeProvider.System,
             atomic,
@@ -348,6 +349,79 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             && receipt.IdempotencyKey == "portfolio:1:seed-idempotency")).Should().Be(1);
         (await _ctx.Db.OutboxMessages.CountAsync(message =>
             message.IdempotencyKey == "demo-seed/1/seed-idempotency")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_FrozenLegacyReceiptReplaysThroughProductionCallerAndReauthorizes()
+    {
+        const string operationKey = "frozen-demo-seed";
+        const string key = "portfolio:1:frozen-demo-seed";
+        // Frozen base-caller fingerprint calculated once from the legacy command; never regenerate.
+        const string fingerprint = "b2e92f67a91c61c5e4859e8dede78600dbc6a3e0a6ce6d5877d03259573664c9";
+        const string resultJson = """
+            {"PortfolioId":1,"AlreadyPresent":false,"OwnerEntityCount":0,"VendorCount":0,"PropertyCount":0,"UnitCount":0,"TenantCount":0,"ActiveLeaseManagementCount":0,"EndedLeaseManagementCount":0,"TenantLedgerEntryCount":0,"SecurityDepositAccountCount":0,"ExpenseCount":0,"WorkOrderCount":0,"AppointmentCount":0,"InspectionCount":0,"LegalAgreementId":null}
+            """;
+        AtomicCommandFingerprint.Create(new SeedDemoPortfolioCommand(
+                1, false, DateTime.UnixEpoch, operationKey))
+            .Should().Be(fingerprint);
+
+        var (writes, atomicContext, _, atomicDb) = BuildAtomicServices(_ctx.Db);
+        var legalDocuments = new DemoLegalTestDependencies(atomicDb);
+        var seeder = new DemoDataSeeder(
+            atomicDb, NullLogger<DemoDataSeeder>.Instance, TimeProvider.System,
+            writes, atomicContext, legalDocuments, legalDocuments, legalDocuments,
+            legalDocuments, legalDocuments);
+        await seeder.SeedPortfolioAsync(
+            1, "prepare-frozen-demo-seed", CancellationToken.None);
+        var propertyCount = await atomicDb.Properties.IgnoreQueryFilters()
+            .CountAsync(property => property.PortfolioId == 1);
+
+        atomicDb.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+        {
+            Id = Guid.NewGuid(),
+            AttemptId = Guid.NewGuid(),
+            CommandType = "sandbox.demo-seed",
+            IdempotencyKey = key,
+            RequestFingerprint = fingerprint,
+            Status = AtomicCommandReceiptStatus.Completed,
+            ResultContract = "demo-portfolio-seed-result:v1",
+            ResultJson = resultJson,
+            StartedAt = DateTime.UnixEpoch,
+            CompletedAt = DateTime.UnixEpoch,
+        });
+        await atomicDb.SaveChangesAsync();
+        atomicDb.ChangeTracker.Clear();
+
+        await seeder.SeedPortfolioAsync(1, operationKey, CancellationToken.None);
+
+        (await atomicDb.Properties.IgnoreQueryFilters().CountAsync(property => property.PortfolioId == 1))
+            .Should().Be(propertyCount, "a legacy receipt replay must not seed the demo graph again");
+        (await atomicDb.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "sandbox.demo-seed" && receipt.IdempotencyKey == key))
+            .Should().Be(1);
+
+        const string forbiddenKey = "portfolio:999:frozen-demo-seed";
+        const string forbiddenResultJson = """
+            {"PortfolioId":999,"AlreadyPresent":false,"OwnerEntityCount":0,"VendorCount":0,"PropertyCount":0,"UnitCount":0,"TenantCount":0,"ActiveLeaseManagementCount":0,"EndedLeaseManagementCount":0,"TenantLedgerEntryCount":0,"SecurityDepositAccountCount":0,"ExpenseCount":0,"WorkOrderCount":0,"AppointmentCount":0,"InspectionCount":0,"LegalAgreementId":null}
+            """;
+        atomicDb.AtomicCommandReceipts.Add(new AtomicCommandReceipt
+        {
+            Id = Guid.NewGuid(),
+            AttemptId = Guid.NewGuid(),
+            CommandType = "sandbox.demo-seed",
+            IdempotencyKey = forbiddenKey,
+            RequestFingerprint = "b80fc9e9852df2221357abd3b2fdf85a735dbd333c967a0f6a5dbafab55d5a06",
+            Status = AtomicCommandReceiptStatus.Completed,
+            ResultContract = "demo-portfolio-seed-result:v1",
+            ResultJson = forbiddenResultJson,
+            StartedAt = DateTime.UnixEpoch,
+            CompletedAt = DateTime.UnixEpoch,
+        });
+        await atomicDb.SaveChangesAsync();
+        atomicDb.ChangeTracker.Clear();
+
+        var forbidden = () => seeder.SeedPortfolioAsync(999, operationKey, CancellationToken.None);
+        await forbidden.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
     [Fact]
@@ -575,7 +649,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         var nonDemoReceiptCount = await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.IdempotencyKey.StartsWith("portfolio:3:"));
 
-        var (startupSeeder, _) = BuildSeeder(_ctx.Db);
+        var (startupSeeder, _) = BuildSeeder(_ctx.Db, [_demoPortfolioDiscovery]);
         await FluentActions.Awaiting(() => startupSeeder.SeedAsync(CancellationToken.None))
             .Should().NotThrowAsync();
         _demoPortfolioDiscovery.UsedFunction.Should().BeTrue(
@@ -628,10 +702,10 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     [Fact]
     public async Task SeedPortfolio_FreshPostgreSqlDatabaseSucceedsOnFirstPassWithRealPendingUploadStore()
     {
-        var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
-        var (atomic, atomicContext, pendingUploads) = BuildAtomicServices(_ctx.Db);
+        var (atomic, atomicContext, pendingUploads, atomicDb) = BuildAtomicServices(_ctx.Db);
+        var legalDocuments = new DemoLegalTestDependencies(atomicDb);
         var seeder = new DemoDataSeeder(
-            _ctx.Db,
+            atomicDb,
             NullLogger<DemoDataSeeder>.Instance,
             TimeProvider.System,
             atomic,
@@ -1137,10 +1211,10 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         RentalCommandDbContext db,
         IEnumerable<IInterceptor>? interceptors = null)
     {
-        var legalDocuments = new DemoLegalTestDependencies(db);
-        var (atomic, atomicContext, _) = BuildAtomicServices(db, interceptors);
+        var (atomic, atomicContext, _, atomicDb) = BuildAtomicServices(db, interceptors);
+        var legalDocuments = new DemoLegalTestDependencies(atomicDb);
         return (new DemoDataSeeder(
-            db,
+            atomicDb,
             NullLogger<DemoDataSeeder>.Instance,
             TimeProvider.System,
             atomic,
@@ -1152,7 +1226,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             legalDocuments), legalDocuments);
     }
 
-    private (IAtomicUnitOfWork Atomic, IAtomicCommandContext Context, IPendingFileUploadStore PendingUploads)
+    private (IRequestWriteExecutor Writes, IAtomicCommandContext Context, IPendingFileUploadStore PendingUploads, RentalCommandDbContext Db)
         BuildAtomicServices(
         RentalCommandDbContext db,
         IEnumerable<IInterceptor>? interceptors = null)
@@ -1162,6 +1236,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, DemoSeedTestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             SeedDemoPortfolioCommand,
             SeedDemoPortfolioResult,
@@ -1187,9 +1262,10 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         var serviceProvider = services.BuildServiceProvider();
         _atomicProviders.Add(serviceProvider);
         return (
-            serviceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            serviceProvider.GetRequiredService<IRequestWriteExecutor>(),
             serviceProvider.GetRequiredService<IAtomicCommandContext>(),
-            serviceProvider.GetRequiredService<IPendingFileUploadStore>());
+            serviceProvider.GetRequiredService<IPendingFileUploadStore>(),
+            serviceProvider.GetRequiredService<RentalCommandDbContext>());
     }
 
     private sealed class DemoSeedTestActor : ICurrentActor

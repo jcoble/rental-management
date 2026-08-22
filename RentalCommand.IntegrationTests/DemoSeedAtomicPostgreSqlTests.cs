@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -82,6 +83,7 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddSingleton(_failure);
         services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicCommandHandler<
             SeedDemoPortfolioCommand,
             SeedDemoPortfolioResult,
@@ -248,6 +250,13 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = services.CreateAsyncScope();
+        if (command is SeedDemoPortfolioCommand seed)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteExactAsync(identity.IdempotencyKey, DemoSeedCommandHandler.Write(db, seed), ct);
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
         var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
         return await atomic.ExecuteAsync(identity, command, resultCodec, ct);
     }

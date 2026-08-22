@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -23,7 +24,7 @@ public class InspectionService : IInspectionService
     private static readonly string[] WriteCapabilities = [CapabilityKeys.WorkManage];
 
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IRequestWriteExecutor? _writes;
     private readonly IFileStorage _storage;
     private readonly IInspectionReportPdfGenerator _pdf;
     private readonly IPendingFileUploadStore? _pendingUploads;
@@ -38,7 +39,7 @@ public class InspectionService : IInspectionService
         IPendingFileUploadStore? pendingUploads,
         ILogger<InspectionService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null)
+        IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _ = dataUpdate;
@@ -47,7 +48,7 @@ public class InspectionService : IInspectionService
         _pendingUploads = pendingUploads;
         _logger = logger;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public InspectionService(
@@ -57,13 +58,13 @@ public class InspectionService : IInspectionService
         IInspectionReportPdfGenerator pdf,
         ILogger<InspectionService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null)
-        : this(db, dataUpdate, storage, pdf, null, logger, timeProvider, atomic)
+        IRequestWriteExecutor? writes = null)
+        : this(db, dataUpdate, storage, pdf, null, logger, timeProvider, writes)
     {
     }
 
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Inspection changes must use the standard save process.");
+    private IRequestWriteExecutor Writes => _writes ?? throw new InvalidOperationException(
+        "Inspection changes must use the shared write executor.");
 
     // Internal portfolio-id entry points exist only for the focused service tests via
     // InternalsVisibleTo. Production callers resolve IInspectionService, whose only surface requires
@@ -314,8 +315,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Template,
             AtomicInspectionMutationOperation.Create, 0, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return DeserializeSnapshot<InspectionTemplateResponse>(outcome.Value);
     }
 
@@ -328,8 +330,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Template,
             AtomicInspectionMutationOperation.Update, templateId, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return DeserializeSnapshot<InspectionTemplateResponse>(outcome.Value);
     }
 
@@ -341,8 +344,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Template,
             AtomicInspectionMutationOperation.Delete, templateId, 0, operationKey, new object());
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return outcome.Value.Found;
     }
 
@@ -354,8 +358,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.Create, 0, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return DeserializeSnapshot<InspectionDetailResponse>(outcome.Value);
     }
 
@@ -368,8 +373,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.Update, id, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         if (outcome.Value.Error is not null)
             throw new DomainValidationException(outcome.Value.Error, StatusCodes.Status409Conflict);
         return DeserializeSnapshot<InspectionResponse>(outcome.Value);
@@ -383,8 +389,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.Delete, id, 0, operationKey, new object());
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return outcome.Value.Found;
     }
 
@@ -403,8 +410,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.Create, inspectionId, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return DeserializeSnapshot<InspectionItemResponse>(outcome.Value);
     }
 
@@ -418,8 +426,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.Update, inspectionId, itemId, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return DeserializeSnapshot<InspectionItemResponse>(outcome.Value);
     }
 
@@ -432,8 +441,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.Delete, inspectionId, itemId, operationKey, new object());
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return outcome.Value.Found;
     }
 
@@ -446,8 +456,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.Reorder, inspectionId, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return DeserializeSnapshot<IReadOnlyList<InspectionItemResponse>>(outcome.Value);
     }
 
@@ -462,8 +473,9 @@ public class InspectionService : IInspectionService
         var request = new AttachInspectionItemPhotoRequest { StoredFileId = storedFileId };
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.AttachPhoto, inspectionId, itemId, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         return DeserializeSnapshot<InspectionItemResponse>(outcome.Value);
     }
 
@@ -476,8 +488,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.Complete, id, 0, operationKey, new object());
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         if (!outcome.Value.Found) return (null, null);
         if (outcome.Value.Error is not null) return (null, outcome.Value.Error);
         var summary = DeserializeSnapshot<CompleteInspectionResponse>(outcome.Value)
@@ -509,8 +522,9 @@ public class InspectionService : IInspectionService
     {
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.RecoverChronology, id, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         if (!outcome.Value.Found) return (null, null);
         if (outcome.Value.Error is not null) return (null, outcome.Value.Error);
         var result = DeserializeSnapshot<RecoverInspectionChronologyResponse>(outcome.Value)
@@ -820,8 +834,9 @@ public class InspectionService : IInspectionService
             pdfBytes.LongLength);
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.AttachReport, inspectionId, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        var outcome = await Writes.ExecuteExactAsync(
+            AtomicInspectionMutation.Identity(command).IdempotencyKey,
+            AtomicInspectionMutation.Write(_db, command), ct);
         if (!outcome.Value.Found)
             throw new AtomicReceiptInvariantException("Inspection disappeared before its report was attached.");
         if (outcome.Value.Error is not null)

@@ -12,6 +12,7 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.AiIntegrations;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -958,7 +959,7 @@ public sealed class PortfolioQaServiceTests : IAsyncLifetime
         }
     }
 
-    private sealed class CapturingPortfolioQaAtomicUnitOfWork : IAtomicUnitOfWork
+    private sealed class CapturingPortfolioQaAtomicUnitOfWork : IRequestWriteExecutor
     {
         private readonly object _result;
 
@@ -968,20 +969,26 @@ public sealed class PortfolioQaServiceTests : IAsyncLifetime
         public object? Command { get; private set; }
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity,
-            TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec,
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
-            Identity = identity;
-            Command = command;
+            Identity = new AtomicCommandIdentity(write.OperationName, idempotencyKey);
+            Command = write.Request;
             return Task.FromResult(new AtomicCommandOutcome<TResult>(
                 (TResult)_result,
                 AtomicCommandDisposition.Executed,
                 Guid.NewGuid()));
         }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull => ExecuteAsync(idempotencyKey, write, ct);
     }
 
     private sealed class ThrowingAccountingService : IAccountingService

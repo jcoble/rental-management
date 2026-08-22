@@ -12,6 +12,78 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Authorization;
 
+public static class WorkspaceTeamWriteSupport
+{
+    public static TransactionalWrite<CreateWorkspaceMembershipCommand, CreateWorkspaceMembershipResult> Write(
+        RentalCommandDbContext db,
+        CreateWorkspaceMembershipCommand command)
+    {
+        var handler = new CreateWorkspaceMembershipHandler(db);
+        return Build("workspace-team.membership.create", "workspace-team.membership.create.v1",
+            command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public static TransactionalWrite<AddWorkspaceRoleAssignmentCommand, WorkspaceTeamMutationResult> Write(
+        RentalCommandDbContext db, WorkspaceAccessRevisionGuard guard,
+        IMembershipAssignmentScopeValidator validator, AddWorkspaceRoleAssignmentCommand command)
+    {
+        var handler = new AddWorkspaceRoleAssignmentHandler(db, guard, validator);
+        return Build("workspace-team.assignment.add", "workspace-team.mutation.v1",
+            command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public static TransactionalWrite<EndWorkspaceRoleAssignmentCommand, WorkspaceTeamMutationResult> Write(
+        RentalCommandDbContext db, WorkspaceAccessRevisionGuard guard,
+        IMembershipAssignmentScopeValidator validator, EndWorkspaceRoleAssignmentCommand command)
+    {
+        var handler = new EndWorkspaceRoleAssignmentHandler(db, guard, validator);
+        return Build("workspace-team.assignment.end", "workspace-team.mutation.v1",
+            command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public static TransactionalWrite<ReplaceWorkspaceAssignmentPropertyScopeCommand, WorkspaceTeamMutationResult> Write(
+        RentalCommandDbContext db, WorkspaceAccessRevisionGuard guard,
+        IMembershipAssignmentScopeValidator validator, ReplaceWorkspaceAssignmentPropertyScopeCommand command)
+    {
+        var handler = new ReplaceWorkspaceAssignmentPropertyScopeHandler(db, guard, validator);
+        return Build("workspace-team.assignment.properties.replace", "workspace-team.mutation.v1",
+            command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public static TransactionalWrite<ChangeWorkspaceMembershipStatusCommand, WorkspaceTeamMutationResult> Write(
+        RentalCommandDbContext db, WorkspaceAccessRevisionGuard guard,
+        IMembershipAssignmentScopeValidator validator, ChangeWorkspaceMembershipStatusCommand command)
+    {
+        var handler = new ChangeWorkspaceMembershipStatusHandler(db, guard, validator);
+        return Build("workspace-team.membership.status", "workspace-team.mutation.v1",
+            command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public static TransactionalWrite<ActivateWorkspaceInvitationCommand, ActivateWorkspaceInvitationResult> Write(
+        RentalCommandDbContext db,
+        ActivateWorkspaceInvitationCommand command)
+    {
+        var handler = new ActivateWorkspaceInvitationHandler(db);
+        return Build(
+            "workspace-invitation.activate", "workspace-invitation-activation-result:v1", command,
+            handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
+        string operationName,
+        string resultContract,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => new(
+            operationName, WriteIdempotencyPolicy.Required, command, resultContract,
+            WriteLockPlan.None, executeAsync, authorizeReplayAsync);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy workspace Team writes are retired; use the shared write executor.");
+}
+
 internal static class WorkspaceTeamAuthoritySupport
 {
     public static async Task<DateTime> LockAndAuthorizeActorAsync(
@@ -277,7 +349,12 @@ public sealed class CreateWorkspaceMembershipHandler
 
     public CreateWorkspaceMembershipHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<CreateWorkspaceMembershipResult> HandleAsync(
+    public Task<CreateWorkspaceMembershipResult> HandleAsync(
+        CreateWorkspaceMembershipCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
+
+    public async Task<CreateWorkspaceMembershipResult> ExecuteAsync(
         CreateWorkspaceMembershipCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -478,7 +555,12 @@ public sealed class ActivateWorkspaceInvitationHandler
 
     public ActivateWorkspaceInvitationHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ActivateWorkspaceInvitationResult> HandleAsync(
+    public Task<ActivateWorkspaceInvitationResult> HandleAsync(
+        ActivateWorkspaceInvitationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
+
+    public async Task<ActivateWorkspaceInvitationResult> ExecuteAsync(
         ActivateWorkspaceInvitationCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -586,7 +668,12 @@ public sealed class AddWorkspaceRoleAssignmentHandler
         _assignmentScopeValidator = assignmentScopeValidator;
     }
 
-    public async Task<WorkspaceTeamMutationResult> HandleAsync(
+    public Task<WorkspaceTeamMutationResult> HandleAsync(
+        AddWorkspaceRoleAssignmentCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
+
+    public async Task<WorkspaceTeamMutationResult> ExecuteAsync(
         AddWorkspaceRoleAssignmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
@@ -665,7 +752,12 @@ public sealed class EndWorkspaceRoleAssignmentHandler
         _assignmentScopeValidator = assignmentScopeValidator;
     }
 
-    public async Task<WorkspaceTeamMutationResult> HandleAsync(
+    public Task<WorkspaceTeamMutationResult> HandleAsync(
+        EndWorkspaceRoleAssignmentCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
+
+    public async Task<WorkspaceTeamMutationResult> ExecuteAsync(
         EndWorkspaceRoleAssignmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
@@ -715,7 +807,12 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
         _assignmentScopeValidator = assignmentScopeValidator;
     }
 
-    public async Task<WorkspaceTeamMutationResult> HandleAsync(
+    public Task<WorkspaceTeamMutationResult> HandleAsync(
+        ReplaceWorkspaceAssignmentPropertyScopeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
+
+    public async Task<WorkspaceTeamMutationResult> ExecuteAsync(
         ReplaceWorkspaceAssignmentPropertyScopeCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -799,7 +896,12 @@ public sealed class ChangeWorkspaceMembershipStatusHandler
         _assignmentScopeValidator = assignmentScopeValidator;
     }
 
-    public async Task<WorkspaceTeamMutationResult> HandleAsync(
+    public Task<WorkspaceTeamMutationResult> HandleAsync(
+        ChangeWorkspaceMembershipStatusCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
+
+    public async Task<WorkspaceTeamMutationResult> ExecuteAsync(
         ChangeWorkspaceMembershipStatusCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

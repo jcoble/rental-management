@@ -72,7 +72,6 @@ public class ConversationNotificationTests : IAsyncLifetime
         new NoopFairHousingReviewService(),
         NullLogger<ConversationService>.Instance,
         TimeProvider.System,
-        _services.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>(),
         _services.GetRequiredService<IRequestWriteExecutor>());
 
     private async Task<AtomicCommandOutcome<AtomicNoticeDeliveryResult>> ExecuteNoticeDeliveryAsync(

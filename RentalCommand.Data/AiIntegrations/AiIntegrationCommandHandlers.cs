@@ -12,6 +12,56 @@ using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.AiIntegrations;
 
+public static class AiIntegrationWriteSupport
+{
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        RentalCommandDbContext db,
+        TCommand command)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        object write = command switch
+        {
+            ActivateWorkspaceLlmCredentialCommand value => Build(
+                "ai.integration.credential.activate", "ai.integration.status.v1", value,
+                new ActivateWorkspaceLlmCredentialHandler(db).ExecuteAsync,
+                new ActivateWorkspaceLlmCredentialHandler(db).AuthorizeReplayAsync),
+            RotateWorkspaceLlmCredentialCommand value => Build(
+                "ai.integration.credential.rotate", "ai.integration.status.v1", value,
+                new RotateWorkspaceLlmCredentialHandler(db).ExecuteAsync,
+                new RotateWorkspaceLlmCredentialHandler(db).AuthorizeReplayAsync),
+            RemoveWorkspaceLlmCredentialCommand value => Build(
+                "ai.integration.credential.remove", "ai.integration.remove.v1", value,
+                new RemoveWorkspaceLlmCredentialHandler(db).ExecuteAsync,
+                new RemoveWorkspaceLlmCredentialHandler(db).AuthorizeReplayAsync),
+            RecordLlmUsageEvidenceCommand value => Build(
+                "ai.integration.usage.record", "ai.integration.usage.v1", value,
+                new RecordLlmUsageEvidenceHandler(db).ExecuteAsync,
+                new RecordLlmUsageEvidenceHandler(db).AuthorizeReplayAsync),
+            PortfolioQaDeliveryCommand value => Build(
+                "portfolio.qa.delivery", "portfolio.qa.delivery.v1", value,
+                new PortfolioQaDeliveryHandler(db).ExecuteAsync,
+                new PortfolioQaDeliveryHandler(db).AuthorizeReplayAsync),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return (TransactionalWrite<TCommand, TResult>)write;
+    }
+
+    private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
+        string operationName,
+        string resultContract,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => new(
+            operationName, WriteIdempotencyPolicy.Required, command, resultContract,
+            WriteLockPlan.None, executeAsync, authorizeReplayAsync);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy AI integration writes are retired; use the shared write executor.");
+}
+
 public sealed class ActivateWorkspaceLlmCredentialHandler
     : IAtomicCommandHandler<ActivateWorkspaceLlmCredentialCommand, AiIntegrationStatusResult>
 {
@@ -19,7 +69,12 @@ public sealed class ActivateWorkspaceLlmCredentialHandler
 
     public ActivateWorkspaceLlmCredentialHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AiIntegrationStatusResult> HandleAsync(
+    public Task<AiIntegrationStatusResult> HandleAsync(
+        ActivateWorkspaceLlmCredentialCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
+
+    public async Task<AiIntegrationStatusResult> ExecuteAsync(
         ActivateWorkspaceLlmCredentialCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -83,7 +138,12 @@ public sealed class RotateWorkspaceLlmCredentialHandler
 
     public RotateWorkspaceLlmCredentialHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AiIntegrationStatusResult> HandleAsync(
+    public Task<AiIntegrationStatusResult> HandleAsync(
+        RotateWorkspaceLlmCredentialCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
+
+    public async Task<AiIntegrationStatusResult> ExecuteAsync(
         RotateWorkspaceLlmCredentialCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -135,7 +195,12 @@ public sealed class RemoveWorkspaceLlmCredentialHandler
 
     public RemoveWorkspaceLlmCredentialHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RemoveWorkspaceLlmCredentialResult> HandleAsync(
+    public Task<RemoveWorkspaceLlmCredentialResult> HandleAsync(
+        RemoveWorkspaceLlmCredentialCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
+
+    public async Task<RemoveWorkspaceLlmCredentialResult> ExecuteAsync(
         RemoveWorkspaceLlmCredentialCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -184,7 +249,12 @@ public sealed class RecordLlmUsageEvidenceHandler
 
     public RecordLlmUsageEvidenceHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecordLlmUsageEvidenceResult> HandleAsync(
+    public Task<RecordLlmUsageEvidenceResult> HandleAsync(
+        RecordLlmUsageEvidenceCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
+
+    public async Task<RecordLlmUsageEvidenceResult> ExecuteAsync(
         RecordLlmUsageEvidenceCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -250,7 +320,12 @@ public sealed class PortfolioQaDeliveryHandler
 
     public PortfolioQaDeliveryHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<PortfolioQaDeliveryResult> HandleAsync(
+    public Task<PortfolioQaDeliveryResult> HandleAsync(
+        PortfolioQaDeliveryCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw AiIntegrationWriteSupport.RetiredPath();
+
+    public async Task<PortfolioQaDeliveryResult> ExecuteAsync(
         PortfolioQaDeliveryCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

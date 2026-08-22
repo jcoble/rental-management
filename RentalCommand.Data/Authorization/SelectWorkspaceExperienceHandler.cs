@@ -11,7 +11,24 @@ public sealed class SelectWorkspaceExperienceHandler
 
     public SelectWorkspaceExperienceHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SelectWorkspaceExperienceResult> HandleAsync(
+    public static TransactionalWrite<SelectWorkspaceExperienceCommand, SelectWorkspaceExperienceResult> Write(
+        RentalCommandDbContext db,
+        SelectWorkspaceExperienceCommand command)
+    {
+        var handler = new SelectWorkspaceExperienceHandler(db);
+        return new TransactionalWrite<SelectWorkspaceExperienceCommand, SelectWorkspaceExperienceResult>(
+            "workspace-experience.select", WriteIdempotencyPolicy.Required, command,
+            "workspace-experience-select-result:v1", WriteLockPlan.None,
+            handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public Task<SelectWorkspaceExperienceResult> HandleAsync(
+        SelectWorkspaceExperienceCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw new InvalidOperationException(
+            "Legacy workspace experience writes are retired; use the shared write executor.");
+
+    public async Task<SelectWorkspaceExperienceResult> ExecuteAsync(
         SelectWorkspaceExperienceCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
