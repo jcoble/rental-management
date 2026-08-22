@@ -36,7 +36,6 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
     private MigratedPostgreSqlTestContext _ctx = null!;
     private UserManager<ApplicationUser> _users = null!;
     private ServiceProvider _services = null!;
-    private IAtomicUnitOfWork _atomic = null!;
     private IRequestWriteExecutor _writes = null!;
     private RentalCommandDbContext _writeDb = null!;
 
@@ -50,7 +49,6 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
         _ctx = await _fixture.CreateContextAsync();
         _services = AtomicDomainTestKernel.CreateForAccountBootstrapPostgreSql(
             (NpgsqlConnection)_ctx.Db.Database.GetDbConnection());
-        _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
         _writes = _services.GetRequiredService<IRequestWriteExecutor>();
         _writeDb = _services.GetRequiredService<RentalCommandDbContext>();
         _users = CreateUserManager(_ctx.Db);

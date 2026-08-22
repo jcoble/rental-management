@@ -48,10 +48,6 @@ public class ConversationNotificationTests : IAsyncLifetime
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<NotificationService>();
-        services.AddAtomicCommandHandler<
-            SendConversationMessageCommand,
-            SendConversationMessageResult,
-            SendConversationMessageHandler>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_ctx.ConnectionString)
                 .AddInterceptors(new RecordingCommandInterceptor(_commands))

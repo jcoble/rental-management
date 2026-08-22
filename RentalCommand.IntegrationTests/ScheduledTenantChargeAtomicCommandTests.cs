@@ -2543,8 +2543,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
 
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-        return await atomic.ExecuteAsync(identity, command, codec);
+        throw new InvalidOperationException($"No executor rule exists for {typeof(TCommand).Name}.");
     }
 
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();

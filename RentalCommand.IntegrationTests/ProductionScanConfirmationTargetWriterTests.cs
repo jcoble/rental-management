@@ -3666,9 +3666,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                 .ExecuteAsync(identity.IdempotencyKey, AtomicMoneyMutation.Write(money, db), ct);
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec, ct);
+        throw new InvalidOperationException($"No executor rule exists for {typeof(TCommand).Name}.");
     }
 
     private TestScope Scope() => TestScope.Create(_services ?? throw new InvalidOperationException());

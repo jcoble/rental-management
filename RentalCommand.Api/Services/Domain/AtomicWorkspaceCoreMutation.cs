@@ -39,17 +39,10 @@ public sealed record AtomicWorkspaceCoreMutationResult(
     string? PublicApplicationToken = null);
 
 public sealed class AtomicWorkspaceCoreMutationHandler
-    : IAtomicCommandHandler<AtomicWorkspaceCoreMutationCommand, AtomicWorkspaceCoreMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicWorkspaceCoreMutationHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<AtomicWorkspaceCoreMutationResult> HandleAsync(
-        AtomicWorkspaceCoreMutationCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw new InvalidOperationException(
-            "Legacy workspace core writes are retired; use the shared write executor.");
 
     public async Task<AtomicWorkspaceCoreMutationResult> ExecuteAsync(
         AtomicWorkspaceCoreMutationCommand command,

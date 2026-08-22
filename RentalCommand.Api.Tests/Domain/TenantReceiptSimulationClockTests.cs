@@ -40,7 +40,6 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private ServiceProvider _services = null!;
-    private IAtomicUnitOfWork _atomic = null!;
     private WorkspaceReadScope _scope;
     private CommandRecorder Recorder => _services.GetRequiredService<CommandRecorder>();
     private NotificationFailureInterceptor Failures => _services.GetRequiredService<NotificationFailureInterceptor>();
@@ -58,7 +57,6 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(TenantReceiptSimulationClockTests));
         await FreezeSimulationClockAsync();
         _services = BuildServices(_ctx.ConnectionString, SimulatedEntryAtUtc);
-        _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
     }
 
     public async Task DisposeAsync()

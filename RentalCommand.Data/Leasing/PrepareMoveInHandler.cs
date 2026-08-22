@@ -13,16 +13,10 @@ namespace RentalCommand.Data.Leasing;
 
 /// <summary>Pure database implementation of the pre-possession relationship command.</summary>
 public sealed class PrepareMoveInHandler
-    : IAtomicCommandHandler<PrepareMoveInCommand, PrepareMoveInResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PrepareMoveInHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<PrepareMoveInResult> HandleAsync(
-        PrepareMoveInCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
 
     public async Task<PrepareMoveInResult> ExecuteAsync(
         PrepareMoveInCommand command,

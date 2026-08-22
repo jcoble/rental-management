@@ -733,7 +733,6 @@ public class ScanControllerTests : IAsyncLifetime
     private ScanController CreateController(
         IScanService scan,
         IFileStorage? files = null,
-        IAtomicUnitOfWork? atomic = null,
         IRequestWriteExecutor? writes = null,
         IScanUploadService? uploads = null)
     {

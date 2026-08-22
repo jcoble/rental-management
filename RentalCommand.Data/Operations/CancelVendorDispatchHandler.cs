@@ -9,7 +9,6 @@ using RentalCommand.Core.Outbox;
 namespace RentalCommand.Data.Operations;
 
 public sealed class CancelVendorDispatchHandler
-    : IAtomicCommandHandler<CancelVendorDispatchCommand, CancelVendorDispatchResult>
 {
     public const string ResultContract = "vendor-dispatch.cancel.v1";
 
@@ -31,11 +30,6 @@ public sealed class CancelVendorDispatchHandler
                 WriteLock.For("WorkOrder", command.WorkOrderId)),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<CancelVendorDispatchResult> HandleAsync(
-        CancelVendorDispatchCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<CancelVendorDispatchResult> ExecuteAsync(
         CancelVendorDispatchCommand command,

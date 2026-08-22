@@ -10,15 +10,10 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class CreatePropertyDispositionHandler
-    : IAtomicCommandHandler<CreatePropertyDispositionCommand, CreatePropertyDispositionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public CreatePropertyDispositionHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<CreatePropertyDispositionResult> HandleAsync(
-        CreatePropertyDispositionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw LeasingWriteSupport.RetiredPath();
 
     public async Task<CreatePropertyDispositionResult> ExecuteAsync(
         CreatePropertyDispositionCommand command, IAtomicCommandContext context, CancellationToken ct)

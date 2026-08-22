@@ -241,10 +241,6 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
         services.AddAtomicPersistenceKernel();
         services.AddPendingFileUploadStore();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            AtomicInspectionMutationCommand,
-            AtomicInspectionMutationResult,
-            AtomicInspectionMutationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider(new ServiceProviderOptions

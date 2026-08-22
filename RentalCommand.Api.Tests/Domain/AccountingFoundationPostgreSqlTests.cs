@@ -137,8 +137,8 @@ public sealed class AccountingFoundationPostgreSqlTests
         await using var services = CreateConcurrentPostingServices(setup.ConnectionString, gate);
         await using var firstScope = services.CreateAsyncScope();
         await using var secondScope = services.CreateAsyncScope();
-        var firstAtomic = firstScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-        var secondAtomic = secondScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var firstWrites = firstScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
+        var secondWrites = secondScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         var firstCommand = new ConcurrentJournalPostingCommand(
             8_071,
             accountIds[0],
@@ -146,16 +146,22 @@ public sealed class AccountingFoundationPostgreSqlTests
             true);
         var secondCommand = firstCommand with { SourceId = 8_072, HoldBeforeCommit = false };
 
-        var first = firstAtomic.ExecuteAsync(
-            new AtomicCommandIdentity("accounting.concurrent-journal-posting", "first-attempt"),
-            firstCommand,
-            ConcurrentPostingCodec);
+        var firstIdentity = new AtomicCommandIdentity(
+            "accounting.concurrent-journal-posting", "first-attempt");
+        var firstHandler = firstScope.ServiceProvider
+            .GetRequiredService<ConcurrentJournalPostingHandler>();
+        var first = firstWrites.ExecuteAsync(
+            firstIdentity.IdempotencyKey,
+            ConcurrentWrite(firstIdentity, firstCommand, firstHandler));
         await gate.FirstJournalFlushed.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-        var second = secondAtomic.ExecuteAsync(
-            new AtomicCommandIdentity("accounting.concurrent-journal-posting", "second-attempt"),
-            secondCommand,
-            ConcurrentPostingCodec);
+        var secondIdentity = new AtomicCommandIdentity(
+            "accounting.concurrent-journal-posting", "second-attempt");
+        var secondHandler = secondScope.ServiceProvider
+            .GetRequiredService<ConcurrentJournalPostingHandler>();
+        var second = secondWrites.ExecuteAsync(
+            secondIdentity.IdempotencyKey,
+            ConcurrentWrite(secondIdentity, secondCommand, secondHandler));
         await gate.SecondStartedPosting.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var winner = await Task.WhenAny(
@@ -510,10 +516,7 @@ public sealed class AccountingFoundationPostgreSqlTests
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddSingleton(gate);
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            ConcurrentJournalPostingCommand,
-            ConcurrentJournalPostingResult,
-            ConcurrentJournalPostingHandler>();
+        services.AddScoped<ConcurrentJournalPostingHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider();
@@ -530,8 +533,21 @@ public sealed class AccountingFoundationPostgreSqlTests
 
     private sealed record ConcurrentJournalPostingResult(int JournalEntryId);
 
+    private static TransactionalWrite<ConcurrentJournalPostingCommand, ConcurrentJournalPostingResult>
+        ConcurrentWrite(
+            AtomicCommandIdentity identity,
+            ConcurrentJournalPostingCommand command,
+            ConcurrentJournalPostingHandler handler) =>
+        new(
+            identity.CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            ConcurrentPostingCodec.ContractName,
+            WriteLockPlan.None,
+            handler.ExecuteAsync,
+            handler.AuthorizeReplayAsync);
+
     private sealed class ConcurrentJournalPostingHandler
-        : IAtomicCommandHandler<ConcurrentJournalPostingCommand, ConcurrentJournalPostingResult>
     {
         private readonly RentalCommandDbContext _db;
         private readonly ConcurrentJournalPostingGate _gate;
@@ -544,7 +560,7 @@ public sealed class AccountingFoundationPostgreSqlTests
             _gate = gate;
         }
 
-        public async Task<ConcurrentJournalPostingResult> HandleAsync(
+        public async Task<ConcurrentJournalPostingResult> ExecuteAsync(
             ConcurrentJournalPostingCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)

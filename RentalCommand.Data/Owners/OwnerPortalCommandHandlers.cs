@@ -47,16 +47,10 @@ public static class OwnerPortalWriteSupport
 }
 
 public sealed class DecideOwnerApprovalHandler
-    : IAtomicCommandHandler<DecideOwnerApprovalCommand, OwnerPortalCommandResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public DecideOwnerApprovalHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<OwnerPortalCommandResult> HandleAsync(
-        DecideOwnerApprovalCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw OwnerPortalWriteSupport.RetiredPath();
 
     public Task<OwnerPortalCommandResult> ExecuteAsync(
         DecideOwnerApprovalCommand command,
@@ -104,16 +98,10 @@ public sealed class DecideOwnerApprovalHandler
 }
 
 public sealed class ReplyToOwnerMessageHandler
-    : IAtomicCommandHandler<ReplyToOwnerMessageCommand, OwnerPortalCommandResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ReplyToOwnerMessageHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<OwnerPortalCommandResult> HandleAsync(
-        ReplyToOwnerMessageCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw OwnerPortalWriteSupport.RetiredPath();
 
     public Task<OwnerPortalCommandResult> ExecuteAsync(
         ReplyToOwnerMessageCommand command,

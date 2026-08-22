@@ -430,7 +430,7 @@ public class CsvImportServiceTests : IDisposable
     }
 
     private sealed class CapturingAtomicUnitOfWork
-        : IAtomicUnitOfWork, IRequestWriteExecutor,
+        : IRequestWriteExecutor,
           IUnitCsvImportPreviewQuery, ICoreCsvImportPreviewQuery,
           IPaymentCsvImportPreviewQuery
     {
@@ -470,17 +470,6 @@ public class CsvImportServiceTests : IDisposable
             string rowsJson,
             CancellationToken ct = default) =>
             Task.FromResult(PaymentResult(rowsJson, created: false));
-
-        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity,
-            TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData
-            where TResult : notnull
-        {
-            throw new InvalidOperationException("Unexpected atomic command in CSV import test.");
-        }
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey,

@@ -14,7 +14,6 @@ using RentalCommand.Data.Notifications;
 namespace RentalCommand.Data.Operations;
 
 public sealed class CompleteVendorDispatchFromInboundHandler
-    : IAtomicCommandHandler<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult>
 {
     public const string ResultContract = "complete-vendor-dispatch-from-inbound-result.v1";
 
@@ -38,11 +37,6 @@ public sealed class CompleteVendorDispatchFromInboundHandler
             "sms.vendor-done", WriteIdempotencyPolicy.Required, command, ResultContract, locks,
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<CompleteVendorDispatchFromInboundResult> HandleAsync(
-        CompleteVendorDispatchFromInboundCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<CompleteVendorDispatchFromInboundResult> ExecuteAsync(
         CompleteVendorDispatchFromInboundCommand command,

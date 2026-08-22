@@ -29,7 +29,6 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         new DateTimeOffset(2027, 1, 5, 5, 0, 0, TimeSpan.Zero));
     private readonly ServiceProvider _services;
     private readonly PropertyService _sut;
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly WorkspaceReadScope _scope;
 
     public PropertySetupAtomicCommandTests(MigratedPostgreSqlFixture postgres)
@@ -38,7 +37,6 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         _ctx.Db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(PropertySetupAtomicCommandTests));
         _services = AtomicDomainTestKernel.CreateForCoreCrud(_ctx.ConnectionString, _timeProvider);
-        _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
         _sut = _services.GetRequiredService<PropertyService>();
     }
 

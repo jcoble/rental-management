@@ -11,7 +11,6 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Operations;
 
 public sealed class DispatchWorkOrderToVendorHandler
-    : IAtomicCommandHandler<DispatchWorkOrderToVendorCommand, DispatchWorkOrderToVendorResult>
 {
     public const string ResultContract = "vendor-dispatch.create.v1";
 
@@ -33,11 +32,6 @@ public sealed class DispatchWorkOrderToVendorHandler
                 WriteLock.For("WorkOrder", command.WorkOrderId)),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<DispatchWorkOrderToVendorResult> HandleAsync(
-        DispatchWorkOrderToVendorCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<DispatchWorkOrderToVendorResult> ExecuteAsync(
         DispatchWorkOrderToVendorCommand command,

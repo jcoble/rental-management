@@ -50,15 +50,10 @@ public static class AuthSessionWriteSupport
 }
 
 public sealed class BootstrapAccountHandler
-    : IAtomicCommandHandler<BootstrapAccountCommand, BootstrapAccountResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public BootstrapAccountHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<BootstrapAccountResult> HandleAsync(
-        BootstrapAccountCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<BootstrapAccountResult> ExecuteAsync(
         BootstrapAccountCommand command,
@@ -327,15 +322,10 @@ public sealed class BootstrapAccountHandler
 }
 
 public sealed class ConfirmAccountEmailHandler
-    : IAtomicCommandHandler<ConfirmAccountEmailCommand, ConfirmAccountEmailResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ConfirmAccountEmailHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ConfirmAccountEmailResult> HandleAsync(
-        ConfirmAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<ConfirmAccountEmailResult> ExecuteAsync(
         ConfirmAccountEmailCommand command,
@@ -430,15 +420,10 @@ public sealed class ConfirmAccountEmailHandler
 }
 
 public sealed class ResetAccountPasswordHandler
-    : IAtomicCommandHandler<ResetAccountPasswordCommand, ResetAccountPasswordResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ResetAccountPasswordHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ResetAccountPasswordResult> HandleAsync(
-        ResetAccountPasswordCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<ResetAccountPasswordResult> ExecuteAsync(
         ResetAccountPasswordCommand command,
@@ -502,15 +487,10 @@ public sealed class ResetAccountPasswordHandler
 }
 
 public sealed class ConfirmGoogleAccountEmailHandler
-    : IAtomicCommandHandler<ConfirmGoogleAccountEmailCommand, ConfirmAccountEmailResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ConfirmGoogleAccountEmailHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ConfirmAccountEmailResult> HandleAsync(
-        ConfirmGoogleAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<ConfirmAccountEmailResult> ExecuteAsync(
         ConfirmGoogleAccountEmailCommand command,
@@ -553,15 +533,10 @@ public sealed class ConfirmGoogleAccountEmailHandler
 }
 
 public sealed class AuthEmailOutboxHandler
-    : IAtomicCommandHandler<AuthEmailOutboxCommand, AuthEmailOutboxResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AuthEmailOutboxHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<AuthEmailOutboxResult> HandleAsync(
-        AuthEmailOutboxCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<AuthEmailOutboxResult> ExecuteAsync(
         AuthEmailOutboxCommand command,

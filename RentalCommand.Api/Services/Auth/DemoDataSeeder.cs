@@ -1487,7 +1487,6 @@ public class DemoDataSeeder
 }
 
 public sealed class DemoLeaseAddendumTemplateCommandHandler
-    : IAtomicCommandHandler<EnsureDemoLeaseAddendumTemplateCommand, EnsureDemoLeaseAddendumTemplateResult>
 {
     internal const string CommandType = "sandbox.demo-addendum-template";
     internal const string TemplateName = "Standard lease addendum page";
@@ -1508,12 +1507,6 @@ public sealed class DemoLeaseAddendumTemplateCommandHandler
             CommandType, WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
-
-    public Task<EnsureDemoLeaseAddendumTemplateResult> HandleAsync(
-        EnsureDemoLeaseAddendumTemplateCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw new InvalidOperationException(
-            "Legacy demo addendum writes are retired; use the shared write executor.");
 
     public async Task<EnsureDemoLeaseAddendumTemplateResult> ExecuteAsync(
         EnsureDemoLeaseAddendumTemplateCommand command,
@@ -1642,7 +1635,6 @@ public sealed class DemoLeaseAddendumTemplateCommandHandler
 }
 
 public sealed class DemoSeedCommandHandler
-    : IAtomicCommandHandler<SeedDemoPortfolioCommand, SeedDemoPortfolioResult>
 {
     private readonly RentalCommandDbContext _db;
 
@@ -1660,12 +1652,6 @@ public sealed class DemoSeedCommandHandler
             "sandbox.demo-seed", WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
-
-    public Task<SeedDemoPortfolioResult> HandleAsync(
-        SeedDemoPortfolioCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw new InvalidOperationException(
-            "Legacy demo seed writes are retired; use the shared write executor.");
 
     public async Task<SeedDemoPortfolioResult> ExecuteAsync(
         SeedDemoPortfolioCommand command,
@@ -1779,7 +1765,6 @@ public sealed class DemoSeedCommandHandler
 }
 
 public sealed class DemoLegalDocumentFinalizeCommandHandler
-    : IAtomicCommandHandler<FinalizeDemoLegalDocumentCommand, FinalizeDemoLegalDocumentResult>
 {
     private readonly RentalCommandDbContext _db;
 
@@ -1797,12 +1782,6 @@ public sealed class DemoLegalDocumentFinalizeCommandHandler
             "sandbox.demo-legal-finalize", WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
-
-    public Task<FinalizeDemoLegalDocumentResult> HandleAsync(
-        FinalizeDemoLegalDocumentCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw new InvalidOperationException(
-            "Legacy demo legal finalization writes are retired; use the shared write executor.");
 
     public async Task<FinalizeDemoLegalDocumentResult> ExecuteAsync(
         FinalizeDemoLegalDocumentCommand command,
