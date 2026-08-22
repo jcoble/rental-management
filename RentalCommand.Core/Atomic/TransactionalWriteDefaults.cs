@@ -66,15 +66,6 @@ public static class TransactionalWriteDefaults
             WriteLock.For("Portfolio", request.PortfolioId),
             entityLock);
 
-    public static string OperationName<TDomain>(string prefix, TDomain domain)
-        where TDomain : struct, Enum => $"{prefix}.{domain.ToString().ToLowerInvariant()}";
-
-    public static string IdempotencyKey<TDomain>(
-        IAuthorizationScopedRequest request, TDomain domain, int targetId, string targetKey)
-        where TDomain : struct, Enum =>
-        $"{request.PortfolioId}:{request.AccessContextId}:{domain}:" +
-        $"{targetId}:{targetKey}:{request.DeliveryIdempotencyKey}";
-
     public static void ValidateAuthorizationScope(IAuthorizationScopedRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -87,35 +78,6 @@ public static class TransactionalWriteDefaults
             throw new ArgumentException(
                 "Workspace, user, access details, and delivery details are required.");
         }
-    }
-
-    public static async Task<DateTime> BeginExecutionAsync<TDomain>(
-        AuthorizationScopedRequest<TDomain> request, IAtomicCommandContext context,
-        Action<AuthorizationScopedRequest<TDomain>> validateRequest,
-        Func<DateTime, CancellationToken, Task> authorizeAsync,
-        string invalidBusinessTimeMessage, CancellationToken ct)
-        where TDomain : struct, Enum
-    {
-        ValidateAuthorizationScope(request);
-        validateRequest(request);
-        var databaseNow = await context.ReadDatabaseClockUtcAsync(ct);
-        var mutationNow = request.BusinessNowUtc == default ? databaseNow
-            : request.BusinessNowUtc.Kind == DateTimeKind.Utc ? request.BusinessNowUtc
-            : throw new ArgumentException(invalidBusinessTimeMessage);
-        context.UseDatabaseWallClockForAudit(mutationNow);
-        await authorizeAsync(databaseNow, ct);
-        return mutationNow;
-    }
-
-    public static async Task AuthorizeReplayAsync<TDomain>(
-        AuthorizationScopedRequest<TDomain> request, IAtomicCommandContext context,
-        Action<AuthorizationScopedRequest<TDomain>> validateRequest,
-        Func<DateTime, CancellationToken, Task> authorizeAsync, CancellationToken ct)
-        where TDomain : struct, Enum
-    {
-        ValidateAuthorizationScope(request);
-        validateRequest(request);
-        await authorizeAsync(await context.ReadDatabaseClockUtcAsync(ct), ct);
     }
 
     public static AtomicSemanticAudit Audit(
