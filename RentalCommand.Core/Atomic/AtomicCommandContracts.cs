@@ -142,6 +142,11 @@ public enum WriteLockProtocol
     LeaseAgreementDraft,
     LeaseTransfer,
     PropertyDisposition,
+    BankingPrepareExchange,
+    BankingConnection,
+    BankingApplyConnection,
+    BankingReconciliation,
+    BankingRoute,
 }
 
 public sealed class WriteLockPlan
@@ -206,6 +211,14 @@ public sealed class WriteLockPlan
                 ["AuthSession", "WorkspaceAccessContext", "LeaseManagement"],
             [WriteLockProtocol.LeaseTransfer] = ["Unit", "Unit", "LeaseManagement"],
             [WriteLockProtocol.PropertyDisposition] = ["Property"],
+            [WriteLockProtocol.BankingPrepareExchange] =
+                ["AuthSession", "WorkspaceAccessContext", "BankConnection"],
+            [WriteLockProtocol.BankingConnection] = ["BankConnection"],
+            [WriteLockProtocol.BankingApplyConnection] = ["BankConnection"],
+            [WriteLockProtocol.BankingReconciliation] =
+                ["AuthSession", "WorkspaceAccessContext"],
+            [WriteLockProtocol.BankingRoute] =
+                ["AuthSession", "WorkspaceAccessContext", "BankTransaction"],
         };
 
     public static WriteLockPlan None { get; } = new();
@@ -252,6 +265,9 @@ public sealed class WriteLockPlan
             WriteLockProtocol.LeasePartyAccessRevoke => ["WorkspaceAccessContext"],
             WriteLockProtocol.NativeEsignRequest => ["LeaseManagement"],
             WriteLockProtocol.PrepareMoveIn => ["RentalApplication"],
+            WriteLockProtocol.BankingApplyConnection => ["BankConnection"],
+            WriteLockProtocol.BankingReconciliation => ["BankTransaction"],
+            WriteLockProtocol.BankingRoute => ["Property"],
             _ => [],
         };
 }
