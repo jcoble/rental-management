@@ -8,6 +8,7 @@
 		type TenantAccountDetail
 	} from '$lib/api/endpoints/tenant-accounts';
 	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
+	import { ApiError } from '$lib/api/client';
 	import {
 		tenantLedgers,
 		type RecurringTenantChargeRow,
@@ -123,7 +124,13 @@
 	const depositQuery = createQuery(() => ({
 		queryKey: ['tenant-security-deposit', tenantAccountId],
 		enabled: tenantAccountId != null,
-		queryFn: () => securityDeposits.get(tenantAccountId as number)
+		// No deposit record yet is a normal state for this panel — treat the 404 as
+		// empty instead of surfacing (and retrying) a console error on every view.
+		queryFn: () =>
+			securityDeposits.get(tenantAccountId as number).catch((err) => {
+				if (err instanceof ApiError && err.status === 404) return null;
+				throw err;
+			})
 	}));
 	const recurringQuery = createQuery(() => ({
 		queryKey: ['tenant-recurring-charges', tenantAccountId],
