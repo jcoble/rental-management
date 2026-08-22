@@ -290,6 +290,7 @@
 			showSuccess('Lease sent for signature.');
 			draftRequestsEnabled = false;
 			issueConfirmationOpen = false;
+			onclose();
 			await onissued(result);
 			await queryClient.invalidateQueries({ queryKey: ['lease-managements', leaseManagementId] });
 		},
