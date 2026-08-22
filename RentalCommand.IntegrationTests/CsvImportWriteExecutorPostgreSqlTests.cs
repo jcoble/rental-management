@@ -19,7 +19,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection3.Name)]
 public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
 {
     private static readonly DateTime SeparatedAuditClock =

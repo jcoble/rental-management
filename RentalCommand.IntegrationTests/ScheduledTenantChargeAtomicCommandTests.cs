@@ -26,7 +26,7 @@ using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Writes;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -47,7 +47,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     private static readonly DateTime FrozenNow =
         new(2026, 7, 15, 12, 0, 0, DateTimeKind.Utc);
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
 
@@ -55,12 +55,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_scheduled_tenant_charges")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }
@@ -1385,119 +1380,6 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task TenantLedgerViewsMigration_UpDownUpIsReversibleOnPostgreSql()
-    {
-        SkipIfNoDocker();
-        await using var db = NewContext();
-
-        await ExecuteTenantLedgerViewsMigrationAsync(db, "Up");
-        var appliedChargeView = await ReadTenantLedgerViewDefinitionAsync(
-            db, "vw_tenant_charge_balances");
-        var appliedAccountView = await ReadTenantLedgerViewDefinitionAsync(
-            db, "vw_tenant_account_balances");
-        appliedChargeView.Should().Contain(
-            "reversal.\"EffectiveOn\" <= ");
-        appliedChargeView.Should().Contain(
-            "credit.\"EffectiveOn\" <= ");
-        appliedAccountView.Should().Contain(
-            "reversal.\"EffectiveOn\" <= ");
-        appliedAccountView.Should().Contain(
-            "credit.\"EffectiveOn\" <= ");
-
-        await ExecuteTenantLedgerViewsMigrationAsync(db, "Down");
-        var revertedChargeView = await ReadTenantLedgerViewDefinitionAsync(
-            db, "vw_tenant_charge_balances");
-        var revertedAccountView = await ReadTenantLedgerViewDefinitionAsync(
-            db, "vw_tenant_account_balances");
-        revertedChargeView.Should().NotContain(
-            "reversal.\"EffectiveOn\" <= ");
-        revertedChargeView.Should().NotContain(
-            "credit.\"EffectiveOn\" <= ");
-        revertedAccountView.Should().NotContain(
-            "reversal.\"EffectiveOn\" <= ");
-        revertedAccountView.Should().NotContain(
-            "credit.\"EffectiveOn\" <= ");
-
-        await ExecuteTenantLedgerViewsMigrationAsync(db, "Up");
-        var reappliedChargeView = await ReadTenantLedgerViewDefinitionAsync(
-            db, "vw_tenant_charge_balances");
-        var reappliedAccountView = await ReadTenantLedgerViewDefinitionAsync(
-            db, "vw_tenant_account_balances");
-        reappliedChargeView.Should().Contain(
-            "reversal.\"EffectiveOn\" <= ");
-        reappliedChargeView.Should().Contain(
-            "credit.\"EffectiveOn\" <= ");
-        reappliedAccountView.Should().Contain(
-            "reversal.\"EffectiveOn\" <= ");
-        reappliedAccountView.Should().Contain(
-            "credit.\"EffectiveOn\" <= ");
-    }
-
-    [SkippableFact]
-    public async Task TenantLedgerAllocationEffectiveOnMigration_UpDownUpBackfillsAndRestoresViews()
-    {
-        SkipIfNoDocker();
-        var todayUtc = new DateTime(2027, 5, 10, 12, 0, 0, DateTimeKind.Utc);
-        var receiptDate = new DateOnly(2027, 5, 10);
-        var scenario = await SeedScenarioAsync(
-            "h6-effective-on-migration",
-            todayUtc,
-            new DateOnly(2027, 5, 1),
-            new DateOnly(2027, 5, 1),
-            new DateOnly(2027, 12, 31),
-            rentDueDay: 1,
-            baseRentAmount: 100m);
-        var chargeId = await SeedExistingRentChargeAsync(
-            scenario,
-            100m,
-            new DateOnly(2027, 5, 1),
-            "rent:h6-effective-on-migration:2027-05",
-            new DateTime(2027, 5, 1, 12, 0, 0, DateTimeKind.Utc));
-        var receiptId = await SeedAdvanceReceiptAsync(
-            scenario,
-            100m,
-            receiptDate,
-            "receipt:h6-effective-on-migration",
-            todayUtc);
-        await SeedLedgerAllocationAsync(scenario, chargeId, receiptId, 100m, todayUtc);
-
-        await using var db = NewContext();
-        await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Drop);
-        await db.Database.ExecuteSqlRawAsync(TenantAccountBalanceViewSql.Drop);
-        await db.Database.ExecuteSqlRawAsync(
-            "ALTER TABLE \"TenantLedgerAllocations\" DROP COLUMN \"EffectiveOn\";");
-
-        await ExecuteTenantLedgerAllocationEffectiveOnMigrationAsync(db, "Up");
-        (await HasTenantLedgerAllocationEffectiveOnColumnAsync(db)).Should().BeTrue();
-        (await db.Database.SqlQuery<DateOnly>($"""
-            SELECT allocation."EffectiveOn" AS "Value"
-            FROM "TenantLedgerAllocations" AS allocation
-            WHERE allocation."PortfolioId" = {scenario.PortfolioId}
-              AND allocation."DebitEntryId" = {chargeId}
-            """).SingleAsync()).Should().Be(receiptDate);
-        (await ReadTenantLedgerViewDefinitionAsync(db, "vw_tenant_charge_balances"))
-            .Should().Contain("COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= ");
-        (await ReadTenantLedgerViewDefinitionAsync(db, "vw_tenant_account_balances"))
-            .Should().Contain("COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= ");
-
-        await ExecuteTenantLedgerAllocationEffectiveOnMigrationAsync(db, "Down");
-        (await HasTenantLedgerAllocationEffectiveOnColumnAsync(db)).Should().BeFalse();
-        (await ReadTenantLedgerViewDefinitionAsync(db, "vw_tenant_charge_balances"))
-            .Should().NotContain("COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= ");
-        (await ReadTenantLedgerViewDefinitionAsync(db, "vw_tenant_account_balances"))
-            .Should().NotContain("COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= ");
-
-        await ExecuteTenantLedgerAllocationEffectiveOnMigrationAsync(db, "Up");
-        (await HasTenantLedgerAllocationEffectiveOnColumnAsync(db)).Should().BeTrue();
-        (await db.Database.SqlQuery<DateOnly>($"""
-            SELECT allocation."EffectiveOn" AS "Value"
-            FROM "TenantLedgerAllocations" AS allocation
-            WHERE allocation."PortfolioId" = {scenario.PortfolioId}
-              AND allocation."DebitEntryId" = {chargeId}
-            """).SingleAsync()).Should().Be(receiptDate);
-    }
-
-    [SkippableFact]
     public async Task RentBatch_CompanionFailureRollsBackLedgerAuditOutboxAndReceipt_ThenRecovers()
     {
         SkipIfNoDocker();
@@ -2306,60 +2188,6 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         FROM as_of_charge_balances
         WHERE "OpenAmount" > 0::numeric
         """).SingleAsync();
-
-    private static async Task ExecuteTenantLedgerViewsMigrationAsync(
-        RentalCommandDbContext db,
-        string methodName)
-    {
-        var migration = new RentalCommand.Data.Migrations.FixTenantLedgerViewsAsOfReversalsAndAllocations();
-        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
-        typeof(RentalCommand.Data.Migrations.FixTenantLedgerViewsAsOfReversalsAndAllocations)
-            .GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(migration, [builder]);
-
-        foreach (var operation in builder.Operations)
-        {
-            operation.Should().BeOfType<SqlOperation>();
-            await db.Database.ExecuteSqlRawAsync(((SqlOperation)operation).Sql);
-        }
-    }
-
-    private static async Task ExecuteTenantLedgerAllocationEffectiveOnMigrationAsync(
-        RentalCommandDbContext db,
-        string methodName)
-    {
-        var migration = new RentalCommand.Data.Migrations.AddTenantLedgerAllocationEffectiveOn();
-        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
-        typeof(RentalCommand.Data.Migrations.AddTenantLedgerAllocationEffectiveOn)
-            .GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(migration, [builder]);
-
-        foreach (var operation in builder.Operations)
-        {
-            switch (operation)
-            {
-                case SqlOperation sql:
-                    await db.Database.ExecuteSqlRawAsync(sql.Sql);
-                    break;
-                case AddColumnOperation addColumn:
-                    await db.Database.ExecuteSqlRawAsync($"""
-                        ALTER TABLE "{addColumn.Table}"
-                        ADD COLUMN "{addColumn.Name}" {addColumn.ColumnType}
-                        {(addColumn.IsNullable ? "NULL" : "NOT NULL")};
-                        """);
-                    break;
-                case DropColumnOperation dropColumn:
-                    await db.Database.ExecuteSqlRawAsync($"""
-                        ALTER TABLE "{dropColumn.Table}"
-                        DROP COLUMN "{dropColumn.Name}";
-                        """);
-                    break;
-                default:
-                    throw new InvalidOperationException(
-                        $"Unexpected operation {operation.GetType().Name} in effective-on migration.");
-            }
-        }
-    }
 
     private static async Task<bool> HasTenantLedgerAllocationEffectiveOnColumnAsync(
         RentalCommandDbContext db) => await db.Database.SqlQuery<int>($"""

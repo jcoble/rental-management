@@ -18,7 +18,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection4.Name)]
 public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<CancelPlannedRelationshipResult> CancelCodec =

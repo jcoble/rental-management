@@ -15,7 +15,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Banking;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -37,7 +37,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     private static readonly AtomicJsonResultCodec<ReconcileBankTransactionResult> ReconcileCodec =
         new("banking.reconciliation.result.v1");
     private readonly DateTime _now = new(2026, 7, 11, 18, 0, 0, DateTimeKind.Utc);
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private int _portfolioId;
@@ -46,12 +46,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_banking_atomic")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

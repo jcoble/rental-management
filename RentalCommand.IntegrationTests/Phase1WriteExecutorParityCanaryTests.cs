@@ -12,7 +12,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection4.Name)]
 public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixture fixture)
 {
     private static readonly AtomicJsonResultCodec<CanaryResult> ResultCodec =

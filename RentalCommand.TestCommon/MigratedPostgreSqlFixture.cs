@@ -16,6 +16,8 @@ namespace RentalCommand.TestCommon;
 public sealed class MigratedPostgreSqlFixture : IAsyncLifetime
 {
     private const string TemplateDatabase = "rentalcommand_test_template";
+    private const string MigratedIntegrationTemplate = "rentalcommand_integration_migrated";
+    private const string ModelIntegrationTemplate = "rentalcommand_integration_model";
     private static readonly Lazy<Task<PostgreSqlContainer>> SharedPostgres = new(StartPostgresAsync);
     private PostgreSqlContainer? _postgres;
     private string _adminConnectionString = string.Empty;
@@ -32,7 +34,11 @@ public sealed class MigratedPostgreSqlFixture : IAsyncLifetime
             .WithImage("postgres:16-alpine")
             .WithCreateParameterModifier(parameters => parameters.Platform = DockerPlatform)
             .WithTmpfsMount("/var/lib/postgresql/data")
-            .WithCommand("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off")
+            .WithCommand(
+                "-c", "fsync=off",
+                "-c", "synchronous_commit=off",
+                "-c", "full_page_writes=off",
+                "-c", "max_locks_per_transaction=1024")
             .WithDatabase("postgres")
             .WithUsername("postgres")
             .WithPassword("postgres")
@@ -72,6 +78,29 @@ public sealed class MigratedPostgreSqlFixture : IAsyncLifetime
         {
             throw new InvalidOperationException("The migrated test template must seed Portfolio and User Id 1.");
         }
+
+        await ExecuteAdminCommandAsync(
+            adminConnectionString,
+            $"CREATE DATABASE \"{MigratedIntegrationTemplate}\"");
+        await using (var migrated = CreateDbContext(
+                         BuildConnectionString(postgres, MigratedIntegrationTemplate)))
+        {
+            await migrated.Database.MigrateAsync();
+        }
+
+        await ExecuteAdminCommandAsync(
+            adminConnectionString,
+            $"CREATE DATABASE \"{ModelIntegrationTemplate}\"");
+        await using (var model = CreateDbContext(
+                         BuildConnectionString(postgres, ModelIntegrationTemplate)))
+        {
+            await model.Database.EnsureCreatedAsync();
+        }
+
+        await ExecuteAdminCommandAsync(
+            adminConnectionString,
+            $"ALTER ROLE rentalcommand_api PASSWORD '{SharedPostgreSqlDatabase.ApiPassword}'; " +
+            $"ALTER ROLE rentalcommand_engine PASSWORD '{SharedPostgreSqlDatabase.EnginePassword}';");
 
         return postgres;
     }
@@ -141,6 +170,74 @@ public sealed class MigratedPostgreSqlFixture : IAsyncLifetime
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(sql, connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    internal static async Task<(string DatabaseName, string ConnectionString)> CreateDatabaseAsync(
+        SharedPostgreSqlSchema schema)
+    {
+        var postgres = await SharedPostgres.Value;
+        var databaseName = $"rc_test_{Guid.NewGuid():N}";
+        var adminConnectionString = BuildConnectionString(postgres, "postgres");
+        var template = schema switch
+        {
+            SharedPostgreSqlSchema.Migrated => $" TEMPLATE \"{MigratedIntegrationTemplate}\"",
+            SharedPostgreSqlSchema.Model => $" TEMPLATE \"{ModelIntegrationTemplate}\"",
+            _ => throw new ArgumentOutOfRangeException(nameof(schema)),
+        };
+        await ExecuteAdminCommandAsync(
+            adminConnectionString,
+            $"CREATE DATABASE \"{databaseName}\"{template}");
+        return (databaseName, BuildConnectionString(postgres, databaseName));
+    }
+
+    internal static async Task DropSharedDatabaseAsync(string databaseName)
+    {
+        var postgres = await SharedPostgres.Value;
+        var adminConnectionString = BuildConnectionString(postgres, "postgres");
+        await ExecuteAdminCommandAsync(
+            adminConnectionString,
+            $"DROP DATABASE IF EXISTS \"{databaseName}\" WITH (FORCE)");
+    }
+}
+
+public enum SharedPostgreSqlSchema
+{
+    Migrated,
+    Model,
+}
+
+public sealed class SharedPostgreSqlDatabase : IAsyncDisposable
+{
+    public const string ApiPassword = "rentalcommand-test-api";
+    public const string EnginePassword = "rentalcommand-test-engine";
+
+    private readonly SharedPostgreSqlSchema _schema;
+    private string? _databaseName;
+    private string? _connectionString;
+
+    public SharedPostgreSqlDatabase(SharedPostgreSqlSchema schema)
+    {
+        _schema = schema;
+    }
+
+    public async Task StartAsync()
+    {
+        (_databaseName, _connectionString) = await MigratedPostgreSqlFixture.CreateDatabaseAsync(_schema);
+    }
+
+    public string GetConnectionString() => _connectionString
+        ?? throw new InvalidOperationException("The shared PostgreSQL database has not been started.");
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_databaseName is null)
+        {
+            return;
+        }
+
+        await MigratedPostgreSqlFixture.DropSharedDatabaseAsync(_databaseName);
+        _databaseName = null;
+        _connectionString = null;
     }
 }
 

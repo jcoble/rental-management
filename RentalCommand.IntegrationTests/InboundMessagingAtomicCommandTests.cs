@@ -16,7 +16,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Conversations;
 using RentalCommand.Data.Operations;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -30,7 +30,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         new("complete-vendor-dispatch-from-inbound-result.v1");
 
     private readonly CommandProbe _probe = new();
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private SeededFacts _facts = null!;
@@ -40,12 +40,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_inbound_messaging")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

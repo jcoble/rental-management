@@ -22,7 +22,7 @@ using Xunit.Abstractions;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection2.Name)]
 public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<TransferLeaseManagementResult> TransferCodec =

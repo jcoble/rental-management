@@ -14,7 +14,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Esign;
 using RentalCommand.Data.Leasing;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
@@ -52,7 +52,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
     private const string CloseAccountFingerprint = "5f286fb2dd323bf80323f302dc09e588d9e5088898ebdca5a9fe9ed8736f31d4";
     private static readonly AtomicJsonResultCodec<CancelLeaseAgreementSuccessorDraftResult> Codec =
         new("lease-agreement.successor-draft.cancel.v1");
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private IServiceScope? _scope;
     private bool _dockerAvailable;
@@ -62,12 +62,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_successor_cancel")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

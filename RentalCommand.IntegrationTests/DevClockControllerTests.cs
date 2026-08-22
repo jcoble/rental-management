@@ -17,7 +17,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Simulation;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -30,7 +30,7 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class DevClockControllerTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private SharedPostgreSqlDatabase? _pg;
     private bool _dockerAvailable;
     private string _conn = string.Empty;
 
@@ -38,12 +38,7 @@ public sealed class DevClockControllerTests : IAsyncLifetime
     {
         try
         {
-            _pg = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _pg = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _pg.StartAsync();
             _dockerAvailable = true;
         }

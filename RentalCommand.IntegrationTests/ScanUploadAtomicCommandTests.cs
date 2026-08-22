@@ -23,14 +23,14 @@ using RentalCommand.Data.Documents;
 using RentalCommand.Data.Outbox;
 using RentalCommand.Data.Scanning;
 using RentalCommand.Engine.Workers;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
 /// <summary>PostgreSQL crash/replay/concurrency proof for scan blob admission and atomic metadata finalization.</summary>
 public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private int _portfolioId;
@@ -41,12 +41,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_scan_upload")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

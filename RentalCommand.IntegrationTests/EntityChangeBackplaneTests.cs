@@ -10,7 +10,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Security;
 using RentalCommand.Engine.Services;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -29,10 +29,10 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class EntityChangeBackplaneTests : IAsyncLifetime
 {
-    private const string ApiPassword = "entity-change-api-password";
-    private const string EnginePassword = "entity-change-engine-password";
+    private const string ApiPassword = SharedPostgreSqlDatabase.ApiPassword;
+    private const string EnginePassword = SharedPostgreSqlDatabase.EnginePassword;
 
-    private PostgreSqlContainer? _pg;
+    private SharedPostgreSqlDatabase? _pg;
     private bool _dockerAvailable;
     private string _connString = string.Empty;
     private string _apiConnString = string.Empty;
@@ -42,12 +42,7 @@ public sealed class EntityChangeBackplaneTests : IAsyncLifetime
     {
         try
         {
-            _pg = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _pg = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _pg.StartAsync();
             _dockerAvailable = true;
             _connString = _pg.GetConnectionString();
@@ -67,11 +62,6 @@ public sealed class EntityChangeBackplaneTests : IAsyncLifetime
         await db.Database.MigrateAsync();
         _apiConnString = RuntimeConnectionString(DatabaseRuntimeIdentity.ApiRole, ApiPassword);
         _engineConnString = RuntimeConnectionString(DatabaseRuntimeIdentity.EngineRole, EnginePassword);
-        await RuntimeDatabaseRoleProvisioner.ProvisionAsync(
-            _connString,
-            _apiConnString,
-            _engineConnString,
-            allowDevelopmentDefaults: true);
     }
 
     public async Task DisposeAsync()

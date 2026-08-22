@@ -18,7 +18,7 @@ using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Esign;
 using RentalCommand.Data.Leasing;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
@@ -28,7 +28,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
     private static readonly DateTime FrozenBusinessNow =
         new(2027, 1, 25, 5, 0, 0, DateTimeKind.Utc);
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private IServiceScope? _serviceScope;
     private readonly DepositBatchCommandCounter _commandCounter = new();
@@ -38,12 +38,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_esign_deposit")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }
