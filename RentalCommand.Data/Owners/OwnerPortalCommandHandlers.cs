@@ -21,12 +21,12 @@ public static class OwnerPortalWriteSupport
         {
             DecideOwnerApprovalCommand value => Build(
                 "owner-portal.approval-decision", "owner-portal.approval-decision.v1", value,
-                new DecideOwnerApprovalHandler(db).ExecuteAsync,
-                new DecideOwnerApprovalHandler(db).AuthorizeReplayAsync),
+                new DecideOwnerApprovalRule(db).ExecuteAsync,
+                new DecideOwnerApprovalRule(db).AuthorizeReplayAsync),
             ReplyToOwnerMessageCommand value => Build(
                 "owner-portal.message-reply", "owner-portal.message-reply.v1", value,
-                new ReplyToOwnerMessageHandler(db).ExecuteAsync,
-                new ReplyToOwnerMessageHandler(db).AuthorizeReplayAsync),
+                new ReplyToOwnerMessageRule(db).ExecuteAsync,
+                new ReplyToOwnerMessageRule(db).AuthorizeReplayAsync),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return (TransactionalWrite<TCommand, OwnerPortalCommandResult>)write;
@@ -46,11 +46,11 @@ public static class OwnerPortalWriteSupport
         "Legacy owner portal writes are retired; use the shared write executor.");
 }
 
-public sealed class DecideOwnerApprovalHandler
+public sealed class DecideOwnerApprovalRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public DecideOwnerApprovalHandler(RentalCommandDbContext db) => _db = db;
+    public DecideOwnerApprovalRule(RentalCommandDbContext db) => _db = db;
 
     public Task<OwnerPortalCommandResult> ExecuteAsync(
         DecideOwnerApprovalCommand command,
@@ -97,11 +97,11 @@ public sealed class DecideOwnerApprovalHandler
             ct);
 }
 
-public sealed class ReplyToOwnerMessageHandler
+public sealed class ReplyToOwnerMessageRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ReplyToOwnerMessageHandler(RentalCommandDbContext db) => _db = db;
+    public ReplyToOwnerMessageRule(RentalCommandDbContext db) => _db = db;
 
     public Task<OwnerPortalCommandResult> ExecuteAsync(
         ReplyToOwnerMessageCommand command,

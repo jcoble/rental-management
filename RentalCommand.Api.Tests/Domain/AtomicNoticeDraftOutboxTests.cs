@@ -46,7 +46,7 @@ public sealed class AtomicNoticeDraftOutboxTests
             },
         };
 
-        AtomicNoticeDraftMutationHandler.StageCreatedDraftUpdates(
+        AtomicNoticeDraftMutationRule.StageCreatedDraftUpdates(
             context.Object, command, drafts, Now);
 
         var message = staged.Should().ContainSingle().Subject;

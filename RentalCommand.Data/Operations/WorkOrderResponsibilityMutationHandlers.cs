@@ -10,14 +10,14 @@ using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Operations;
 
-public sealed class CloseWorkOrderResponsibilityHandler
+public sealed class CloseWorkOrderResponsibilityRule
 {
     public const string ResultContract = "work-order-responsibility.close.v1";
 
     private readonly RentalCommandDbContext _db;
     private readonly WorkOrderResponsibilityAccessRevisionGuard _accessRevisionGuard;
 
-    public CloseWorkOrderResponsibilityHandler(
+    public CloseWorkOrderResponsibilityRule(
         RentalCommandDbContext db,
         WorkOrderResponsibilityAccessRevisionGuard accessRevisionGuard)
     {
@@ -30,7 +30,7 @@ public sealed class CloseWorkOrderResponsibilityHandler
         RentalCommandDbContext db,
         WorkOrderResponsibilityAccessRevisionGuard accessRevisionGuard)
     {
-        var handler = new CloseWorkOrderResponsibilityHandler(db, accessRevisionGuard);
+        var handler = new CloseWorkOrderResponsibilityRule(db, accessRevisionGuard);
         return new TransactionalWrite<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult>(
             "work-order-responsibility.close", WriteIdempotencyPolicy.Required, command,
             ResultContract, new WriteLockPlan(WriteLockProtocol.WorkOrderResponsibility),
@@ -138,19 +138,19 @@ public sealed class CloseWorkOrderResponsibilityHandler
     }
 }
 
-public sealed class UpdateAssignedWorkOrderHandler
+public sealed class UpdateAssignedWorkOrderRule
 {
     public const string ResultContract = "assigned-work-order.update.v1";
 
     private readonly RentalCommandDbContext _db;
 
-    public UpdateAssignedWorkOrderHandler(RentalCommandDbContext db) => _db = db;
+    public UpdateAssignedWorkOrderRule(RentalCommandDbContext db) => _db = db;
 
     public static TransactionalWrite<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult> Write(
         UpdateAssignedWorkOrderCommand command,
         RentalCommandDbContext db)
     {
-        var handler = new UpdateAssignedWorkOrderHandler(db);
+        var handler = new UpdateAssignedWorkOrderRule(db);
         return new TransactionalWrite<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult>(
             "assigned-work-order.update", WriteIdempotencyPolicy.Required, command, ResultContract,
             new WriteLockPlan(WriteLockProtocol.WorkspaceAccessContextWorkOrder,

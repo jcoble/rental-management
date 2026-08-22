@@ -430,7 +430,7 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         CreateLedgerAccountCommand command)
     {
         await using var scope = _services.CreateAsyncScope();
-        var handler = new CreateLedgerAccountHandler(
+        var handler = new CreateLedgerAccountRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
             .ExecuteAsync(command.DeliveryIdempotencyKey,
@@ -441,7 +441,7 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         UpdateLedgerAccountCommand command)
     {
         await using var scope = _services.CreateAsyncScope();
-        var handler = new UpdateLedgerAccountHandler(
+        var handler = new UpdateLedgerAccountRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
             .ExecuteAsync(command.DeliveryIdempotencyKey,

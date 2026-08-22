@@ -8,11 +8,11 @@ using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Auth;
 
-public sealed class IssueSessionRefreshCredentialHandler
+public sealed class IssueSessionRefreshCredentialRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public IssueSessionRefreshCredentialHandler(RentalCommandDbContext db) => _db = db;
+    public IssueSessionRefreshCredentialRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<SessionRefreshMutationResult> ExecuteAsync(
         IssueSessionRefreshCredentialCommand command,
@@ -190,11 +190,11 @@ public sealed class IssueSessionRefreshCredentialHandler
         bool CanIssue);
 }
 
-public sealed class RotateSessionRefreshCredentialHandler
+public sealed class RotateSessionRefreshCredentialRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public RotateSessionRefreshCredentialHandler(RentalCommandDbContext db) => _db = db;
+    public RotateSessionRefreshCredentialRule(RentalCommandDbContext db) => _db = db;
 
     private const string ReuseReason = "Refresh credential reuse detected";
 
@@ -203,10 +203,10 @@ public sealed class RotateSessionRefreshCredentialHandler
         IAtomicCommandContext context,
         CancellationToken ct)
     {
-        IssueSessionRefreshCredentialHandler.ValidateHash(
+        IssueSessionRefreshCredentialRule.ValidateHash(
             command.PresentedTokenHash,
             nameof(command.PresentedTokenHash));
-        IssueSessionRefreshCredentialHandler.ValidateHash(
+        IssueSessionRefreshCredentialRule.ValidateHash(
             command.ReplacementTokenHash,
             nameof(command.ReplacementTokenHash));
         if (command.OperationId == Guid.Empty || command.ReplacementCredentialId == Guid.Empty)
@@ -237,7 +237,7 @@ public sealed class RotateSessionRefreshCredentialHandler
             .SingleOrDefaultAsync(ct);
         if (located is null)
         {
-            return IssueSessionRefreshCredentialHandler.Rejected(
+            return IssueSessionRefreshCredentialRule.Rejected(
                 Guid.Empty,
                 Guid.Empty,
                 Guid.Empty);
@@ -256,7 +256,7 @@ public sealed class RotateSessionRefreshCredentialHandler
             ct);
         if (target is null)
         {
-            return IssueSessionRefreshCredentialHandler.Rejected(
+            return IssueSessionRefreshCredentialRule.Rejected(
                 located.AuthSessionId,
                 located.RefreshTokenFamilyId,
                 located.Id);
@@ -270,7 +270,7 @@ public sealed class RotateSessionRefreshCredentialHandler
             ct);
         if (authority is null)
         {
-            return IssueSessionRefreshCredentialHandler.Rejected(
+            return IssueSessionRefreshCredentialRule.Rejected(
                 target.Session.Id,
                 target.Family.Id,
                 target.Credential.Id);
@@ -325,7 +325,7 @@ public sealed class RotateSessionRefreshCredentialHandler
 
         if (!target.IsEligible)
         {
-            return IssueSessionRefreshCredentialHandler.Rejected(
+            return IssueSessionRefreshCredentialRule.Rejected(
                 target.Session.Id,
                 target.Family.Id,
                 target.Credential.Id);
@@ -348,7 +348,7 @@ public sealed class RotateSessionRefreshCredentialHandler
         target.Session.LastSeenAtUtc = command.PresentedAtUtc;
         _db.Add(replacement);
 
-        context.StageSemanticEvent(IssueSessionRefreshCredentialHandler.Audit(
+        context.StageSemanticEvent(IssueSessionRefreshCredentialRule.Audit(
             authority.PortfolioId,
             target.AccessContextId,
             AuditLogOperation.Updated,
@@ -383,10 +383,10 @@ public sealed class RotateSessionRefreshCredentialHandler
         IAtomicCommandContext context,
         CancellationToken ct)
     {
-        IssueSessionRefreshCredentialHandler.ValidateHash(
+        IssueSessionRefreshCredentialRule.ValidateHash(
             command.PresentedTokenHash,
             nameof(command.PresentedTokenHash));
-        IssueSessionRefreshCredentialHandler.ValidateHash(
+        IssueSessionRefreshCredentialRule.ValidateHash(
             command.ReplacementTokenHash,
             nameof(command.ReplacementTokenHash));
         if (command.OperationId == Guid.Empty || command.ReplacementCredentialId == Guid.Empty)
@@ -478,7 +478,7 @@ public sealed class RotateSessionRefreshCredentialHandler
         target.Session.RevokedAtUtc ??= now;
         target.Session.RevocationReason ??= ReuseReason;
 
-        context.StageSemanticEvent(IssueSessionRefreshCredentialHandler.Audit(
+        context.StageSemanticEvent(IssueSessionRefreshCredentialRule.Audit(
             portfolioId,
             target.AccessContextId,
             AuditLogOperation.Updated,

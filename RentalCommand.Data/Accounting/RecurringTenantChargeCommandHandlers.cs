@@ -12,11 +12,11 @@ using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Data.Accounting;
 
-public sealed class CreateRecurringTenantChargeHandler
+public sealed class CreateRecurringTenantChargeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CreateRecurringTenantChargeHandler(RentalCommandDbContext db) => _db = db;
+    public CreateRecurringTenantChargeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RecurringTenantChargeMutationResult> ExecuteAsync(
         CreateRecurringTenantChargeCommand command,
@@ -103,11 +103,11 @@ public sealed class CreateRecurringTenantChargeHandler
     }
 }
 
-public sealed class UpdateRecurringTenantChargeHandler
+public sealed class UpdateRecurringTenantChargeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public UpdateRecurringTenantChargeHandler(RentalCommandDbContext db) => _db = db;
+    public UpdateRecurringTenantChargeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RecurringTenantChargeMutationResult> ExecuteAsync(
         UpdateRecurringTenantChargeCommand command,
@@ -211,11 +211,11 @@ public sealed class UpdateRecurringTenantChargeHandler
     }
 }
 
-public sealed class DeactivateRecurringTenantChargeHandler
+public sealed class DeactivateRecurringTenantChargeRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public DeactivateRecurringTenantChargeHandler(RentalCommandDbContext db) => _db = db;
+    public DeactivateRecurringTenantChargeRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<RecurringTenantChargeMutationResult> ExecuteAsync(
         DeactivateRecurringTenantChargeCommand command,

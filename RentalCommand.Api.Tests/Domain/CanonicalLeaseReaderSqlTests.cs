@@ -138,7 +138,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             .ToQueryString();
         var resolutionSql = db.ResolvePropertyUnit(17, 9, 42).ToQueryString();
         var tenantDeleteSql = db.TenantDeleteEligibility(17, 5).ToQueryString();
-        var w9Sql = RequestVendorW9Handler.AuthorizedVendors(
+        var w9Sql = RequestVendorW9Rule.AuthorizedVendors(
                 new RequestVendorW9Command(
                     17, 8, "query-canary", 7, ReadScope().SessionId, ReadScope().UserId,
                     ReadScope().AccessContextId, ReadScope().AccessRevision, now),

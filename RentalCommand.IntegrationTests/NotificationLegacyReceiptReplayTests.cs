@@ -107,7 +107,7 @@ public sealed class NotificationLegacyReceiptReplayTests : IAsyncLifetime
             "owner-statement.email.queue.v1", QueueOwnerStatementEmail.Write(db, owner));
 
         var batch = new ApplyClaimedTenantNoticeDraftBatchCommand(BatchToken);
-        var batchHandler = new ApplyClaimedTenantNoticeDraftBatchHandler(db);
+        var batchHandler = new ApplyClaimedTenantNoticeDraftBatchRule(db);
         await ReplayJobAsync(jobs, "tenant-notice-draft.claimed-batch.apply",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", batch, BatchFingerprint,
             "{\"CreatedCount\":0,\"Drafts\":[]}", new ApplyClaimedTenantNoticeDraftBatchResult(0, []),

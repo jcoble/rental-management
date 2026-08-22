@@ -61,7 +61,7 @@ public sealed class OpeningSecurityDepositRecoveryController
             $"opening-security-deposits:{access.PortfolioId}:{digest}");
         try
         {
-            var handler = new RecoverOpeningSecurityDepositsHandler(_db);
+            var handler = new RecoverOpeningSecurityDepositsRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 command.DeliveryIdempotencyKey,
                 TenantMoneyWriteSupport.Write(

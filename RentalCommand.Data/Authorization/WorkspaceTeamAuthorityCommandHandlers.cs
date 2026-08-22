@@ -18,7 +18,7 @@ public static class WorkspaceTeamWriteSupport
         RentalCommandDbContext db,
         CreateWorkspaceMembershipCommand command)
     {
-        var handler = new CreateWorkspaceMembershipHandler(db);
+        var handler = new CreateWorkspaceMembershipRule(db);
         return Build("workspace-team.membership.create", "workspace-team.membership.create.v1",
             command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
@@ -27,7 +27,7 @@ public static class WorkspaceTeamWriteSupport
         RentalCommandDbContext db, WorkspaceAccessRevisionGuard guard,
         IMembershipAssignmentScopeValidator validator, AddWorkspaceRoleAssignmentCommand command)
     {
-        var handler = new AddWorkspaceRoleAssignmentHandler(db, guard, validator);
+        var handler = new AddWorkspaceRoleAssignmentRule(db, guard, validator);
         return Build("workspace-team.assignment.add", "workspace-team.mutation.v1",
             command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
@@ -36,7 +36,7 @@ public static class WorkspaceTeamWriteSupport
         RentalCommandDbContext db, WorkspaceAccessRevisionGuard guard,
         IMembershipAssignmentScopeValidator validator, EndWorkspaceRoleAssignmentCommand command)
     {
-        var handler = new EndWorkspaceRoleAssignmentHandler(db, guard, validator);
+        var handler = new EndWorkspaceRoleAssignmentRule(db, guard, validator);
         return Build("workspace-team.assignment.end", "workspace-team.mutation.v1",
             command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
@@ -45,7 +45,7 @@ public static class WorkspaceTeamWriteSupport
         RentalCommandDbContext db, WorkspaceAccessRevisionGuard guard,
         IMembershipAssignmentScopeValidator validator, ReplaceWorkspaceAssignmentPropertyScopeCommand command)
     {
-        var handler = new ReplaceWorkspaceAssignmentPropertyScopeHandler(db, guard, validator);
+        var handler = new ReplaceWorkspaceAssignmentPropertyScopeRule(db, guard, validator);
         return Build("workspace-team.assignment.properties.replace", "workspace-team.mutation.v1",
             command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
@@ -54,7 +54,7 @@ public static class WorkspaceTeamWriteSupport
         RentalCommandDbContext db, WorkspaceAccessRevisionGuard guard,
         IMembershipAssignmentScopeValidator validator, ChangeWorkspaceMembershipStatusCommand command)
     {
-        var handler = new ChangeWorkspaceMembershipStatusHandler(db, guard, validator);
+        var handler = new ChangeWorkspaceMembershipStatusRule(db, guard, validator);
         return Build("workspace-team.membership.status", "workspace-team.mutation.v1",
             command, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
@@ -63,7 +63,7 @@ public static class WorkspaceTeamWriteSupport
         RentalCommandDbContext db,
         ActivateWorkspaceInvitationCommand command)
     {
-        var handler = new ActivateWorkspaceInvitationHandler(db);
+        var handler = new ActivateWorkspaceInvitationRule(db);
         return Build(
             "workspace-invitation.activate", "workspace-invitation-activation-result:v1", command,
             handler.ExecuteAsync, handler.AuthorizeReplayAsync);
@@ -342,11 +342,11 @@ internal static class WorkspaceTeamAuthoritySupport
             NewValues: JsonSerializer.Serialize(values), ChangeReason: reason);
 }
 
-public sealed class CreateWorkspaceMembershipHandler
+public sealed class CreateWorkspaceMembershipRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CreateWorkspaceMembershipHandler(RentalCommandDbContext db) => _db = db;
+    public CreateWorkspaceMembershipRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<CreateWorkspaceMembershipResult> ExecuteAsync(
         CreateWorkspaceMembershipCommand command,
@@ -542,11 +542,11 @@ public sealed class CreateWorkspaceMembershipHandler
     }
 }
 
-public sealed class ActivateWorkspaceInvitationHandler
+public sealed class ActivateWorkspaceInvitationRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public ActivateWorkspaceInvitationHandler(RentalCommandDbContext db) => _db = db;
+    public ActivateWorkspaceInvitationRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<ActivateWorkspaceInvitationResult> ExecuteAsync(
         ActivateWorkspaceInvitationCommand command,
@@ -639,13 +639,13 @@ public sealed class ActivateWorkspaceInvitationHandler
     }
 }
 
-public sealed class AddWorkspaceRoleAssignmentHandler
+public sealed class AddWorkspaceRoleAssignmentRule
 {
     private readonly RentalCommandDbContext _db;
     private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
     private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
 
-    public AddWorkspaceRoleAssignmentHandler(
+    public AddWorkspaceRoleAssignmentRule(
         RentalCommandDbContext db,
         WorkspaceAccessRevisionGuard accessRevisionGuard,
         IMembershipAssignmentScopeValidator assignmentScopeValidator)
@@ -717,13 +717,13 @@ public sealed class AddWorkspaceRoleAssignmentHandler
     }
 }
 
-public sealed class EndWorkspaceRoleAssignmentHandler
+public sealed class EndWorkspaceRoleAssignmentRule
 {
     private readonly RentalCommandDbContext _db;
     private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
     private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
 
-    public EndWorkspaceRoleAssignmentHandler(
+    public EndWorkspaceRoleAssignmentRule(
         RentalCommandDbContext db,
         WorkspaceAccessRevisionGuard accessRevisionGuard,
         IMembershipAssignmentScopeValidator assignmentScopeValidator)
@@ -738,8 +738,8 @@ public sealed class EndWorkspaceRoleAssignmentHandler
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
             command, context, command.TargetAccessContextId, _db, ct);
-        var target = await AddWorkspaceRoleAssignmentHandler.LoadTargetAsync(command, _db, ct);
-        AddWorkspaceRoleAssignmentHandler.EnsureActive(target);
+        var target = await AddWorkspaceRoleAssignmentRule.LoadTargetAsync(command, _db, ct);
+        AddWorkspaceRoleAssignmentRule.EnsureActive(target);
         var assignment = await _db.Set<MembershipRoleAssignment>()
             .SingleOrDefaultAsync(item => item.Id == command.AssignmentId &&
                                           item.WorkspaceMembershipId == target.Membership.Id &&
@@ -759,20 +759,20 @@ public sealed class EndWorkspaceRoleAssignmentHandler
             new { command.EffectiveToUtc, Revision = command.ExpectedRevision + 1 }));
         await WorkspaceTeamAuthoritySupport.ValidateAndFlushMutationAsync(
             command, context, _db, _accessRevisionGuard, _assignmentScopeValidator, ct);
-        return AddWorkspaceRoleAssignmentHandler.Result(target, assignment.Id, command.ExpectedRevision + 1);
+        return AddWorkspaceRoleAssignmentRule.Result(target, assignment.Id, command.ExpectedRevision + 1);
     }
 
     public Task AuthorizeReplayAsync(EndWorkspaceRoleAssignmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
+public sealed class ReplaceWorkspaceAssignmentPropertyScopeRule
 {
     private readonly RentalCommandDbContext _db;
     private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
     private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
 
-    public ReplaceWorkspaceAssignmentPropertyScopeHandler(
+    public ReplaceWorkspaceAssignmentPropertyScopeRule(
         RentalCommandDbContext db,
         WorkspaceAccessRevisionGuard accessRevisionGuard,
         IMembershipAssignmentScopeValidator assignmentScopeValidator)
@@ -789,8 +789,8 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
             command, context, command.TargetAccessContextId, _db, ct);
-        var target = await AddWorkspaceRoleAssignmentHandler.LoadTargetAsync(command, _db, ct);
-        AddWorkspaceRoleAssignmentHandler.EnsureActive(target);
+        var target = await AddWorkspaceRoleAssignmentRule.LoadTargetAsync(command, _db, ct);
+        AddWorkspaceRoleAssignmentRule.EnsureActive(target);
         var assignment = await _db.Set<MembershipRoleAssignment>()
             .Where(item => item.Id == command.AssignmentId &&
                            item.WorkspaceMembershipId == target.Membership.Id &&
@@ -841,7 +841,7 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
             new { PropertyIds = command.SelectedPropertyIds, Revision = command.ExpectedRevision + 1 }));
         await WorkspaceTeamAuthoritySupport.ValidateAndFlushMutationAsync(
             command, context, _db, _accessRevisionGuard, _assignmentScopeValidator, ct);
-        return AddWorkspaceRoleAssignmentHandler.Result(
+        return AddWorkspaceRoleAssignmentRule.Result(
             target, assignment.Entity.Id, command.ExpectedRevision + 1);
     }
 
@@ -849,13 +849,13 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
         WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class ChangeWorkspaceMembershipStatusHandler
+public sealed class ChangeWorkspaceMembershipStatusRule
 {
     private readonly RentalCommandDbContext _db;
     private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
     private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
 
-    public ChangeWorkspaceMembershipStatusHandler(
+    public ChangeWorkspaceMembershipStatusRule(
         RentalCommandDbContext db,
         WorkspaceAccessRevisionGuard accessRevisionGuard,
         IMembershipAssignmentScopeValidator assignmentScopeValidator)
@@ -872,7 +872,7 @@ public sealed class ChangeWorkspaceMembershipStatusHandler
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
             command, context, command.TargetAccessContextId, _db, ct);
-        var target = await AddWorkspaceRoleAssignmentHandler.LoadTargetAsync(command, _db, ct);
+        var target = await AddWorkspaceRoleAssignmentRule.LoadTargetAsync(command, _db, ct);
         Apply(command, target, changedAtUtc);
         target.Context.UpdatedAtUtc = changedAtUtc;
         target.Membership.UpdatedAtUtc = changedAtUtc;
@@ -889,7 +889,7 @@ public sealed class ChangeWorkspaceMembershipStatusHandler
             }));
         await WorkspaceTeamAuthoritySupport.ValidateAndFlushMutationAsync(
             command, context, _db, _accessRevisionGuard, _assignmentScopeValidator, ct);
-        return AddWorkspaceRoleAssignmentHandler.Result(target, null, command.ExpectedRevision + 1);
+        return AddWorkspaceRoleAssignmentRule.Result(target, null, command.ExpectedRevision + 1);
     }
 
     public Task AuthorizeReplayAsync(ChangeWorkspaceMembershipStatusCommand command, IAtomicCommandContext context, CancellationToken ct) =>
@@ -897,7 +897,7 @@ public sealed class ChangeWorkspaceMembershipStatusHandler
 
     private static void Apply(
         ChangeWorkspaceMembershipStatusCommand command,
-        AddWorkspaceRoleAssignmentHandler.TeamTarget target,
+        AddWorkspaceRoleAssignmentRule.TeamTarget target,
         DateTime changedAtUtc)
     {
         switch (command.Action)

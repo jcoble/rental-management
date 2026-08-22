@@ -72,7 +72,7 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         blocked.Value.Outcome.Should().Be(CancelPlannedRelationshipOutcome.FinancialResolutionRequired);
 
         var reversalCommand = ReverseLedger(scenario, openingBalance.Id, "opening-balance");
-        var handler = new ReverseTenantLedgerEntryHandler(
+        var handler = new ReverseTenantLedgerEntryRule(
             _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         var reversal = await _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
             .ExecuteAsync(reversalCommand.DeliveryIdempotencyKey,

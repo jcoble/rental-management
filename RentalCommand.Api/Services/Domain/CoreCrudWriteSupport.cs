@@ -328,7 +328,7 @@ internal static class RentalCrudWriteSupport
     }
 }
 
-internal sealed class UnitCrudWriteRules(RentalCommandDbContext db)
+internal sealed class UnitCrudRule(RentalCommandDbContext db)
 {
     public Task<AtomicRentalMutationResult> CreateAsync(
         RentalCrudWriteRequest request, IAtomicCommandContext context, CancellationToken ct) =>

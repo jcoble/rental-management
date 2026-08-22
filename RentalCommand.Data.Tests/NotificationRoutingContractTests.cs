@@ -23,10 +23,10 @@ public sealed class NotificationRoutingContractTests
     [Fact]
     public void ExistingTenantAndWorkOrderEvents_UseCanonicalTeamRouting()
     {
-        Read("RentalCommand.Data", "Conversations", "SendConversationMessageHandler.cs")
+        Read("RentalCommand.Data", "Conversations", "SendConversationMessageRule.cs")
             .Should().Contain(".ForTenantTeamTopic(")
             .And.NotContain(".ForTenantRelationship(");
-        Read("RentalCommand.Data", "Operations", "CompleteVendorDispatchFromInboundHandler.cs")
+        Read("RentalCommand.Data", "Operations", "CompleteVendorDispatchFromInboundRule.cs")
             .Should().Contain(".ForTeamTopic(")
             .And.NotContain(".ForProperty(");
     }

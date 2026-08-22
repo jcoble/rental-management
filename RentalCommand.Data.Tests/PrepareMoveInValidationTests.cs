@@ -18,7 +18,7 @@ public sealed class PrepareMoveInValidationTests
                 LeaseManagementPartyRole.Occupant, false, null),
         ]);
 
-        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+        var act = () => PrepareMoveInRule.ValidateCommandShape(command);
 
         act.Should().NotThrow();
     }
@@ -32,7 +32,7 @@ public sealed class PrepareMoveInValidationTests
                 false, "Approved applicant", true, 1, true),
         ]);
 
-        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+        var act = () => PrepareMoveInRule.ValidateCommandShape(command);
 
         act.Should().NotThrow();
     }
@@ -46,7 +46,7 @@ public sealed class PrepareMoveInValidationTests
                 LeaseManagementPartyRole.PrimaryTenant, true, 1),
         ], documentTemplateId: null);
 
-        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+        var act = () => PrepareMoveInRule.ValidateCommandShape(command);
 
         act.Should().NotThrow();
     }
@@ -60,7 +60,7 @@ public sealed class PrepareMoveInValidationTests
                 LeaseManagementPartyRole.PrimaryTenant, true, 1),
         ], documentTemplateId: 0);
 
-        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+        var act = () => PrepareMoveInRule.ValidateCommandShape(command);
 
         act.Should().Throw<ArgumentException>();
     }
@@ -75,7 +75,7 @@ public sealed class PrepareMoveInValidationTests
                 LeaseManagementPartyRole.PrimaryTenant, false, "Invalid dual source", true, 1, true),
         ]);
 
-        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+        var act = () => PrepareMoveInRule.ValidateCommandShape(command);
 
         act.Should().Throw<ArgumentException>();
     }
@@ -92,7 +92,7 @@ public sealed class PrepareMoveInValidationTests
             RentTrackingStartMode = RentTrackingStartMode.CustomCutoffDate,
         };
 
-        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+        var act = () => PrepareMoveInRule.ValidateCommandShape(command);
 
         act.Should().Throw<ArgumentException>();
     }
@@ -109,7 +109,7 @@ public sealed class PrepareMoveInValidationTests
             RentTrackingStartOn = new DateOnly(2026, 9, 1),
         };
 
-        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+        var act = () => PrepareMoveInRule.ValidateCommandShape(command);
 
         act.Should().Throw<ArgumentException>();
     }

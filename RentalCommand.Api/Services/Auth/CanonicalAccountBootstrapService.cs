@@ -142,7 +142,7 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
             CreateLockId(normalizedEmail));
         var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey)))
             .ToLowerInvariant();
-        var handler = new BootstrapAccountHandler(_db);
+        var handler = new BootstrapAccountRule(_db);
         var outcome = await _writes.ExecuteAsync($"email:{keyDigest}",
             AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         if (outcome.Value.Outcome == BootstrapAccountOutcome.DuplicateEmail)

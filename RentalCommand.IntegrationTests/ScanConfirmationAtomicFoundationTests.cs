@@ -862,9 +862,9 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
                     identity.IdempotencyKey,
                     ScanDraftWriteSupport.Write(
                         identity.CommandType, reject, ScanDraftWriteSupport.RejectResultContract,
-                        (request, context, token) => RejectScanDraftHandler.ExecuteAsync(
+                        (request, context, token) => RejectScanDraftRule.ExecuteAsync(
                             db, request, context, token),
-                        (request, context, token) => RejectScanDraftHandler.AuthorizeAsync(
+                        (request, context, token) => RejectScanDraftRule.AuthorizeAsync(
                             db, request, context, token)));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
@@ -877,9 +877,9 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
                     identity.IdempotencyKey,
                     ScanDraftWriteSupport.Write(
                         identity.CommandType, confirm, ScanDraftWriteSupport.ConfirmResultContract,
-                        (request, context, token) => ConfirmScanDraftHandler.ExecuteAsync(
+                        (request, context, token) => ConfirmScanDraftRule.ExecuteAsync(
                             db, writer, request, context, token),
-                        (request, context, token) => ConfirmScanDraftHandler.AuthorizeAsync(
+                        (request, context, token) => ConfirmScanDraftRule.AuthorizeAsync(
                             writer, request, context, token)));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }

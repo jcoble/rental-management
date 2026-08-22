@@ -25,7 +25,7 @@ public class TenantService : ITenantService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IRequestWriteExecutor? _writes;
-    private readonly PropertyTenantCrudWriteRules _crudRules;
+    private readonly PropertyTenantCrudRule _crudRules;
     private readonly TimeProvider _timeProvider;
 
     public TenantService(
@@ -38,7 +38,7 @@ public class TenantService : ITenantService
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
         _writes = writes;
-        _crudRules = new PropertyTenantCrudWriteRules(db);
+        _crudRules = new PropertyTenantCrudRule(db);
     }
     public async Task<TenantResponse?> CreateAuthorizedAsync(
         WorkspaceReadScope scope,

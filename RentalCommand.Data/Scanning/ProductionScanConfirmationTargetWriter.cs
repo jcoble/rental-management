@@ -498,7 +498,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             AllocateOldestCharges = target.TenantLedgerEntryId is null,
         };
         await context.AcquireLockAsync("TenantAccount", target.TenantAccountId, ct);
-        var result = await new RecordTenantReceiptHandler(_db).ExecuteAsync(receiptCommand, context, ct);
+        var result = await new RecordTenantReceiptRule(_db).ExecuteAsync(receiptCommand, context, ct);
         return new ScanConfirmationTargetWriteResult(
             target.TenantAccountId,
             accountContext.UnitId,
@@ -885,7 +885,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         if (reason.Length > 1000)
             reason = reason[..1000];
 
-        var result = await new RecordLeaseEndingDispositionHandler(_db).ExecuteAsync(
+        var result = await new RecordLeaseEndingDispositionRule(_db).ExecuteAsync(
             new RecordLeaseEndingDispositionCommand(
                 command.PortfolioId,
                 target.LeaseManagementId,

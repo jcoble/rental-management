@@ -745,9 +745,9 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             identity.IdempotencyKey,
             ScanDraftWriteSupport.Write(
                 identity.CommandType, command, ScanDraftWriteSupport.FinalizeResultContract,
-                (request, context, token) => FinalizeScanUploadHandler.ExecuteAsync(
+                (request, context, token) => FinalizeScanUploadRule.ExecuteAsync(
                     db, request, context, token),
-                (request, context, token) => FinalizeScanUploadHandler.AuthorizeAsync(
+                (request, context, token) => FinalizeScanUploadRule.AuthorizeAsync(
                     db, request, context, token)));
     }
 

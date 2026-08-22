@@ -1370,7 +1370,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
-        var handler = new RecoverLateFeeChargesHandler(db);
+        var handler = new RecoverLateFeeChargesRule(db);
         return await writes.ExecuteAsync(
             command.DeliveryIdempotencyKey,
             TenantMoneyWriteSupport.Write(
@@ -1384,7 +1384,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             ApplyScheduledRentChargeBatchCommand command)
     {
         await using var scope = services.CreateAsyncScope();
-        var handler = new ApplyScheduledRentChargeBatchHandler(
+        var handler = new ApplyScheduledRentChargeBatchRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
             .ExecuteAsync(key, TenantMoneyWriteSupport.Write(
@@ -1398,7 +1398,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             ApplyScheduledLateFeeChargeBatchCommand command)
     {
         await using var scope = services.CreateAsyncScope();
-        var handler = new ApplyScheduledLateFeeChargeBatchHandler(
+        var handler = new ApplyScheduledLateFeeChargeBatchRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
             .ExecuteAsync(key, TenantMoneyWriteSupport.Write(

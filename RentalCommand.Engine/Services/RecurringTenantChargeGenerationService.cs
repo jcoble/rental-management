@@ -41,7 +41,7 @@ public sealed class RecurringTenantChargeGenerationService
                     runToken,
                     _timeProvider.GetUtcNow().UtcDateTime,
                     BatchSize);
-            var handler = new ApplyRecurringTenantChargeBatchHandler(_db);
+            var handler = new ApplyRecurringTenantChargeBatchRule(_db);
             var outcome = await _writes.ExecuteAsync(
                 runToken.ToString("N"),
                 TenantMoneyWriteSupport.Write(

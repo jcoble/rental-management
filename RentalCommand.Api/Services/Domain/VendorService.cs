@@ -280,7 +280,7 @@ public class VendorService : IVendorService
                 scope.AccessRevision,
                 _timeProvider.UtcNow());
         var outcome = await RequireWrites().ExecuteAsync(
-            operationKey, RequestVendorW9Handler.Write(command, _db), ct);
+            operationKey, RequestVendorW9Rule.Write(command, _db), ct);
 
         return outcome.Value.Outcome switch
         {

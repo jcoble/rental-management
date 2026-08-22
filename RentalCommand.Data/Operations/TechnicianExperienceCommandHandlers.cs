@@ -9,19 +9,19 @@ using RentalCommand.Core.Operations;
 
 namespace RentalCommand.Data.Operations;
 
-public sealed class RecordTechnicianWorkEntryHandler
+public sealed class RecordTechnicianWorkEntryRule
 {
     public const string ResultContract = "technician-work-entry.v1";
 
     private readonly RentalCommandDbContext _db;
 
-    public RecordTechnicianWorkEntryHandler(RentalCommandDbContext db) => _db = db;
+    public RecordTechnicianWorkEntryRule(RentalCommandDbContext db) => _db = db;
 
     public static TransactionalWrite<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult> Write(
         RecordTechnicianWorkEntryCommand command,
         RentalCommandDbContext db)
     {
-        var handler = new RecordTechnicianWorkEntryHandler(db);
+        var handler = new RecordTechnicianWorkEntryRule(db);
         return new TransactionalWrite<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult>(
             "technician-work-entry.record", WriteIdempotencyPolicy.Required, command, ResultContract,
             WorkOrderLock(command.WorkOrderId), handler.ExecuteAsync, handler.AuthorizeAsync);
@@ -134,22 +134,22 @@ public sealed class RecordTechnicianWorkEntryHandler
     }
 }
 
-public sealed class SendTechnicianAssignmentMessageHandler
+public sealed class SendTechnicianAssignmentMessageRule
 {
     public const string ResultContract = "technician-assignment-message.v1";
 
     private readonly RentalCommandDbContext _db;
 
-    public SendTechnicianAssignmentMessageHandler(RentalCommandDbContext db) => _db = db;
+    public SendTechnicianAssignmentMessageRule(RentalCommandDbContext db) => _db = db;
 
     public static TransactionalWrite<SendTechnicianAssignmentMessageCommand, SendTechnicianAssignmentMessageResult> Write(
         SendTechnicianAssignmentMessageCommand command,
         RentalCommandDbContext db)
     {
-        var handler = new SendTechnicianAssignmentMessageHandler(db);
+        var handler = new SendTechnicianAssignmentMessageRule(db);
         return new TransactionalWrite<SendTechnicianAssignmentMessageCommand, SendTechnicianAssignmentMessageResult>(
             "technician-assignment-message.send", WriteIdempotencyPolicy.Required, command,
-            ResultContract, RecordTechnicianWorkEntryHandler.WorkOrderLock(command.WorkOrderId),
+            ResultContract, RecordTechnicianWorkEntryRule.WorkOrderLock(command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
@@ -238,7 +238,7 @@ public sealed class SendTechnicianAssignmentMessageHandler
     }
 
     public Task AuthorizeReplayAsync(SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RecordTechnicianWorkEntryHandler.RetiredPath();
+        throw RecordTechnicianWorkEntryRule.RetiredPath();
 
     public async Task AuthorizeAsync(SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -254,22 +254,22 @@ public sealed class SendTechnicianAssignmentMessageHandler
         : body.Trim()[..277] + "...";
 }
 
-public sealed class MarkTechnicianAssignmentConversationReadHandler
+public sealed class MarkTechnicianAssignmentConversationReadRule
 {
     public const string ResultContract = "technician-assignment-conversation-read.v1";
 
     private readonly RentalCommandDbContext _db;
 
-    public MarkTechnicianAssignmentConversationReadHandler(RentalCommandDbContext db) => _db = db;
+    public MarkTechnicianAssignmentConversationReadRule(RentalCommandDbContext db) => _db = db;
 
     public static TransactionalWrite<MarkTechnicianAssignmentConversationReadCommand, MarkTechnicianAssignmentConversationReadResult> Write(
         MarkTechnicianAssignmentConversationReadCommand command,
         RentalCommandDbContext db)
     {
-        var handler = new MarkTechnicianAssignmentConversationReadHandler(db);
+        var handler = new MarkTechnicianAssignmentConversationReadRule(db);
         return new TransactionalWrite<MarkTechnicianAssignmentConversationReadCommand, MarkTechnicianAssignmentConversationReadResult>(
             "technician-assignment-conversation.read", WriteIdempotencyPolicy.Required, command,
-            ResultContract, RecordTechnicianWorkEntryHandler.WorkOrderLock(command.WorkOrderId),
+            ResultContract, RecordTechnicianWorkEntryRule.WorkOrderLock(command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
@@ -292,7 +292,7 @@ public sealed class MarkTechnicianAssignmentConversationReadHandler
     }
 
     public Task AuthorizeReplayAsync(MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RecordTechnicianWorkEntryHandler.RetiredPath();
+        throw RecordTechnicianWorkEntryRule.RetiredPath();
 
     public async Task AuthorizeAsync(MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct)
     {

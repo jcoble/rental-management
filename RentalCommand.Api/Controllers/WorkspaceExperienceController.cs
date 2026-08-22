@@ -72,7 +72,7 @@ public sealed class WorkspaceExperienceController : AuthenticatedPortfolioContro
         {
             await _writes.ExecuteExactAsync(
                 $"{active.PortfolioId}:{active.AccessContextId}:{keyDigest}",
-                SelectWorkspaceExperienceHandler.Write(_db, command), ct);
+                SelectWorkspaceExperienceRule.Write(_db, command), ct);
         }
         catch (UnauthorizedAccessException)
         {

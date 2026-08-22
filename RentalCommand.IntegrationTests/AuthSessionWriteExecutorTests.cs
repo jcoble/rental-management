@@ -56,59 +56,59 @@ public sealed class AuthSessionWriteExecutorTests(MigratedPostgreSqlFixture fixt
             Bootstrap(), BootstrapFingerprint,
             "{\"Outcome\":0,\"UserId\":7,\"PortfolioId\":8,\"AccessContextId\":9}",
             new BootstrapAccountResult(BootstrapAccountOutcome.Created, 7, 8, 9),
-            "auth-account-bootstrap-result:v1", db => new BootstrapAccountHandler(db).AuthorizeAsync);
+            "auth-account-bootstrap-result:v1", db => new BootstrapAccountRule(db).AuthorizeAsync);
         await ReplayAsync(services, "auth.email.confirm", LegacyUserOperationKey(7, "confirm-operation"),
             Confirm(), ConfirmFingerprint, "{\"Outcome\":0,\"UserId\":7}",
             new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.Confirmed, 7),
-            "auth-email-confirm-result:v1", db => new ConfirmAccountEmailHandler(db).AuthorizeAsync);
+            "auth-email-confirm-result:v1", db => new ConfirmAccountEmailRule(db).AuthorizeAsync);
         await ReplayAsync(services, "auth.email.google-confirm", $"7:{new string('d', 64)}",
             Google(), GoogleFingerprint, "{\"Outcome\":0,\"UserId\":7}",
             new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.Confirmed, 7),
-            "auth-email-confirm-result:v1", db => new ConfirmGoogleAccountEmailHandler(db).AuthorizeAsync);
+            "auth-email-confirm-result:v1", db => new ConfirmGoogleAccountEmailRule(db).AuthorizeAsync);
         await ReplayAsync(services, "auth.password.reset", LegacyUserOperationKey(7, "reset-operation"),
             Reset(), ResetFingerprint, "{\"Outcome\":0,\"UserId\":7}",
             new ResetAccountPasswordResult(ResetAccountPasswordOutcome.Reset, 7),
-            "auth-password-reset-result:v1", db => new ResetAccountPasswordHandler(db).AuthorizeAsync);
+            "auth-password-reset-result:v1", db => new ResetAccountPasswordRule(db).AuthorizeAsync);
         await ReplayAsync(services, "auth.email.email-confirmation", LegacyUserOperationKey(7, "email-operation"),
             Email(), EmailFingerprint,
             "{\"Enqueued\":true,\"UserId\":7,\"PortfolioId\":8,\"EmailKind\":\"email-confirmation\"}",
             new AuthEmailOutboxResult(true, 7, 8, "email-confirmation"),
-            "auth-email-outbox-result:v1", db => new AuthEmailOutboxHandler(db).AuthorizeAsync);
+            "auth-email-outbox-result:v1", db => new AuthEmailOutboxRule(db).AuthorizeAsync);
         await ReplayAsync(services, "auth-context-selection:issue", LegacyOperationKey(Guid.Parse("12121212-1212-1212-1212-121212121212")),
             Challenge(), ChallengeFingerprint,
             "{\"Issued\":true,\"ChallengeId\":\"22222222-2222-2222-2222-222222222222\",\"UserId\":7,\"ExpiresAtUtc\":\"2026-08-21T12:05:00Z\"}",
             new LoginContextSelectionChallengeResult(true, Guid.Parse("22222222-2222-2222-2222-222222222222"), 7, Now.AddMinutes(5)),
-            "auth-context-selection-challenge-result:v1", db => new IssueLoginContextSelectionChallengeHandler(db).AuthorizeAsync);
+            "auth-context-selection-challenge-result:v1", db => new IssueLoginContextSelectionChallengeRule(db).AuthorizeAsync);
         await ReplayAsync(services, "auth-session:start", LegacyOperationKey(Guid.Parse("13131313-1313-1313-1313-131313131313")),
             Start(), StartFingerprint,
             "{\"Started\":true,\"AuthSessionId\":\"11111111-1111-1111-1111-111111111111\",\"UserId\":7,\"AccessContextId\":9,\"PortfolioId\":8,\"AccessRevision\":3,\"RefreshTokenFamilyId\":\"33333333-3333-3333-3333-333333333333\",\"CredentialId\":\"44444444-4444-4444-4444-444444444444\"}",
             new StartAuthSessionResult(true, SessionId, 7, 9, 8, 3, FamilyId, CredentialId),
-            "auth-session-start-result:v1", db => new StartAuthSessionHandler(db).AuthorizeAsync);
+            "auth-session-start-result:v1", db => new StartAuthSessionRule(db).AuthorizeAsync);
         await ReplayAsync(services, "session-refresh:issue", LegacyOperationKey(Guid.Parse("14141414-1414-1414-1414-141414141414")),
             Issue(), IssueFingerprint,
             "{\"Status\":0,\"AuthSessionId\":\"11111111-1111-1111-1111-111111111111\",\"RefreshTokenFamilyId\":\"99999999-9999-9999-9999-999999999999\",\"CredentialId\":\"88888888-8888-8888-8888-888888888888\",\"ReplacementCredentialId\":null,\"UserId\":null,\"AccessContextId\":null,\"PortfolioId\":null,\"AccessRevision\":null}",
             new SessionRefreshMutationResult(SessionRefreshMutationStatus.Issued, SessionId, IssueFamilyId, IssueCredentialId),
-            "session-refresh-mutation-result.v1", db => new IssueSessionRefreshCredentialHandler(db).AuthorizeAsync);
+            "session-refresh-mutation-result.v1", db => new IssueSessionRefreshCredentialRule(db).AuthorizeAsync);
         await ReplayAsync(services, "session-refresh:rotate", LegacyOperationKey(RotationOperationId),
             Rotate(), RotateFingerprint,
             "{\"Status\":1,\"AuthSessionId\":\"11111111-1111-1111-1111-111111111111\",\"RefreshTokenFamilyId\":\"33333333-3333-3333-3333-333333333333\",\"CredentialId\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\",\"ReplacementCredentialId\":\"55555555-5555-5555-5555-555555555555\",\"UserId\":7,\"AccessContextId\":9,\"PortfolioId\":8,\"AccessRevision\":3}",
             new SessionRefreshMutationResult(SessionRefreshMutationStatus.Rotated, SessionId, FamilyId,
                 PresentedCredentialId, ReplacementCredentialId, 7, 9, 8, 3),
-            "auth-session-refresh-rotation-result:v1", db => new RotateSessionRefreshCredentialHandler(db).AuthorizeAsync);
+            "auth-session-refresh-rotation-result:v1", db => new RotateSessionRefreshCredentialRule(db).AuthorizeAsync);
         await ReplayAsync(services, "auth-context:switch", LegacyOperationKey(Guid.Parse("15151515-1515-1515-1515-151515151515")),
             Switch(), SwitchFingerprint,
             "{\"Switched\":true,\"AuthSessionId\":\"11111111-1111-1111-1111-111111111111\",\"UserId\":7,\"AccessContextId\":10,\"PortfolioId\":11,\"AccessRevision\":4}",
             new SwitchAuthSessionContextResult(true, SessionId, 7, 10, 11, 4),
-            "auth-session-context-switch-result:v1", db => new SwitchAuthSessionContextHandler(db).AuthorizeAsync);
+            "auth-session-context-switch-result:v1", db => new SwitchAuthSessionContextRule(db).AuthorizeAsync);
         await ReplayAsync(services, "auth.password.change", LegacyChangePasswordKey(7, 9, "change-operation"),
             Change(), ChangeFingerprint, "{\"Outcome\":0,\"UserId\":7,\"AccessContextId\":9}",
             new ChangePasswordResult(ChangePasswordOutcome.Changed, 7, 9),
-            "auth-password-change-result:v1", db => new ChangePasswordHandler(db).AuthorizeAsync);
+            "auth-password-change-result:v1", db => new ChangePasswordRule(db).AuthorizeAsync);
         await ReplayAsync(services, "auth-session:revoke", LegacyOperationKey(Guid.Parse("16161616-1616-1616-1616-161616161616")),
             Revoke(), RevokeFingerprint,
             "{\"Revoked\":true,\"AuthSessionId\":\"11111111-1111-1111-1111-111111111111\"}",
             new RevokeAuthSessionResult(true, SessionId),
-            "auth-session-revoke-result:v1", db => new RevokeAuthSessionHandler(db).AuthorizeAsync);
+            "auth-session-revoke-result:v1", db => new RevokeAuthSessionRule(db).AuthorizeAsync);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public sealed class AuthSessionWriteExecutorTests(MigratedPostgreSqlFixture fixt
             LegacyChangePasswordKey(7, 9, "change-operation"), Change(), ChangeFingerprint,
             "{\"Outcome\":0,\"UserId\":7,\"AccessContextId\":9}",
             new ChangePasswordResult(ChangePasswordOutcome.Changed, 7, 9),
-            "auth-password-change-result:v1", db => new ChangePasswordHandler(db).AuthorizeAsync);
+            "auth-password-change-result:v1", db => new ChangePasswordRule(db).AuthorizeAsync);
 
         await action.Should().ThrowAsync<UnauthorizedAccessException>();
     }
@@ -142,7 +142,7 @@ public sealed class AuthSessionWriteExecutorTests(MigratedPostgreSqlFixture fixt
             "{\"Status\":1,\"AuthSessionId\":\"11111111-1111-1111-1111-111111111111\",\"RefreshTokenFamilyId\":\"33333333-3333-3333-3333-333333333333\",\"CredentialId\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\",\"ReplacementCredentialId\":\"55555555-5555-5555-5555-555555555555\",\"UserId\":7,\"AccessContextId\":9,\"PortfolioId\":8,\"AccessRevision\":3}",
             new SessionRefreshMutationResult(SessionRefreshMutationStatus.Rotated, SessionId, FamilyId,
                 PresentedCredentialId, ReplacementCredentialId, 7, 9, 8, 3),
-            "auth-session-refresh-rotation-result:v1", db => new RotateSessionRefreshCredentialHandler(db).AuthorizeAsync);
+            "auth-session-refresh-rotation-result:v1", db => new RotateSessionRefreshCredentialRule(db).AuthorizeAsync);
 
         await action.Should().ThrowAsync<RefreshTokenRotationOwnershipException>();
     }

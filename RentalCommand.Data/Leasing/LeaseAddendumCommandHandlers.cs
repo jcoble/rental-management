@@ -7,11 +7,11 @@ using RentalCommand.Core.Leasing;
 
 namespace RentalCommand.Data.Leasing;
 
-public sealed class CreateLeaseAddendumDraftHandler
+public sealed class CreateLeaseAddendumDraftRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CreateLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
+    public CreateLeaseAddendumDraftRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<LeaseAddendumDraftMutationResult> ExecuteAsync(
         CreateLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -96,11 +96,11 @@ public sealed class CreateLeaseAddendumDraftHandler
         LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class EditLeaseAddendumDraftHandler
+public sealed class EditLeaseAddendumDraftRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public EditLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
+    public EditLeaseAddendumDraftRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<LeaseAddendumDraftMutationResult> ExecuteAsync(
         EditLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -192,11 +192,11 @@ public sealed class EditLeaseAddendumDraftHandler
         LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
-public sealed class CorrectLeaseAddendumDraftHandler
+public sealed class CorrectLeaseAddendumDraftRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CorrectLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
+    public CorrectLeaseAddendumDraftRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<LeaseAddendumDraftMutationResult> ExecuteAsync(
         CorrectLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)

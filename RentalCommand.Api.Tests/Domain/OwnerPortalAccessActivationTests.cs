@@ -473,8 +473,8 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         });
         await _ctx.Db.SaveChangesAsync();
 
-        var handler = new RevokeOwnerPortalAccessHandler(_ctx.Db);
-        var method = typeof(RevokeOwnerPortalAccessHandler).GetMethod(
+        var handler = new RevokeOwnerPortalAccessRule(_ctx.Db);
+        var method = typeof(RevokeOwnerPortalAccessRule).GetMethod(
             "BuildRevocationTargetQuery",
             BindingFlags.Instance | BindingFlags.NonPublic);
         method.Should().NotBeNull();

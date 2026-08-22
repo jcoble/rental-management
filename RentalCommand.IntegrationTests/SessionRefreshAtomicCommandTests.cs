@@ -729,9 +729,9 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         object write = command switch
         {
-            IssueSessionRefreshCredentialCommand value => Build(value, new IssueSessionRefreshCredentialHandler(db)),
-            RotateSessionRefreshCredentialCommand value => Build(value, new RotateSessionRefreshCredentialHandler(db)),
-            RevokeAuthSessionCommand value => Build(value, new RevokeAuthSessionHandler(db)),
+            IssueSessionRefreshCredentialCommand value => Build(value, new IssueSessionRefreshCredentialRule(db)),
+            RotateSessionRefreshCredentialCommand value => Build(value, new RotateSessionRefreshCredentialRule(db)),
+            RevokeAuthSessionCommand value => Build(value, new RevokeAuthSessionRule(db)),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
@@ -739,15 +739,15 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
     }
 
     private static TransactionalWrite<IssueSessionRefreshCredentialCommand, SessionRefreshMutationResult> Build(
-        IssueSessionRefreshCredentialCommand command, IssueSessionRefreshCredentialHandler handler) =>
+        IssueSessionRefreshCredentialCommand command, IssueSessionRefreshCredentialRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private static TransactionalWrite<RotateSessionRefreshCredentialCommand, SessionRefreshMutationResult> Build(
-        RotateSessionRefreshCredentialCommand command, RotateSessionRefreshCredentialHandler handler) =>
+        RotateSessionRefreshCredentialCommand command, RotateSessionRefreshCredentialRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private static TransactionalWrite<RevokeAuthSessionCommand, RevokeAuthSessionResult> Build(
-        RevokeAuthSessionCommand command, RevokeAuthSessionHandler handler) =>
+        RevokeAuthSessionCommand command, RevokeAuthSessionRule handler) =>
         AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync);
 
     private void SkipIfNoDocker() =>

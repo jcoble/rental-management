@@ -260,7 +260,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var command = CancelAutopay();
-        var handler = new CancelTenantAutopayHandler(db);
+        var handler = new CancelTenantAutopayRule(db);
         var write = AccountingWriteSupport.Write(
             command, handler.ExecuteAsync, handler.AuthorizeAsync);
         const string key = "1:8:11:autopay-cancel";
@@ -339,7 +339,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
                 AccountType.Expense, parentId, null, ScheduleECategory.Other, true,
                 $"create-lock-{parentId?.ToString() ?? "none"}");
             var (context, acquired) = Recorder(database.Db);
-            var handler = new CreateLedgerAccountHandler(database.Db);
+            var handler = new CreateLedgerAccountRule(database.Db);
 
             await ExecuteRecordedAsync(command, handler.ExecuteAsync, handler.AuthorizeAsync, context);
 
@@ -362,7 +362,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
             scope.AccessRevision, target.Id, "Updated target", null, parent.Id, true,
             ScheduleECategory.Other, true, false, "update-lock");
         var (context, acquired) = Recorder(database.Db);
-        var handler = new UpdateLedgerAccountHandler(database.Db);
+        var handler = new UpdateLedgerAccountRule(database.Db);
 
         await ExecuteRecordedAsync(command, handler.ExecuteAsync, handler.AuthorizeAsync, context);
 
@@ -382,7 +382,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
         var command = AtomicAccountingLifecycle.DirectionCommand(
             scope, AccountingProvider.QuickBooks, false, true, "direction-lock");
         var (context, acquired) = Recorder(database.Db);
-        var handler = new SetAccountingDirectionHandler(database.Db);
+        var handler = new SetAccountingDirectionRule(database.Db);
 
         await ExecuteRecordedAsync(command, handler.ExecuteAsync, handler.AuthorizeAsync, context);
 
@@ -402,7 +402,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
 
         var connect = AtomicAccountingConnect.Command(
             scope, AccountingProvider.QuickBooks, "https://example.test/callback", "connect-replay");
-        var connectHandler = new PrepareAccountingConnectHandler(db);
+        var connectHandler = new PrepareAccountingConnectRule(db);
         var connectWrite = AccountingWriteSupport.Write(
             connect, connectHandler.ExecuteAsync, connectHandler.AuthorizeAsync);
         var firstConnect = await writes.ExecuteAsync(
@@ -415,7 +415,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
 
         var prepare = AtomicAccountingLifecycle.PrepareDisconnectCommand(
             scope, AccountingProvider.QuickBooks, "disconnect-replay");
-        var prepareHandler = new PrepareAccountingDisconnectHandler(db);
+        var prepareHandler = new PrepareAccountingDisconnectRule(db);
         var prepareWrite = AccountingWriteSupport.Write(
             prepare, prepareHandler.ExecuteAsync, prepareHandler.AuthorizeAsync);
         var firstPrepare = await writes.ExecuteAsync(
@@ -432,7 +432,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
             .Should().BeEquivalentTo(preparedState);
 
         var finalize = AtomicAccountingLifecycle.FinalizeDisconnectCommand(prepare, firstPrepare.Value);
-        var finalizeHandler = new FinalizeAccountingDisconnectHandler(db);
+        var finalizeHandler = new FinalizeAccountingDisconnectRule(db);
         var finalizeWrite = AccountingWriteSupport.Write(
             finalize, finalizeHandler.ExecuteAsync, finalizeHandler.AuthorizeAsync);
         var firstFinalize = await writes.ExecuteAsync(
@@ -450,7 +450,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
 
         var direction = AtomicAccountingLifecycle.DirectionCommand(
             scope, AccountingProvider.QuickBooks, false, true, "direction-replay");
-        var directionHandler = new SetAccountingDirectionHandler(db);
+        var directionHandler = new SetAccountingDirectionRule(db);
         var directionWrite = AccountingWriteSupport.Write(
             direction, directionHandler.ExecuteAsync, directionHandler.AuthorizeAsync);
         var firstDirection = await writes.ExecuteAsync(

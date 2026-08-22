@@ -381,7 +381,7 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
         AtomicPaymentCsvImportCommand command)
     {
         await using var scope = _services!.CreateAsyncScope();
-        var handler = new AtomicPaymentCsvImportHandler(
+        var handler = new AtomicPaymentCsvImportRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         return await scope.ServiceProvider
             .GetRequiredService<IRequestWriteExecutor>()

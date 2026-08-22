@@ -149,7 +149,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
                 ? null
                 : _tokens.HashBearer(request.ContextSelectionChallengeBearer));
 
-        var handler = new StartAuthSessionHandler(_db);
+        var handler = new StartAuthSessionRule(_db);
         var outcome = await _writes.ExecuteAsync(
             SessionRefreshCommandIdentity.ForStart(request.OperationId).IdempotencyKey,
             AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
@@ -195,7 +195,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         var operationId = Guid.NewGuid();
         var command = new IssueLoginContextSelectionChallengeCommand(
             userId, challengeId, _tokens.HashBearer(challengeBearer), now, expiresAt);
-        var handler = new IssueLoginContextSelectionChallengeHandler(_db);
+        var handler = new IssueLoginContextSelectionChallengeRule(_db);
         var outcome = await _writes.ExecuteAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(operationId).IdempotencyKey,
             AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
@@ -239,7 +239,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             now,
             replacementExpiresAt);
 
-        var handler = new RotateSessionRefreshCredentialHandler(_db);
+        var handler = new RotateSessionRefreshCredentialRule(_db);
         var outcome = await _writes.ExecuteAsync(
             SessionRefreshCommandIdentity.ForRotation(request.OperationId).IdempotencyKey,
             AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
@@ -267,7 +267,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         Guid operationId,
         CancellationToken ct = default)
     {
-        var handler = new SwitchAuthSessionContextHandler(_db);
+        var handler = new SwitchAuthSessionContextRule(_db);
         var outcome = await _writes.ExecuteAsync(
             SessionRefreshCommandIdentity.ForContextSwitch(operationId).IdempotencyKey,
             AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
@@ -279,7 +279,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         Guid operationId,
         CancellationToken ct = default)
     {
-        var handler = new RevokeAuthSessionHandler(_db);
+        var handler = new RevokeAuthSessionRule(_db);
         var outcome = await _writes.ExecuteAsync(
             SessionRefreshCommandIdentity.ForSessionRevocation(operationId).IdempotencyKey,
             AuthSessionWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);

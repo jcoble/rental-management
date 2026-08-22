@@ -10,11 +10,11 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Accounting;
 
-public sealed class CreateLedgerAccountHandler
+public sealed class CreateLedgerAccountRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public CreateLedgerAccountHandler(RentalCommandDbContext db) => _db = db;
+    public CreateLedgerAccountRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<LedgerAccountMutationResult> ExecuteAsync(
         CreateLedgerAccountCommand command,
@@ -101,11 +101,11 @@ public sealed class CreateLedgerAccountHandler
         "Legacy atomic ledger-account writes are retired; use the shared write executor.");
 }
 
-public sealed class UpdateLedgerAccountHandler
+public sealed class UpdateLedgerAccountRule
 {
     private readonly RentalCommandDbContext _db;
 
-    public UpdateLedgerAccountHandler(RentalCommandDbContext db) => _db = db;
+    public UpdateLedgerAccountRule(RentalCommandDbContext db) => _db = db;
 
     public async Task<LedgerAccountMutationResult> ExecuteAsync(
         UpdateLedgerAccountCommand command,
