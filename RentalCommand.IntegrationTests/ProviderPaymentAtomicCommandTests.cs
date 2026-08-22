@@ -27,6 +27,7 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 using RentalCommand.Engine.Services;
+using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 using Stripe.Checkout;
 using Testcontainers.PostgreSql;
@@ -112,6 +113,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             ScheduleProviderPaymentReconciliationResult,
             ScheduleProviderPaymentReconciliationHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddAtomicCommandHandler<
             FinalizeProviderPaymentCreateCommand,
             FinalizeProviderPaymentCreateResult,
@@ -1639,7 +1641,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             Options.Create(new StripeConfig { SecretKey = "sk_test_deterministic" }),
             TimeProvider.System,
-            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
             NullLogger<AutopayChargeService>.Instance,
             provider);
 
@@ -1691,7 +1693,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             Options.Create(new StripeConfig { SecretKey = "sk_test_deterministic" }),
             TimeProvider.System,
-            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
             NullLogger<AutopayChargeService>.Instance,
             provider);
 
@@ -2279,6 +2281,32 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
 
+        if (command is PrepareProviderPaymentCreateCommand
+            or PrepareProviderAutopaySetupCommand
+            or SubmitProviderPaymentCreateCommand
+            or ScheduleProviderPaymentReconciliationCommand
+            or FinalizeProviderPaymentCreateCommand
+            or FailProviderPaymentCreateCommand
+            or AbandonProviderPaymentAttemptCommand
+            or InspectProviderPaymentAttemptCommand
+            or RecordVerifiedProviderPaymentEventCommand
+            or ReconcileClaimedProviderPaymentEventCommand)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var write = ProviderPaymentWriteSupport.Write<TCommand, TResult>(
+                db, identity.CommandType, command);
+            if (command is ScheduleProviderPaymentReconciliationCommand
+                or ReconcileClaimedProviderPaymentEventCommand)
+            {
+                return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>()
+                    .ExecuteAsync(identity.IdempotencyKey, write, ct);
+            }
+            var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+            return command is RecordVerifiedProviderPaymentEventCommand
+                ? await writes.ExecuteExactAsync(identity.IdempotencyKey, write, ct)
+                : await writes.ExecuteAsync(identity.IdempotencyKey, write, ct);
+        }
+
         return await scope.ServiceProvider
             .GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, codec, ct);
@@ -2301,11 +2329,11 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         SubmitRaceBarrier? submitRaceBarrier = null)
     {
         await using var scope = _services!.CreateAsyncScope();
-        IAtomicUnitOfWork atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        IRequestWriteExecutor writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
         if (throwAfterFinalize)
-            atomic = new ThrowAfterFinalizeAtomicUnitOfWork(atomic);
+            writes = new ThrowAfterFinalizeRequestWriteExecutor(writes);
         if (submitRaceBarrier is not null)
-            atomic = new SubmitRaceBarrierAtomicUnitOfWork(atomic, submitRaceBarrier);
+            writes = new SubmitRaceBarrierRequestWriteExecutor(writes, submitRaceBarrier);
         var service = new StripePaymentService(
             Options.Create(new StripeConfig
             {
@@ -2315,7 +2343,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             scope.ServiceProvider.GetRequiredService<ISandboxGuard>(),
             NullLogger<StripePaymentService>.Instance,
             TimeProvider.System,
-            atomic,
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            writes,
             scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>());
         return await service.CreatePaymentCheckoutSessionAsync(
             scenario.PortfolioId, scenario.TenantId, scenario.AccountId, scenario.ChargeId,
@@ -2329,7 +2358,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         await using var scope = _services!.CreateAsyncScope();
         var service = new InteractivePaymentReconciliationService(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
             scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>(),
             timeProvider ?? TimeProvider.System,
             Options.Create(options),
@@ -2347,7 +2376,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             scope.ServiceProvider.GetRequiredService<ISandboxGuard>(),
             NullLogger<StripePaymentService>.Instance,
             TimeProvider.System,
-            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
             scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>());
         return await service.CancelPaymentAttemptAsync(
             scenario.PortfolioId, scenario.TenantId, scenario.AccountId, paymentAttemptId,
@@ -2385,19 +2415,25 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         }
     }
 
-    private sealed class SubmitRaceBarrierAtomicUnitOfWork(
-        IAtomicUnitOfWork inner, SubmitRaceBarrier barrier) : IAtomicUnitOfWork
+    private sealed class SubmitRaceBarrierRequestWriteExecutor(
+        IRequestWriteExecutor inner, SubmitRaceBarrier barrier) : IRequestWriteExecutor
     {
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity, TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec, CancellationToken ct = default)
+            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
-            if (identity.CommandType == "payments.provider-create.submit")
+            if (write.OperationName == "payments.provider-create.submit")
                 await barrier.WaitAsync(ct);
-            return await inner.ExecuteAsync(identity, command, resultCodec, ct);
+            return await inner.ExecuteAsync(idempotencyKey, write, ct);
         }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
+            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData where TResult : notnull =>
+            inner.ExecuteExactAsync(idempotencyKey, write, ct);
     }
 
     private static TenantLedgerEntry Charge(Scenario scenario, string suffix, decimal amount) => new()
@@ -2422,23 +2458,29 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             Task.FromResult(false);
     }
 
-    private sealed class ThrowAfterFinalizeAtomicUnitOfWork(IAtomicUnitOfWork inner)
-        : IAtomicUnitOfWork
+    private sealed class ThrowAfterFinalizeRequestWriteExecutor(IRequestWriteExecutor inner)
+        : IRequestWriteExecutor
     {
         private int _thrown;
 
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity, TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec, CancellationToken ct = default)
+            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
-            var outcome = await inner.ExecuteAsync(identity, command, resultCodec, ct);
-            if (identity.CommandType.StartsWith("payments.provider-create.finalize:", StringComparison.Ordinal)
+            var outcome = await inner.ExecuteAsync(idempotencyKey, write, ct);
+            if (write.OperationName.StartsWith("payments.provider-create.finalize:", StringComparison.Ordinal)
                 && Interlocked.Exchange(ref _thrown, 1) == 0)
                 throw new FinalizeResponseLostException();
             return outcome;
         }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
+            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData where TResult : notnull =>
+            inner.ExecuteExactAsync(idempotencyKey, write, ct);
     }
 
     private sealed class FinalizeResponseLostException()

@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Payments;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Payments;
@@ -81,16 +82,20 @@ public class StripeCheckoutTests : IDisposable
             new SandboxGuard(_ctx.Db),
             NullLogger<StripePaymentService>.Instance,
             TimeProvider.System,
-            enabled ? new CanonicalNotFoundAtomicUnitOfWork() : new UnexpectedAtomicUnitOfWork());
+            _ctx.Db,
+            enabled
+                ? new CanonicalNotFoundRequestWriteExecutor()
+                : new UnexpectedRequestWriteExecutor());
     }
 
-    private sealed class CanonicalNotFoundAtomicUnitOfWork : IAtomicUnitOfWork
+    private sealed class CanonicalNotFoundRequestWriteExecutor : IRequestWriteExecutor
     {
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity, TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec, CancellationToken ct = default)
+            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData where TResult : notnull
         {
+            var command = write.Request;
             object result = command switch
             {
                 PrepareProviderPaymentCreateCommand prepare => new PrepareProviderPaymentCreateResult(
@@ -106,6 +111,15 @@ public class StripeCheckoutTests : IDisposable
             return Task.FromResult(new AtomicCommandOutcome<TResult>(
                 (TResult)result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
         }
+    }
+
+    private sealed class UnexpectedRequestWriteExecutor : IRequestWriteExecutor
+    {
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData where TResult : notnull =>
+            throw new InvalidOperationException("A provider write was not expected.");
     }
 
 }
