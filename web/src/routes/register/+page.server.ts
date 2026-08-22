@@ -7,15 +7,19 @@
  * the "Check your email" confirmation state.
  */
 
-import { fail } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
 import { createHash } from 'node:crypto';
 import type { Actions, PageServerLoad } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import { env } from '$env/dynamic/public';
+import { safeLandingForAccess } from '$lib/auth/experience-policy';
 
 export const load: PageServerLoad = async ({ locals }) => {
-	// Already logged in — nothing to expose; layout redirect handles the guard.
-	void locals;
+	// /register sits outside the (protected) layout group, so no layout guard
+	// runs here — redirect an authenticated user the same way /login does.
+	if (locals.user) {
+		throw redirect(303, locals.access ? (safeLandingForAccess(locals.access) ?? '/logout') : '/logout');
+	}
 	return {
 		googleEnabled: Boolean(env.PUBLIC_GOOGLE_CLIENT_ID)
 	};
