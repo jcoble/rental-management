@@ -24,7 +24,7 @@ namespace RentalCommand.Api.Tests.Voice;
 /// The slot-filling "Tell me" conversation: speak a partial expense, get asked
 /// for the missing field, answer it, and reach a complete draft.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public class VoiceConversationTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;

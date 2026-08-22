@@ -21,7 +21,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name2)]
 public sealed class HistoricalRentRecoveryPostgreSqlTests
 {
     private const string ApiPassword = "historical-rent-api-role-test-password";
