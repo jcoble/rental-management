@@ -92,32 +92,106 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
         recorder.Sequence.Should().Equal(("Unit", 606), ("LeaseManagement", 707));
     }
 
+    /// <summary>
+    /// Pins every protocol's derived namespace order. Call sites now pass only ids, so this table
+    /// is the sole guard against a mapping drifting in <see cref="WriteLockPlan"/>'s protocol
+    /// table: a changed or added protocol must be re-pinned here deliberately.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<WriteLockProtocol, string[]> PinnedProtocolNamespaces =
+        new Dictionary<WriteLockProtocol, string[]>
+        {
+            [WriteLockProtocol.AuthorizationScope] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio"],
+            [WriteLockProtocol.AuthorizationScopeOwnerEntity] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "OwnerEntity"],
+            [WriteLockProtocol.AuthorizationScopeVendor] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Vendor"],
+            [WriteLockProtocol.AuthorizationScopeProperty] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Property"],
+            [WriteLockProtocol.AuthorizationScopeUnit] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Unit"],
+            [WriteLockProtocol.AuthorizationScopeApplication] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "RentalApplication"],
+            [WriteLockProtocol.AuthorizationScopeTenant] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "Tenant"],
+            [WriteLockProtocol.AuthorizationScopeScanDraft] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "ScanDraft"],
+            [WriteLockProtocol.AuthorizationScopeRentalApplication] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "RentalApplication"],
+            [WriteLockProtocol.Portfolio] = ["Portfolio"],
+            [WriteLockProtocol.StoredFile] = ["StoredFile"],
+            [WriteLockProtocol.WorkOrder] = ["WorkOrder"],
+            [WriteLockProtocol.VendorDispatchInbound] = ["VendorDispatch"],
+            [WriteLockProtocol.WorkOrderResponsibility] = [],
+            [WriteLockProtocol.WorkspaceAccessContextWorkOrder] =
+                ["WorkspaceAccessContext", "WorkOrder"],
+            [WriteLockProtocol.WorkOrderVendor] = ["WorkOrder", "Vendor"],
+            [WriteLockProtocol.Vendor] = ["Vendor"],
+            [WriteLockProtocol.AppointmentWorkOrder] = ["Appointment"],
+            [WriteLockProtocol.WorkOrderAppointmentProgression] = [],
+            [WriteLockProtocol.Possession] = ["Unit", "LeaseManagement"],
+            [WriteLockProtocol.ConfirmMoveIn] = ["Unit", "LeaseManagement", "TenantAccount"],
+            [WriteLockProtocol.LeaseParty] = ["LeaseManagement"],
+            [WriteLockProtocol.LeasePartyAccessGrant] = ["LeaseManagement"],
+            [WriteLockProtocol.LeasePartyAccessRevoke] = ["LeaseManagement"],
+            [WriteLockProtocol.TenantAccount] = ["TenantAccount"],
+            [WriteLockProtocol.RentalApplication] = ["RentalApplication"],
+            [WriteLockProtocol.TenantAccountRecurringCharge] =
+                ["TenantAccount", "RecurringTenantCharge"],
+            [WriteLockProtocol.AuthorizationScopeLedgerAccount] =
+                ["AuthSession", "WorkspaceAccessContext", "Portfolio", "LedgerAccount"],
+            [WriteLockProtocol.AuthorizationScopeTenantAccount] =
+                ["AuthSession", "WorkspaceAccessContext", "TenantAccount"],
+            [WriteLockProtocol.AuthorizationScopeAccountingConnection] =
+                ["AuthSession", "WorkspaceAccessContext", "AccountingConnection"],
+            [WriteLockProtocol.AccountingConnection] = ["AccountingConnection"],
+            [WriteLockProtocol.NativeEsignLeaseManagement] = ["LeaseManagement"],
+            [WriteLockProtocol.NativeEsignRequest] = ["SignatureRequest"],
+            [WriteLockProtocol.PrepareMoveIn] = ["Unit"],
+            [WriteLockProtocol.LeaseManagement] = ["LeaseManagement"],
+            [WriteLockProtocol.LeaseAgreementDraft] =
+                ["AuthSession", "WorkspaceAccessContext", "LeaseManagement"],
+            [WriteLockProtocol.LeaseTransfer] = ["Unit", "Unit", "LeaseManagement"],
+            [WriteLockProtocol.PropertyDisposition] = ["Property"],
+            [WriteLockProtocol.BankingPrepareExchange] =
+                ["AuthSession", "WorkspaceAccessContext", "BankConnection"],
+            [WriteLockProtocol.BankingConnection] = ["BankConnection"],
+            [WriteLockProtocol.BankingApplyConnection] = ["BankConnection"],
+            [WriteLockProtocol.BankingReconciliation] =
+                ["AuthSession", "WorkspaceAccessContext"],
+            [WriteLockProtocol.BankingRoute] =
+                ["AuthSession", "WorkspaceAccessContext", "BankTransaction"],
+        };
+
     [Fact]
-    public void ExplicitProtocols_DeriveCommonPrefixAndLegacyMultiAggregateOrder()
+    public void EveryProtocol_DerivesItsPinnedNamespaceOrder()
     {
-        var authSessionId = Guid.Parse("9e10d15b-f5f0-48c0-9334-3215f24d07b5");
+        var protocols = Enum.GetValues<WriteLockProtocol>();
+        PinnedProtocolNamespaces.Keys.Should().BeEquivalentTo(
+            protocols, "every protocol must be pinned here when it is added");
 
-        var commonPrefix = new WriteLockPlan(
-            WriteLockProtocol.AuthorizationScope,
-            authSessionId,
-            11,
-            12);
-        var possession = new WriteLockPlan(
-            WriteLockProtocol.Possession,
-            21,
-            22);
-        var confirmMoveIn = new WriteLockPlan(
-            WriteLockProtocol.ConfirmMoveIn,
-            31,
-            32,
-            33);
+        foreach (var protocol in protocols)
+        {
+            var expected = PinnedProtocolNamespaces[protocol];
+            var ids = Enumerable.Range(101, expected.Length).Cast<object>().ToArray();
 
-        commonPrefix.Locks.Select(item => item.LockNamespace).Should()
-            .Equal("AuthSession", "WorkspaceAccessContext", "Portfolio");
-        possession.Locks.Select(item => item.LockNamespace).Should()
-            .Equal("Unit", "LeaseManagement");
-        confirmMoveIn.Locks.Select(item => item.LockNamespace).Should()
-            .Equal("Unit", "LeaseManagement", "TenantAccount");
+            var plan = new WriteLockPlan(protocol, ids);
+
+            plan.Locks.Select(item => item.LockNamespace).Should()
+                .Equal(expected, "protocol '{0}' namespace order is pinned", protocol);
+            plan.Locks.Select(item => (object)item.IntegerId!.Value).Should()
+                .Equal(ids, "ids must bind positionally for protocol '{0}'", protocol);
+        }
+    }
+
+    [Fact]
+    public void Protocol_RejectsWrongLockIdCount()
+    {
+        var incomplete = () => new WriteLockPlan(WriteLockProtocol.ConfirmMoveIn, 31, 32);
+        var excess = () => new WriteLockPlan(WriteLockProtocol.Possession, 21, 22, 23);
+
+        incomplete.Should().Throw<ArgumentException>();
+        excess.Should().Throw<ArgumentException>();
     }
 
     [Fact]
