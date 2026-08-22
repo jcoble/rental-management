@@ -16,17 +16,17 @@ using RentalCommand.Data.Security;
 using RentalCommand.Data.Simulation;
 using RentalCommand.Engine.Data;
 using RentalCommand.Engine.Writes;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
 /// <summary>Real PostgreSQL proof for the scan and dev-simulation leased queue boundaries.</summary>
 public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
 {
-    private const string ApiPassword = "scan-claim-api-password";
-    private const string EnginePassword = "scan-claim-engine-password";
+    private const string ApiPassword = SharedPostgreSqlDatabase.ApiPassword;
+    private const string EnginePassword = SharedPostgreSqlDatabase.EnginePassword;
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private string _connectionString = string.Empty;
     private string _engineConnectionString = string.Empty;
     private bool _dockerAvailable;
@@ -35,12 +35,7 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
         }
         catch
@@ -60,11 +55,6 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         _engineConnectionString = RuntimeConnectionString(
             DatabaseRuntimeIdentity.EngineRole,
             EnginePassword);
-        await RuntimeDatabaseRoleProvisioner.ProvisionAsync(
-            _connectionString,
-            apiConnectionString,
-            _engineConnectionString,
-            allowDevelopmentDefaults: true);
     }
 
     public async Task DisposeAsync()

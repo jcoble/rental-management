@@ -16,7 +16,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// labels must be resolved by the same SQL statement as the authorized, stably ordered ten-row audit
 /// page. Entity branches remain correlated to that bounded page in SQL.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public class DashboardRecentActivityTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

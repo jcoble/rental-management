@@ -19,7 +19,7 @@ using Xunit;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection2.Name)]
 public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
 {
     private static readonly DateTime InterceptorNow =

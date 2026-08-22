@@ -299,7 +299,7 @@ public sealed class PortalServiceBalanceTests
             .Options);
 }
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;

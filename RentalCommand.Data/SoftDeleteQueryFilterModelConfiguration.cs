@@ -30,6 +30,8 @@ internal static class SoftDeleteQueryFilterModelConfiguration
         // Dependent of Loan (Loan has its own `DeletedAt == null`). The amortization rows disappear
         // when the loan is soft-deleted, so a deleted loan's interest never leaks into a report.
         modelBuilder.Entity<LoanPayment>().HasQueryFilter(e => e.Loan!.DeletedAt == null);
+        modelBuilder.Entity<LoanPaymentCorrection>()
+            .HasQueryFilter(e => e.LoanPayment!.Loan!.DeletedAt == null);
 
         // Dependents of Portfolio (Portfolio has `DeletedAt == null`).
         modelBuilder.Entity<AccountingConnection>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
@@ -86,4 +88,3 @@ internal static class SoftDeleteQueryFilterModelConfiguration
             .HasQueryFilter(e => e.JournalEntry!.Portfolio!.DeletedAt == null);
     }
 }
-

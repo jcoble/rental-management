@@ -12,7 +12,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -24,7 +24,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         new("atomic-expense-result.v2");
     private static readonly AtomicJsonResultCodec<EventResult> EventCodec =
         new("atomic-event-result.v1");
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private int _portfolioId;
@@ -39,12 +39,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
 
         // Once Docker passes the explicit preflight, startup, migration, DI, and application errors
         // are deliberately not caught: they fail the test class instead of becoming false skips.
-        _postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
-            .WithDatabase("rentalcommand")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
         await _postgres.StartAsync();
 
         var services = new ServiceCollection();

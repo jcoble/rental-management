@@ -11,7 +11,7 @@ public sealed class PortfolioVisibilityQueryFilterTests
     [Fact]
     public void Required_relationships_below_filtered_principals_have_transitive_filters()
     {
-        using var db = CreateDb();
+        using var db = CreateDb(throwOnRequiredNavigationFilterWarning: true);
 
         var unfilteredRequiredDependents = db.Model.GetEntityTypes()
             .SelectMany(dependent => dependent.GetForeignKeys()
@@ -117,13 +117,18 @@ public sealed class PortfolioVisibilityQueryFilterTests
         RentalCommandDbContext db) where TEntity : class =>
         db.Model.FindEntityType(typeof(TEntity))!.GetQueryFilter()!;
 
-    private static RentalCommandDbContext CreateDb()
+    private static RentalCommandDbContext CreateDb(
+        bool throwOnRequiredNavigationFilterWarning = false)
     {
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseNpgsql("Host=localhost;Database=query_filter_contract;Username=contract;Password=contract")
-            .ConfigureWarnings(warnings => warnings.Throw(
-                CoreEventId.PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning))
-            .Options;
+        var builder = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseNpgsql("Host=localhost;Database=query_filter_contract;Username=contract;Password=contract");
+        if (throwOnRequiredNavigationFilterWarning)
+        {
+            builder.ConfigureWarnings(warnings => warnings.Throw(
+                CoreEventId.PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning));
+        }
+
+        var options = builder.Options;
         return new RentalCommandDbContext(options);
     }
 }

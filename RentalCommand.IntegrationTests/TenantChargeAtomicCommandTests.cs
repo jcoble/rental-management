@@ -17,7 +17,7 @@ using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -42,7 +42,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
     private static readonly AtomicJsonResultCodec<SecurityDepositMutationResult> DepositCodec =
         new("tenant-account.deposit.mutation.v1");
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
 
@@ -50,12 +50,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_tenant_charge_atomic")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }

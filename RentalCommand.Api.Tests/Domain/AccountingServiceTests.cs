@@ -25,7 +25,7 @@ namespace RentalCommand.Api.Tests.Domain;
 
 // These service tests use the same migrated PostgreSQL schema and API role as production so
 // provider-specific functions, views, RLS policies, and constraints remain part of the contract.
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name2)]
 public class AccountingServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

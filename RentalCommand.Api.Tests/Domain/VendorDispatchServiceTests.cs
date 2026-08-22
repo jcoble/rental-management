@@ -29,7 +29,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Covers vendor SMS dispatch (creates an open dispatch + enqueues the job SMS), a vendor DONE reply
 /// closing the work order + dispatch, and ratings updating the scorecard aggregates.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public class VendorDispatchServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

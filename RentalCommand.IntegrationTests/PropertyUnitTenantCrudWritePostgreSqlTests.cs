@@ -17,7 +17,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection2.Name)]
 public sealed class PropertyUnitTenantCrudWritePostgreSqlTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;

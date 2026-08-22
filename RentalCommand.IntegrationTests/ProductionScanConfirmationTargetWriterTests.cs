@@ -22,7 +22,6 @@ using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -48,7 +47,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     private static readonly AtomicJsonResultCodec<TenantPaymentRefundResult> RefundCodec =
         new("tenant-account.payment.refund.v1");
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private int _portfolioId;
@@ -72,12 +71,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         _dockerAvailable = await DockerSocketPreflightAsync();
         if (!_dockerAvailable) return;
 
-        _postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
-            .WithDatabase("rentalcommand")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Model);
         await _postgres.StartAsync();
 
         var services = new ServiceCollection();

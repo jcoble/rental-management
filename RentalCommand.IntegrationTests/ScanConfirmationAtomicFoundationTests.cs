@@ -14,7 +14,7 @@ using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Scanning;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -29,7 +29,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
     private static readonly Guid SessionId =
         Guid.Parse("44444444-4444-4444-4444-444444444444");
 
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private int _portfolioId;
@@ -44,12 +44,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             return;
         }
 
-        _postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
-            .WithDatabase("rentalcommand")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
         await _postgres.StartAsync();
 
         var services = new ServiceCollection();

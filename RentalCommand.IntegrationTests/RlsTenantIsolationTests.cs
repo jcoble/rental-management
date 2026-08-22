@@ -5,7 +5,6 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -35,13 +34,12 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
 {
     private const string ApiRole = "rentalcommand_api";
     private const string EngineRole = "rentalcommand_engine";
-    private const string ApiPassword = "rls-api-test-password";
-    private const string EnginePassword = "rls-engine-test-password";
+    private const string ApiPassword = SharedPostgreSqlDatabase.ApiPassword;
+    private const string EnginePassword = SharedPostgreSqlDatabase.EnginePassword;
 
-    // Built inside InitializeAsync (not as a field initializer): PostgreSqlBuilder.Build() validates
-    // the Docker endpoint eagerly, so building it here lets a missing daemon be caught and skipped
-    // instead of throwing in the test constructor.
-    private PostgreSqlContainer? _pg;
+    // Acquired inside InitializeAsync so a missing Docker daemon can be caught and skipped instead
+    // of throwing in the test constructor.
+    private SharedPostgreSqlDatabase? _pg;
 
     private bool _dockerAvailable;
     private string _ownerConnString = string.Empty;
@@ -58,12 +56,7 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
     {
         try
         {
-            _pg = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _pg = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _pg.StartAsync();
             _dockerAvailable = true;
         }
@@ -81,8 +74,6 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         await using (var ctx = NewContext(_ownerConnString))
         {
             await ctx.Database.MigrateAsync();
-            await ctx.Database.ExecuteSqlRawAsync(
-                $"ALTER ROLE {ApiRole} PASSWORD '{ApiPassword}'; ALTER ROLE {EngineRole} PASSWORD '{EnginePassword}';");
         }
 
         // Seed two portfolios' data as the owner/superuser (which bypasses RLS for the inserts).

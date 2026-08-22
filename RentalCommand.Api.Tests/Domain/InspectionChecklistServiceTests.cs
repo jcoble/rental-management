@@ -30,7 +30,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// endpoint, starting an inspection from a template materializes Pending items, and completing an
 /// inspection spawns a work order per Fail item, flips status to Completed, and records a report file.
 /// </summary>
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public class InspectionChecklistServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

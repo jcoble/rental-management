@@ -941,7 +941,7 @@ public class TenantServiceTests : IDisposable
     }
 }
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public sealed class TenantServicePostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

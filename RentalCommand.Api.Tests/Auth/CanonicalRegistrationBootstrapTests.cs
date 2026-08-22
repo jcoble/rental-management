@@ -29,7 +29,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name4)]
 public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;

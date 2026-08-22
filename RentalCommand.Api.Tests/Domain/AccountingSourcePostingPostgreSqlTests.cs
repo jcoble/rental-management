@@ -10,7 +10,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name3)]
 public sealed class AccountingSourcePostingPostgreSqlTests
 {
     private readonly MigratedPostgreSqlFixture _fixture;

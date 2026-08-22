@@ -18,7 +18,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name4)]
 public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture postgres)
 {
     private static readonly DateTime FrozenBusinessNowUtc = new(2027, 1, 15, 12, 0, 0, DateTimeKind.Utc);

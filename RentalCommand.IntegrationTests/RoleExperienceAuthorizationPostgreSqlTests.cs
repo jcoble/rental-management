@@ -13,7 +13,7 @@ using Xunit;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection3.Name)]
 public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;

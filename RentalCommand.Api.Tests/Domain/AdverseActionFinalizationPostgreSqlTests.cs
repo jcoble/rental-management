@@ -22,7 +22,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-[Collection(MigratedPostgreSqlCollection.Name)]
+[Collection(MigratedPostgreSqlCollection.Name1)]
 public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;

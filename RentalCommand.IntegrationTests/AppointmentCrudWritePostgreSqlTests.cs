@@ -19,7 +19,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
-[Collection(RoleAuthorityPostgreSqlCollection.Name)]
+[Collection(RoleAuthorityPostgreSqlCollection4.Name)]
 public sealed class AppointmentCrudWritePostgreSqlTests : IAsyncLifetime
 {
     private static readonly DateTime BusinessNow =

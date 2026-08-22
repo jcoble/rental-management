@@ -5,14 +5,14 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.Data.Esign;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
 /// <summary>Real PostgreSQL proof for native e-sign execution leases and fencing.</summary>
 public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private string _connectionString = string.Empty;
     private bool _dockerAvailable;
 
@@ -20,12 +20,7 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
         }
         catch

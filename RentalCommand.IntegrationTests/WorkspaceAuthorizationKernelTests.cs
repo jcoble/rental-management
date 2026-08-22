@@ -24,7 +24,7 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Auth;
 using RentalCommand.Data.Authorization;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.IntegrationTests;
@@ -36,7 +36,7 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 {
-    private const string ApiPassword = "workspace-authorization-api-test-password";
+    private const string ApiPassword = SharedPostgreSqlDatabase.ApiPassword;
     private static readonly AtomicJsonResultCodec<WorkspaceAccessMutationResult> MutationCodec =
         new("workspace-access-mutation-result.v1");
     private static readonly AtomicJsonResultCodec<CreateWorkspaceMembershipResult> TeamCreateCodec =
@@ -45,7 +45,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         new("workspace-team.mutation.v1");
     private static readonly AtomicJsonResultCodec<StartAuthSessionResult> StartSessionCodec =
         new("auth-session-start-result:v1");
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
@@ -71,12 +71,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     {
         try
         {
-            _postgres = new PostgreSqlBuilder()
-                .WithImage("postgres:16-alpine")
-                .WithDatabase("rentalcommand_access")
-                .WithUsername("postgres")
-                .WithPassword("postgres")
-                .Build();
+            _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
             await _postgres.StartAsync();
             _dockerAvailable = true;
         }
@@ -89,8 +84,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         _connectionString = _postgres.GetConnectionString();
         await using var db = NewContext();
         await db.Database.MigrateAsync();
-        await db.Database.ExecuteSqlRawAsync(
-            $"ALTER ROLE rentalcommand_api PASSWORD '{ApiPassword}';");
         await SeedKernelAsync(db);
         _apiConnectionString = new NpgsqlConnectionStringBuilder(_connectionString)
         {

@@ -12,14 +12,14 @@ using RentalCommand.Data;
 using RentalCommand.Data.Outbox;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
-using Testcontainers.PostgreSql;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
 
 /// <summary>Real PostgreSQL proof for claim ordering, concurrency, expiry, and fencing.</summary>
 public sealed class OutboxClaimStoreTests : IAsyncLifetime
 {
-    private PostgreSqlContainer? _postgres;
+    private SharedPostgreSqlDatabase? _postgres;
     private string? _connectionString;
     private bool _dockerAvailable;
 
@@ -28,12 +28,7 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         _dockerAvailable = await DockerSocketPreflightAsync();
         if (!_dockerAvailable) return;
 
-        _postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
-            .WithDatabase("rentalcommand")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _postgres = new SharedPostgreSqlDatabase(SharedPostgreSqlSchema.Migrated);
         await _postgres.StartAsync();
         _connectionString = _postgres.GetConnectionString();
 
