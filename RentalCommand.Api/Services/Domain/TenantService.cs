@@ -24,7 +24,6 @@ public class TenantService : ITenantService
     private const int MaxSearchTokens = 8;
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAtomicUnitOfWork? _atomic;
     private readonly IRequestWriteExecutor? _writes;
     private readonly PropertyTenantCrudWriteRules _crudRules;
     private readonly TimeProvider _timeProvider;
@@ -33,13 +32,11 @@ public class TenantService : ITenantService
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null,
         IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
-        _atomic = atomic;
         _writes = writes;
         _crudRules = new PropertyTenantCrudWriteRules(db);
     }
@@ -66,8 +63,9 @@ public class TenantService : ITenantService
         CancellationToken ct = default)
     {
         var command = AtomicGuidedTenantSetup.Command(scope, request, operationKey);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicGuidedTenantSetup.Identity(command), command, AtomicGuidedTenantSetup.Codec, ct);
+        var outcome = await RequireWrites().ExecuteExactAsync(
+            AtomicGuidedTenantSetup.Identity(command).IdempotencyKey,
+            AtomicGuidedTenantSetup.Write(_db, command), ct);
         return JsonSerializer.Deserialize<List<TenantResponse>>(outcome.Value.TenantsJson) ?? [];
     }
 
@@ -103,9 +101,6 @@ public class TenantService : ITenantService
             CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found;
     }
-
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Tenant changes must use the standard save process.");
 
     private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
         "Tenant changes must use the shared write executor.");

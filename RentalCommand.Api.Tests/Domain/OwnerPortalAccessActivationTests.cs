@@ -767,10 +767,9 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
     }
 
     private OwnerEntityService Service() => new(
-        _ctx.Db,
+        _services.GetRequiredService<RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
         new FixedTimeProvider(FrozenBusinessNowUtc),
-        _services.GetRequiredService<IAtomicUnitOfWork>(),
         writes: _services.GetRequiredService<IRequestWriteExecutor>());
 
     private static ServiceProvider BuildServices(
@@ -1002,6 +1001,7 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
 
     private async Task<OwnerEntityResponse> ProjectOwnerForGridAsync(int ownerId)
     {
+        var db = _services.GetRequiredService<RentalCommandDbContext>();
         var method = typeof(OwnerEntityService).GetMethod(
             "ProjectOwnerResponses",
             BindingFlags.Instance | BindingFlags.NonPublic);
@@ -1009,8 +1009,8 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
 
         var query = (IQueryable<OwnerEntityResponse>)method!.Invoke(_sut,
         [
-            _ctx.Db.OwnerEntities.AsNoTracking().Where(owner => owner.Id == ownerId),
-            _ctx.Db.Properties.AsNoTracking().Where(property => property.PortfolioId == PortfolioId),
+            db.OwnerEntities.AsNoTracking().Where(owner => owner.Id == ownerId),
+            db.Properties.AsNoTracking().Where(property => property.PortfolioId == PortfolioId),
         ])!;
         return await query.SingleAsync();
     }

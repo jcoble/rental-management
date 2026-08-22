@@ -10,6 +10,42 @@ using RentalCommand.Core.Owners;
 
 namespace RentalCommand.Data.Owners;
 
+public static class OwnerPortalWriteSupport
+{
+    public static TransactionalWrite<TCommand, OwnerPortalCommandResult> Write<TCommand>(
+        RentalCommandDbContext db,
+        TCommand command)
+        where TCommand : notnull, IAtomicCommandData
+    {
+        object write = command switch
+        {
+            DecideOwnerApprovalCommand value => Build(
+                "owner-portal.approval-decision", "owner-portal.approval-decision.v1", value,
+                new DecideOwnerApprovalHandler(db).ExecuteAsync,
+                new DecideOwnerApprovalHandler(db).AuthorizeReplayAsync),
+            ReplyToOwnerMessageCommand value => Build(
+                "owner-portal.message-reply", "owner-portal.message-reply.v1", value,
+                new ReplyToOwnerMessageHandler(db).ExecuteAsync,
+                new ReplyToOwnerMessageHandler(db).AuthorizeReplayAsync),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return (TransactionalWrite<TCommand, OwnerPortalCommandResult>)write;
+    }
+
+    private static TransactionalWrite<TCommand, OwnerPortalCommandResult> Build<TCommand>(
+        string operationName,
+        string resultContract,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<OwnerPortalCommandResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData => new(
+            operationName, WriteIdempotencyPolicy.Required, command, resultContract,
+            WriteLockPlan.None, executeAsync, authorizeReplayAsync);
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy owner portal writes are retired; use the shared write executor.");
+}
+
 public sealed class DecideOwnerApprovalHandler
     : IAtomicCommandHandler<DecideOwnerApprovalCommand, OwnerPortalCommandResult>
 {
@@ -18,6 +54,11 @@ public sealed class DecideOwnerApprovalHandler
     public DecideOwnerApprovalHandler(RentalCommandDbContext db) => _db = db;
 
     public Task<OwnerPortalCommandResult> HandleAsync(
+        DecideOwnerApprovalCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw OwnerPortalWriteSupport.RetiredPath();
+
+    public Task<OwnerPortalCommandResult> ExecuteAsync(
         DecideOwnerApprovalCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -70,6 +111,11 @@ public sealed class ReplyToOwnerMessageHandler
     public ReplyToOwnerMessageHandler(RentalCommandDbContext db) => _db = db;
 
     public Task<OwnerPortalCommandResult> HandleAsync(
+        ReplyToOwnerMessageCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw OwnerPortalWriteSupport.RetiredPath();
+
+    public Task<OwnerPortalCommandResult> ExecuteAsync(
         ReplyToOwnerMessageCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

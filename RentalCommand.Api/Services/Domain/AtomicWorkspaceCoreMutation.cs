@@ -45,7 +45,13 @@ public sealed class AtomicWorkspaceCoreMutationHandler
 
     public AtomicWorkspaceCoreMutationHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AtomicWorkspaceCoreMutationResult> HandleAsync(
+    public Task<AtomicWorkspaceCoreMutationResult> HandleAsync(
+        AtomicWorkspaceCoreMutationCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw new InvalidOperationException(
+            "Legacy workspace core writes are retired; use the shared write executor.");
+
+    public async Task<AtomicWorkspaceCoreMutationResult> ExecuteAsync(
         AtomicWorkspaceCoreMutationCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -274,6 +280,16 @@ public static class AtomicWorkspaceCoreMutation
 {
     public static readonly AtomicJsonResultCodec<AtomicWorkspaceCoreMutationResult> Codec =
         new("rental.workspace-core-mutation.v1");
+
+    public static TransactionalWrite<AtomicWorkspaceCoreMutationCommand, AtomicWorkspaceCoreMutationResult> Write(
+        RentalCommandDbContext db,
+        AtomicWorkspaceCoreMutationCommand command)
+    {
+        var handler = new AtomicWorkspaceCoreMutationHandler(db);
+        return new TransactionalWrite<AtomicWorkspaceCoreMutationCommand, AtomicWorkspaceCoreMutationResult>(
+            Identity(command).CommandType, WriteIdempotencyPolicy.Required, command, Codec.ContractName,
+            WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
 
     public static AtomicWorkspaceCoreMutationCommand Command<TRequest>(
         WorkspaceReadScope scope,

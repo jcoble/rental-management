@@ -9,6 +9,8 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.AiIntegrations;
+using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -47,13 +49,7 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
     private readonly IReadOnlyDictionary<string, ILlmCredentialProbe> _probes;
     private readonly IWorkspaceAuthorizationEvaluator _authorization;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
-    private static readonly AtomicJsonResultCodec<AiIntegrationStatusResult> StatusCodec =
-        new("ai.integration.status.v1");
-    private static readonly AtomicJsonResultCodec<RemoveWorkspaceLlmCredentialResult> RemoveCodec =
-        new("ai.integration.remove.v1");
-    private static readonly AtomicJsonResultCodec<RecordLlmUsageEvidenceResult> UsageCodec =
-        new("ai.integration.usage.v1");
+    private readonly IRequestWriteExecutor _writes;
 
     public WorkspaceLlmCredentialService(
         RentalCommandDbContext db,
@@ -61,14 +57,14 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
         IEnumerable<ILlmCredentialProbe> probes,
         IWorkspaceAuthorizationEvaluator authorization,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _protector = dataProtection.CreateProtector(ProtectorPurpose);
         _probes = probes.ToDictionary(probe => probe.ProviderKey, StringComparer.OrdinalIgnoreCase);
         _authorization = authorization;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     public Task<bool> AuthorizeAsync(ActiveAccessContext access, CancellationToken ct = default) =>
@@ -132,10 +128,10 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             ApiKeyIntentDigest(normalized.Provider, normalized.ModelId, normalized.ApiKey),
             Encrypt(normalized.ApiKey),
             now);
-        var identity = new AtomicCommandIdentity(
-            "ai.integration.credential.activate",
-            MutationIdentity(access.PortfolioId, request.ClientOperationId));
-        var outcome = await _atomic.ExecuteAsync(identity, command, StatusCodec, ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            MutationIdentity(access.PortfolioId, request.ClientOperationId),
+            AiIntegrationWriteSupport.Write<ActivateWorkspaceLlmCredentialCommand, AiIntegrationStatusResult>(
+                _db, command), ct);
         return MapStatus(outcome.Value);
     }
 
@@ -160,10 +156,10 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             ApiKeyIntentDigest(normalized.Provider, normalized.ModelId, normalized.ApiKey),
             Encrypt(normalized.ApiKey),
             now);
-        var identity = new AtomicCommandIdentity(
-            "ai.integration.credential.rotate",
-            MutationIdentity(access.PortfolioId, request.ClientOperationId));
-        var outcome = await _atomic.ExecuteAsync(identity, command, StatusCodec, ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            MutationIdentity(access.PortfolioId, request.ClientOperationId),
+            AiIntegrationWriteSupport.Write<RotateWorkspaceLlmCredentialCommand, AiIntegrationStatusResult>(
+                _db, command), ct);
         return MapStatus(outcome.Value);
     }
 
@@ -180,10 +176,10 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             access.AccessContextId,
             access.AccessRevision,
             _timeProvider.GetUtcNow().UtcDateTime);
-        var identity = new AtomicCommandIdentity(
-            "ai.integration.credential.remove",
-            MutationIdentity(access.PortfolioId, clientOperationId));
-        await _atomic.ExecuteAsync(identity, command, RemoveCodec, ct);
+        await _writes.ExecuteExactAsync(
+            MutationIdentity(access.PortfolioId, clientOperationId),
+            AiIntegrationWriteSupport.Write<RemoveWorkspaceLlmCredentialCommand, RemoveWorkspaceLlmCredentialResult>(
+                _db, command), ct);
     }
 
     public async Task<WorkspaceLlmRuntimeCredential?> ResolveActiveAsync(
@@ -259,11 +255,10 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             outputUnits,
             estimatedCostUsd,
             _timeProvider.GetUtcNow().UtcDateTime);
-        await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("ai.integration.usage.record", $"{portfolioId}:{stableIdentity}"),
-            command,
-            UsageCodec,
-            ct);
+        await _writes.ExecuteExactAsync(
+            $"{portfolioId}:{stableIdentity}",
+            AiIntegrationWriteSupport.Write<RecordLlmUsageEvidenceCommand, RecordLlmUsageEvidenceResult>(
+                _db, command), ct);
     }
 
     public string Encrypt(string apiKey) => _protector.Protect(apiKey);

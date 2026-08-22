@@ -66,7 +66,13 @@ public sealed class AtomicInspectionMutationHandler
     private static readonly VendorDispatchStatus[] OpenVendorDispatchStatuses =
         [VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged];
 
-    public async Task<AtomicInspectionMutationResult> HandleAsync(
+    public Task<AtomicInspectionMutationResult> HandleAsync(
+        AtomicInspectionMutationCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw new InvalidOperationException(
+            "Legacy inspection writes are retired; use the shared write executor.");
+
+    public async Task<AtomicInspectionMutationResult> ExecuteAsync(
         AtomicInspectionMutationCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -1310,6 +1316,16 @@ public static class AtomicInspectionMutation
 {
     public static readonly AtomicJsonResultCodec<AtomicInspectionMutationResult> Codec =
         new("rental.inspection-mutation.v1");
+
+    public static TransactionalWrite<AtomicInspectionMutationCommand, AtomicInspectionMutationResult> Write(
+        RentalCommandDbContext db,
+        AtomicInspectionMutationCommand command)
+    {
+        var handler = new AtomicInspectionMutationHandler(db);
+        return new TransactionalWrite<AtomicInspectionMutationCommand, AtomicInspectionMutationResult>(
+            Identity(command).CommandType, WriteIdempotencyPolicy.Required, command, Codec.ContractName,
+            WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
 
     public static AtomicInspectionMutationCommand Command<TRequest>(
         WorkspaceReadScope scope,

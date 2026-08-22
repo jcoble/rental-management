@@ -259,7 +259,6 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         var controller = new ScanController(
             Mock.Of<IScanService>(),
             Mock.Of<IScanUploadService>(),
-            _serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
             _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
             Mock.Of<IScanConfirmationTargetWriter>(),
             _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),

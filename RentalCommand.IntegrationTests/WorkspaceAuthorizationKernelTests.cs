@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
+using System.Data.Common;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using RentalCommand.Api.DTOs;
@@ -99,6 +101,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<WorkspaceLockRecorder>();
         services.AddScoped<ICurrentActor, AccessTestActor>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicPersistenceKernel();
@@ -128,7 +131,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             UnsafeWorkspaceAssignmentMutationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString)
-                .UseAtomicPersistenceKernel(provider));
+                .UseAtomicPersistenceKernel(provider)
+                .AddInterceptors(provider.GetRequiredService<WorkspaceLockRecorder>()));
         _services = services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
@@ -1677,6 +1681,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var pair = await SeedTeamAuthorityPairAsync($"invite-{Guid.NewGuid():N}");
+        var locks = Services.GetRequiredService<WorkspaceLockRecorder>();
+        locks.Clear();
         var identity = new AtomicCommandIdentity("test.team.membership.create", Guid.NewGuid().ToString("N"));
         var command = new CreateWorkspaceMembershipCommand(
             pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
@@ -1711,6 +1717,9 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             message.IdempotencyKey ==
             $"workspace-invitation:{first.Value.WorkspaceMembershipId}:activation-v1"))
             .Should().Be(1);
+        locks.WorkspaceAccessContextIds.Should().ContainSingle().Which.Should().Be(
+            pair.ActorContextId,
+            "the production executor must run the command rule's exact actor-context lock once; replay only reauthorizes");
     }
 
     [SkippableFact]
@@ -2038,7 +2047,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             .ToListAsync();
         propertyIds.Should().Equal(_leasingPropertyId, _managerPropertyId);
         (await db.AtomicCommandReceipts.CountAsync(receipt =>
-            receipt.CommandType == "test.team.replace-overlap" &&
+            receipt.CommandType == "workspace-team.assignment.properties.replace" &&
             receipt.Status == AtomicCommandReceiptStatus.Completed)).Should().Be(1);
     }
 
@@ -2525,6 +2534,54 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                     AuthSessionWriteSupport.Write(start, handler.ExecuteAsync, handler.AuthorizeAsync));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
+        if (command is CreateWorkspaceMembershipCommand createMembership)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+                .ExecuteExactAsync(identity.IdempotencyKey,
+                    WorkspaceTeamWriteSupport.Write(db, createMembership));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is AddWorkspaceRoleAssignmentCommand addAssignment)
+        {
+            var provider = scope.ServiceProvider;
+            var outcome = await provider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+                identity.IdempotencyKey, WorkspaceTeamWriteSupport.Write(
+                    provider.GetRequiredService<RentalCommandDbContext>(),
+                    provider.GetRequiredService<WorkspaceAccessRevisionGuard>(),
+                    provider.GetRequiredService<IMembershipAssignmentScopeValidator>(), addAssignment));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is EndWorkspaceRoleAssignmentCommand endAssignment)
+        {
+            var provider = scope.ServiceProvider;
+            var outcome = await provider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+                identity.IdempotencyKey, WorkspaceTeamWriteSupport.Write(
+                    provider.GetRequiredService<RentalCommandDbContext>(),
+                    provider.GetRequiredService<WorkspaceAccessRevisionGuard>(),
+                    provider.GetRequiredService<IMembershipAssignmentScopeValidator>(), endAssignment));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is ReplaceWorkspaceAssignmentPropertyScopeCommand replaceScope)
+        {
+            var provider = scope.ServiceProvider;
+            var outcome = await provider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+                identity.IdempotencyKey, WorkspaceTeamWriteSupport.Write(
+                    provider.GetRequiredService<RentalCommandDbContext>(),
+                    provider.GetRequiredService<WorkspaceAccessRevisionGuard>(),
+                    provider.GetRequiredService<IMembershipAssignmentScopeValidator>(), replaceScope));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        if (command is ChangeWorkspaceMembershipStatusCommand changeStatus)
+        {
+            var provider = scope.ServiceProvider;
+            var outcome = await provider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+                identity.IdempotencyKey, WorkspaceTeamWriteSupport.Write(
+                    provider.GetRequiredService<RentalCommandDbContext>(),
+                    provider.GetRequiredService<WorkspaceAccessRevisionGuard>(),
+                    provider.GetRequiredService<IMembershipAssignmentScopeValidator>(), changeStatus));
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
         return await scope.ServiceProvider
             .GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, codec);
@@ -2535,6 +2592,32 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         long ExpectedRevision,
         int AssignmentId,
         DateTime ChangedAtUtc) : IAtomicCommandData;
+
+    private sealed class WorkspaceLockRecorder : DbCommandInterceptor
+    {
+        private const int WorkspaceAccessContextNamespace = unchecked((int)0x930364cb);
+        private readonly List<int> _workspaceAccessContextIds = [];
+
+        public IReadOnlyList<int> WorkspaceAccessContextIds => _workspaceAccessContextIds;
+
+        public void Clear() => _workspaceAccessContextIds.Clear();
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.Ordinal)
+                && command.Parameters.Count == 2
+                && command.Parameters[0].Value is int namespaceKey
+                && namespaceKey == WorkspaceAccessContextNamespace)
+            {
+                _workspaceAccessContextIds.Add(Convert.ToInt32(command.Parameters[1].Value));
+            }
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
 
     private sealed class UnsafeWorkspaceAssignmentMutationHandler
         : IAtomicCommandHandler<UnsafeWorkspaceAssignmentMutationCommand, WorkspaceAccessMutationResult>

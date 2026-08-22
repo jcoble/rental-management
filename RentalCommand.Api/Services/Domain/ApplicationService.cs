@@ -24,7 +24,6 @@ public sealed class ApplicationService : IApplicationService
     private readonly IFileStorage _files;
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor _writes;
 
     public ApplicationService(
@@ -33,7 +32,6 @@ public sealed class ApplicationService : IApplicationService
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic,
         IRequestWriteExecutor writes)
     {
         _db = db;
@@ -41,7 +39,6 @@ public sealed class ApplicationService : IApplicationService
         _dataUpdate = dataUpdate;
         _ = audit;
         _timeProvider = timeProvider;
-        _atomic = atomic;
         _writes = writes;
     }
 
@@ -460,9 +457,9 @@ public sealed class ApplicationService : IApplicationService
         var command = AtomicWorkspaceCoreMutation.Command(
             scope, AtomicWorkspaceCoreMutationOperation.RotateApplicationLink,
             operationKey, new { });
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicWorkspaceCoreMutation.Identity(command), command,
-            AtomicWorkspaceCoreMutation.Codec, ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            AtomicWorkspaceCoreMutation.Identity(command).IdempotencyKey,
+            AtomicWorkspaceCoreMutation.Write(_db, command), ct);
         if (!outcome.Value.Found || outcome.Value.PublicApplicationToken is null)
             throw new InvalidOperationException("Portfolio not found.");
 
@@ -537,8 +534,6 @@ public sealed class ApplicationService : IApplicationService
         var note = string.Join(" ", parts);
         return note.Length > 2000 ? note[..2000] : note;
     }
-
-    private IAtomicUnitOfWork Atomic => _atomic;
 
     private Task<AtomicCommandOutcome<AtomicRentalMutationResult>> ExecuteApplicationWriteAsync(
         AtomicRentalMutationCommand command,

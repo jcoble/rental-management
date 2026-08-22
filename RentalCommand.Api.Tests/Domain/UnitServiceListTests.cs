@@ -37,7 +37,7 @@ public class UnitServiceListTests : IAsyncLifetime
         _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = SeedCanonicalLeaseReadModel();
         _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(),
-            TimeProvider.System, Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            TimeProvider.System, Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
     }
 
     private WorkspaceReadScope SeedCanonicalLeaseReadModel()

@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
@@ -34,7 +35,7 @@ public class DemoDataSeeder
     private readonly RentalCommandDbContext _db;
     private readonly ILogger<DemoDataSeeder> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
     private readonly IAtomicCommandContext _atomicContext;
     private readonly ILeaseAgreementRenderer _agreementRenderer;
     private readonly ILeaseAgreementPdfGenerator _agreementPdf;
@@ -46,7 +47,7 @@ public class DemoDataSeeder
         RentalCommandDbContext db,
         ILogger<DemoDataSeeder> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
         IAtomicCommandContext atomicContext,
         ILeaseAgreementRenderer agreementRenderer,
         ILeaseAgreementPdfGenerator agreementPdf,
@@ -57,7 +58,7 @@ public class DemoDataSeeder
         _db = db;
         _logger = logger;
         _timeProvider = timeProvider;
-        _atomic = atomic;
+        _writes = writes;
         _atomicContext = atomicContext;
         _agreementRenderer = agreementRenderer;
         _agreementPdf = agreementPdf;
@@ -165,13 +166,9 @@ public class DemoDataSeeder
             requirePendingSandboxOnboarding,
             businessNowUtc,
             operationKey);
-        await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                "sandbox.demo-seed",
-                $"portfolio:{portfolioId}:{operationKey}"),
-            command,
-            DemoSeedCommandHandler.ResultCodec,
-            ct);
+        await _writes.ExecuteExactAsync(
+            $"portfolio:{portfolioId}:{operationKey}",
+            DemoSeedCommandHandler.Write(_db, command), ct);
         await CompleteLegalArtifactsAsync(
             portfolioId,
             ct);
@@ -192,13 +189,9 @@ public class DemoDataSeeder
         {
             var prepared = await PrepareLegalDocumentAsync(legalIntent, ct);
             var finalizeCommand = ToFinalizeCommand(prepared);
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "sandbox.demo-legal-finalize",
-                    $"portfolio:{portfolioId}:agreement:{finalizeCommand.AgreementId}:v1"),
-                finalizeCommand,
-                DemoLegalDocumentFinalizeCommandHandler.ResultCodec,
-                ct);
+            var outcome = await _writes.ExecuteExactAsync(
+                $"portfolio:{portfolioId}:agreement:{finalizeCommand.AgreementId}:v1",
+                DemoLegalDocumentFinalizeCommandHandler.Write(_db, finalizeCommand), ct);
             if (outcome.Value.Skipped)
             {
                 skippedCount++;
@@ -213,16 +206,13 @@ public class DemoDataSeeder
             _db.ChangeTracker.Clear();
         }
 
-        await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity(
-                DemoLeaseAddendumTemplateCommandHandler.CommandType,
-                $"portfolio:{portfolioId}:standard-lease-addendum-template:v2"),
-            new EnsureDemoLeaseAddendumTemplateCommand(
-                portfolioId,
-                actorUserId,
-                _timeProvider.UtcNow()),
-            DemoLeaseAddendumTemplateCommandHandler.ResultCodec,
-            ct);
+        var addendumCommand = new EnsureDemoLeaseAddendumTemplateCommand(
+            portfolioId,
+            actorUserId,
+            _timeProvider.UtcNow());
+        await _writes.ExecuteExactAsync(
+            $"portfolio:{portfolioId}:standard-lease-addendum-template:v2",
+            DemoLeaseAddendumTemplateCommandHandler.Write(_db, addendumCommand), ct);
 
         _logger.LogInformation(
             "Demo legal-document reconciliation completed for portfolio {PortfolioId}: {FinalizedCount} finalized, {SkippedCount} skipped.",
@@ -1509,7 +1499,23 @@ public sealed class DemoLeaseAddendumTemplateCommandHandler
 
     public DemoLeaseAddendumTemplateCommandHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<EnsureDemoLeaseAddendumTemplateResult> HandleAsync(
+    public static TransactionalWrite<EnsureDemoLeaseAddendumTemplateCommand, EnsureDemoLeaseAddendumTemplateResult> Write(
+        RentalCommandDbContext db,
+        EnsureDemoLeaseAddendumTemplateCommand command)
+    {
+        var handler = new DemoLeaseAddendumTemplateCommandHandler(db);
+        return new TransactionalWrite<EnsureDemoLeaseAddendumTemplateCommand, EnsureDemoLeaseAddendumTemplateResult>(
+            CommandType, WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
+            WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public Task<EnsureDemoLeaseAddendumTemplateResult> HandleAsync(
+        EnsureDemoLeaseAddendumTemplateCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw new InvalidOperationException(
+            "Legacy demo addendum writes are retired; use the shared write executor.");
+
+    public async Task<EnsureDemoLeaseAddendumTemplateResult> ExecuteAsync(
         EnsureDemoLeaseAddendumTemplateCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -1645,7 +1651,23 @@ public sealed class DemoSeedCommandHandler
     internal static readonly AtomicJsonResultCodec<SeedDemoPortfolioResult> ResultCodec =
         new("demo-portfolio-seed-result:v1");
 
-    public async Task<SeedDemoPortfolioResult> HandleAsync(
+    public static TransactionalWrite<SeedDemoPortfolioCommand, SeedDemoPortfolioResult> Write(
+        RentalCommandDbContext db,
+        SeedDemoPortfolioCommand command)
+    {
+        var handler = new DemoSeedCommandHandler(db);
+        return new TransactionalWrite<SeedDemoPortfolioCommand, SeedDemoPortfolioResult>(
+            "sandbox.demo-seed", WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
+            WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public Task<SeedDemoPortfolioResult> HandleAsync(
+        SeedDemoPortfolioCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw new InvalidOperationException(
+            "Legacy demo seed writes are retired; use the shared write executor.");
+
+    public async Task<SeedDemoPortfolioResult> ExecuteAsync(
         SeedDemoPortfolioCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)
@@ -1766,7 +1788,23 @@ public sealed class DemoLegalDocumentFinalizeCommandHandler
     internal static readonly AtomicJsonResultCodec<FinalizeDemoLegalDocumentResult> ResultCodec =
         new("demo-legal-document-finalize-result:v2");
 
-    public async Task<FinalizeDemoLegalDocumentResult> HandleAsync(
+    public static TransactionalWrite<FinalizeDemoLegalDocumentCommand, FinalizeDemoLegalDocumentResult> Write(
+        RentalCommandDbContext db,
+        FinalizeDemoLegalDocumentCommand command)
+    {
+        var handler = new DemoLegalDocumentFinalizeCommandHandler(db);
+        return new TransactionalWrite<FinalizeDemoLegalDocumentCommand, FinalizeDemoLegalDocumentResult>(
+            "sandbox.demo-legal-finalize", WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
+            WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    public Task<FinalizeDemoLegalDocumentResult> HandleAsync(
+        FinalizeDemoLegalDocumentCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct) => throw new InvalidOperationException(
+            "Legacy demo legal finalization writes are retired; use the shared write executor.");
+
+    public async Task<FinalizeDemoLegalDocumentResult> ExecuteAsync(
         FinalizeDemoLegalDocumentCommand command,
         IAtomicCommandContext attempt,
         CancellationToken ct)

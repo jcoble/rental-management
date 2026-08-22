@@ -63,7 +63,6 @@ public class PublicApplicationsControllerTests : IDisposable
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<IAtomicUnitOfWork>(),
             new PublicSubmissionWriteExecutor(_db));
         var uploadSettings = Options.Create(new UploadSettings
         {
