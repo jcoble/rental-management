@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -268,7 +270,7 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ConnectedAdmissionReplays_ResumeProviderCallsWithoutRepeatingRows()
+    public async Task ConnectedProviderAndSignalWrites_ReplayExactly_WithoutRepeatingProviderCallsOrRows()
     {
         var (scope, unitId) = await SeedScopeAsync(DateTime.UtcNow.AddMinutes(-5));
         var adapter = new RecordingListingAdapter();
@@ -293,7 +295,9 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
 
         await sut.PrepareConnectedAsync(scope, unitId, publicationId, " connected-prepare ");
         await sut.PrepareConnectedAsync(scope, unitId, publicationId, " connected-prepare ");
-        await sut.PublishConnectedAsync(scope, unitId, publicationId, "connected-publish");
+        var published = await sut.PublishConnectedAsync(scope, unitId, publicationId, "connected-publish");
+        (await sut.PublishConnectedAsync(scope, unitId, publicationId, "connected-publish"))
+            .Should().BeEquivalentTo(published);
         await sut.UpdateConnectedAsync(scope, unitId, publicationId, "connected-update");
         await sut.UpdateConnectedAsync(scope, unitId, publicationId, "connected-update");
         await sut.UnpublishConnectedAsync(scope, unitId, publicationId, "connected-unpublish");
@@ -319,10 +323,10 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
         await sut.ConfirmSignalAsync(scope, unitId, signal!.Id, true, "signal-confirm");
         await sut.ConfirmSignalAsync(scope, unitId, signal.Id, true, "signal-confirm");
 
-        adapter.PrepareCalls.Should().Be(2);
+        adapter.PrepareCalls.Should().Be(1);
         adapter.PublishCalls.Should().Be(1);
-        adapter.UpdateCalls.Should().Be(2);
-        adapter.UnpublishCalls.Should().Be(2);
+        adapter.UpdateCalls.Should().Be(1);
+        adapter.UnpublishCalls.Should().Be(1);
         adapter.SawLocalTransaction.Should().BeFalse();
         (await _context.Db.ExternalListingSignals.AsNoTracking().CountAsync(row =>
             row.PortfolioId == scope.PortfolioId && row.ProviderMessageKey == "provider-message"))
@@ -339,6 +343,70 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
             .SingleAsync(row => row.Id == publicationId);
         publication.LastDeliveryAttemptAtUtc.Should().NotBeNull();
         publication.LastDeliveryAttemptAtUtc.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public async Task AdmissionOnlyPublishReplay_ResumesProviderOnceWithoutDuplicateState()
+    {
+        var (scope, unitId) = await SeedScopeAsync(DateTime.UtcNow.AddMinutes(-5));
+        var adapter = new RecordingListingAdapter();
+        await using var services = BuildServices(TimeProvider.System, adapter);
+        await using var serviceScope = services.CreateAsyncScope();
+        var sut = serviceScope.ServiceProvider.GetRequiredService<ListingWorkspaceService>();
+
+        await sut.GenerateAsync(scope, unitId, "admission-only-generate");
+        await sut.SaveAsync(scope, unitId, new SaveListingWorkspaceRequest
+        {
+            Headline = "Admission-only replay listing",
+            Description = "A durable admission without downstream receipts resumes publishing.",
+            Rent = 2100m,
+        }, "admission-only-save");
+        var target = await _context.Db.RentalListings.AsNoTracking()
+            .Where(row => row.UnitId == unitId)
+            .Select(row => new
+            {
+                Listing = row,
+                Publication = row.Publications.Single(item => item.Mode == ListingPublicationMode.Connected),
+            })
+            .SingleAsync();
+        await sut.PrepareConnectedAsync(
+            scope, unitId, target.Publication.Id, "admission-only-prepare");
+
+        const string operationKey = "admission-only-publish";
+        var admissionKey = $"{scope.PortfolioId}:{unitId}:{Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(operationKey))).ToLowerInvariant()}";
+        var admission = new AdmitConnectedListingIntentCommand(
+            scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
+            scope.AccessContextId, scope.AccessRevision, target.Publication.Id,
+            target.Listing.Id, target.Listing.ContentVersion, ConnectedListingIntentOperation.Publish);
+        await serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+            admissionKey, ConnectedListingWriteSupport.Write(admission,
+                serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()));
+
+        var published = await sut.PublishConnectedAsync(
+            scope, unitId, target.Publication.Id, operationKey);
+        (await sut.PublishConnectedAsync(scope, unitId, target.Publication.Id, operationKey))
+            .Should().BeEquivalentTo(published);
+
+        adapter.PublishCalls.Should().Be(1);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == "listing-workspace.connected.publish.intent")).Should().Be(1);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == "listing-workspace.connected.persist-result")).Should().Be(2);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == "listing-workspace.connected.apply-result")).Should().Be(2);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking().GroupBy(row => new
+            {
+                row.CommandType,
+                row.IdempotencyKey,
+            }).Where(group => group.Count() != 1).CountAsync()).Should().Be(0);
+        (await _context.Db.ListingPublications.AsNoTracking().CountAsync(row =>
+            row.Id == target.Publication.Id && row.Status == ListingPublicationStatus.Published))
+            .Should().Be(1);
+        (await _context.Db.RentalListings.AsNoTracking().CountAsync(row =>
+            row.Id == target.Listing.Id)).Should().Be(1);
+        (await _context.Db.ListingPublications.AsNoTracking().CountAsync(row =>
+            row.RentalListingId == target.Listing.Id)).Should().Be(2);
     }
 
     [Fact]
@@ -522,7 +590,7 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
             (await sut.ConfirmSignalAsync(scope, unitId, 9106, true, "legacy-confirm"))
                 .Should().NotBeNull();
         }
-        adapter.PrepareCalls.Should().Be(1);
+        adapter.PrepareCalls.Should().Be(0);
         (await _context.Db.RentalListings.CountAsync(row => row.Id == listing.Id)).Should().Be(1);
         (await _context.Db.ListingPublications.CountAsync(row => row.Id == publication.Id)).Should().Be(1);
         (await _context.Db.ExternalListingSignals.CountAsync()).Should().Be(0);
