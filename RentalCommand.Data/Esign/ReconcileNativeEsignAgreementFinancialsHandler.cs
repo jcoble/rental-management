@@ -9,17 +9,10 @@ using RentalCommand.Core.Esign;
 namespace RentalCommand.Data.Esign;
 
 public sealed class ReconcileNativeEsignAgreementFinancialsHandler
-    : IAtomicCommandHandler<ReconcileNativeEsignAgreementFinancialsCommand,
-        ReconcileNativeEsignAgreementFinancialsResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ReconcileNativeEsignAgreementFinancialsHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ReconcileNativeEsignAgreementFinancialsResult> HandleAsync(
-        ReconcileNativeEsignAgreementFinancialsCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task<ReconcileNativeEsignAgreementFinancialsResult> ExecuteAsync(
         ReconcileNativeEsignAgreementFinancialsCommand command,
@@ -92,17 +85,10 @@ public sealed class ReconcileNativeEsignAgreementFinancialsHandler
 }
 
 public sealed class ReconcileNativeEsignAgreementFinancialsBatchHandler
-    : IAtomicCommandHandler<ReconcileNativeEsignAgreementFinancialsBatchCommand,
-        ReconcileNativeEsignAgreementFinancialsBatchResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ReconcileNativeEsignAgreementFinancialsBatchHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ReconcileNativeEsignAgreementFinancialsBatchResult> HandleAsync(
-        ReconcileNativeEsignAgreementFinancialsBatchCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task<ReconcileNativeEsignAgreementFinancialsBatchResult> ExecuteAsync(
         ReconcileNativeEsignAgreementFinancialsBatchCommand command,

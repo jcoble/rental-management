@@ -37,10 +37,6 @@ public class SmsInboundRouterTests : IDisposable
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            CompleteVendorDispatchFromInboundCommand,
-            CompleteVendorDispatchFromInboundResult,
-            CompleteVendorDispatchFromInboundHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();

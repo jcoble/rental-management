@@ -9,16 +9,10 @@ using RentalCommand.Core.Esign;
 namespace RentalCommand.Data.Esign;
 
 public sealed class RecordNativeSignatureHandler
-    : IAtomicCommandHandler<RecordNativeSignatureCommand, NativeSignerActionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecordNativeSignatureHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<NativeSignerActionResult> HandleAsync(
-        RecordNativeSignatureCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task<NativeSignerActionResult> ExecuteAsync(
         RecordNativeSignatureCommand command,
@@ -239,16 +233,10 @@ public sealed class RecordNativeSignatureHandler
 }
 
 public sealed class RecordNativeDeclineHandler
-    : IAtomicCommandHandler<RecordNativeDeclineCommand, NativeSignerActionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecordNativeDeclineHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<NativeSignerActionResult> HandleAsync(
-        RecordNativeDeclineCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task<NativeSignerActionResult> ExecuteAsync(
         RecordNativeDeclineCommand command,

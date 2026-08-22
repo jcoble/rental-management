@@ -786,18 +786,6 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            ActivateOwnerPortalAccessCommand,
-            ActivateOwnerPortalAccessMutationResult,
-            ActivateOwnerPortalAccessHandler>();
-        services.AddAtomicCommandHandler<
-            RevokeOwnerPortalAccessCommand,
-            RevokeOwnerPortalAccessMutationResult,
-            RevokeOwnerPortalAccessHandler>();
-        services.AddAtomicCommandHandler<
-            ActivateWorkspaceInvitationCommand,
-            ActivateWorkspaceInvitationResult,
-            ActivateWorkspaceInvitationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(connectionString)

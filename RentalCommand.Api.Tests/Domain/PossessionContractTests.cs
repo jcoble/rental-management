@@ -35,9 +35,8 @@ public sealed class PossessionContractTests
 
         route.Should().NotBeNull();
         route!.Template.Should().Be("{leaseManagementId:int}/reconcile-historical-possession");
-        typeof(ReconcileHistoricalPossessionHandler)
-            .Should().Implement<IAtomicCommandHandler<ReconcileHistoricalPossessionCommand,
-                ReconcileHistoricalPossessionResult>>();
+        typeof(ReconcileHistoricalPossessionHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(ReconcileHistoricalPossessionHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
         typeof(ReconcileHistoricalPossessionRequest).GetProperty("PossessionGivenOn")
             .Should().NotBeNull();
         typeof(LeaseManagementSummaryResponse)
@@ -54,8 +53,8 @@ public sealed class PossessionContractTests
 
         route.Should().NotBeNull();
         route!.Template.Should().Be("{leaseManagementId:int}/confirm-move-in");
-        typeof(ConfirmMoveInHandler)
-            .Should().Implement<IAtomicCommandHandler<ConfirmMoveInCommand, ConfirmMoveInResult>>();
+        typeof(ConfirmMoveInHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(ConfirmMoveInHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
         typeof(ConfirmMoveInRequest).GetProperty("TenantAccountId").Should().BeNull();
         typeof(ConfirmMoveInRequest).GetProperty("SecurityDepositAccountId").Should().BeNull();
         typeof(ConfirmMoveInRequest).GetProperty("Amount").Should().BeNull();

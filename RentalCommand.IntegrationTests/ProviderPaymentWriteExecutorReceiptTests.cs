@@ -152,30 +152,6 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
     }
 
     [Fact]
-    public async Task AllTenLegacyHandlerArms_AreRetired()
-    {
-        using var db = new RentalCommandDbContext(
-            new DbContextOptionsBuilder<RentalCommandDbContext>().Options);
-        Func<Task>[] calls =
-        [
-            () => new PrepareProviderPaymentCreateHandler(db).HandleAsync(Prepare(), null!, default),
-            () => new PrepareProviderAutopaySetupHandler(db).HandleAsync(Autopay(), null!, default),
-            () => new SubmitProviderPaymentCreateHandler(db).HandleAsync(Submit(), null!, default),
-            () => new ScheduleProviderPaymentReconciliationHandler(db).HandleAsync(Schedule(), null!, default),
-            () => new FinalizeProviderPaymentCreateHandler(db).HandleAsync(Finalize(), null!, default),
-            () => new FailProviderPaymentCreateHandler(db).HandleAsync(Fail(), null!, default),
-            () => new AbandonProviderPaymentAttemptHandler(db).HandleAsync(Abandon(), null!, default),
-            () => new InspectProviderPaymentAttemptHandler(db).HandleAsync(Inspect(), null!, default),
-            () => new RecordVerifiedProviderPaymentEventHandler(db).HandleAsync(Event(), null!, default),
-            () => new ReconcileClaimedProviderPaymentEventHandler(db).HandleAsync(Reconcile(), null!, default),
-        ];
-
-        foreach (var call in calls)
-            await call.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("Legacy atomic provider-payment writes are retired; use the shared write executor.");
-    }
-
-    [Fact]
     public void FrozenStoredResults_DecodeAllTenLegacyContractsAndJsonShapes()
     {
         AssertFrozen<PrepareProviderPaymentCreateResult>(

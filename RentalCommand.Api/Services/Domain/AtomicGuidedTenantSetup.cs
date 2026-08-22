@@ -33,19 +33,12 @@ public sealed record AtomicGuidedTenantSetupResult(
 /// semantic audit, every realtime update, and the command receipt share one kernel transaction.
 /// </summary>
 public sealed class AtomicGuidedTenantSetupHandler
-    : IAtomicCommandHandler<AtomicGuidedTenantSetupCommand, AtomicGuidedTenantSetupResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicGuidedTenantSetupHandler(RentalCommandDbContext db) => _db = db;
 
     private const int MaximumBatchSize = 25;
-
-    public Task<AtomicGuidedTenantSetupResult> HandleAsync(
-        AtomicGuidedTenantSetupCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw new InvalidOperationException(
-            "Legacy guided tenant setup writes are retired; use the shared write executor.");
 
     public async Task<AtomicGuidedTenantSetupResult> ExecuteAsync(
         AtomicGuidedTenantSetupCommand command,

@@ -33,7 +33,6 @@ public static class ConversationWriteSupport
 }
 
 public sealed class SendConversationMessageHandler
-    : IAtomicCommandHandler<SendConversationMessageCommand, SendConversationMessageResult>
 {
     private readonly RentalCommandDbContext _db;
 
@@ -42,11 +41,6 @@ public sealed class SendConversationMessageHandler
     private const int PreviewMaxLength = 280;
     private static readonly string[] ManagementCapabilities =
         [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage];
-
-    public Task<SendConversationMessageResult> HandleAsync(
-        SendConversationMessageCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw ConversationWriteSupport.RetiredPath();
 
     public async Task<SendConversationMessageResult> ExecuteAsync(
         SendConversationMessageCommand command,

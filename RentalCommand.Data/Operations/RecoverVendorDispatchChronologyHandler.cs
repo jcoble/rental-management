@@ -10,9 +10,6 @@ using RentalCommand.Data.Atomic;
 namespace RentalCommand.Data.Operations;
 
 public sealed class RecoverVendorDispatchChronologyHandler
-    : IAtomicCommandHandler<
-        RecoverVendorDispatchChronologyCommand,
-        RecoverVendorDispatchChronologyResult>
 {
     public const string ResultContract = "vendor-dispatch.chronology-recovery.v1";
 
@@ -32,11 +29,6 @@ public sealed class RecoverVendorDispatchChronologyHandler
             "vendor-dispatch.recover-chronology", WriteIdempotencyPolicy.Required, command,
             ResultContract, WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<RecoverVendorDispatchChronologyResult> HandleAsync(
-        RecoverVendorDispatchChronologyCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<RecoverVendorDispatchChronologyResult> ExecuteAsync(
         RecoverVendorDispatchChronologyCommand command,

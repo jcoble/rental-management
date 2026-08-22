@@ -47,18 +47,12 @@ public sealed record AtomicRentalMutationResult(
 /// before a receipt replay is returned.
 /// </summary>
 public sealed class AtomicRentalMutationHandler
-    : IAtomicCommandHandler<AtomicRentalMutationCommand, AtomicRentalMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicRentalMutationHandler(RentalCommandDbContext db) => _db = db;
 
     private const string ApplicationEntityType = "RentalApplication";
-
-    public Task<AtomicRentalMutationResult> HandleAsync(
-        AtomicRentalMutationCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<AtomicRentalMutationResult> ExecuteAsync(
         AtomicRentalMutationCommand command,

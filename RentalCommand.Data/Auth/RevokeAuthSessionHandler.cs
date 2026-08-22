@@ -9,15 +9,10 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Auth;
 
 public sealed class RevokeAuthSessionHandler
-    : IAtomicCommandHandler<RevokeAuthSessionCommand, RevokeAuthSessionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RevokeAuthSessionHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RevokeAuthSessionResult> HandleAsync(
-        RevokeAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<RevokeAuthSessionResult> ExecuteAsync(
         RevokeAuthSessionCommand command,

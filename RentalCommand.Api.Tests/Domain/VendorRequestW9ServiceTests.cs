@@ -44,10 +44,6 @@ public sealed class VendorRequestW9ServiceTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            RequestVendorW9Command,
-            RequestVendorW9Result,
-            RequestVendorW9Handler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_ctx.ConnectionString)
                 .AddInterceptors(new RequestGucConnectionInterceptor(_scope))

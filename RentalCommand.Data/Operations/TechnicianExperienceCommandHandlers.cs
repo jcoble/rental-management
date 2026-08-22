@@ -10,7 +10,6 @@ using RentalCommand.Core.Operations;
 namespace RentalCommand.Data.Operations;
 
 public sealed class RecordTechnicianWorkEntryHandler
-    : IAtomicCommandHandler<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult>
 {
     public const string ResultContract = "technician-work-entry.v1";
 
@@ -27,10 +26,6 @@ public sealed class RecordTechnicianWorkEntryHandler
             "technician-work-entry.record", WriteIdempotencyPolicy.Required, command, ResultContract,
             WorkOrderLock(command.WorkOrderId), handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<RecordTechnicianWorkEntryResult> HandleAsync(
-        RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
 
     public async Task<RecordTechnicianWorkEntryResult> ExecuteAsync(
         RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -140,7 +135,6 @@ public sealed class RecordTechnicianWorkEntryHandler
 }
 
 public sealed class SendTechnicianAssignmentMessageHandler
-    : IAtomicCommandHandler<SendTechnicianAssignmentMessageCommand, SendTechnicianAssignmentMessageResult>
 {
     public const string ResultContract = "technician-assignment-message.v1";
 
@@ -158,10 +152,6 @@ public sealed class SendTechnicianAssignmentMessageHandler
             ResultContract, RecordTechnicianWorkEntryHandler.WorkOrderLock(command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<SendTechnicianAssignmentMessageResult> HandleAsync(
-        SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RecordTechnicianWorkEntryHandler.RetiredPath();
 
     public async Task<SendTechnicianAssignmentMessageResult> ExecuteAsync(
         SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -265,8 +255,6 @@ public sealed class SendTechnicianAssignmentMessageHandler
 }
 
 public sealed class MarkTechnicianAssignmentConversationReadHandler
-    : IAtomicCommandHandler<MarkTechnicianAssignmentConversationReadCommand,
-        MarkTechnicianAssignmentConversationReadResult>
 {
     public const string ResultContract = "technician-assignment-conversation-read.v1";
 
@@ -284,10 +272,6 @@ public sealed class MarkTechnicianAssignmentConversationReadHandler
             ResultContract, RecordTechnicianWorkEntryHandler.WorkOrderLock(command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<MarkTechnicianAssignmentConversationReadResult> HandleAsync(
-        MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RecordTechnicianWorkEntryHandler.RetiredPath();
 
     public async Task<MarkTechnicianAssignmentConversationReadResult> ExecuteAsync(
         MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context,

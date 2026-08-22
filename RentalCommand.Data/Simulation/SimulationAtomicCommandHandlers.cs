@@ -63,16 +63,10 @@ public static class SimulationWriteSupport
 }
 
 public sealed class SetSimulationClockHandler
-    : IAtomicCommandHandler<SetSimulationClockCommand, SimulationClockMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public SetSimulationClockHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SimulationClockMutationResult> HandleAsync(
-        SetSimulationClockCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         SetSimulationClockCommand command,
@@ -127,16 +121,10 @@ public sealed class SetSimulationClockHandler
 }
 
 public sealed class AdvanceSimulationClockHandler
-    : IAtomicCommandHandler<AdvanceSimulationClockCommand, SimulationClockMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AdvanceSimulationClockHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SimulationClockMutationResult> HandleAsync(
-        AdvanceSimulationClockCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         AdvanceSimulationClockCommand command,
@@ -169,16 +157,10 @@ public sealed class AdvanceSimulationClockHandler
 }
 
 public sealed class FreezeSimulationClockHandler
-    : IAtomicCommandHandler<FreezeSimulationClockCommand, SimulationClockMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public FreezeSimulationClockHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SimulationClockMutationResult> HandleAsync(
-        FreezeSimulationClockCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         FreezeSimulationClockCommand command,
@@ -206,16 +188,10 @@ public sealed class FreezeSimulationClockHandler
 }
 
 public sealed class UnfreezeSimulationClockHandler
-    : IAtomicCommandHandler<UnfreezeSimulationClockCommand, SimulationClockMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public UnfreezeSimulationClockHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SimulationClockMutationResult> HandleAsync(
-        UnfreezeSimulationClockCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         UnfreezeSimulationClockCommand command,
@@ -243,16 +219,10 @@ public sealed class UnfreezeSimulationClockHandler
 }
 
 public sealed class ResetSimulationClockHandler
-    : IAtomicCommandHandler<ResetSimulationClockCommand, SimulationClockMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ResetSimulationClockHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SimulationClockMutationResult> HandleAsync(
-        ResetSimulationClockCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
 
     public Task<SimulationClockMutationResult> ExecuteAsync(
         ResetSimulationClockCommand command,
@@ -278,16 +248,10 @@ public sealed class ResetSimulationClockHandler
 }
 
 public sealed class EnqueueSimulationWorkerCommandHandler
-    : IAtomicCommandHandler<EnqueueSimulationWorkerCommand, EnqueueSimulationWorkerResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public EnqueueSimulationWorkerCommandHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<EnqueueSimulationWorkerResult> HandleAsync(
-        EnqueueSimulationWorkerCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw SimulationWriteSupport.RetiredPath();
 
     public async Task<EnqueueSimulationWorkerResult> ExecuteAsync(
         EnqueueSimulationWorkerCommand command,

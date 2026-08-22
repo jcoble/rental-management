@@ -56,14 +56,14 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         services.AddSingleton<TransactionEvidenceInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<CreateExpenseCommand, ExpenseResult, CreateExpenseHandler>();
-        services.AddAtomicCommandHandler<RetryExpenseCommand, ExpenseResult, RetryExpenseHandler>();
-        services.AddAtomicCommandHandler<CreatedSemanticCommand, ExpenseResult, CreatedSemanticHandler>();
-        services.AddAtomicCommandHandler<ExactAuditCommand, ExpenseResult, ExactAuditHandler>();
-        services.AddAtomicCommandHandler<SemanticEventCommand, EventResult, SemanticEventHandler>();
-        services.AddAtomicCommandHandler<AtomicityCommand, ExpenseResult, AtomicityHandler>();
-        services.AddAtomicCommandHandler<NestedOuterCommand, ExpenseResult, NestedOuterHandler>();
-        services.AddAtomicCommandHandler<NestedInnerCommand, ExpenseResult, NestedInnerHandler>();
+        services.AddScoped<ITestWriteRule<CreateExpenseCommand, ExpenseResult>, CreateExpenseHandler>();
+        services.AddScoped<ITestWriteRule<RetryExpenseCommand, ExpenseResult>, RetryExpenseHandler>();
+        services.AddScoped<ITestWriteRule<CreatedSemanticCommand, ExpenseResult>, CreatedSemanticHandler>();
+        services.AddScoped<ITestWriteRule<ExactAuditCommand, ExpenseResult>, ExactAuditHandler>();
+        services.AddScoped<ITestWriteRule<SemanticEventCommand, EventResult>, SemanticEventHandler>();
+        services.AddScoped<ITestWriteRule<AtomicityCommand, ExpenseResult>, AtomicityHandler>();
+        services.AddScoped<ITestWriteRule<NestedOuterCommand, ExpenseResult>, NestedOuterHandler>();
+        services.AddScoped<ITestWriteRule<NestedInnerCommand, ExpenseResult>, NestedInnerHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -474,9 +474,12 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         var marker = beginTransaction ? "preexisting-transaction" : "preexisting-dirty";
         var identity = Identity($"{nameof(DirtyOrTransactionOwnedContext_IsRejectedBeforeAtomicWork)}-{beginTransaction}");
 
+        var command = new CreateExpenseCommand(_portfolioId, marker);
+        var rule = scope.ServiceProvider
+            .GetRequiredService<ITestWriteRule<CreateExpenseCommand, ExpenseResult>>();
         Func<Task> act = async () => await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, new CreateExpenseCommand(_portfolioId, marker), ExpenseCodec);
+            .GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, Write(identity, command, ExpenseCodec, rule));
 
         await act.Should().ThrowAsync<AtomicArchitectureException>()
             .WithMessage(beginTransaction
@@ -538,10 +541,27 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = Services.CreateAsyncScope();
+        var rule = scope.ServiceProvider.GetRequiredService<ITestWriteRule<TCommand, TResult>>();
         return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+            .GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, Write(identity, command, codec, rule));
     }
+
+    private static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec,
+        ITestWriteRule<TCommand, TResult> rule)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull =>
+        new(
+            identity.CommandType,
+            WriteIdempotencyPolicy.Required,
+            command,
+            codec.ContractName,
+            WriteLockPlan.None,
+            rule.ExecuteAsync,
+            rule.AuthorizeReplayAsync);
 
     private AtomicCommandIdentity Identity(string testName) =>
         new($"test.atomic.{testName}", Guid.NewGuid().ToString("N"));
@@ -633,7 +653,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         AtomicCommandIdentity InnerIdentity) : IAtomicCommandData;
     private sealed record NestedInnerCommand(int PortfolioId, string Marker) : IAtomicCommandData;
 
-    private sealed class CreateExpenseHandler : IAtomicCommandHandler<CreateExpenseCommand, ExpenseResult>
+    private sealed class CreateExpenseHandler : ITestWriteRule<CreateExpenseCommand, ExpenseResult>
     {
         private readonly RentalCommandDbContext _db;
         private readonly HandlerProbe _probe;
@@ -645,7 +665,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             _probe = probe;
         }
 
-        public async Task<ExpenseResult> HandleAsync(
+        public async Task<ExpenseResult> ExecuteAsync(
             CreateExpenseCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)
@@ -668,7 +688,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class RetryExpenseHandler : IAtomicCommandHandler<RetryExpenseCommand, ExpenseResult>
+    private sealed class RetryExpenseHandler : ITestWriteRule<RetryExpenseCommand, ExpenseResult>
     {
         private readonly RentalCommandDbContext _db;
         private readonly HandlerProbe _probe;
@@ -680,7 +700,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             _probe = probe;
         }
 
-        public async Task<ExpenseResult> HandleAsync(
+        public async Task<ExpenseResult> ExecuteAsync(
             RetryExpenseCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)
@@ -703,13 +723,13 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class CreatedSemanticHandler : IAtomicCommandHandler<CreatedSemanticCommand, ExpenseResult>
+    private sealed class CreatedSemanticHandler : ITestWriteRule<CreatedSemanticCommand, ExpenseResult>
     {
         private readonly RentalCommandDbContext _db;
 
         public CreatedSemanticHandler(RentalCommandDbContext db) => _db = db;
 
-        public async Task<ExpenseResult> HandleAsync(
+        public async Task<ExpenseResult> ExecuteAsync(
             CreatedSemanticCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)
@@ -735,13 +755,13 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class ExactAuditHandler : IAtomicCommandHandler<ExactAuditCommand, ExpenseResult>
+    private sealed class ExactAuditHandler : ITestWriteRule<ExactAuditCommand, ExpenseResult>
     {
         private readonly RentalCommandDbContext _db;
 
         public ExactAuditHandler(RentalCommandDbContext db) => _db = db;
 
-        public async Task<ExpenseResult> HandleAsync(
+        public async Task<ExpenseResult> ExecuteAsync(
             ExactAuditCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)
@@ -779,11 +799,11 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
                 ChangeReason: reason);
     }
 
-    private sealed class SemanticEventHandler : IAtomicCommandHandler<SemanticEventCommand, EventResult>
+    private sealed class SemanticEventHandler : ITestWriteRule<SemanticEventCommand, EventResult>
     {
         public SemanticEventHandler() { }
 
-        public Task<EventResult> HandleAsync(
+        public Task<EventResult> ExecuteAsync(
             SemanticEventCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)
@@ -804,13 +824,13 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class AtomicityHandler : IAtomicCommandHandler<AtomicityCommand, ExpenseResult>
+    private sealed class AtomicityHandler : ITestWriteRule<AtomicityCommand, ExpenseResult>
     {
         private readonly RentalCommandDbContext _db;
 
         public AtomicityHandler(RentalCommandDbContext db) => _db = db;
 
-        public async Task<ExpenseResult> HandleAsync(
+        public async Task<ExpenseResult> ExecuteAsync(
             AtomicityCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)
@@ -834,26 +854,31 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class NestedOuterHandler : IAtomicCommandHandler<NestedOuterCommand, ExpenseResult>
+    private sealed class NestedOuterHandler : ITestWriteRule<NestedOuterCommand, ExpenseResult>
     {
-        private readonly IAtomicUnitOfWork _unitOfWork;
+        private readonly IWriteExecutor _writes;
+        private readonly ITestWriteRule<NestedInnerCommand, ExpenseResult> _inner;
         private readonly NestedProbe _probe;
 
-        public NestedOuterHandler(IAtomicUnitOfWork unitOfWork, NestedProbe probe)
+        public NestedOuterHandler(
+            IWriteExecutor writes,
+            ITestWriteRule<NestedInnerCommand, ExpenseResult> inner,
+            NestedProbe probe)
         {
-            _unitOfWork = unitOfWork;
+            _writes = writes;
+            _inner = inner;
             _probe = probe;
         }
 
-        public async Task<ExpenseResult> HandleAsync(
+        public async Task<ExpenseResult> ExecuteAsync(
             NestedOuterCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)
         {
-            _probe.InnerOutcome = await _unitOfWork.ExecuteAsync(
-                command.InnerIdentity,
-                new NestedInnerCommand(command.PortfolioId, command.Marker),
-                ExpenseCodec,
+            var innerCommand = new NestedInnerCommand(command.PortfolioId, command.Marker);
+            _probe.InnerOutcome = await _writes.ExecuteAsync(
+                command.InnerIdentity.IdempotencyKey,
+                Write(command.InnerIdentity, innerCommand, ExpenseCodec, _inner),
                 ct);
             return _probe.InnerOutcome.Value;
         }
@@ -864,13 +889,13 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class NestedInnerHandler : IAtomicCommandHandler<NestedInnerCommand, ExpenseResult>
+    private sealed class NestedInnerHandler : ITestWriteRule<NestedInnerCommand, ExpenseResult>
     {
         private readonly RentalCommandDbContext _db;
 
         public NestedInnerHandler(RentalCommandDbContext db) => _db = db;
 
-        public async Task<ExpenseResult> HandleAsync(
+        public async Task<ExpenseResult> ExecuteAsync(
             NestedInnerCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)
@@ -885,6 +910,21 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             NestedInnerCommand command,
             IAtomicCommandContext context,
             CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private interface ITestWriteRule<in TCommand, TResult>
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        Task<TResult> ExecuteAsync(
+            TCommand command,
+            IAtomicCommandContext context,
+            CancellationToken ct);
+
+        Task AuthorizeReplayAsync(
+            TCommand command,
+            IAtomicCommandContext context,
+            CancellationToken ct);
     }
 
     private sealed class HandlerProbe

@@ -9,15 +9,10 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Auth;
 
 public sealed class IssueSessionRefreshCredentialHandler
-    : IAtomicCommandHandler<IssueSessionRefreshCredentialCommand, SessionRefreshMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public IssueSessionRefreshCredentialHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SessionRefreshMutationResult> HandleAsync(
-        IssueSessionRefreshCredentialCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<SessionRefreshMutationResult> ExecuteAsync(
         IssueSessionRefreshCredentialCommand command,
@@ -196,17 +191,12 @@ public sealed class IssueSessionRefreshCredentialHandler
 }
 
 public sealed class RotateSessionRefreshCredentialHandler
-    : IAtomicCommandHandler<RotateSessionRefreshCredentialCommand, SessionRefreshMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RotateSessionRefreshCredentialHandler(RentalCommandDbContext db) => _db = db;
 
     private const string ReuseReason = "Refresh credential reuse detected";
-
-    public Task<SessionRefreshMutationResult> HandleAsync(
-        RotateSessionRefreshCredentialCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<SessionRefreshMutationResult> ExecuteAsync(
         RotateSessionRefreshCredentialCommand command,

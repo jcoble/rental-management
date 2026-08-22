@@ -25,34 +25,6 @@ internal sealed class WriteExecutor(AtomicTransactionRunner runner) : IWriteExec
         }
 
         var identity = new AtomicCommandIdentity(write.OperationName, idempotencyKey);
-        var codec = new AtomicJsonResultCodec<TResult>(write.ResultContract);
-        var operation = new TransactionalWriteHandler<TCommand, TResult>(write);
-        return runner.ExecuteAsync(identity, write.Request, codec, operation, ct);
-    }
-
-    private sealed class TransactionalWriteHandler<TCommand, TResult>(
-        TransactionalWrite<TCommand, TResult> write)
-        : IAtomicCommandHandler<TCommand, TResult>
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull
-    {
-        public async Task<TResult> HandleAsync(
-            TCommand command,
-            IAtomicCommandContext context,
-            CancellationToken ct)
-        {
-            foreach (var writeLock in write.LockPlan.Locks)
-            {
-                await writeLock.AcquireAsync(context, ct);
-            }
-
-            return await write.ExecuteAsync(command, context, ct);
-        }
-
-        public Task AuthorizeReplayAsync(
-            TCommand command,
-            IAtomicCommandContext context,
-            CancellationToken ct) =>
-            write.AuthorizeReplayAsync(command, context, ct);
+        return runner.ExecuteAsync(identity, write, ct);
     }
 }

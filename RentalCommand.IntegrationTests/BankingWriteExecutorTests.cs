@@ -78,28 +78,6 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
     }
 
     [Fact]
-    public async Task EightLegacyHandlerArms_AreRetired()
-    {
-        await using var db = EmptyContext();
-        var context = Mock.Of<IAtomicCommandContext>();
-        var actions = new Func<Task>[]
-        {
-            () => new PreparePlaidTokenExchangeHandler(db).HandleAsync(Prepare(), context, default),
-            () => new AdmitPlaidTokenExchangeHandler(db).HandleAsync(Admit(), context, default),
-            () => new RecordPlaidTokenExchangeReceiptHandler(db).HandleAsync(Receipt(), context, default),
-            () => new ApplyPlaidConnectionHandler(db).HandleAsync(Connection(), context, default),
-            () => new ApplyPlaidSyncHandler(db).HandleAsync(Sync(), context, default),
-            () => new ImportBankTransactionsHandler(db).HandleAsync(Import(), context, default),
-            () => new ReconcileBankTransactionHandler(db).HandleAsync(Reconcile(), context, default),
-            () => new RouteBankTransactionHandler(db).HandleAsync(Route(), context, default),
-        };
-
-        foreach (var action in actions)
-            await action.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("Legacy atomic banking writes are retired; use the shared write executor.");
-    }
-
-    [Fact]
     public async Task LegacyReceiptFixtures_ReplayAllEightBankingContracts()
     {
         await using var database = await fixture.CreateContextAsync();

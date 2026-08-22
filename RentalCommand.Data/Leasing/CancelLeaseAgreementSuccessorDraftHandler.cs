@@ -7,16 +7,10 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class CancelLeaseAgreementSuccessorDraftHandler
-    : IAtomicCommandHandler<CancelLeaseAgreementSuccessorDraftCommand, CancelLeaseAgreementSuccessorDraftResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public CancelLeaseAgreementSuccessorDraftHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<CancelLeaseAgreementSuccessorDraftResult> HandleAsync(
-        CancelLeaseAgreementSuccessorDraftCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw LeasingWriteSupport.RetiredPath();
 
     public async Task<CancelLeaseAgreementSuccessorDraftResult> ExecuteAsync(
         CancelLeaseAgreementSuccessorDraftCommand command,

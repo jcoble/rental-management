@@ -8,15 +8,10 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class CreateLeaseAddendumDraftHandler
-    : IAtomicCommandHandler<CreateLeaseAddendumDraftCommand, LeaseAddendumDraftMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public CreateLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<LeaseAddendumDraftMutationResult> HandleAsync(
-        CreateLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw LeasingWriteSupport.RetiredPath();
 
     public async Task<LeaseAddendumDraftMutationResult> ExecuteAsync(
         CreateLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -102,15 +97,10 @@ public sealed class CreateLeaseAddendumDraftHandler
 }
 
 public sealed class EditLeaseAddendumDraftHandler
-    : IAtomicCommandHandler<EditLeaseAddendumDraftCommand, LeaseAddendumDraftMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public EditLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<LeaseAddendumDraftMutationResult> HandleAsync(
-        EditLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw LeasingWriteSupport.RetiredPath();
 
     public async Task<LeaseAddendumDraftMutationResult> ExecuteAsync(
         EditLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -203,15 +193,10 @@ public sealed class EditLeaseAddendumDraftHandler
 }
 
 public sealed class CorrectLeaseAddendumDraftHandler
-    : IAtomicCommandHandler<CorrectLeaseAddendumDraftCommand, LeaseAddendumDraftMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public CorrectLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<LeaseAddendumDraftMutationResult> HandleAsync(
-        CorrectLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw LeasingWriteSupport.RetiredPath();
 
     public async Task<LeaseAddendumDraftMutationResult> ExecuteAsync(
         CorrectLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)

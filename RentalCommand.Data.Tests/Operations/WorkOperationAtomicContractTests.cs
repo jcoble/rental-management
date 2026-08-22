@@ -14,7 +14,7 @@ public sealed class WorkOperationAtomicContractTests
     public void Every_live_operation_handler_reauthorizes_receipt_replay(
         Type handlerType, Type commandType)
     {
-        HandlerFor(handlerType, commandType).GetMethod(nameof(IAtomicCommandHandler<IAtomicCommandData, object>.AuthorizeReplayAsync))
+        handlerType.GetMethod("AuthorizeReplayAsync", [commandType, typeof(IAtomicCommandContext), typeof(CancellationToken)])
             .Should().NotBeNull();
     }
 
@@ -82,9 +82,4 @@ public sealed class WorkOperationAtomicContractTests
         source.Should().Contain("INSERT INTO \"OutboxMessages\"");
     }
 
-    private static Type HandlerFor(Type handlerType, Type commandType) =>
-        handlerType.GetInterfaces().Single(type =>
-            type.IsGenericType
-            && type.GetGenericTypeDefinition() == typeof(IAtomicCommandHandler<,>)
-            && type.GetGenericArguments()[0] == commandType);
 }

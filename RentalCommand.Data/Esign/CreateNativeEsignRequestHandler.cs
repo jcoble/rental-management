@@ -89,15 +89,10 @@ public static class NativeEsignWriteSupport
 
 /// <summary>Canonical Agreement issuance. No legacy Lease row is read or changed.</summary>
 public sealed class IssueLeaseAgreementHandler
-    : IAtomicCommandHandler<IssueLeaseAgreementCommand, IssueLeaseAgreementResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public IssueLeaseAgreementHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<IssueLeaseAgreementResult> HandleAsync(
-        IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task<IssueLeaseAgreementResult> ExecuteAsync(
         IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)

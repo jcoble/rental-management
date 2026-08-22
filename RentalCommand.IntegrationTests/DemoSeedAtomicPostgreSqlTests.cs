@@ -84,10 +84,6 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(_failure);
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            SeedDemoPortfolioCommand,
-            SeedDemoPortfolioResult,
-            DemoSeedCommandHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(_context.ConnectionString)
@@ -257,8 +253,7 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
                 .ExecuteExactAsync(identity.IdempotencyKey, DemoSeedCommandHandler.Write(db, seed), ct);
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-        return await atomic.ExecuteAsync(identity, command, resultCodec, ct);
+        throw new InvalidOperationException($"No executor rule exists for {typeof(TCommand).Name}.");
     }
 
     private sealed class RuntimeApiRoleInterceptor : DbConnectionInterceptor

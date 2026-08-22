@@ -133,22 +133,29 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
     }
 
     [Fact]
-    public async Task OldPossessionShellAndNewExecutor_OnSameTargets_CompleteWithoutDeadlock()
+    public async Task PossessionExecutorRules_OnSameTargets_CompleteWithoutDeadlock()
     {
         await using var database = await fixture.CreateContextAsync();
         var coordinator = new LockCanaryCoordinator();
         var newLockProbe = new NewExecutorLockProbe(coordinator);
-        await using var oldServices = BuildServices(database.ConnectionString, coordinator, oldShell: true);
+        await using var oldServices = BuildServices(database.ConnectionString, coordinator);
         await using var newServices = BuildServices(
-            database.ConnectionString, coordinator, oldShell: false, newLockProbe);
+            database.ConnectionString, coordinator, newLockProbe);
         await using var oldScope = oldServices.CreateAsyncScope();
         await using var newScope = newServices.CreateAsyncScope();
         var command = new LockCanaryCommand(UnitId: 41, LeaseManagementId: 42);
 
-        var oldTask = oldScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
-            new AtomicCommandIdentity("canary.possession.old-shell", "old-shell"),
+        var firstRule = new PossessionLockRule(coordinator);
+        var firstWrite = new TransactionalWrite<LockCanaryCommand, LockCanaryResult>(
+            "canary.possession.first-executor",
+            WriteIdempotencyPolicy.Required,
             command,
-            LockCanaryResult.Codec);
+            LockCanaryResult.Codec.ContractName,
+            WriteLockPlan.None,
+            firstRule.ExecuteAsync,
+            firstRule.AuthorizeReplayAsync);
+        var oldTask = oldScope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync("first-executor", firstWrite);
         await coordinator.OldUnitHeld.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var write = new TransactionalWrite<LockCanaryCommand, LockCanaryResult>(
@@ -173,14 +180,14 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
     }
 
     [Fact]
-    public async Task ActorDrivenNoticeDeliveryShellAndAuthorizationExecutor_OnSameTargets_CompleteWithoutDeadlock()
+    public async Task NoticeDeliveryExecutorRules_OnSameTargets_CompleteWithoutDeadlock()
     {
         await using var database = await fixture.CreateContextAsync();
         var coordinator = new LockCanaryCoordinator();
         var newLockProbe = new NewExecutorLockProbe(coordinator);
-        await using var oldServices = BuildServices(database.ConnectionString, coordinator, oldShell: true);
+        await using var oldServices = BuildServices(database.ConnectionString, coordinator);
         await using var newServices = BuildServices(
-            database.ConnectionString, coordinator, oldShell: false, newLockProbe);
+            database.ConnectionString, coordinator, newLockProbe);
         await using var oldScope = oldServices.CreateAsyncScope();
         await using var newScope = newServices.CreateAsyncScope();
         var command = new NoticeDeliveryLockCanaryCommand(
@@ -189,10 +196,17 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             AccessContextId: 52,
             NoticeDraftId: 53);
 
-        var oldTask = oldScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
-            new AtomicCommandIdentity("canary.notice-delivery.old-shell", "old-shell"),
+        var firstRule = new NoticeDeliveryLockRule(coordinator);
+        var firstWrite = new TransactionalWrite<NoticeDeliveryLockCanaryCommand, LockCanaryResult>(
+            "canary.notice-delivery.first-executor",
+            WriteIdempotencyPolicy.Required,
             command,
-            LockCanaryResult.Codec);
+            LockCanaryResult.Codec.ContractName,
+            WriteLockPlan.None,
+            firstRule.ExecuteAsync,
+            firstRule.AuthorizeReplayAsync);
+        var oldTask = oldScope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync("first-executor", firstWrite);
         await coordinator.OldAuthSessionHeld.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var write = new TransactionalWrite<NoticeDeliveryLockCanaryCommand, LockCanaryResult>(
@@ -220,7 +234,6 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
     private static ServiceProvider BuildServices(
         string connectionString,
         LockCanaryCoordinator coordinator,
-        bool oldShell,
         NewExecutorLockProbe? newLockProbe = null)
     {
         var services = new ServiceCollection();
@@ -228,15 +241,6 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
         services.AddSingleton(coordinator);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        if (oldShell)
-        {
-            services.AddAtomicCommandHandler<LockCanaryCommand, LockCanaryResult, OldPossessionShell>();
-            services.AddAtomicCommandHandler<
-                NoticeDeliveryLockCanaryCommand,
-                LockCanaryResult,
-                ActorDrivenNoticeDeliveryShell>();
-        }
-
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
         {
             options.UseNpgsql(connectionString)
@@ -280,10 +284,9 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             new("lock-order-canary.v1");
     }
 
-    private sealed class OldPossessionShell(LockCanaryCoordinator coordinator)
-        : IAtomicCommandHandler<LockCanaryCommand, LockCanaryResult>
+    private sealed class PossessionLockRule(LockCanaryCoordinator coordinator)
     {
-        public async Task<LockCanaryResult> HandleAsync(
+        public async Task<LockCanaryResult> ExecuteAsync(
             LockCanaryCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)
@@ -301,10 +304,9 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class ActorDrivenNoticeDeliveryShell(LockCanaryCoordinator coordinator)
-        : IAtomicCommandHandler<NoticeDeliveryLockCanaryCommand, LockCanaryResult>
+    private sealed class NoticeDeliveryLockRule(LockCanaryCoordinator coordinator)
     {
-        public async Task<LockCanaryResult> HandleAsync(
+        public async Task<LockCanaryResult> ExecuteAsync(
             NoticeDeliveryLockCanaryCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)

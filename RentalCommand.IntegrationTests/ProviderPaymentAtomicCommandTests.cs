@@ -88,48 +88,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<ProviderPaymentFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            RecordVerifiedProviderPaymentEventCommand,
-            RecordVerifiedProviderPaymentEventResult,
-            RecordVerifiedProviderPaymentEventHandler>();
-        services.AddAtomicCommandHandler<
-            ReconcileClaimedProviderPaymentEventCommand,
-            ReconcileClaimedProviderPaymentEventResult,
-            ReconcileClaimedProviderPaymentEventHandler>();
-        services.AddAtomicCommandHandler<
-            CancelTenantAutopayCommand,
-            CancelTenantAutopayResult,
-            CancelTenantAutopayHandler>();
-        services.AddAtomicCommandHandler<
-            PrepareProviderPaymentCreateCommand,
-            PrepareProviderPaymentCreateResult,
-            PrepareProviderPaymentCreateHandler>();
-        services.AddAtomicCommandHandler<
-            SubmitProviderPaymentCreateCommand,
-            SubmitProviderPaymentCreateResult,
-            SubmitProviderPaymentCreateHandler>();
-        services.AddAtomicCommandHandler<
-            ScheduleProviderPaymentReconciliationCommand,
-            ScheduleProviderPaymentReconciliationResult,
-            ScheduleProviderPaymentReconciliationHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            FinalizeProviderPaymentCreateCommand,
-            FinalizeProviderPaymentCreateResult,
-            FinalizeProviderPaymentCreateHandler>();
-        services.AddAtomicCommandHandler<
-            FailProviderPaymentCreateCommand,
-            FailProviderPaymentCreateResult,
-            FailProviderPaymentCreateHandler>();
-        services.AddAtomicCommandHandler<
-            AbandonProviderPaymentAttemptCommand,
-            AbandonProviderPaymentAttemptResult,
-            AbandonProviderPaymentAttemptHandler>();
-        services.AddAtomicCommandHandler<
-            InspectProviderPaymentAttemptCommand,
-            InspectProviderPaymentAttemptResult,
-            InspectProviderPaymentAttemptHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -2307,9 +2267,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
                 : await writes.ExecuteAsync(identity.IdempotencyKey, write, ct);
         }
 
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec, ct);
+        throw new InvalidOperationException($"No executor rule exists for {typeof(TCommand).Name}.");
     }
 
     private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAfterBarrierAsync<TCommand, TResult>(

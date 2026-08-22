@@ -112,8 +112,8 @@ public sealed class CoreCrudAtomicContractTests
         endpoint!.GetParameters().Any(parameter =>
             parameter.GetCustomAttribute<FromHeaderAttribute>()?.Name == "Idempotency-Key")
             .Should().BeTrue();
-        typeof(AtomicGuidedTenantSetupHandler)
-            .Should().Implement<IAtomicCommandHandler<AtomicGuidedTenantSetupCommand, AtomicGuidedTenantSetupResult>>();
+        typeof(AtomicGuidedTenantSetupHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(AtomicGuidedTenantSetupHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
 
         var handler = ReadSource(
             "RentalCommand.Api", "Services", "Domain", "AtomicGuidedTenantSetup.cs");

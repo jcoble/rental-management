@@ -6,20 +6,6 @@ namespace RentalCommand.Core.Atomic;
 public interface IAtomicCommandData;
 
 /// <summary>
-/// Receipt-backed transaction boundary over the caller's scoped database context.
-/// </summary>
-public interface IAtomicUnitOfWork
-{
-    Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-        AtomicCommandIdentity identity,
-        TCommand command,
-        AtomicJsonResultCodec<TResult> resultCodec,
-        CancellationToken ct = default)
-        where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull;
-}
-
-/// <summary>
 /// Shared front door for one local, receipt-backed write. The supplied operation runs on the
 /// executor-owned scoped context and transaction.
 /// </summary>
@@ -40,7 +26,6 @@ public enum WriteIdempotencyPolicy
 
 public enum WriteEntryPointKind
 {
-    LegacyAtomic,
     Transactional,
 }
 
@@ -307,22 +292,6 @@ public sealed record WriteLock
         IntegerId is int integerId
             ? context.AcquireLockAsync(LockNamespace, integerId, ct)
             : context.AcquireLockAsync(LockNamespace, GuidId!.Value, ct);
-}
-
-/// <summary>Application command code executed on the same scoped context as the transaction owner.</summary>
-public interface IAtomicCommandHandler<in TCommand, TResult>
-    where TCommand : notnull, IAtomicCommandData
-    where TResult : notnull
-{
-    Task<TResult> HandleAsync(
-        TCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct);
-
-    Task AuthorizeReplayAsync(
-        TCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct);
 }
 
 public sealed record AtomicSqlMutationTarget(

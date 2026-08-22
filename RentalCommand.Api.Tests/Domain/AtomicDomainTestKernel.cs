@@ -72,18 +72,6 @@ internal static class AtomicDomainTestKernel
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            DispatchWorkOrderToVendorCommand,
-            DispatchWorkOrderToVendorResult,
-            DispatchWorkOrderToVendorHandler>();
-        services.AddAtomicCommandHandler<
-            CancelVendorDispatchCommand,
-            CancelVendorDispatchResult,
-            CancelVendorDispatchHandler>();
-        services.AddAtomicCommandHandler<
-            RecoverVendorDispatchChronologyCommand,
-            RecoverVendorDispatchChronologyResult,
-            RecoverVendorDispatchChronologyHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -101,18 +89,6 @@ internal static class AtomicDomainTestKernel
             new SqliteCompatibleRentalCommandDbContext(
                 provider.GetRequiredService<DbContextOptions<RentalCommandDbContext>>()));
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            AtomicRentalMutationCommand,
-            AtomicRentalMutationResult,
-            AtomicRentalMutationHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicPublicApplicationSubmissionCommand,
-            AtomicPublicApplicationSubmissionResult,
-            AtomicPublicApplicationSubmissionHandler>();
-        services.AddAtomicCommandHandler<
-            AtomicWorkspaceCoreMutationCommand,
-            AtomicWorkspaceCoreMutationResult,
-            AtomicWorkspaceCoreMutationHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -123,10 +99,6 @@ internal static class AtomicDomainTestKernel
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddScoped<PropertyService>();
         services.AddScoped<TenantService>();
-        services.AddAtomicCommandHandler<
-            AtomicGuidedTenantSetupCommand,
-            AtomicGuidedTenantSetupResult,
-            AtomicGuidedTenantSetupHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -149,10 +121,6 @@ internal static class AtomicDomainTestKernel
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddScoped<PropertyService>();
         services.AddScoped<TenantService>();
-        services.AddAtomicCommandHandler<
-            AtomicGuidedTenantSetupCommand,
-            AtomicGuidedTenantSetupResult,
-            AtomicGuidedTenantSetupHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -164,10 +132,6 @@ internal static class AtomicDomainTestKernel
         services.AddSingleton(Mock.Of<IAuditTrailService>());
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<UnitService>();
-        services.AddAtomicCommandHandler<
-            AtomicRentalMutationCommand,
-            AtomicRentalMutationResult,
-            AtomicRentalMutationHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -197,18 +161,6 @@ internal static class AtomicDomainTestKernel
     {
         var services = CorePostgreSql(connectionString, interceptors: interceptors);
         services.AddPendingFileUploadStore();
-        services.AddAtomicCommandHandler<
-            AtomicInspectionMutationCommand,
-            AtomicInspectionMutationResult,
-            AtomicInspectionMutationHandler>();
-        services.AddAtomicCommandHandler<
-            DispatchWorkOrderToVendorCommand,
-            DispatchWorkOrderToVendorResult,
-            DispatchWorkOrderToVendorHandler>();
-        services.AddAtomicCommandHandler<
-            CompleteVendorDispatchFromInboundCommand,
-            CompleteVendorDispatchFromInboundResult,
-            CompleteVendorDispatchFromInboundHandler>();
         AddWorkOrderHandlers(services);
         return services.BuildServiceProvider();
     }

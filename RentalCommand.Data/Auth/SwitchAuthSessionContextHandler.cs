@@ -9,15 +9,10 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Auth;
 
 public sealed class SwitchAuthSessionContextHandler
-    : IAtomicCommandHandler<SwitchAuthSessionContextCommand, SwitchAuthSessionContextResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public SwitchAuthSessionContextHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SwitchAuthSessionContextResult> HandleAsync(
-        SwitchAuthSessionContextCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<SwitchAuthSessionContextResult> ExecuteAsync(
         SwitchAuthSessionContextCommand command,

@@ -94,16 +94,10 @@ public sealed record SetAccountingDirectionResult(
     DateTime? UpdatedAtUtc);
 
 public sealed class PrepareAccountingDisconnectHandler
-    : IAtomicCommandHandler<PrepareAccountingDisconnectCommand, PrepareAccountingDisconnectResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PrepareAccountingDisconnectHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<PrepareAccountingDisconnectResult> HandleAsync(
-        PrepareAccountingDisconnectCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
 
     public async Task<PrepareAccountingDisconnectResult> ExecuteAsync(
         PrepareAccountingDisconnectCommand command,
@@ -201,16 +195,10 @@ public sealed class PrepareAccountingDisconnectHandler
 }
 
 public sealed class FinalizeAccountingDisconnectHandler
-    : IAtomicCommandHandler<FinalizeAccountingDisconnectCommand, FinalizeAccountingDisconnectResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public FinalizeAccountingDisconnectHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<FinalizeAccountingDisconnectResult> HandleAsync(
-        FinalizeAccountingDisconnectCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
 
     public async Task<FinalizeAccountingDisconnectResult> ExecuteAsync(
         FinalizeAccountingDisconnectCommand command,
@@ -298,16 +286,10 @@ public sealed class FinalizeAccountingDisconnectHandler
 }
 
 public sealed class SetAccountingDirectionHandler
-    : IAtomicCommandHandler<SetAccountingDirectionCommand, SetAccountingDirectionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public SetAccountingDirectionHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SetAccountingDirectionResult> HandleAsync(
-        SetAccountingDirectionCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
 
     public async Task<SetAccountingDirectionResult> ExecuteAsync(
         SetAccountingDirectionCommand command,

@@ -106,16 +106,10 @@ public static class BankingWriteSupport
 }
 
 public sealed class PreparePlaidTokenExchangeHandler
-    : IAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PreparePlaidTokenExchangeHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<PreparePlaidTokenExchangeResult> HandleAsync(
-        PreparePlaidTokenExchangeCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
 
     public async Task<PreparePlaidTokenExchangeResult> ExecuteAsync(
         PreparePlaidTokenExchangeCommand command,
@@ -176,16 +170,10 @@ public sealed class PreparePlaidTokenExchangeHandler
 }
 
 public sealed class AdmitPlaidTokenExchangeHandler
-    : IAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AdmitPlaidTokenExchangeHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<AdmitPlaidTokenExchangeResult> HandleAsync(
-        AdmitPlaidTokenExchangeCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
 
     public async Task<AdmitPlaidTokenExchangeResult> ExecuteAsync(
         AdmitPlaidTokenExchangeCommand command,
@@ -239,16 +227,10 @@ public sealed class AdmitPlaidTokenExchangeHandler
 }
 
 public sealed class RecordPlaidTokenExchangeReceiptHandler
-    : IAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecordPlaidTokenExchangeReceiptHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<RecordPlaidTokenExchangeReceiptResult> HandleAsync(
-        RecordPlaidTokenExchangeReceiptCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
 
     public async Task<RecordPlaidTokenExchangeReceiptResult> ExecuteAsync(
         RecordPlaidTokenExchangeReceiptCommand command,
@@ -309,16 +291,10 @@ public sealed class RecordPlaidTokenExchangeReceiptHandler
 }
 
 public sealed class ApplyPlaidConnectionHandler
-    : IAtomicCommandHandler<ApplyPlaidConnectionCommand, ApplyPlaidConnectionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ApplyPlaidConnectionHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ApplyPlaidConnectionResult> HandleAsync(
-        ApplyPlaidConnectionCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
 
     public async Task<ApplyPlaidConnectionResult> ExecuteAsync(
         ApplyPlaidConnectionCommand command,
@@ -432,18 +408,12 @@ public sealed class ApplyPlaidConnectionHandler
 }
 
 public sealed class ApplyPlaidSyncHandler
-    : IAtomicCommandHandler<ApplyPlaidSyncCommand, ApplyPlaidSyncResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ApplyPlaidSyncHandler(RentalCommandDbContext db) => _db = db;
 
     private const int MaxBatch = 500;
-
-    public async Task<ApplyPlaidSyncResult> HandleAsync(
-        ApplyPlaidSyncCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
 
     public async Task<ApplyPlaidSyncResult> ExecuteAsync(
         ApplyPlaidSyncCommand command,
@@ -625,18 +595,12 @@ public sealed class ApplyPlaidSyncHandler
 }
 
 public sealed class ImportBankTransactionsHandler
-    : IAtomicCommandHandler<ImportBankTransactionsCommand, ImportBankTransactionsResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ImportBankTransactionsHandler(RentalCommandDbContext db) => _db = db;
 
     private const int MaxBatch = 500;
-
-    public async Task<ImportBankTransactionsResult> HandleAsync(
-        ImportBankTransactionsCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
 
     public async Task<ImportBankTransactionsResult> ExecuteAsync(
         ImportBankTransactionsCommand command,
@@ -856,16 +820,10 @@ public sealed class ImportBankTransactionsHandler
 }
 
 public sealed class ReconcileBankTransactionHandler
-    : IAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ReconcileBankTransactionHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<ReconcileBankTransactionResult> HandleAsync(
-        ReconcileBankTransactionCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
 
     public async Task<ReconcileBankTransactionResult> ExecuteAsync(
         ReconcileBankTransactionCommand command,
@@ -1565,15 +1523,10 @@ public sealed class ReconcileBankTransactionHandler
 }
 
 public sealed class RouteBankTransactionHandler
-    : IAtomicCommandHandler<RouteBankTransactionCommand, RouteBankTransactionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RouteBankTransactionHandler(RentalCommandDbContext db) => _db = db;
-
-    public async Task<RouteBankTransactionResult> HandleAsync(
-        RouteBankTransactionCommand command, IAtomicCommandContext context,
-        CancellationToken ct) => throw BankingWriteSupport.RetiredPath();
 
     public async Task<RouteBankTransactionResult> ExecuteAsync(
         RouteBankTransactionCommand command, IAtomicCommandContext context, CancellationToken ct)

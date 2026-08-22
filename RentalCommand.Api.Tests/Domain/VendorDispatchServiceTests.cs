@@ -56,22 +56,6 @@ public class VendorDispatchServiceTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            DispatchWorkOrderToVendorCommand,
-            DispatchWorkOrderToVendorResult,
-            DispatchWorkOrderToVendorHandler>();
-        services.AddAtomicCommandHandler<
-            CancelVendorDispatchCommand,
-            CancelVendorDispatchResult,
-            CancelVendorDispatchHandler>();
-        services.AddAtomicCommandHandler<
-            CompleteVendorDispatchFromInboundCommand,
-            CompleteVendorDispatchFromInboundResult,
-            CompleteVendorDispatchFromInboundHandler>();
-        services.AddAtomicCommandHandler<
-            CreateVendorRatingCommand,
-            VendorRatingMutationResult,
-            CreateVendorRatingHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_ctx.ConnectionString)
                 .AddInterceptors(new RequestGucConnectionInterceptor(_scope))

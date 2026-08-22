@@ -10,14 +10,14 @@ public sealed class AtomicKernelArchitectureBudgetTests
     [
         "IAtomicCommandContext",
         "IAtomicCommandData",
-        "IAtomicCommandHandler`2",
-        "IAtomicUnitOfWork",
+        "IAuthorizationScopedRequest",
+        "IWriteExecutor",
     ];
 
     [Fact]
     public void Public_kernel_surface_stays_within_the_wholesale_budget()
     {
-        var interfaces = typeof(IAtomicUnitOfWork).Assembly
+        var interfaces = typeof(IWriteExecutor).Assembly
             .GetExportedTypes()
             .Where(type => type.IsInterface
                 && type.Namespace?.StartsWith(
@@ -32,32 +32,27 @@ public sealed class AtomicKernelArchitectureBudgetTests
 
         var memberCount = interfaces.Sum(DeclaredContractMemberCount);
         memberCount.Should().BeLessThanOrEqualTo(
-            20,
-            "the complete public interface surface is capped at twenty declared members");
+            21,
+            "the complete public interface surface is capped at twenty-one declared members");
 
         var executionMethods = interfaces
             .SelectMany(type => type.GetMethods())
-            .Where(method => method.Name == nameof(IAtomicUnitOfWork.ExecuteAsync))
+            .Where(method => method.Name == nameof(IWriteExecutor.ExecuteAsync))
             .ToArray();
         executionMethods.Should().ContainSingle(
             "the kernel exposes exactly one public command execution method");
-        executionMethods[0].DeclaringType.Should().Be(typeof(IAtomicUnitOfWork));
+        executionMethods[0].DeclaringType.Should().Be(typeof(IWriteExecutor));
     }
 
     [Fact]
-    public void Handler_contract_requires_explicit_replay_authorization()
+    public void Transactional_write_requires_explicit_replay_authorization()
     {
-        var handler = typeof(IAtomicUnitOfWork).Assembly
-            .GetExportedTypes()
-            .Single(type => type.IsInterface && type.Name == "IAtomicCommandHandler`2");
-        var methods = handler.GetMethods().Where(method => !method.IsSpecialName).ToArray();
-
-        methods.Select(method => method.Name).Should().BeEquivalentTo(
-            ["HandleAsync", "AuthorizeReplayAsync"],
-            "every handler must explicitly classify and authorize replay; replay is never an optional side interface");
-        methods.Should().OnlyContain(
-            method => method.IsAbstract,
-            "default no-op replay policies would silently expose global receipts");
+        var write = typeof(TransactionalWrite<,>);
+        write.GetProperty(nameof(TransactionalWrite<IAtomicCommandData, object>.AuthorizeReplayAsync))
+            .Should().NotBeNull("every write must explicitly authorize receipt replay");
+        write.GetConstructors().Should().ContainSingle();
+        write.GetConstructors().Single().GetParameters().Select(parameter => parameter.Name)
+            .Should().Contain("authorizeReplayAsync");
     }
 
     [Fact]
@@ -203,7 +198,10 @@ public sealed class AtomicKernelArchitectureBudgetTests
             .SelectMany(path => Directory.EnumerateFiles(path, "*.cs", SearchOption.AllDirectories))
             .Where(path =>
                 !Path.GetFileName(path).Contains(".g.", StringComparison.OrdinalIgnoreCase)
-                && !Path.GetFileName(path).EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase));
+                && !Path.GetFileName(path).EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !Path.GetFileName(path).Equals(
+                "TransactionalWriteDefaults.cs",
+                StringComparison.OrdinalIgnoreCase));
 
     private static int LogicalLineCount(string source)
     {

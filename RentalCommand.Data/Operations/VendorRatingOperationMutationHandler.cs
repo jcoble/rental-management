@@ -10,7 +10,6 @@ using RentalCommand.Core.Operations;
 namespace RentalCommand.Data.Operations;
 
 public sealed class CreateVendorRatingHandler
-    : IAtomicCommandHandler<CreateVendorRatingCommand, VendorRatingMutationResult>
 {
     public const string ResultContract = "vendor-rating.create.v1";
 
@@ -32,10 +31,6 @@ public sealed class CreateVendorRatingHandler
             "vendor-rating.create", WriteIdempotencyPolicy.Required, command, ResultContract,
             locks, handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<VendorRatingMutationResult> HandleAsync(
-        CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
 
     public async Task<VendorRatingMutationResult> ExecuteAsync(
         CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct)
