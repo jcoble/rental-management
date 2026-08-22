@@ -8,6 +8,9 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Payments;
+using RentalCommand.Api.Writes;
+using RentalCommand.Data;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Api.Services.Payments;
 
@@ -31,39 +34,25 @@ public class StripePaymentService : IStripePaymentService
     private readonly ISandboxGuard _sandbox;
     private readonly ILogger<StripePaymentService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomicUnitOfWork;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
     private readonly IInteractivePaymentProviderClient _interactiveProvider;
-
-    private static readonly AtomicJsonResultCodec<PrepareProviderPaymentCreateResult> PrepareCodec =
-        new("prepare-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<FinalizeProviderPaymentCreateResult> FinalizeCodec =
-        new("finalize-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<PrepareProviderAutopaySetupResult> PrepareSetupCodec =
-        new("prepare-provider-autopay-setup-result.v1");
-    private static readonly AtomicJsonResultCodec<SubmitProviderPaymentCreateResult> SubmitCodec =
-        new("submit-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<FailProviderPaymentCreateResult> FailCodec =
-        new("fail-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<AbandonProviderPaymentAttemptResult> AbandonCodec =
-        new("abandon-provider-payment-attempt-result.v1");
-    private static readonly AtomicJsonResultCodec<InspectProviderPaymentAttemptResult> InspectCodec =
-        new("inspect-provider-payment-attempt-result.v1");
-    private static readonly AtomicJsonResultCodec<RecordVerifiedProviderPaymentEventResult> ProviderEventCodec =
-        new("record-verified-provider-payment-event-result.v1");
 
     public StripePaymentService(
         IOptions<StripeConfig> config,
         ISandboxGuard sandbox,
         ILogger<StripePaymentService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomicUnitOfWork,
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes,
         IInteractivePaymentProviderClient? interactiveProvider = null)
     {
         _config = config.Value;
         _sandbox = sandbox;
         _logger = logger;
         _timeProvider = timeProvider;
-        _atomicUnitOfWork = atomicUnitOfWork;
+        _db = db;
+        _writes = writes;
         _interactiveProvider = interactiveProvider ?? new StripeInteractivePaymentProviderClient(config);
     }
 
@@ -98,9 +87,7 @@ public class StripePaymentService : IStripePaymentService
 
         var idempotencyKey = BuildPaymentIdempotencyKey(
             "intent", chargeLedgerEntryId, actorUserId, attemptKey);
-        var prepared = await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-create.prepare", idempotencyKey),
-            new PrepareProviderPaymentCreateCommand(
+        var prepareCommand = new PrepareProviderPaymentCreateCommand(
                 portfolioId,
                 tenantAccountId,
                 chargeLedgerEntryId,
@@ -110,9 +97,10 @@ public class StripePaymentService : IStripePaymentService
                 Provider: "stripe",
                 IdempotencyKey: idempotencyKey,
                 Currency: "USD",
-                PreparedAtUtc: _timeProvider.UtcNow()),
-            PrepareCodec,
-            ct);
+                PreparedAtUtc: _timeProvider.UtcNow());
+        var prepared = await _writes.ExecuteAsync(idempotencyKey,
+            ProviderPaymentWriteSupport.Write<PrepareProviderPaymentCreateCommand,
+                PrepareProviderPaymentCreateResult>(_db, "payments.provider-create.prepare", prepareCommand), ct);
         if (prepared.Value.Outcome == PrepareProviderPaymentCreateOutcome.NotFound)
         {
             return CreateIntentResult.NotFound();
@@ -194,9 +182,7 @@ public class StripePaymentService : IStripePaymentService
 
         var idempotencyKey = BuildPaymentIdempotencyKey(
             "checkout", chargeLedgerEntryId, actorUserId, attemptKey);
-        var prepared = await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-create.prepare", idempotencyKey),
-            new PrepareProviderPaymentCreateCommand(
+        var prepareCommand = new PrepareProviderPaymentCreateCommand(
                 portfolioId,
                 tenantAccountId,
                 chargeLedgerEntryId,
@@ -206,9 +192,10 @@ public class StripePaymentService : IStripePaymentService
                 Provider: "stripe",
                 IdempotencyKey: idempotencyKey,
                 Currency: "USD",
-                PreparedAtUtc: _timeProvider.UtcNow()),
-            PrepareCodec,
-            ct);
+                PreparedAtUtc: _timeProvider.UtcNow());
+        var prepared = await _writes.ExecuteAsync(idempotencyKey,
+            ProviderPaymentWriteSupport.Write<PrepareProviderPaymentCreateCommand,
+                PrepareProviderPaymentCreateResult>(_db, "payments.provider-create.prepare", prepareCommand), ct);
         if (prepared.Value.Outcome == PrepareProviderPaymentCreateOutcome.NotFound)
         {
             return CheckoutResult.NotFound();
@@ -294,12 +281,11 @@ public class StripePaymentService : IStripePaymentService
         var idempotencyKey = $"autopay-setup:{operationKey.Trim()}";
         if (idempotencyKey.Length > 200)
             throw new ArgumentException("Autopay setup operation key cannot exceed 186 characters.", nameof(operationKey));
-        var prepared = await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-autopay.prepare", idempotencyKey),
-            new PrepareProviderAutopaySetupCommand(portfolioId, tenantAccountId, tenantId,
-                actorUserId, "stripe", idempotencyKey, "USD", _timeProvider.UtcNow()),
-            PrepareSetupCodec,
-            ct);
+        var prepareCommand = new PrepareProviderAutopaySetupCommand(portfolioId, tenantAccountId, tenantId,
+            actorUserId, "stripe", idempotencyKey, "USD", _timeProvider.UtcNow());
+        var prepared = await _writes.ExecuteAsync(idempotencyKey,
+            ProviderPaymentWriteSupport.Write<PrepareProviderAutopaySetupCommand,
+                PrepareProviderAutopaySetupResult>(_db, "payments.provider-autopay.prepare", prepareCommand), ct);
         if (prepared.Value.Outcome == PrepareProviderAutopaySetupOutcome.NotFound)
         {
             return CheckoutResult.NotFound();
@@ -375,11 +361,10 @@ public class StripePaymentService : IStripePaymentService
         var ev = EventUtility.ConstructEvent(json, signature, _config.WebhookSecret, throwOnApiVersionMismatch: false);
         var now = _timeProvider.UtcNow();
         var command = await NormalizeVerifiedEventAsync(ev, now, ct);
-        var outcome = await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-event.record", $"stripe:{ev.Id}"),
-            command,
-            ProviderEventCodec,
-            ct);
+        var key = $"stripe:{ev.Id}";
+        var outcome = await _writes.ExecuteExactAsync(key,
+            ProviderPaymentWriteSupport.Write<RecordVerifiedProviderPaymentEventCommand,
+                RecordVerifiedProviderPaymentEventResult>(_db, "payments.provider-event.record", command), ct);
 
         _logger.LogInformation(
             "Stripe webhook event {EventId} ({EventType}) completed with {Outcome}.",
@@ -656,14 +641,14 @@ public class StripePaymentService : IStripePaymentService
             && attempt.PreparedAtUtc is DateTime preparedAt
             && preparedAt <= _timeProvider.UtcNow().AddHours(-24))
         {
-            await _atomicUnitOfWork.ExecuteAsync(
-                new AtomicCommandIdentity("payments.provider-create.fail", attempt.IdempotencyKey),
-                new FailProviderPaymentCreateCommand(
+            var command = new FailProviderPaymentCreateCommand(
                     attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
                     attempt.Provider, attempt.IdempotencyKey, "PROVIDER_RECONCILE_EXPIRED",
                     "Provider reconciliation found no accepted payment after 24 hours.",
-                    _timeProvider.UtcNow(), attempt.ProviderFenceToken),
-                FailCodec, ct);
+                    _timeProvider.UtcNow(), attempt.ProviderFenceToken);
+            await _writes.ExecuteAsync(attempt.IdempotencyKey,
+                ProviderPaymentWriteSupport.Write<FailProviderPaymentCreateCommand,
+                    FailProviderPaymentCreateResult>(_db, "payments.provider-create.fail", command), ct);
             return attempt with
             {
                 Outcome = SubmitProviderPaymentCreateOutcome.Failed,
@@ -697,14 +682,14 @@ public class StripePaymentService : IStripePaymentService
             && attempt.PreparedAtUtc is DateTime preparedAt
             && preparedAt <= _timeProvider.UtcNow().AddHours(-24))
         {
-            await _atomicUnitOfWork.ExecuteAsync(
-                new AtomicCommandIdentity("payments.provider-create.fail", attempt.IdempotencyKey),
-                new FailProviderPaymentCreateCommand(
+            var command = new FailProviderPaymentCreateCommand(
                     attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
                     attempt.Provider, attempt.IdempotencyKey, "PROVIDER_RECONCILE_EXPIRED",
                     "Provider reconciliation found no accepted setup after 24 hours.",
-                    _timeProvider.UtcNow(), attempt.ProviderFenceToken),
-                FailCodec, ct);
+                    _timeProvider.UtcNow(), attempt.ProviderFenceToken);
+            await _writes.ExecuteAsync(attempt.IdempotencyKey,
+                ProviderPaymentWriteSupport.Write<FailProviderPaymentCreateCommand,
+                    FailProviderPaymentCreateResult>(_db, "payments.provider-create.fail", command), ct);
             return attempt with
             {
                 Outcome = SubmitProviderPaymentCreateOutcome.Failed,
@@ -723,11 +708,11 @@ public class StripePaymentService : IStripePaymentService
         if (!_config.Enabled)
             return CheckoutResult.NotEnabled();
 
-        var inspected = await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-attempt.inspect", paymentAttemptId.ToString()),
-            new InspectProviderPaymentAttemptCommand(
-                portfolioId, tenantId, tenantAccountId, paymentAttemptId, "stripe"),
-            InspectCodec, ct);
+        var command = new InspectProviderPaymentAttemptCommand(
+            portfolioId, tenantId, tenantAccountId, paymentAttemptId, "stripe");
+        var inspected = await _writes.ExecuteAsync(paymentAttemptId.ToString(),
+            ProviderPaymentWriteSupport.Write<InspectProviderPaymentAttemptCommand,
+                InspectProviderPaymentAttemptResult>(_db, "payments.provider-attempt.inspect", command), ct);
         var attempt = inspected.Value;
         if (!attempt.Found)
             return CheckoutResult.NotFound();
@@ -791,16 +776,16 @@ public class StripePaymentService : IStripePaymentService
         if (state is not (TenantPaymentAttemptState.Canceled or TenantPaymentAttemptState.Failed))
             return CheckoutResult.Pending(attempt.PaymentAttemptId, attempt.State.ToString(),
                 attempt.ProviderPaymentId);
-        var abandoned = await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-attempt.abandon", attempt.IdempotencyKey),
-            new AbandonProviderPaymentAttemptCommand(
+        var command = new AbandonProviderPaymentAttemptCommand(
                 attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
                 attempt.Provider, attempt.IdempotencyKey,
                 string.IsNullOrWhiteSpace(reason) ? "Tenant canceled hosted payment." : reason,
                 _timeProvider.UtcNow(), ProviderConfirmed: true,
                 ConfirmedState: state,
-                ProviderPaymentId: ProviderObjectId(provider)),
-            AbandonCodec, ct);
+                ProviderPaymentId: ProviderObjectId(provider));
+        var abandoned = await _writes.ExecuteAsync(attempt.IdempotencyKey,
+            ProviderPaymentWriteSupport.Write<AbandonProviderPaymentAttemptCommand,
+                AbandonProviderPaymentAttemptResult>(_db, "payments.provider-attempt.abandon", command), ct);
         return abandoned.Value.State switch
         {
             TenantPaymentAttemptState.Canceled => CheckoutResult.Canceled(attempt.PaymentAttemptId),
@@ -820,29 +805,32 @@ public class StripePaymentService : IStripePaymentService
         if (string.IsNullOrWhiteSpace(providerObjectId))
             throw new InvalidOperationException(
                 $"Provider reconciliation for payment attempt {attempt.PaymentAttemptId} did not return an object identity.");
-        await _atomicUnitOfWork.ExecuteAsync(
+        var operationName = $"payments.provider-create.finalize:{state}";
+        var command = new FinalizeProviderPaymentCreateCommand(
+            attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
+            attempt.Provider, attempt.IdempotencyKey, providerObjectId, state, null,
+            _timeProvider.UtcNow(), attempt.ProviderFenceToken);
+        await _writes.ExecuteAsync(attempt.IdempotencyKey,
             // The durable attempt key identifies the provider object, while the command type
             // identifies the state transition. A response-lost Submitted finalize may be
             // followed by a Succeeded reconciliation; those are two legitimate atomic commands,
             // not an idempotency conflict for one command payload.
-            new AtomicCommandIdentity($"payments.provider-create.finalize:{state}", attempt.IdempotencyKey),
-            new FinalizeProviderPaymentCreateCommand(
-                attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
-                attempt.Provider, attempt.IdempotencyKey, providerObjectId, state, null,
-                _timeProvider.UtcNow(), attempt.ProviderFenceToken),
-            FinalizeCodec, ct);
+            ProviderPaymentWriteSupport.Write<FinalizeProviderPaymentCreateCommand,
+                FinalizeProviderPaymentCreateResult>(_db, operationName, command), ct);
     }
 
     private async Task FailInteractiveAttemptAsync(
         SubmitProviderPaymentCreateResult attempt, InteractiveProviderException exception,
-        CancellationToken ct) =>
-        await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-create.fail", attempt.IdempotencyKey),
-            new FailProviderPaymentCreateCommand(
-                attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
-                attempt.Provider, attempt.IdempotencyKey, exception.FailureCode,
-                exception.Message, _timeProvider.UtcNow(), attempt.ProviderFenceToken),
-            FailCodec, ct);
+        CancellationToken ct)
+    {
+        var command = new FailProviderPaymentCreateCommand(
+            attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
+            attempt.Provider, attempt.IdempotencyKey, exception.FailureCode,
+            exception.Message, _timeProvider.UtcNow(), attempt.ProviderFenceToken);
+        await _writes.ExecuteAsync(attempt.IdempotencyKey,
+            ProviderPaymentWriteSupport.Write<FailProviderPaymentCreateCommand,
+                FailProviderPaymentCreateResult>(_db, "payments.provider-create.fail", command), ct);
+    }
 
     private static string ProviderObjectId(InteractiveProviderObject provider) =>
         provider.ProviderPaymentId
@@ -933,13 +921,15 @@ public class StripePaymentService : IStripePaymentService
 
     private Task<AtomicCommandOutcome<SubmitProviderPaymentCreateResult>> SubmitProviderAttemptAsync(
         int portfolioId, int tenantAccountId, long paymentAttemptId, string provider,
-        string idempotencyKey, CancellationToken ct) => _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-create.submit", idempotencyKey),
-            new SubmitProviderPaymentCreateCommand(
-                portfolioId, tenantAccountId, paymentAttemptId, provider, idempotencyKey,
-                _timeProvider.UtcNow()),
-            SubmitCodec,
-            ct);
+        string idempotencyKey, CancellationToken ct)
+    {
+        var command = new SubmitProviderPaymentCreateCommand(
+            portfolioId, tenantAccountId, paymentAttemptId, provider, idempotencyKey,
+            _timeProvider.UtcNow());
+        return _writes.ExecuteAsync(idempotencyKey,
+            ProviderPaymentWriteSupport.Write<SubmitProviderPaymentCreateCommand,
+                SubmitProviderPaymentCreateResult>(_db, "payments.provider-create.submit", command), ct);
+    }
 
     /// <summary>
     /// Resolves the success URL: an explicit request value is honored ONLY when it passes the
