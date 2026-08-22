@@ -1897,7 +1897,18 @@ public class BankingServiceTests : IAsyncLifetime
         replay.Id.Should().Be(first.Id);
         _plaid.Verify(p => p.ExchangePublicTokenAsync(
             It.IsAny<PlaidRuntimeSettings>(), "single-use-token", It.IsAny<CancellationToken>()), Times.Once);
-        _ctx.Db.PlaidTokenExchangeAttempts.Single().Status.Should().Be("Completed");
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.PlaidTokenExchangeAttempts.CountAsync()).Should().Be(1);
+        (await _ctx.Db.BankConnections.CountAsync()).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.plaid.exchange.prepare")).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.plaid.exchange.admit")).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.plaid.exchange.receipt")).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.plaid.connection.apply")).Should().Be(1);
+        (await _ctx.Db.PlaidTokenExchangeAttempts.SingleAsync()).Status.Should().Be("Completed");
     }
 
     [Fact]
@@ -1922,7 +1933,18 @@ public class BankingServiceTests : IAsyncLifetime
             .WithMessage("*will not be exchanged again*");
         _plaid.Verify(p => p.ExchangePublicTokenAsync(
             It.IsAny<PlaidRuntimeSettings>(), "unknown-outcome-token", It.IsAny<CancellationToken>()), Times.Once);
-        _ctx.Db.PlaidTokenExchangeAttempts.Single().Status.Should().Be("RemoteAdmitted");
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.PlaidTokenExchangeAttempts.CountAsync()).Should().Be(1);
+        (await _ctx.Db.BankConnections.CountAsync()).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.plaid.exchange.prepare")).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.plaid.exchange.admit")).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.plaid.exchange.receipt")).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.plaid.connection.apply")).Should().Be(0);
+        (await _ctx.Db.PlaidTokenExchangeAttempts.SingleAsync()).Status.Should().Be("RemoteAdmitted");
     }
 
     [Fact]
@@ -1965,7 +1987,7 @@ public class BankingServiceTests : IAsyncLifetime
             .Setup(p => p.SyncTransactionsAsync(
                 It.IsAny<PlaidRuntimeSettings>(),
                 "access-token",
-                null,
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PlaidTransactionsSyncResult(
                 "next-cursor",
@@ -2009,6 +2031,8 @@ public class BankingServiceTests : IAsyncLifetime
                 "request-id"));
 
         var result = await _sut.SyncPlaidConnectionAsync(1, connection.Id);
+        await FluentActions.Invoking(() => _sut.SyncPlaidConnectionAsync(1, connection.Id))
+            .Should().ThrowAsync<AtomicIdempotencyConflictException>();
 
         result.Should().NotBeNull();
         var syncResult = result!;
@@ -2026,6 +2050,16 @@ public class BankingServiceTests : IAsyncLifetime
         row.LastSyncedAt.Should().NotBeNull();
         row.SyncCursorCipherText.Should().NotBeNull();
         row.SyncCursorCipherText.Should().NotContain("next-cursor");
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.BankConnections.CountAsync()).Should().Be(1);
+        (await _ctx.Db.BankTransactions.CountAsync(transaction =>
+            transaction.ProviderTransactionId == "txn-1")).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.plaid.sync.apply")).Should().Be(2,
+            "the initial empty page and the imported page each own one completed receipt");
+        _plaid.Verify(p => p.SyncTransactionsAsync(
+            It.IsAny<PlaidRuntimeSettings>(), "access-token", It.IsAny<string?>(),
+            It.IsAny<CancellationToken>()), Times.Exactly(3));
     }
 
     [Fact]
