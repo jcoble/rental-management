@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Data.Common;
+using System.Security.Cryptography;
 using FluentAssertions;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -136,7 +138,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         _probe.Commands.Clear();
-        _probe.AdvisoryLockParameterCounts.Clear();
+        _probe.AdvisoryLockAggregateIds.Clear();
         var command = VendorDone("SM-provider-stable-1");
         var identity = VendorIdentity(command.ProviderEventId);
 
@@ -199,7 +201,8 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         _probe.Commands.Count(sql => sql.Contains(
             "TSK-668 event-time team routing with direct responsibility and visible administrator fallback",
             StringComparison.Ordinal)).Should().Be(2);
-        _probe.AdvisoryLockParameterCounts.Should().StartWith([1, 2],
+        _probe.AdvisoryLockAggregateIds.Should().StartWith(
+            [PhoneLockKey(command.NormalizedFromPhone!), _facts.WorkOrderId],
             "the executor must acquire the hashed phone lock before the work-order lock");
         typeof(CompleteVendorDispatchFromInboundRule).GetMethod("ExecuteAsync").Should().NotBeNull();
         typeof(CompleteVendorDispatchFromInboundRule).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
@@ -515,6 +518,13 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
 
     private CompleteVendorDispatchFromInboundCommand VendorDone(string eventId, DateTime? receivedAt = null) =>
         new(eventId, "+16145550199", true, receivedAt ?? _now);
+
+    private static int PhoneLockKey(string normalizedPhone)
+    {
+        var digest = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(normalizedPhone));
+        var key = BinaryPrimitives.ReadInt32BigEndian(digest) & int.MaxValue;
+        return key == 0 ? 1 : key;
+    }
 
     private static AtomicCommandIdentity VendorIdentity(string eventId) =>
         new("sms.vendor-done", $"provider-event:{eventId}");
@@ -1007,7 +1017,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
     private sealed class CommandProbe : DbCommandInterceptor
     {
         public ConcurrentQueue<string> Commands { get; } = new();
-        public ConcurrentQueue<int> AdvisoryLockParameterCounts { get; } = new();
+        public ConcurrentQueue<int> AdvisoryLockAggregateIds { get; } = new();
         public bool FailOnAtomicAuditInsert { get; set; }
 
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
@@ -1036,7 +1046,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             Commands.Enqueue(sql);
             if (sql.Contains("pg_advisory_xact_lock", StringComparison.Ordinal))
             {
-                AdvisoryLockParameterCounts.Enqueue(command.Parameters.Count);
+                AdvisoryLockAggregateIds.Enqueue(Convert.ToInt32(command.Parameters[1].Value));
             }
             if (FailOnAtomicAuditInsert
                 && sql.Contains("INSERT INTO \"AtomicAuditLogs\"", StringComparison.Ordinal))

@@ -37,7 +37,7 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
     internal const string BatchClaimSql = """
         WITH clock AS MATERIALIZED (
             SELECT clock_timestamp() AS now_utc
-        ), candidates AS (
+        ), candidates AS MATERIALIZED (
             SELECT request."Id"
             FROM "SignatureRequests" AS request
             LEFT JOIN "LeaseAgreements" AS agreement ON agreement."Id" = request."LeaseAgreementId"
@@ -50,7 +50,6 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
                        AND addendum."VoidedAtUtc" IS NULL))
               AND (request."ExecutionClaimToken" IS NULL
                    OR request."ExecutionClaimExpiresAtUtc" <= clock.now_utc)
-              AND pg_try_advisory_xact_lock(@lockNamespace, request."Id")
               AND NOT EXISTS (
                   SELECT 1
                   FROM "SignatureSigners" AS signer
@@ -59,6 +58,10 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
             ORDER BY request."PreparedAtUtc", request."Id"
             FOR UPDATE OF request SKIP LOCKED
             LIMIT @batchSize
+        ), locked_candidates AS (
+            SELECT candidate."Id"
+            FROM candidates AS candidate
+            WHERE pg_try_advisory_xact_lock(@lockNamespace, candidate."Id")
         )
         UPDATE "SignatureRequests" AS request
         SET "ExecutionClaimOwner" = @claimOwner,
@@ -67,8 +70,8 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
             "ExecutionAttemptCount" = request."ExecutionAttemptCount" + 1,
             "ExecutionLastAttemptAtUtc" = clock.now_utc,
             "LastError" = NULL
-        FROM candidates, clock
-        WHERE request."Id" = candidates."Id"
+        FROM locked_candidates, clock
+        WHERE request."Id" = locked_candidates."Id"
         RETURNING request."Id", request."PublicId", request."ExecutionClaimToken";
         """;
 

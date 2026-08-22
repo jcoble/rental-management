@@ -1602,7 +1602,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             PortfolioId = portfolio.Id,
             Status = WorkspaceMembershipStatus.Active,
             DefaultExperience = WorkspaceExperience.Management,
-            EffectiveFromUtc = now.AddMinutes(-1),
+            EffectiveFromUtc = FrozenNow.AddMinutes(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
@@ -1614,7 +1614,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
                 role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
             Status = MembershipRoleAssignmentStatus.Active,
             ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
-            EffectiveFromUtc = now.AddMinutes(-1),
+            EffectiveFromUtc = FrozenNow.AddMinutes(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
