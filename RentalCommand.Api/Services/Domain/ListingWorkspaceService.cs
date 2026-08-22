@@ -498,8 +498,11 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         var admitted = await AdmitConnectedIntentAsync(
             scope, snapshot, operationId, ConnectedListingIntentOperation.Prepare, ct);
         if (admitted is null) return null;
-        if (admitted.Replayed && await HasCompletedConnectedOutcomeAsync(admitted, ct))
-            return await GetAsync(scope.PortfolioId, unitId, ct);
+        if (admitted.Replayed)
+        {
+            var resumed = await ResumeConnectedOutcomeAsync(snapshot, admitted, ct);
+            if (resumed.Found) return resumed.Response;
+        }
         var adapter = RequireAvailableAdapter(snapshot.ProviderKey);
         ListingPreparedPackage prepared;
         try
@@ -564,8 +567,11 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         var admitted = await AdmitConnectedIntentAsync(scope, snapshot, operationId, intentOperation, ct);
         if (admitted is null)
             return null;
-        if (admitted.Replayed && await HasCompletedConnectedOutcomeAsync(admitted, ct))
-            return await GetAsync(scope.PortfolioId, unitId, ct);
+        if (admitted.Replayed)
+        {
+            var resumed = await ResumeConnectedOutcomeAsync(snapshot, admitted, ct);
+            if (resumed.Found) return resumed.Response;
+        }
         var adapter = RequireAvailableAdapter(snapshot.ProviderKey);
         var preparedPackageKey = operation == ConnectedListingOperation.Publish
             ? DecodePreparedPackageKey(snapshot.PreparedPackageKey, snapshot.Package.ContentVersion)
@@ -628,8 +634,8 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             outcome.Disposition == AtomicCommandDisposition.Replayed);
     }
 
-    private async Task<bool> HasCompletedConnectedOutcomeAsync(
-        ConnectedIntentAdmission admission, CancellationToken ct)
+    private async Task<(bool Found, ListingWorkspaceResponse? Response)> ResumeConnectedOutcomeAsync(
+        ConnectedListingSnapshot snapshot, ConnectedIntentAdmission admission, CancellationToken ct)
     {
         var admissionResult = JsonSerializer.Serialize(new
         {
@@ -641,13 +647,20 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
                 && receipt.ResultContract == ConnectedPersistenceCodec.ContractName
                 && receipt.ResultJson != null
                 && EF.Functions.JsonContains(receipt.ResultJson, admissionResult))
-            .Select(receipt => (Guid?)receipt.AttemptId)
+            .Select(receipt => new { receipt.AttemptId, receipt.IdempotencyKey, receipt.ResultJson })
             .SingleOrDefaultAsync(ct);
-        return persisted is not null && await _db.AtomicCommandReceipts.AsNoTracking().AnyAsync(receipt =>
+        if (persisted is null) return (false, null);
+        var applied = await _db.AtomicCommandReceipts.AsNoTracking().AnyAsync(receipt =>
             receipt.CommandType == "listing-workspace.connected.apply-result"
-            && receipt.IdempotencyKey == persisted.Value.ToString("N")
+            && receipt.IdempotencyKey == persisted.AttemptId.ToString("N")
             && receipt.Status == AtomicCommandReceiptStatus.Completed
             && receipt.ResultContract == ConnectedApplicationCodec.ContractName, ct);
+        if (applied)
+            return (true, await GetAsync(snapshot.Package.PortfolioId, snapshot.Package.UnitId, ct));
+        var result = ConnectedPersistenceCodec.Deserialize(persisted.ResultJson!);
+        return (true, await ApplyConnectedResultAsync(snapshot, admission, persisted.AttemptId,
+            persisted.IdempotencyKey, result, result.ProviderStatus == ListingPublicationStatus.Published,
+            "Applied persisted Connected listing result", ct));
     }
 
     private IListingChannelAdapter RequireAvailableAdapter(string providerKey)
@@ -733,13 +746,23 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         if (persisted.Value.AdmissionAttemptId != admission.AttemptId)
             throw new AtomicReceiptInvariantException("Connected listing finalizer receipt belongs to another admission.");
 
+        return await ApplyConnectedResultAsync(snapshot, admission, persisted.AttemptId,
+            persistenceIdentity.IdempotencyKey, persisted.Value, markPublishedVersion, reason, ct);
+    }
+
+    private async Task<ListingWorkspaceResponse?> ApplyConnectedResultAsync(
+        ConnectedListingSnapshot snapshot, ConnectedIntentAdmission admission,
+        Guid persistenceAttemptId, string persistenceIdempotencyKey,
+        ConnectedListingPersistenceResult persistenceResult, bool markPublishedVersion,
+        string reason, CancellationToken ct)
+    {
         var applicationIdentity = InternalIdentity(
-            "listing-workspace.connected.apply-result", $"{persisted.AttemptId:N}");
+            "listing-workspace.connected.apply-result", $"{persistenceAttemptId:N}");
         var applicationCommand = new ApplyConnectedListingResultCommand(
             snapshot.Package.PortfolioId, snapshot.Package.PropertyId, snapshot.Package.UnitId,
             admission.ActorUserId, snapshot.Package.ContentVersion,
-            persisted.AttemptId, persistenceIdentity.CommandType, persistenceIdentity.IdempotencyKey,
-            ConnectedPersistenceCodec.ContractName, persisted.Value, markPublishedVersion, reason);
+            persistenceAttemptId, "listing-workspace.connected.persist-result", persistenceIdempotencyKey,
+            ConnectedPersistenceCodec.ContractName, persistenceResult, markPublishedVersion, reason);
         var applied = await RequireWrites().ExecuteAsync(
             applicationIdentity.IdempotencyKey,
             ConnectedListingWriteSupport.Write(applicationCommand, _db), ct);
