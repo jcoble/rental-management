@@ -43,7 +43,8 @@ public sealed class PortfolioGettingStartedSignalsPostgreSqlTests : IAsyncLifeti
         _context.Db.Users.Add(otherUser);
         await _context.Db.SaveChangesAsync();
         _otherUserId = otherUser.Id;
-        _service = new PortfolioService(_context.Db, Mock.Of<IAtomicUnitOfWork>());
+        _service = new PortfolioService(
+            _context.Db, Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         _commands.Clear();
     }
 

@@ -40,7 +40,7 @@ public class TenantServiceTests : IDisposable
         _services = AtomicDomainTestKernel.CreateForCoreCrud(_ctx.ConnectionString, _timeProvider);
         _sut = new TenantService(
             _ctx.Db, Mock.Of<IDataUpdateService>(), _timeProvider,
-            _services.GetRequiredService<IAtomicUnitOfWork>());
+            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
         _writeSut = _services.GetRequiredService<TenantService>();
     }
 
@@ -482,9 +482,9 @@ public class TenantServiceTests : IDisposable
             ],
         };
 
-        var first = await _sut.CreateGuidedSetupBatchAsync(
+        var first = await _writeSut.CreateGuidedSetupBatchAsync(
             _scope, request, "guided-tenant-batch");
-        var replay = await _sut.CreateGuidedSetupBatchAsync(
+        var replay = await _writeSut.CreateGuidedSetupBatchAsync(
             _scope, request, "guided-tenant-batch");
 
         first.Should().HaveCount(2);
@@ -512,7 +512,7 @@ public class TenantServiceTests : IDisposable
             ],
         };
 
-        Func<Task> act = async () => await _sut.CreateGuidedSetupBatchAsync(
+        Func<Task> act = async () => await _writeSut.CreateGuidedSetupBatchAsync(
             _scope, request, "guided-invalid-row");
 
         await act.Should().ThrowAsync<DomainValidationException>();
@@ -530,13 +530,13 @@ public class TenantServiceTests : IDisposable
         {
             Tenants = [new CreateTenantRequest { FirstName = "Avery", LastName = "Ellis" }],
         };
-        await _sut.CreateGuidedSetupBatchAsync(_scope, request, "guided-replay-auth");
+        await _writeSut.CreateGuidedSetupBatchAsync(_scope, request, "guided-replay-auth");
         var session = await _ctx.Db.AuthSessions.SingleAsync(row => row.Id == _scope.SessionId);
         session.Status = AuthSessionStatus.Revoked;
         session.RevokedAtUtc = DateTime.UtcNow;
         await _ctx.Db.SaveChangesAsync();
 
-        Func<Task> replay = async () => await _sut.CreateGuidedSetupBatchAsync(
+        Func<Task> replay = async () => await _writeSut.CreateGuidedSetupBatchAsync(
             _scope, request, "guided-replay-auth");
 
         await replay.Should().ThrowAsync<UnauthorizedAccessException>();
@@ -966,7 +966,7 @@ public sealed class TenantServicePostgreSqlTests : IAsyncLifetime
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
             TimeProvider.System,
-            Mock.Of<IAtomicUnitOfWork>());
+            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();

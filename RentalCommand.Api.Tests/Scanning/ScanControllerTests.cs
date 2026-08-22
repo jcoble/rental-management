@@ -743,7 +743,6 @@ public class ScanControllerTests : IAsyncLifetime
         var controller = new ScanController(
             scan,
             uploads ?? Mock.Of<IScanUploadService>(),
-            atomic ?? Mock.Of<IAtomicUnitOfWork>(),
             writes ?? Mock.Of<IRequestWriteExecutor>(),
             Mock.Of<IScanConfirmationTargetWriter>(),
             _db,

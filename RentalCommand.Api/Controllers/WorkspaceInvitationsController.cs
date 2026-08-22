@@ -6,10 +6,12 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -20,20 +22,18 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class WorkspaceInvitationsController : ControllerBase
 {
-    private static readonly AtomicJsonResultCodec<ActivateWorkspaceInvitationResult> ActivationCodec =
-        new("workspace-invitation-activation-result:v1");
     private readonly RentalCommandDbContext _db;
     private readonly UserManager<ApplicationUser> _users;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
 
     public WorkspaceInvitationsController(
         RentalCommandDbContext db,
         UserManager<ApplicationUser> users,
-        IAtomicUnitOfWork atomic)
+        IRequestWriteExecutor writes)
     {
         _db = db;
         _users = users;
-        _atomic = atomic;
+        _writes = writes;
     }
 
     [HttpPost("activate")]
@@ -100,13 +100,9 @@ public sealed class WorkspaceInvitationsController : ControllerBase
             Guid.NewGuid().ToString("N"));
         try
         {
-            var result = (await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "workspace-invitation.activate",
-                    $"{invitation.InvitedUserId}:{tokenHash}"),
-                command,
-                ActivationCodec,
-                ct)).Value;
+            var result = (await _writes.ExecuteExactAsync(
+                $"{invitation.InvitedUserId}:{tokenHash}",
+                WorkspaceTeamWriteSupport.Write(_db, command), ct)).Value;
             return result.Outcome == ActivateWorkspaceInvitationOutcome.Activated
                 ? Ok(new { activated = true })
                 : InvalidInvitation();

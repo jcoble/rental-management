@@ -5,11 +5,13 @@ using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Auth;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -22,21 +24,23 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class TeamController : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<CreateWorkspaceMembershipResult> CreateCodec =
-        new("workspace-team.membership.create.v1");
-    private static readonly AtomicJsonResultCodec<WorkspaceTeamMutationResult> MutationCodec =
-        new("workspace-team.mutation.v1");
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IRequestWriteExecutor _writes;
+    private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
+    private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
     private readonly string _webBaseUrl;
 
     public TeamController(
         RentalCommandDbContext db,
-        IAtomicUnitOfWork atomic,
+        IRequestWriteExecutor writes,
+        WorkspaceAccessRevisionGuard accessRevisionGuard,
+        IMembershipAssignmentScopeValidator assignmentScopeValidator,
         IConfiguration configuration)
     {
         _db = db;
-        _atomic = atomic;
+        _writes = writes;
+        _accessRevisionGuard = accessRevisionGuard;
+        _assignmentScopeValidator = assignmentScopeValidator;
         _webBaseUrl = configuration["App:WebBaseUrl"] ?? "https://localhost:5667";
     }
 
@@ -195,8 +199,8 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
             request.Email, request.DisplayName, request.RoleProfileKey, request.ScopeKind,
             request.SelectedPropertyIds.Distinct().Order().ToArray(),
             request.EffectiveFromUtc, _webBaseUrl);
-        return await Execute("workspace-team.membership.create", envelope.KeyDigest,
-            command, CreateCodec, StatusCodes.Status201Created, ct);
+        return await Execute(envelope.KeyDigest,
+            WorkspaceTeamWriteSupport.Write(_db, command), StatusCodes.Status201Created, ct);
     }
 
     [HttpPost("members/{accessContextId:int}/assignments")]
@@ -214,8 +218,10 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
             e.PortfolioId, e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
             accessContextId, request.ExpectedAccessRevision, request.RoleProfileKey, request.ScopeKind,
             request.SelectedPropertyIds.Distinct().Order().ToArray(), request.EffectiveFromUtc);
-        return await Execute("workspace-team.assignment.add", e.KeyDigest,
-            command, MutationCodec, StatusCodes.Status201Created, ct);
+        return await Execute(e.KeyDigest,
+            WorkspaceTeamWriteSupport.Write(
+                _db, _accessRevisionGuard, _assignmentScopeValidator, command),
+            StatusCodes.Status201Created, ct);
     }
 
     [HttpPatch("members/{accessContextId:int}/assignments/{assignmentId:int}/end")]
@@ -234,8 +240,10 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
             e.PortfolioId, e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
             accessContextId, request.ExpectedAccessRevision, assignmentId,
             request.EffectiveToUtc);
-        return await Execute("workspace-team.assignment.end", e.KeyDigest,
-            command, MutationCodec, StatusCodes.Status200OK, ct);
+        return await Execute(e.KeyDigest,
+            WorkspaceTeamWriteSupport.Write(
+                _db, _accessRevisionGuard, _assignmentScopeValidator, command),
+            StatusCodes.Status200OK, ct);
     }
 
     [HttpPut("members/{accessContextId:int}/assignments/{assignmentId:int}/properties")]
@@ -254,8 +262,10 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
             e.PortfolioId, e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
             accessContextId, request.ExpectedAccessRevision, assignmentId,
             request.PropertyIds.Distinct().Order().ToArray());
-        return await Execute("workspace-team.assignment.properties.replace", e.KeyDigest,
-            command, MutationCodec, StatusCodes.Status200OK, ct);
+        return await Execute(e.KeyDigest,
+            WorkspaceTeamWriteSupport.Write(
+                _db, _accessRevisionGuard, _assignmentScopeValidator, command),
+            StatusCodes.Status200OK, ct);
     }
 
     [HttpPatch("members/{accessContextId:int}/status")]
@@ -272,15 +282,15 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
         var command = new ChangeWorkspaceMembershipStatusCommand(
             e.PortfolioId, e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
             accessContextId, request.ExpectedAccessRevision, request.Action);
-        return await Execute("workspace-team.membership.status", e.KeyDigest,
-            command, MutationCodec, StatusCodes.Status200OK, ct);
+        return await Execute(e.KeyDigest,
+            WorkspaceTeamWriteSupport.Write(
+                _db, _accessRevisionGuard, _assignmentScopeValidator, command),
+            StatusCodes.Status200OK, ct);
     }
 
     private async Task<IActionResult> Execute<TCommand, TResult>(
-        string commandType,
         string key,
-        TCommand command,
-        AtomicJsonResultCodec<TResult> codec,
+        TransactionalWrite<TCommand, TResult> write,
         int successStatus,
         CancellationToken ct)
         where TCommand : notnull, IAtomicCommandData
@@ -288,8 +298,9 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     {
         try
         {
-            var outcome = await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(commandType, $"{GetPortfolioId()}:{key}"), command, codec, ct);
+            var outcome = await _writes.ExecuteExactAsync(
+                $"{GetPortfolioId()}:{key}",
+                write, ct);
             return StatusCode(successStatus, new
             {
                 outcome.Value,

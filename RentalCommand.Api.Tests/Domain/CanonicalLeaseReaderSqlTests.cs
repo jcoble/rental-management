@@ -33,7 +33,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         var sql = service.BuildHealthQuery(17)
             .OrderBy(row => row.UnitNumber)
@@ -72,7 +72,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         var sql = service.BuildCanonicalResponseQuery(17)
             .OrderBy(unit => unit.UnitNumber)

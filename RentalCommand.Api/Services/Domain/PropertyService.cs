@@ -22,7 +22,6 @@ public class PropertyService : IPropertyService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAtomicUnitOfWork? _atomic;
     private readonly IRequestWriteExecutor? _writes;
     private readonly PropertyTenantCrudWriteRules _crudRules;
     private readonly TimeProvider _timeProvider;
@@ -31,13 +30,11 @@ public class PropertyService : IPropertyService
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null,
         IRequestWriteExecutor? writes = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
-        _atomic = atomic;
         _writes = writes;
         _crudRules = new PropertyTenantCrudWriteRules(db);
     }
@@ -92,9 +89,6 @@ public class PropertyService : IPropertyService
             CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found;
     }
-
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Property changes must use the standard save process.");
 
     private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
         "Property changes must use the shared write executor.");

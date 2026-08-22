@@ -14,6 +14,24 @@ using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data.Conversations;
 
+public static class ConversationWriteSupport
+{
+    public static TransactionalWrite<SendConversationMessageCommand, SendConversationMessageResult> Write(
+        string operationName,
+        RentalCommandDbContext db,
+        SendConversationMessageCommand command)
+    {
+        var handler = new SendConversationMessageHandler(db);
+        return new TransactionalWrite<SendConversationMessageCommand, SendConversationMessageResult>(
+            operationName, WriteIdempotencyPolicy.Required, command,
+            "conversation-message-result.v1", WriteLockPlan.None,
+            handler.ExecuteAsync, handler.AuthorizeReplayAsync);
+    }
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy conversation writes are retired; use the shared write executor.");
+}
+
 public sealed class SendConversationMessageHandler
     : IAtomicCommandHandler<SendConversationMessageCommand, SendConversationMessageResult>
 {
@@ -25,7 +43,12 @@ public sealed class SendConversationMessageHandler
     private static readonly string[] ManagementCapabilities =
         [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage];
 
-    public async Task<SendConversationMessageResult> HandleAsync(
+    public Task<SendConversationMessageResult> HandleAsync(
+        SendConversationMessageCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw ConversationWriteSupport.RetiredPath();
+
+    public async Task<SendConversationMessageResult> ExecuteAsync(
         SendConversationMessageCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)

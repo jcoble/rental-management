@@ -2,8 +2,11 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -18,19 +21,19 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class WorkspaceExperienceController : AuthenticatedPortfolioControllerBase
 {
-    private static readonly AtomicJsonResultCodec<SelectWorkspaceExperienceResult> ResultCodec =
-        new("workspace-experience-select-result:v1");
-
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly IRequestWriteExecutor _writes;
     private readonly IAccessEnvelopeQuery _accessEnvelopes;
     private readonly TimeProvider _timeProvider;
 
     public WorkspaceExperienceController(
-        IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        IRequestWriteExecutor writes,
         IAccessEnvelopeQuery accessEnvelopes,
         TimeProvider timeProvider)
     {
-        _atomic = atomic;
+        _db = db;
+        _writes = writes;
         _accessEnvelopes = accessEnvelopes;
         _timeProvider = timeProvider;
     }
@@ -67,13 +70,9 @@ public sealed class WorkspaceExperienceController : AuthenticatedPortfolioContro
             request.Experience);
         try
         {
-            await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity(
-                    "workspace-experience.select",
-                    $"{active.PortfolioId}:{active.AccessContextId}:{keyDigest}"),
-                command,
-                ResultCodec,
-                ct);
+            await _writes.ExecuteExactAsync(
+                $"{active.PortfolioId}:{active.AccessContextId}:{keyDigest}",
+                SelectWorkspaceExperienceHandler.Write(_db, command), ct);
         }
         catch (UnauthorizedAccessException)
         {

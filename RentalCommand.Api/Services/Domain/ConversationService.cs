@@ -13,6 +13,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Conversations;
 using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -30,10 +31,7 @@ public class ConversationService : IConversationService
     private readonly IFairHousingReviewService _fairHousing;
     private readonly ILogger<ConversationService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomic;
     private readonly IRequestWriteExecutor _writes;
-    private static readonly AtomicJsonResultCodec<SendConversationMessageResult> SendCodec =
-        new("conversation-message-result.v1");
 
     public ConversationService(
         RentalCommandDbContext db,
@@ -41,7 +39,6 @@ public class ConversationService : IConversationService
         IFairHousingReviewService fairHousing,
         ILogger<ConversationService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomic,
         IRequestWriteExecutor writes)
     {
         _db = db;
@@ -49,7 +46,6 @@ public class ConversationService : IConversationService
         _fairHousing = fairHousing;
         _logger = logger;
         _timeProvider = timeProvider;
-        _atomic = atomic;
         _writes = writes;
     }
 
@@ -545,7 +541,9 @@ public class ConversationService : IConversationService
         SendConversationMessageCommand command,
         CancellationToken ct)
     {
-        var outcome = await _atomic.ExecuteAsync(identity, command, SendCodec, ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            identity.IdempotencyKey,
+            ConversationWriteSupport.Write(identity.CommandType, _db, command), ct);
         if (outcome.Value.Outcome == SendConversationMessageOutcome.NotFound)
         {
             return null;
@@ -684,7 +682,9 @@ public class ConversationService : IConversationService
         int tenantId,
         CancellationToken ct)
     {
-        var outcome = await _atomic.ExecuteAsync(identity, command, SendCodec, ct);
+        var outcome = await _writes.ExecuteExactAsync(
+            identity.IdempotencyKey,
+            ConversationWriteSupport.Write(identity.CommandType, _db, command), ct);
         if (outcome.Value.Outcome == SendConversationMessageOutcome.NotFound) return null;
 
         var detail = await LoadDetailAsync(
