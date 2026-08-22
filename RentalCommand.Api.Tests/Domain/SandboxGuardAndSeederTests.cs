@@ -12,6 +12,7 @@ using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
 using RentalCommand.Api.Services.Payments;
+using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -985,7 +986,17 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             new SandboxGuard(_ctx.Db),
             NullLogger<StripePaymentService>.Instance,
             TimeProvider.System,
-            new UnexpectedAtomicUnitOfWork());
+            _ctx.Db,
+            new UnexpectedRequestWriteExecutor());
+    }
+
+    private sealed class UnexpectedRequestWriteExecutor : IRequestWriteExecutor
+    {
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData where TResult : notnull =>
+            throw new InvalidOperationException("A provider write was not expected.");
     }
 
     private (TenantAccount account, TenantLedgerEntry charge) SeedTenantAccountAndRentCharge(

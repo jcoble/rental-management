@@ -9,6 +9,78 @@ using RentalCommand.Core.Payments;
 
 namespace RentalCommand.Data.Payments;
 
+public static class ProviderPaymentWriteSupport
+{
+    public static TransactionalWrite<TCommand, TResult> Write<TCommand, TResult>(
+        RentalCommandDbContext db,
+        string operationName,
+        TCommand command)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        object write = command switch
+        {
+            PrepareProviderPaymentCreateCommand value => Build(operationName,
+                "prepare-provider-payment-create-result.v1", TenantAccount(value.TenantAccountId),
+                value, new PrepareProviderPaymentCreateHandler(db).ExecuteAsync,
+                new PrepareProviderPaymentCreateHandler(db).AuthorizeReplayAsync),
+            PrepareProviderAutopaySetupCommand value => Build(operationName,
+                "prepare-provider-autopay-setup-result.v1", TenantAccount(value.TenantAccountId),
+                value, new PrepareProviderAutopaySetupHandler(db).ExecuteAsync,
+                new PrepareProviderAutopaySetupHandler(db).AuthorizeReplayAsync),
+            SubmitProviderPaymentCreateCommand value => Build(operationName,
+                "submit-provider-payment-create-result.v1", TenantAccount(value.TenantAccountId),
+                value, new SubmitProviderPaymentCreateHandler(db).ExecuteAsync,
+                new SubmitProviderPaymentCreateHandler(db).AuthorizeReplayAsync),
+            ScheduleProviderPaymentReconciliationCommand value => Build(operationName,
+                "schedule-provider-payment-reconciliation-result.v1", TenantAccount(value.TenantAccountId),
+                value, new ScheduleProviderPaymentReconciliationHandler(db).ExecuteAsync,
+                new ScheduleProviderPaymentReconciliationHandler(db).AuthorizeReplayAsync),
+            FinalizeProviderPaymentCreateCommand value => Build(operationName,
+                "finalize-provider-payment-create-result.v1", TenantAccount(value.TenantAccountId),
+                value, new FinalizeProviderPaymentCreateHandler(db).ExecuteAsync,
+                new FinalizeProviderPaymentCreateHandler(db).AuthorizeReplayAsync),
+            FailProviderPaymentCreateCommand value => Build(operationName,
+                "fail-provider-payment-create-result.v1", TenantAccount(value.TenantAccountId),
+                value, new FailProviderPaymentCreateHandler(db).ExecuteAsync,
+                new FailProviderPaymentCreateHandler(db).AuthorizeReplayAsync),
+            AbandonProviderPaymentAttemptCommand value => Build(operationName,
+                "abandon-provider-payment-attempt-result.v1", TenantAccount(value.TenantAccountId),
+                value, new AbandonProviderPaymentAttemptHandler(db).ExecuteAsync,
+                new AbandonProviderPaymentAttemptHandler(db).AuthorizeReplayAsync),
+            InspectProviderPaymentAttemptCommand value => Build(operationName,
+                "inspect-provider-payment-attempt-result.v1", TenantAccount(value.TenantAccountId),
+                value, new InspectProviderPaymentAttemptHandler(db).ExecuteAsync,
+                new InspectProviderPaymentAttemptHandler(db).AuthorizeReplayAsync),
+            RecordVerifiedProviderPaymentEventCommand value => Build(operationName,
+                "record-verified-provider-payment-event-result.v1", WriteLockPlan.None,
+                value, new RecordVerifiedProviderPaymentEventHandler(db).ExecuteAsync,
+                new RecordVerifiedProviderPaymentEventHandler(db).AuthorizeReplayAsync),
+            ReconcileClaimedProviderPaymentEventCommand value => Build(operationName,
+                "reconcile-claimed-provider-payment-event-result.v1", WriteLockPlan.None,
+                value, new ReconcileClaimedProviderPaymentEventHandler(db).ExecuteAsync,
+                new ReconcileClaimedProviderPaymentEventHandler(db).AuthorizeReplayAsync),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+        return (TransactionalWrite<TCommand, TResult>)write;
+    }
+
+    private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
+        string operationName, string resultContract, WriteLockPlan lockPlan, TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull => new(operationName,
+            WriteIdempotencyPolicy.Required, command, resultContract, lockPlan,
+            executeAsync, authorizeReplayAsync);
+
+    private static WriteLockPlan TenantAccount(int id) => new(
+        WriteLockProtocol.TenantAccount, WriteLock.For("TenantAccount", id));
+
+    internal static InvalidOperationException RetiredPath() => new(
+        "Legacy atomic provider-payment writes are retired; use the shared write executor.");
+}
+
 public sealed class PrepareProviderPaymentCreateHandler
     : IAtomicCommandHandler<PrepareProviderPaymentCreateCommand, PrepareProviderPaymentCreateResult>
 {
@@ -16,7 +88,11 @@ public sealed class PrepareProviderPaymentCreateHandler
 
     public PrepareProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<PrepareProviderPaymentCreateResult> HandleAsync(
+    public Task<PrepareProviderPaymentCreateResult> HandleAsync(
+        PrepareProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<PrepareProviderPaymentCreateResult> ExecuteAsync(
         PrepareProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ProviderPaymentHandlerSupport.Validate(command.PortfolioId, command.TenantAccountId,
@@ -151,7 +227,11 @@ public sealed class PrepareProviderAutopaySetupHandler
 
     public PrepareProviderAutopaySetupHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<PrepareProviderAutopaySetupResult> HandleAsync(
+    public Task<PrepareProviderAutopaySetupResult> HandleAsync(
+        PrepareProviderAutopaySetupCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<PrepareProviderAutopaySetupResult> ExecuteAsync(
         PrepareProviderAutopaySetupCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ProviderPaymentHandlerSupport.Validate(command.PortfolioId, command.TenantAccountId,
@@ -244,7 +324,11 @@ public sealed class SubmitProviderPaymentCreateHandler
 
     public SubmitProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<SubmitProviderPaymentCreateResult> HandleAsync(
+    public Task<SubmitProviderPaymentCreateResult> HandleAsync(
+        SubmitProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<SubmitProviderPaymentCreateResult> ExecuteAsync(
         SubmitProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
@@ -353,7 +437,12 @@ public sealed class ScheduleProviderPaymentReconciliationHandler
 
     public ScheduleProviderPaymentReconciliationHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<ScheduleProviderPaymentReconciliationResult> HandleAsync(
+    public Task<ScheduleProviderPaymentReconciliationResult> HandleAsync(
+        ScheduleProviderPaymentReconciliationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<ScheduleProviderPaymentReconciliationResult> ExecuteAsync(
         ScheduleProviderPaymentReconciliationCommand command,
         IAtomicCommandContext context,
         CancellationToken ct)
@@ -437,7 +526,11 @@ public sealed class FinalizeProviderPaymentCreateHandler
 
     public FinalizeProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<FinalizeProviderPaymentCreateResult> HandleAsync(
+    public Task<FinalizeProviderPaymentCreateResult> HandleAsync(
+        FinalizeProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<FinalizeProviderPaymentCreateResult> ExecuteAsync(
         FinalizeProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
@@ -497,7 +590,11 @@ public sealed class FailProviderPaymentCreateHandler
 
     public FailProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<FailProviderPaymentCreateResult> HandleAsync(
+    public Task<FailProviderPaymentCreateResult> HandleAsync(
+        FailProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<FailProviderPaymentCreateResult> ExecuteAsync(
         FailProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
@@ -549,7 +646,11 @@ public sealed class AbandonProviderPaymentAttemptHandler
 
     public AbandonProviderPaymentAttemptHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<AbandonProviderPaymentAttemptResult> HandleAsync(
+    public Task<AbandonProviderPaymentAttemptResult> HandleAsync(
+        AbandonProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<AbandonProviderPaymentAttemptResult> ExecuteAsync(
         AbandonProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
@@ -624,7 +725,11 @@ public sealed class InspectProviderPaymentAttemptHandler
 
     public InspectProviderPaymentAttemptHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<InspectProviderPaymentAttemptResult> HandleAsync(
+    public Task<InspectProviderPaymentAttemptResult> HandleAsync(
+        InspectProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<InspectProviderPaymentAttemptResult> ExecuteAsync(
         InspectProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(
@@ -674,7 +779,11 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
 
     public RecordVerifiedProviderPaymentEventHandler(RentalCommandDbContext db) => _db = db;
 
-    public async Task<RecordVerifiedProviderPaymentEventResult> HandleAsync(
+    public Task<RecordVerifiedProviderPaymentEventResult> HandleAsync(
+        RecordVerifiedProviderPaymentEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<RecordVerifiedProviderPaymentEventResult> ExecuteAsync(
         RecordVerifiedProviderPaymentEventCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var existing = await (
@@ -888,7 +997,11 @@ public sealed class ReconcileClaimedProviderPaymentEventHandler
 
     internal const int MaximumAttempts = 8;
 
-    public async Task<ReconcileClaimedProviderPaymentEventResult> HandleAsync(
+    public Task<ReconcileClaimedProviderPaymentEventResult> HandleAsync(
+        ReconcileClaimedProviderPaymentEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        throw ProviderPaymentWriteSupport.RetiredPath();
+
+    public async Task<ReconcileClaimedProviderPaymentEventResult> ExecuteAsync(
         ReconcileClaimedProviderPaymentEventCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var inbox = await AtomicProviderInboxPersistence.LockOwnedAsync(_db,

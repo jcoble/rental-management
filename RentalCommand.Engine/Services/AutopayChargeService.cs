@@ -9,6 +9,8 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Payments;
+using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -19,31 +21,22 @@ public sealed class AutopayChargeService : IAutopayChargeService
     private readonly RentalCommandDbContext _db;
     private readonly StripeConfig _config;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork _atomicUnitOfWork;
+    private readonly IJobStepWriteExecutor _writes;
     private readonly IAutopayProviderClient _provider;
     private readonly ILogger<AutopayChargeService> _logger;
-
-    private static readonly AtomicJsonResultCodec<PrepareProviderPaymentCreateResult> PrepareCodec =
-        new("prepare-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<FinalizeProviderPaymentCreateResult> FinalizeCodec =
-        new("finalize-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<FailProviderPaymentCreateResult> FailCodec =
-        new("fail-provider-payment-create-result.v1");
-    private static readonly AtomicJsonResultCodec<SubmitProviderPaymentCreateResult> SubmitCodec =
-        new("submit-provider-payment-create-result.v1");
 
     public AutopayChargeService(
         RentalCommandDbContext db,
         IOptions<StripeConfig> config,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomicUnitOfWork,
+        IJobStepWriteExecutor writes,
         ILogger<AutopayChargeService> logger,
         IAutopayProviderClient? provider = null)
     {
         _db = db;
         _config = config.Value;
         _timeProvider = timeProvider;
-        _atomicUnitOfWork = atomicUnitOfWork;
+        _writes = writes;
         _logger = logger;
         _provider = provider ?? new StripeAutopayProviderClient(config);
     }
@@ -119,14 +112,13 @@ public sealed class AutopayChargeService : IAutopayChargeService
             ct.ThrowIfCancellationRequested();
             var idempotencyKey = BuildIdempotencyKey(
                 candidate.ChargeLedgerEntryId, candidate.AttemptNonce);
-            var prepared = await _atomicUnitOfWork.ExecuteAsync(
-                new AtomicCommandIdentity("payments.provider-create.prepare", idempotencyKey),
-                new PrepareProviderPaymentCreateCommand(candidate.PortfolioId,
+            var command = new PrepareProviderPaymentCreateCommand(candidate.PortfolioId,
                     candidate.TenantAccountId, candidate.ChargeLedgerEntryId,
                     candidate.ActorUserId, TenantId: null, candidate.EnrollmentId,
-                    "stripe", idempotencyKey, "USD", now),
-                PrepareCodec,
-                ct);
+                    "stripe", idempotencyKey, "USD", now);
+            var prepared = await _writes.ExecuteAsync(idempotencyKey,
+                ProviderPaymentWriteSupport.Write<PrepareProviderPaymentCreateCommand,
+                    PrepareProviderPaymentCreateResult>(_db, "payments.provider-create.prepare", command), ct);
             if (prepared.Value.Outcome != PrepareProviderPaymentCreateOutcome.Prepared
                 || string.IsNullOrWhiteSpace(prepared.Value.ProviderCustomerId)
                 || string.IsNullOrWhiteSpace(prepared.Value.ProviderPaymentMethodId))
@@ -179,14 +171,14 @@ public sealed class AutopayChargeService : IAutopayChargeService
 
             if (item.Attempt.PreparedAtUtc <= now.AddHours(-24))
             {
-                var fail = await _atomicUnitOfWork.ExecuteAsync(
-                    new AtomicCommandIdentity("payments.provider-create.fail", item.Attempt.IdempotencyKey),
-                    new FailProviderPaymentCreateCommand(item.Attempt.PortfolioId,
+                var command = new FailProviderPaymentCreateCommand(item.Attempt.PortfolioId,
                         item.Attempt.TenantAccountId, item.Attempt.Id, item.Attempt.Provider,
                         item.Attempt.IdempotencyKey, "PROVIDER_RECONCILE_EXPIRED",
                         "Provider reconciliation found no accepted payment after 24 hours.", now,
-                        item.Attempt.ProviderFenceToken),
-                    FailCodec, ct);
+                        item.Attempt.ProviderFenceToken);
+                var fail = await _writes.ExecuteAsync(item.Attempt.IdempotencyKey,
+                    ProviderPaymentWriteSupport.Write<FailProviderPaymentCreateCommand,
+                        FailProviderPaymentCreateResult>(_db, "payments.provider-create.fail", command), ct);
                 _logger.LogWarning("Autopay attempt {AttemptId} expired without provider reconciliation ({State}).",
                     item.Attempt.Id, fail.Value.State);
                 deferredChargeIds.Add(item.Attempt.ChargeLedgerEntryId!.Value);
@@ -227,12 +219,12 @@ public sealed class AutopayChargeService : IAutopayChargeService
         }
         catch (StripeException ex) when (IsDefinitiveProviderFailure(ex))
         {
-            await _atomicUnitOfWork.ExecuteAsync(
-                new AtomicCommandIdentity("payments.provider-create.fail", attempt.IdempotencyKey),
-                new FailProviderPaymentCreateCommand(portfolioId, tenantAccountId, attempt.Id,
+            var command = new FailProviderPaymentCreateCommand(portfolioId, tenantAccountId, attempt.Id,
                     "stripe", attempt.IdempotencyKey, ex.StripeError?.Code, ex.Message,
-                    _timeProvider.UtcNow(), submitted.Value.ProviderFenceToken),
-                FailCodec, ct);
+                    _timeProvider.UtcNow(), submitted.Value.ProviderFenceToken);
+            await _writes.ExecuteAsync(attempt.IdempotencyKey,
+                ProviderPaymentWriteSupport.Write<FailProviderPaymentCreateCommand,
+                    FailProviderPaymentCreateResult>(_db, "payments.provider-create.fail", command), ct);
             _logger.LogWarning(ex, "Autopay provider definitively declined attempt {AttemptId}", attempt.Id);
             return false;
         }
@@ -246,12 +238,14 @@ public sealed class AutopayChargeService : IAutopayChargeService
     }
 
     private async Task<AtomicCommandOutcome<SubmitProviderPaymentCreateResult>> SubmitAttemptAsync(
-        TenantPaymentAttempt attempt, DateTime now, CancellationToken ct) =>
-        await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-create.submit", attempt.IdempotencyKey),
-            new SubmitProviderPaymentCreateCommand(attempt.PortfolioId, attempt.TenantAccountId,
-                attempt.Id, attempt.Provider, attempt.IdempotencyKey, now),
-            SubmitCodec, ct);
+        TenantPaymentAttempt attempt, DateTime now, CancellationToken ct)
+    {
+        var command = new SubmitProviderPaymentCreateCommand(attempt.PortfolioId,
+            attempt.TenantAccountId, attempt.Id, attempt.Provider, attempt.IdempotencyKey, now);
+        return await _writes.ExecuteAsync(attempt.IdempotencyKey,
+            ProviderPaymentWriteSupport.Write<SubmitProviderPaymentCreateCommand,
+                SubmitProviderPaymentCreateResult>(_db, "payments.provider-create.submit", command), ct);
+    }
 
     private async Task FinalizeAttemptAsync(
         TenantPaymentAttempt attempt, AutopayProviderPayment payment, Guid? fence, CancellationToken ct)
@@ -262,12 +256,12 @@ public sealed class AutopayChargeService : IAutopayChargeService
             "canceled" => TenantPaymentAttemptState.Canceled,
             _ => TenantPaymentAttemptState.Submitted,
         };
-        await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-create.finalize", attempt.IdempotencyKey),
-            new FinalizeProviderPaymentCreateCommand(attempt.PortfolioId, attempt.TenantAccountId,
+        var command = new FinalizeProviderPaymentCreateCommand(attempt.PortfolioId, attempt.TenantAccountId,
                 attempt.Id, attempt.Provider, attempt.IdempotencyKey, payment.ProviderPaymentId,
-                state, null, _timeProvider.UtcNow(), fence),
-            FinalizeCodec, ct);
+                state, null, _timeProvider.UtcNow(), fence);
+        await _writes.ExecuteAsync(attempt.IdempotencyKey,
+            ProviderPaymentWriteSupport.Write<FinalizeProviderPaymentCreateCommand,
+                FinalizeProviderPaymentCreateResult>(_db, "payments.provider-create.finalize", command), ct);
     }
 
     private static bool IsDefinitiveProviderFailure(StripeException ex) =>
