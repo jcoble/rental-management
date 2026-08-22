@@ -65,14 +65,6 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         services.AddSingleton(_probe);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            SendConversationMessageCommand,
-            SendConversationMessageResult,
-            SendConversationMessageHandler>();
-        services.AddAtomicCommandHandler<
-            CompleteVendorDispatchFromInboundCommand,
-            CompleteVendorDispatchFromInboundResult,
-            CompleteVendorDispatchFromInboundHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .AddInterceptors(provider.GetRequiredService<CommandProbe>())
@@ -214,8 +206,8 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             StringComparison.Ordinal)).Should().Be(2);
         _probe.AdvisoryLockParameterCounts.Should().StartWith([1, 2],
             "the executor must acquire the hashed phone lock before the work-order lock");
-        typeof(CompleteVendorDispatchFromInboundHandler).Should()
-            .Implement<IAtomicCommandHandler<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult>>();
+        typeof(CompleteVendorDispatchFromInboundHandler).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(CompleteVendorDispatchFromInboundHandler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
     }
 
     [SkippableFact]
@@ -500,8 +492,17 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         where TResult : notnull
     {
         await using var scope = _services!.CreateAsyncScope();
-        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
-        return await atomic.ExecuteAsync(identity, command, resultCodec, ct);
+        if (command is SendConversationMessageCommand message)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+                .ExecuteAsync(
+                    identity.IdempotencyKey,
+                    ConversationWriteSupport.Write(identity.CommandType, db, message),
+                    ct);
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        throw new InvalidOperationException($"No executor rule exists for {typeof(TCommand).Name}.");
     }
 
     private async Task<AtomicCommandOutcome<CompleteVendorDispatchFromInboundResult>> ExecuteAtomicAsync(

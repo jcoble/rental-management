@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -185,9 +184,6 @@ builder.Services.AddHttpContextAccessor();
 // Production persistence is fail-closed: auditable writes and raw DML must be admitted by the
 // atomic executor or by one exact infrastructure mutation lease.
 builder.Services.AddAtomicPersistenceKernel();
-builder.Services.AddAtomicCommandHandlersFrom(
-    typeof(RentalCommandDbContext).Assembly,
-    Assembly.GetExecutingAssembly());
 builder.Services.AddScoped<RentalCommand.Api.Writes.IRequestWriteExecutor,
     RentalCommand.Api.Writes.RequestWriteExecutor>();
 builder.Services.AddScoped<

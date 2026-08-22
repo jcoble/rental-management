@@ -343,16 +343,10 @@ internal static class WorkspaceTeamAuthoritySupport
 }
 
 public sealed class CreateWorkspaceMembershipHandler
-    : IAtomicCommandHandler<CreateWorkspaceMembershipCommand, CreateWorkspaceMembershipResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public CreateWorkspaceMembershipHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<CreateWorkspaceMembershipResult> HandleAsync(
-        CreateWorkspaceMembershipCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
 
     public async Task<CreateWorkspaceMembershipResult> ExecuteAsync(
         CreateWorkspaceMembershipCommand command,
@@ -549,16 +543,10 @@ public sealed class CreateWorkspaceMembershipHandler
 }
 
 public sealed class ActivateWorkspaceInvitationHandler
-    : IAtomicCommandHandler<ActivateWorkspaceInvitationCommand, ActivateWorkspaceInvitationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ActivateWorkspaceInvitationHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ActivateWorkspaceInvitationResult> HandleAsync(
-        ActivateWorkspaceInvitationCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
 
     public async Task<ActivateWorkspaceInvitationResult> ExecuteAsync(
         ActivateWorkspaceInvitationCommand command,
@@ -652,7 +640,6 @@ public sealed class ActivateWorkspaceInvitationHandler
 }
 
 public sealed class AddWorkspaceRoleAssignmentHandler
-    : IAtomicCommandHandler<AddWorkspaceRoleAssignmentCommand, WorkspaceTeamMutationResult>
 {
     private readonly RentalCommandDbContext _db;
     private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
@@ -667,11 +654,6 @@ public sealed class AddWorkspaceRoleAssignmentHandler
         _accessRevisionGuard = accessRevisionGuard;
         _assignmentScopeValidator = assignmentScopeValidator;
     }
-
-    public Task<WorkspaceTeamMutationResult> HandleAsync(
-        AddWorkspaceRoleAssignmentCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
 
     public async Task<WorkspaceTeamMutationResult> ExecuteAsync(
         AddWorkspaceRoleAssignmentCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -736,7 +718,6 @@ public sealed class AddWorkspaceRoleAssignmentHandler
 }
 
 public sealed class EndWorkspaceRoleAssignmentHandler
-    : IAtomicCommandHandler<EndWorkspaceRoleAssignmentCommand, WorkspaceTeamMutationResult>
 {
     private readonly RentalCommandDbContext _db;
     private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
@@ -751,11 +732,6 @@ public sealed class EndWorkspaceRoleAssignmentHandler
         _accessRevisionGuard = accessRevisionGuard;
         _assignmentScopeValidator = assignmentScopeValidator;
     }
-
-    public Task<WorkspaceTeamMutationResult> HandleAsync(
-        EndWorkspaceRoleAssignmentCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
 
     public async Task<WorkspaceTeamMutationResult> ExecuteAsync(
         EndWorkspaceRoleAssignmentCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -791,7 +767,6 @@ public sealed class EndWorkspaceRoleAssignmentHandler
 }
 
 public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
-    : IAtomicCommandHandler<ReplaceWorkspaceAssignmentPropertyScopeCommand, WorkspaceTeamMutationResult>
 {
     private readonly RentalCommandDbContext _db;
     private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
@@ -806,11 +781,6 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
         _accessRevisionGuard = accessRevisionGuard;
         _assignmentScopeValidator = assignmentScopeValidator;
     }
-
-    public Task<WorkspaceTeamMutationResult> HandleAsync(
-        ReplaceWorkspaceAssignmentPropertyScopeCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
 
     public async Task<WorkspaceTeamMutationResult> ExecuteAsync(
         ReplaceWorkspaceAssignmentPropertyScopeCommand command,
@@ -880,7 +850,6 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
 }
 
 public sealed class ChangeWorkspaceMembershipStatusHandler
-    : IAtomicCommandHandler<ChangeWorkspaceMembershipStatusCommand, WorkspaceTeamMutationResult>
 {
     private readonly RentalCommandDbContext _db;
     private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
@@ -895,11 +864,6 @@ public sealed class ChangeWorkspaceMembershipStatusHandler
         _accessRevisionGuard = accessRevisionGuard;
         _assignmentScopeValidator = assignmentScopeValidator;
     }
-
-    public Task<WorkspaceTeamMutationResult> HandleAsync(
-        ChangeWorkspaceMembershipStatusCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw WorkspaceTeamWriteSupport.RetiredPath();
 
     public async Task<WorkspaceTeamMutationResult> ExecuteAsync(
         ChangeWorkspaceMembershipStatusCommand command,

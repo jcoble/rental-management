@@ -25,15 +25,9 @@ public sealed class AiIntegrationAtomicContractTests
         Type handlerType,
         Type commandType)
     {
-        HandlerFor(handlerType, commandType).GetMethod(nameof(IAtomicCommandHandler<IAtomicCommandData, object>.AuthorizeReplayAsync))
+        handlerType.GetMethod("AuthorizeReplayAsync", [commandType, typeof(IAtomicCommandContext), typeof(CancellationToken)])
             .Should().NotBeNull();
     }
-
-    private static Type HandlerFor(Type handlerType, Type commandType) =>
-        handlerType.GetInterfaces().Single(type =>
-            type.IsGenericType
-            && type.GetGenericTypeDefinition() == typeof(IAtomicCommandHandler<,>)
-            && type.GetGenericArguments()[0] == commandType);
 
     [Fact]
     public void CredentialHandlers_StageSecretFreeSemanticAudit()

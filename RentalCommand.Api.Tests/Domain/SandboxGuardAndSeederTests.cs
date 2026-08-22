@@ -1347,18 +1347,6 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, DemoSeedTestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            SeedDemoPortfolioCommand,
-            SeedDemoPortfolioResult,
-            DemoSeedCommandHandler>();
-        services.AddAtomicCommandHandler<
-            FinalizeDemoLegalDocumentCommand,
-            FinalizeDemoLegalDocumentResult,
-            DemoLegalDocumentFinalizeCommandHandler>();
-        services.AddAtomicCommandHandler<
-            EnsureDemoLeaseAddendumTemplateCommand,
-            EnsureDemoLeaseAddendumTemplateResult,
-            DemoLeaseAddendumTemplateCommandHandler>();
         services.AddPendingFileUploadStore();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {

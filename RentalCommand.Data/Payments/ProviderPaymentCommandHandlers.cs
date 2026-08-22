@@ -82,15 +82,10 @@ public static class ProviderPaymentWriteSupport
 }
 
 public sealed class PrepareProviderPaymentCreateHandler
-    : IAtomicCommandHandler<PrepareProviderPaymentCreateCommand, PrepareProviderPaymentCreateResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PrepareProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<PrepareProviderPaymentCreateResult> HandleAsync(
-        PrepareProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<PrepareProviderPaymentCreateResult> ExecuteAsync(
         PrepareProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -221,15 +216,10 @@ public sealed class PrepareProviderPaymentCreateHandler
 }
 
 public sealed class PrepareProviderAutopaySetupHandler
-    : IAtomicCommandHandler<PrepareProviderAutopaySetupCommand, PrepareProviderAutopaySetupResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public PrepareProviderAutopaySetupHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<PrepareProviderAutopaySetupResult> HandleAsync(
-        PrepareProviderAutopaySetupCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<PrepareProviderAutopaySetupResult> ExecuteAsync(
         PrepareProviderAutopaySetupCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -318,15 +308,10 @@ public sealed class PrepareProviderAutopaySetupHandler
 /// that case the caller receives a terminal state and must not call the provider.
 /// </summary>
 public sealed class SubmitProviderPaymentCreateHandler
-    : IAtomicCommandHandler<SubmitProviderPaymentCreateCommand, SubmitProviderPaymentCreateResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public SubmitProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<SubmitProviderPaymentCreateResult> HandleAsync(
-        SubmitProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<SubmitProviderPaymentCreateResult> ExecuteAsync(
         SubmitProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -430,17 +415,10 @@ public sealed class SubmitProviderPaymentCreateHandler
 /// retains the Submitted fence until a later provider-confirmed terminal transition.
 /// </summary>
 public sealed class ScheduleProviderPaymentReconciliationHandler
-    : IAtomicCommandHandler<ScheduleProviderPaymentReconciliationCommand,
-        ScheduleProviderPaymentReconciliationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ScheduleProviderPaymentReconciliationHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ScheduleProviderPaymentReconciliationResult> HandleAsync(
-        ScheduleProviderPaymentReconciliationCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<ScheduleProviderPaymentReconciliationResult> ExecuteAsync(
         ScheduleProviderPaymentReconciliationCommand command,
@@ -520,15 +498,10 @@ public sealed class ScheduleProviderPaymentReconciliationHandler
 }
 
 public sealed class FinalizeProviderPaymentCreateHandler
-    : IAtomicCommandHandler<FinalizeProviderPaymentCreateCommand, FinalizeProviderPaymentCreateResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public FinalizeProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<FinalizeProviderPaymentCreateResult> HandleAsync(
-        FinalizeProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<FinalizeProviderPaymentCreateResult> ExecuteAsync(
         FinalizeProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -584,15 +557,10 @@ public sealed class FinalizeProviderPaymentCreateHandler
 }
 
 public sealed class FailProviderPaymentCreateHandler
-    : IAtomicCommandHandler<FailProviderPaymentCreateCommand, FailProviderPaymentCreateResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public FailProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<FailProviderPaymentCreateResult> HandleAsync(
-        FailProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<FailProviderPaymentCreateResult> ExecuteAsync(
         FailProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -640,15 +608,10 @@ public sealed class FailProviderPaymentCreateHandler
 }
 
 public sealed class AbandonProviderPaymentAttemptHandler
-    : IAtomicCommandHandler<AbandonProviderPaymentAttemptCommand, AbandonProviderPaymentAttemptResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AbandonProviderPaymentAttemptHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<AbandonProviderPaymentAttemptResult> HandleAsync(
-        AbandonProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<AbandonProviderPaymentAttemptResult> ExecuteAsync(
         AbandonProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -719,15 +682,10 @@ public sealed class AbandonProviderPaymentAttemptHandler
 }
 
 public sealed class InspectProviderPaymentAttemptHandler
-    : IAtomicCommandHandler<InspectProviderPaymentAttemptCommand, InspectProviderPaymentAttemptResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public InspectProviderPaymentAttemptHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<InspectProviderPaymentAttemptResult> HandleAsync(
-        InspectProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<InspectProviderPaymentAttemptResult> ExecuteAsync(
         InspectProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -773,15 +731,10 @@ public sealed class InspectProviderPaymentAttemptHandler
 }
 
 public sealed class RecordVerifiedProviderPaymentEventHandler
-    : IAtomicCommandHandler<RecordVerifiedProviderPaymentEventCommand, RecordVerifiedProviderPaymentEventResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecordVerifiedProviderPaymentEventHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<RecordVerifiedProviderPaymentEventResult> HandleAsync(
-        RecordVerifiedProviderPaymentEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<RecordVerifiedProviderPaymentEventResult> ExecuteAsync(
         RecordVerifiedProviderPaymentEventCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -989,17 +942,12 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
 }
 
 public sealed class ReconcileClaimedProviderPaymentEventHandler
-    : IAtomicCommandHandler<ReconcileClaimedProviderPaymentEventCommand, ReconcileClaimedProviderPaymentEventResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ReconcileClaimedProviderPaymentEventHandler(RentalCommandDbContext db) => _db = db;
 
     internal const int MaximumAttempts = 8;
-
-    public Task<ReconcileClaimedProviderPaymentEventResult> HandleAsync(
-        ReconcileClaimedProviderPaymentEventCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ProviderPaymentWriteSupport.RetiredPath();
 
     public async Task<ReconcileClaimedProviderPaymentEventResult> ExecuteAsync(
         ReconcileClaimedProviderPaymentEventCommand command, IAtomicCommandContext context, CancellationToken ct)

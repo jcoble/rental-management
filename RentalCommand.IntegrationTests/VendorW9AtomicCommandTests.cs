@@ -62,10 +62,6 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<
-            RequestVendorW9Command,
-            RequestVendorW9Result,
-            RequestVendorW9Handler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -225,8 +221,8 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         eligibility.ParameterValues.Should().Contain(
             value => Equals(value, _portfolioId),
             "portfolio scope must be enforced by the translated query");
-        typeof(RequestVendorW9Handler).Should()
-            .Implement<IAtomicCommandHandler<RequestVendorW9Command, RequestVendorW9Result>>();
+        typeof(RequestVendorW9Handler).GetMethod("ExecuteAsync").Should().NotBeNull();
+        typeof(RequestVendorW9Handler).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
     }
 
     [SkippableFact]

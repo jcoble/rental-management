@@ -844,38 +844,6 @@ public class ScanServiceTests : IDisposable
     // Test doubles
     // -------------------------------------------------------------------------
 
-    private sealed class ScanRejectAtomicUnitOfWork(RentalCommandDbContext db) : IAtomicUnitOfWork
-    {
-        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
-            AtomicCommandIdentity identity,
-            TCommand command,
-            AtomicJsonResultCodec<TResult> resultCodec,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData
-            where TResult : notnull
-        {
-            var reject = command.Should().BeOfType<RejectScanDraftCommand>().Subject;
-            var draft = await db.ScanDrafts.SingleAsync(item => item.Id == reject.DraftId, ct);
-            var rejected = draft.Status is not ("Confirmed" or "Rejected" or "Confirming");
-            if (rejected)
-            {
-                draft.Status = "Rejected";
-                draft.ReviewedAt = reject.ReviewedAtUtc;
-                draft.ReviewedBy = reject.UserId.ToString();
-                if (!string.IsNullOrWhiteSpace(reject.Reason)) draft.FailureReason = reject.Reason;
-                await db.SaveChangesAsync(ct);
-            }
-            var result = new RejectScanDraftResult(
-                rejected,
-                reject.DraftId,
-                rejected ? reject.ReviewedAtUtc : null);
-            return new AtomicCommandOutcome<TResult>(
-                (TResult)(object)result,
-                AtomicCommandDisposition.Executed,
-                Guid.NewGuid());
-        }
-    }
-
     private sealed class ScanRejectRequestWriteExecutor(RentalCommandDbContext db) : IRequestWriteExecutor
     {
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(

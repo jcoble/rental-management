@@ -53,16 +53,10 @@ public static class ApplicationFinanceWriteSupport
 }
 
 public sealed class RecordApplicationFeeHandler
-    : IAtomicCommandHandler<RecordApplicationFeeCommand, ApplicationFinanceMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RecordApplicationFeeHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ApplicationFinanceMutationResult> HandleAsync(
-        RecordApplicationFeeCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw ApplicationFinanceWriteSupport.RetiredPath();
 
     public async Task<ApplicationFinanceMutationResult> ExecuteAsync(
         RecordApplicationFeeCommand command,
@@ -165,16 +159,10 @@ public sealed class RecordApplicationFeeHandler
 }
 
 public sealed class RefundApplicationFeeHandler
-    : IAtomicCommandHandler<RefundApplicationFeeCommand, ApplicationFinanceMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public RefundApplicationFeeHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ApplicationFinanceMutationResult> HandleAsync(
-        RefundApplicationFeeCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw ApplicationFinanceWriteSupport.RetiredPath();
 
     public async Task<ApplicationFinanceMutationResult> ExecuteAsync(
         RefundApplicationFeeCommand command,

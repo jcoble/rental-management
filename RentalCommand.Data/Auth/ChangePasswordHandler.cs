@@ -10,15 +10,10 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Auth;
 
 public sealed class ChangePasswordHandler
-    : IAtomicCommandHandler<ChangePasswordCommand, ChangePasswordResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public ChangePasswordHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<ChangePasswordResult> HandleAsync(
-        ChangePasswordCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<ChangePasswordResult> ExecuteAsync(
         ChangePasswordCommand command,

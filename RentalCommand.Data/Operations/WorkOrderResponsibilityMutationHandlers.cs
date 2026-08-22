@@ -11,7 +11,6 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Operations;
 
 public sealed class CloseWorkOrderResponsibilityHandler
-    : IAtomicCommandHandler<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult>
 {
     public const string ResultContract = "work-order-responsibility.close.v1";
 
@@ -37,11 +36,6 @@ public sealed class CloseWorkOrderResponsibilityHandler
             ResultContract, new WriteLockPlan(WriteLockProtocol.WorkOrderResponsibility),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<CloseWorkOrderResponsibilityResult> HandleAsync(
-        CloseWorkOrderResponsibilityCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<CloseWorkOrderResponsibilityResult> ExecuteAsync(
         CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -145,7 +139,6 @@ public sealed class CloseWorkOrderResponsibilityHandler
 }
 
 public sealed class UpdateAssignedWorkOrderHandler
-    : IAtomicCommandHandler<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult>
 {
     public const string ResultContract = "assigned-work-order.update.v1";
 
@@ -165,10 +158,6 @@ public sealed class UpdateAssignedWorkOrderHandler
                 WriteLock.For("WorkOrder", command.WorkOrderId)),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<UpdateAssignedWorkOrderResult> HandleAsync(
-        UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
 
     public async Task<UpdateAssignedWorkOrderResult> ExecuteAsync(
         UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)

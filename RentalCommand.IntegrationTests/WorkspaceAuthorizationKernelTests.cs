@@ -105,30 +105,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, AccessTestActor>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            CreateWorkspaceMembershipCommand,
-            CreateWorkspaceMembershipResult,
-            CreateWorkspaceMembershipHandler>();
-        services.AddAtomicCommandHandler<
-            AddWorkspaceRoleAssignmentCommand,
-            WorkspaceTeamMutationResult,
-            AddWorkspaceRoleAssignmentHandler>();
-        services.AddAtomicCommandHandler<
-            EndWorkspaceRoleAssignmentCommand,
-            WorkspaceTeamMutationResult,
-            EndWorkspaceRoleAssignmentHandler>();
-        services.AddAtomicCommandHandler<
-            ReplaceWorkspaceAssignmentPropertyScopeCommand,
-            WorkspaceTeamMutationResult,
-            ReplaceWorkspaceAssignmentPropertyScopeHandler>();
-        services.AddAtomicCommandHandler<
-            ChangeWorkspaceMembershipStatusCommand,
-            WorkspaceTeamMutationResult,
-            ChangeWorkspaceMembershipStatusHandler>();
-        services.AddAtomicCommandHandler<
-            UnsafeWorkspaceAssignmentMutationCommand,
-            WorkspaceAccessMutationResult,
-            UnsafeWorkspaceAssignmentMutationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -2582,9 +2558,25 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                     provider.GetRequiredService<IMembershipAssignmentScopeValidator>(), changeStatus));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
-        return await scope.ServiceProvider
-            .GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        if (command is UnsafeWorkspaceAssignmentMutationCommand unsafeMutation)
+        {
+            var provider = scope.ServiceProvider;
+            var handler = new UnsafeWorkspaceAssignmentMutationHandler(
+                provider.GetRequiredService<RentalCommandDbContext>(),
+                provider.GetRequiredService<WorkspaceAccessRevisionGuard>());
+            var write = new TransactionalWrite<UnsafeWorkspaceAssignmentMutationCommand, WorkspaceAccessMutationResult>(
+                identity.CommandType,
+                WriteIdempotencyPolicy.Required,
+                unsafeMutation,
+                codec.ContractName,
+                WriteLockPlan.None,
+                handler.ExecuteAsync,
+                handler.AuthorizeReplayAsync);
+            var outcome = await provider.GetRequiredService<IWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey, write);
+            return (AtomicCommandOutcome<TResult>)(object)outcome;
+        }
+        throw new InvalidOperationException($"No executor rule exists for {typeof(TCommand).Name}.");
     }
 
     private sealed record UnsafeWorkspaceAssignmentMutationCommand(
@@ -2620,7 +2612,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     private sealed class UnsafeWorkspaceAssignmentMutationHandler
-        : IAtomicCommandHandler<UnsafeWorkspaceAssignmentMutationCommand, WorkspaceAccessMutationResult>
     {
         private readonly RentalCommandDbContext _db;
         private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
@@ -2633,7 +2624,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             _accessRevisionGuard = accessRevisionGuard;
         }
 
-        public async Task<WorkspaceAccessMutationResult> HandleAsync(
+        public async Task<WorkspaceAccessMutationResult> ExecuteAsync(
             UnsafeWorkspaceAssignmentMutationCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)

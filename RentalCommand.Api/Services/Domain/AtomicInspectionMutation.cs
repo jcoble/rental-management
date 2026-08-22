@@ -55,7 +55,6 @@ public sealed record AttachInspectionReportRequest(
     long FileSize);
 
 public sealed class AtomicInspectionMutationHandler
-    : IAtomicCommandHandler<AtomicInspectionMutationCommand, AtomicInspectionMutationResult>
 {
     private readonly RentalCommandDbContext _db;
 
@@ -65,12 +64,6 @@ public sealed class AtomicInspectionMutationHandler
     private const int MaxInspectionItems = 100;
     private static readonly VendorDispatchStatus[] OpenVendorDispatchStatuses =
         [VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged];
-
-    public Task<AtomicInspectionMutationResult> HandleAsync(
-        AtomicInspectionMutationCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw new InvalidOperationException(
-            "Legacy inspection writes are retired; use the shared write executor.");
 
     public async Task<AtomicInspectionMutationResult> ExecuteAsync(
         AtomicInspectionMutationCommand command,

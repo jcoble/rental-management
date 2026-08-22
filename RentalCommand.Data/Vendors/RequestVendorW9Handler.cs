@@ -11,7 +11,6 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Vendors;
 
 public sealed class RequestVendorW9Handler
-    : IAtomicCommandHandler<RequestVendorW9Command, RequestVendorW9Result>
 {
     public const string ResultContract = "vendor-w9.request.result.v1";
 
@@ -28,11 +27,6 @@ public sealed class RequestVendorW9Handler
             "vendor-w9.request", WriteIdempotencyPolicy.Required, command, ResultContract,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeAsync);
     }
-
-    public Task<RequestVendorW9Result> HandleAsync(
-        RequestVendorW9Command command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<RequestVendorW9Result> ExecuteAsync(
         RequestVendorW9Command command,

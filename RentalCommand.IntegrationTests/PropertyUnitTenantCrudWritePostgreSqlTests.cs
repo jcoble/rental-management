@@ -231,8 +231,6 @@ public sealed class PropertyUnitTenantCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddSingleton(Mock.Of<IAuditTrailService>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            AtomicRentalMutationCommand, AtomicRentalMutationResult, AtomicRentalMutationHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<PropertyService>();
         services.AddScoped<UnitService>();

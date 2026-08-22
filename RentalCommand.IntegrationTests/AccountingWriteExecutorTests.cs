@@ -468,53 +468,6 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
         (await db.AccountingConnections.CountAsync()).Should().Be(1);
     }
 
-    [Fact]
-    public async Task AllElevenLegacyHandlerArmsThrow()
-    {
-        var create = CreateLedger();
-        var update = UpdateLedger(delete: false);
-        var delete = UpdateLedger(delete: true);
-        var connect = PrepareConnect();
-        var autopay = CancelAutopay();
-        var prepare = PrepareDisconnect();
-        var finalize = FinalizeDisconnect();
-        var direction = SetDirection();
-        var pull = ApplyPull();
-        var mapping = ConfirmMapping();
-        var continuation = ContinueMapping();
-        var calls = new Func<Task>[]
-        {
-            () => new CreateLedgerAccountHandler(null!).HandleAsync(create, null!, default),
-            () => new CreateLedgerAccountHandler(null!).AuthorizeReplayAsync(create, null!, default),
-            () => new UpdateLedgerAccountHandler(null!).HandleAsync(update, null!, default),
-            () => new UpdateLedgerAccountHandler(null!).AuthorizeReplayAsync(update, null!, default),
-            () => new UpdateLedgerAccountHandler(null!).HandleAsync(delete, null!, default),
-            () => new UpdateLedgerAccountHandler(null!).AuthorizeReplayAsync(delete, null!, default),
-            () => new PrepareAccountingConnectHandler(null!).HandleAsync(connect, null!, default),
-            () => new PrepareAccountingConnectHandler(null!).AuthorizeReplayAsync(connect, null!, default),
-            () => new CancelTenantAutopayHandler(null!).HandleAsync(autopay, null!, default),
-            () => new CancelTenantAutopayHandler(null!).AuthorizeReplayAsync(autopay, null!, default),
-            () => new PrepareAccountingDisconnectHandler(null!).HandleAsync(prepare, null!, default),
-            () => new PrepareAccountingDisconnectHandler(null!).AuthorizeReplayAsync(prepare, null!, default),
-            () => new FinalizeAccountingDisconnectHandler(null!).HandleAsync(finalize, null!, default),
-            () => new FinalizeAccountingDisconnectHandler(null!).AuthorizeReplayAsync(finalize, null!, default),
-            () => new SetAccountingDirectionHandler(null!).HandleAsync(direction, null!, default),
-            () => new SetAccountingDirectionHandler(null!).AuthorizeReplayAsync(direction, null!, default),
-            () => new ApplyAccountingPullResultHandler(null!).HandleAsync(pull, null!, default),
-            () => new ApplyAccountingPullResultHandler(null!).AuthorizeReplayAsync(pull, null!, default),
-            () => new ConfirmAccountingMappingHandler(null!).HandleAsync(mapping, null!, default),
-            () => new ConfirmAccountingMappingHandler(null!).AuthorizeReplayAsync(mapping, null!, default),
-            () => new ContinueAccountingMappingPromotionHandler(null!).HandleAsync(continuation, null!, default),
-            () => new ContinueAccountingMappingPromotionHandler(null!).AuthorizeReplayAsync(continuation, null!, default),
-        };
-
-        foreach (var call in calls)
-        {
-            await call.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("*shared write executor*");
-        }
-    }
-
     private static IAtomicCommandData[] Commands() =>
     [
         CreateLedger(), UpdateLedger(false), UpdateLedger(true), PrepareConnect(), CancelAutopay(),

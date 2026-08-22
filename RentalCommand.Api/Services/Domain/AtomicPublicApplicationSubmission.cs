@@ -30,16 +30,10 @@ public sealed record AtomicPublicApplicationSubmissionResult(
 
 /// <summary>Anonymous token-scoped intake with a durable receipt, audit, and outbox.</summary>
 public sealed class AtomicPublicApplicationSubmissionHandler
-    : IAtomicCommandHandler<AtomicPublicApplicationSubmissionCommand, AtomicPublicApplicationSubmissionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public AtomicPublicApplicationSubmissionHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<AtomicPublicApplicationSubmissionResult> HandleAsync(
-        AtomicPublicApplicationSubmissionCommand command,
-        IAtomicCommandContext attempt,
-        CancellationToken ct) => throw RetiredPath();
 
     public async Task<AtomicPublicApplicationSubmissionResult> ExecuteAsync(
         AtomicPublicApplicationSubmissionCommand command,

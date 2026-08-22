@@ -9,15 +9,10 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Auth;
 
 public sealed class IssueLoginContextSelectionChallengeHandler
-    : IAtomicCommandHandler<IssueLoginContextSelectionChallengeCommand, LoginContextSelectionChallengeResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public IssueLoginContextSelectionChallengeHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<LoginContextSelectionChallengeResult> HandleAsync(
-        IssueLoginContextSelectionChallengeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<LoginContextSelectionChallengeResult> ExecuteAsync(
         IssueLoginContextSelectionChallengeCommand command,
@@ -144,15 +139,10 @@ public sealed class IssueLoginContextSelectionChallengeHandler
 }
 
 public sealed class StartAuthSessionHandler
-    : IAtomicCommandHandler<StartAuthSessionCommand, StartAuthSessionResult>
 {
     private readonly RentalCommandDbContext _db;
 
     public StartAuthSessionHandler(RentalCommandDbContext db) => _db = db;
-
-    public Task<StartAuthSessionResult> HandleAsync(
-        StartAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task<StartAuthSessionResult> ExecuteAsync(
         StartAuthSessionCommand command,

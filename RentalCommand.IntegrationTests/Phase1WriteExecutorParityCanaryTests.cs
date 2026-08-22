@@ -19,10 +19,9 @@ public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixtu
         new("phase1-write-executor-parity.v1");
 
     [Fact]
-    public async Task TestLocalHandler_OldShellAndRequestExecutorWriteIdenticalCompleteProjections()
+    public async Task RequestExecutor_CommitsCompleteProjectionAndReplaysExactResult()
     {
-        await using var oldDatabase = await fixture.CreateContextAsync();
-        await using var newDatabase = await fixture.CreateContextAsync();
+        await using var database = await fixture.CreateContextAsync();
         var now = new DateTime(2027, 1, 24, 15, 30, 0, DateTimeKind.Utc);
         var command = new CanaryCommand(
             PortfolioId: 1,
@@ -33,20 +32,12 @@ public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixtu
             "test.phase1.write-executor-parity",
             "phase1-two-path-parity-canary");
 
-        AtomicCommandOutcome<CanaryResult> oldOutcome;
-        await using (var services = BuildServices(oldDatabase.ConnectionString, now))
+        AtomicCommandOutcome<CanaryResult> outcome;
+        AtomicCommandOutcome<CanaryResult> replay;
+        await using (var services = BuildServices(database.ConnectionString, now))
         await using (var scope = services.CreateAsyncScope())
         {
-            oldOutcome = await scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>()
-                .ExecuteAsync(identity, command, ResultCodec);
-        }
-
-        AtomicCommandOutcome<CanaryResult> newOutcome;
-        await using (var services = BuildServices(newDatabase.ConnectionString, now))
-        await using (var scope = services.CreateAsyncScope())
-        {
-            var handler = scope.ServiceProvider.GetRequiredService<
-                IAtomicCommandHandler<CanaryCommand, CanaryResult>>();
+            var handler = scope.ServiceProvider.GetRequiredService<CanaryHandler>();
             var write = new TransactionalWrite<CanaryCommand, CanaryResult>(
                 identity.CommandType,
                 WriteIdempotencyPolicy.Required,
@@ -56,20 +47,21 @@ public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixtu
                     WriteLockProtocol.Possession,
                     WriteLock.For("Unit", 701),
                     WriteLock.For("LeaseManagement", 702)),
-                handler.HandleAsync,
+                handler.ExecuteAsync,
                 handler.AuthorizeReplayAsync);
-            newOutcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+            outcome = await writes.ExecuteAsync(identity.IdempotencyKey, write);
+            replay = await writes
                 .ExecuteAsync(identity.IdempotencyKey, write);
         }
 
-        newOutcome.Value.Should().Be(oldOutcome.Value);
-        newOutcome.Disposition.Should().Be(oldOutcome.Disposition);
-
-        var oldProjection = await ReadCompleteProjectionAsync(
-            oldDatabase.Db, identity, command.Marker, oldOutcome.AttemptId);
-        var newProjection = await ReadCompleteProjectionAsync(
-            newDatabase.Db, identity, command.Marker, newOutcome.AttemptId);
-        newProjection.Should().BeEquivalentTo(oldProjection);
+        outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(outcome.Value);
+        replay.AttemptId.Should().Be(outcome.AttemptId);
+        var projection = await ReadCompleteProjectionAsync(
+            database.Db, identity, command.Marker, outcome.AttemptId);
+        projection.AttemptCorrelation.ReceiptMatchesAuditMatchesOutcome.Should().BeTrue();
     }
 
     private static ServiceProvider BuildServices(string connectionString, DateTime now)
@@ -78,7 +70,7 @@ public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixtu
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<CanaryCommand, CanaryResult, CanaryHandler>();
+        services.AddScoped<CanaryHandler>();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString)
@@ -207,9 +199,8 @@ public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixtu
     private sealed record CanaryResult(int ExpenseId, string Marker);
 
     private sealed class CanaryHandler(RentalCommandDbContext db)
-        : IAtomicCommandHandler<CanaryCommand, CanaryResult>
     {
-        public async Task<CanaryResult> HandleAsync(
+        public async Task<CanaryResult> ExecuteAsync(
             CanaryCommand command,
             IAtomicCommandContext context,
             CancellationToken ct)

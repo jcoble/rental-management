@@ -2362,14 +2362,6 @@ public class BankingServiceTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult, PreparePlaidTokenExchangeHandler>();
-        services.AddAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult, AdmitPlaidTokenExchangeHandler>();
-        services.AddAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult, RecordPlaidTokenExchangeReceiptHandler>();
-        services.AddAtomicCommandHandler<ApplyPlaidConnectionCommand, ApplyPlaidConnectionResult, ApplyPlaidConnectionHandler>();
-        services.AddAtomicCommandHandler<ApplyPlaidSyncCommand, ApplyPlaidSyncResult, ApplyPlaidSyncHandler>();
-        services.AddAtomicCommandHandler<ImportBankTransactionsCommand, ImportBankTransactionsResult, ImportBankTransactionsHandler>();
-        services.AddAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult, ReconcileBankTransactionHandler>();
-        services.AddAtomicCommandHandler<RouteBankTransactionCommand, RouteBankTransactionResult, RouteBankTransactionHandler>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(db.Database.GetDbConnection(), contextOwnsConnection: false);
