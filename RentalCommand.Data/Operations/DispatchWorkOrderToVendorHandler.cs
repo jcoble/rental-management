@@ -29,7 +29,7 @@ public sealed class DispatchWorkOrderToVendorHandler
         return new TransactionalWrite<DispatchWorkOrderToVendorCommand, DispatchWorkOrderToVendorResult>(
             "vendor-dispatch.create", WriteIdempotencyPolicy.Required, command, ResultContract,
             new WriteLockPlan(WriteLockProtocol.WorkOrder,
-                WriteLock.For("WorkOrder", command.WorkOrderId)),
+                command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 

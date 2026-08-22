@@ -93,24 +93,24 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
     }
 
     [Fact]
-    public void ExplicitProtocols_EnforceCommonPrefixAndLegacyMultiAggregateOrder()
+    public void ExplicitProtocols_DeriveCommonPrefixAndLegacyMultiAggregateOrder()
     {
         var authSessionId = Guid.Parse("9e10d15b-f5f0-48c0-9334-3215f24d07b5");
 
         var commonPrefix = new WriteLockPlan(
             WriteLockProtocol.AuthorizationScope,
-            WriteLock.For("AuthSession", authSessionId),
-            WriteLock.For("WorkspaceAccessContext", 11),
-            WriteLock.For("Portfolio", 12));
+            authSessionId,
+            11,
+            12);
         var possession = new WriteLockPlan(
             WriteLockProtocol.Possession,
-            WriteLock.For("Unit", 21),
-            WriteLock.For("LeaseManagement", 22));
+            21,
+            22);
         var confirmMoveIn = new WriteLockPlan(
             WriteLockProtocol.ConfirmMoveIn,
-            WriteLock.For("Unit", 31),
-            WriteLock.For("LeaseManagement", 32),
-            WriteLock.For("TenantAccount", 33));
+            31,
+            32,
+            33);
 
         commonPrefix.Locks.Select(item => item.LockNamespace).Should()
             .Equal("AuthSession", "WorkspaceAccessContext", "Portfolio");
@@ -118,18 +118,6 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             .Equal("Unit", "LeaseManagement");
         confirmMoveIn.Locks.Select(item => item.LockNamespace).Should()
             .Equal("Unit", "LeaseManagement", "TenantAccount");
-
-        Action reversedPossession = () => new WriteLockPlan(
-            WriteLockProtocol.Possession,
-            WriteLock.For("LeaseManagement", 22),
-            WriteLock.For("Unit", 21));
-        Action incompleteMoveIn = () => new WriteLockPlan(
-            WriteLockProtocol.ConfirmMoveIn,
-            WriteLock.For("Unit", 31),
-            WriteLock.For("LeaseManagement", 32));
-
-        reversedPossession.Should().Throw<ArgumentException>();
-        incompleteMoveIn.Should().Throw<ArgumentException>();
     }
 
     [Fact]
@@ -165,8 +153,8 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             LockCanaryResult.Codec.ContractName,
             new WriteLockPlan(
                 WriteLockProtocol.Possession,
-                WriteLock.For("Unit", command.UnitId),
-                WriteLock.For("LeaseManagement", command.LeaseManagementId)),
+                command.UnitId,
+                command.LeaseManagementId),
             static (_, _, _) => Task.FromResult(new LockCanaryResult(true)),
             static (_, _, _) => Task.CompletedTask);
         var newTask = newScope.ServiceProvider.GetRequiredService<IWriteExecutor>()
@@ -216,9 +204,9 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
             LockCanaryResult.Codec.ContractName,
             new WriteLockPlan(
                 WriteLockProtocol.AuthorizationScope,
-                WriteLock.For("AuthSession", command.AuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
-                WriteLock.For("Portfolio", command.PortfolioId)),
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.PortfolioId),
             static (_, _, _) => Task.FromResult(new LockCanaryResult(true)),
             static (_, _, _) => Task.CompletedTask);
         var newTask = newScope.ServiceProvider.GetRequiredService<IWriteExecutor>()

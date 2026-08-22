@@ -45,8 +45,8 @@ public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixtu
                 ResultCodec.ContractName,
                 new WriteLockPlan(
                     WriteLockProtocol.Possession,
-                    WriteLock.For("Unit", 701),
-                    WriteLock.For("LeaseManagement", 702)),
+                    701,
+                    702),
                 handler.ExecuteAsync,
                 handler.AuthorizeReplayAsync);
             var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();

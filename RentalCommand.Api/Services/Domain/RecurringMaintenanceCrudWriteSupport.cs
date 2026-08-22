@@ -63,9 +63,9 @@ internal static class RecurringMaintenanceCrudWriteSupport
             ResultContract,
             new WriteLockPlan(
                 WriteLockProtocol.AuthorizationScope,
-                WriteLock.For("AuthSession", request.AuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", request.AccessContextId),
-                WriteLock.For("Portfolio", request.PortfolioId)),
+                request.AuthSessionId,
+                request.AccessContextId,
+                request.PortfolioId),
             executeAsync,
             authorizeReplayAsync);
 

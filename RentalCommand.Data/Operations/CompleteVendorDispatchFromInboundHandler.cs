@@ -31,7 +31,7 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         var handler = new CompleteVendorDispatchFromInboundHandler(db);
         var locks = command.IsCompletionRequest && !string.IsNullOrWhiteSpace(command.NormalizedFromPhone)
             ? new WriteLockPlan(WriteLockProtocol.VendorDispatchInbound,
-                WriteLock.For("VendorDispatch", PhoneLockKey(command.NormalizedFromPhone)))
+                PhoneLockKey(command.NormalizedFromPhone))
             : WriteLockPlan.None;
         return new TransactionalWrite<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult>(
             "sms.vendor-done", WriteIdempotencyPolicy.Required, command, ResultContract, locks,

@@ -755,15 +755,15 @@ public static class AtomicRentalMutation
         var lockPlan = command.EntityId > 0
             ? new WriteLockPlan(
                 WriteLockProtocol.AuthorizationScopeApplication,
-                WriteLock.For("AuthSession", command.AuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
-                WriteLock.For("Portfolio", command.PortfolioId),
-                WriteLock.For("RentalApplication", command.EntityId))
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.PortfolioId,
+                command.EntityId)
             : new WriteLockPlan(
                 WriteLockProtocol.AuthorizationScope,
-                WriteLock.For("AuthSession", command.AuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
-                WriteLock.For("Portfolio", command.PortfolioId));
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.PortfolioId);
         return new(
             identity.CommandType,
             WriteIdempotencyPolicy.Required,

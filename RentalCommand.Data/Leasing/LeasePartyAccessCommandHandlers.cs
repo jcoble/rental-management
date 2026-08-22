@@ -58,7 +58,7 @@ public static class LeasePartyAccessWriteSupport
             command,
             resultContract,
             new WriteLockPlan(protocol,
-                WriteLock.For("LeaseManagement", command.LeaseManagementId)),
+                command.LeaseManagementId),
             executeAsync,
             authorizeReplayAsync);
     }

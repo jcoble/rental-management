@@ -75,8 +75,20 @@ internal static class CoreCrudWriteSupport
             executeAsync,
             authorizeReplayAsync,
             request.EntityId > 0
-                ? WriteLock.For(request.Domain.ToString(), request.EntityId)
-                : null);
+                ? request.Domain switch
+                {
+                    AtomicCoreCrudMutationDomain.OwnerEntity =>
+                        WriteLockProtocol.AuthorizationScopeOwnerEntity,
+                    AtomicCoreCrudMutationDomain.Vendor =>
+                        WriteLockProtocol.AuthorizationScopeVendor,
+                    AtomicCoreCrudMutationDomain.Property =>
+                        WriteLockProtocol.AuthorizationScopeProperty,
+                    AtomicCoreCrudMutationDomain.Tenant =>
+                        WriteLockProtocol.AuthorizationScopeTenant,
+                    _ => throw new ArgumentOutOfRangeException(nameof(request)),
+                }
+                : null,
+            request.EntityId > 0 ? request.EntityId : null);
 
     public static async Task<DateTime> BeginExecutionAsync(
         CoreCrudWriteRequest request,
@@ -284,7 +296,8 @@ internal static class RentalCrudWriteSupport
             ResultContract,
             executeAsync,
             authorizeReplayAsync,
-            request.EntityId > 0 ? WriteLock.For("Unit", request.EntityId) : null);
+            request.EntityId > 0 ? WriteLockProtocol.AuthorizationScopeUnit : null,
+            request.EntityId > 0 ? request.EntityId : null);
 
     public static async Task<DateTime> BeginExecutionAsync(
         RentalCrudWriteRequest request,

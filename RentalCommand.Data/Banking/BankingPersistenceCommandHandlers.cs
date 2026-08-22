@@ -33,10 +33,10 @@ public static class BankingWriteSupport
             PreparePlaidTokenExchangeCommand value => Build(
                 "banking.plaid.exchange.prepare", PlaidExchangePrepareResultContract,
                 new WriteLockPlan(WriteLockProtocol.BankingPrepareExchange,
-                    WriteLock.For("AuthSession", value.AuthSessionId),
-                    WriteLock.For("WorkspaceAccessContext", value.AccessContextId),
-                    WriteLock.For("BankConnection", ApplyPlaidConnectionHandler.StableGuid(
-                        value.PortfolioId, "plaid-exchange", value.ClientOperationId))),
+                    value.AuthSessionId,
+                    value.AccessContextId,
+                    ApplyPlaidConnectionHandler.StableGuid(
+                        value.PortfolioId, "plaid-exchange", value.ClientOperationId)),
                 value, new PreparePlaidTokenExchangeHandler(db).ExecuteAsync,
                 new PreparePlaidTokenExchangeHandler(db).AuthorizeReplayAsync),
             AdmitPlaidTokenExchangeCommand value => Build(
@@ -52,7 +52,7 @@ public static class BankingWriteSupport
             ApplyPlaidConnectionCommand value => Build(
                 "banking.plaid.connection.apply", PlaidConnectionResultContract,
                 new WriteLockPlan(WriteLockProtocol.BankingApplyConnection,
-                    WriteLock.For("BankConnection", value.ExchangeAttemptId)),
+                    value.ExchangeAttemptId),
                 value, new ApplyPlaidConnectionHandler(db).ExecuteAsync,
                 new ApplyPlaidConnectionHandler(db).AuthorizeReplayAsync),
             ApplyPlaidSyncCommand value => Build(
@@ -70,16 +70,16 @@ public static class BankingWriteSupport
             ReconcileBankTransactionCommand value => Build(
                 "banking.transaction.reconcile", ReconciliationResultContract,
                 new WriteLockPlan(WriteLockProtocol.BankingReconciliation,
-                    WriteLock.For("AuthSession", value.AuthSessionId),
-                    WriteLock.For("WorkspaceAccessContext", value.AccessContextId)),
+                    value.AuthSessionId,
+                    value.AccessContextId),
                 value, new ReconcileBankTransactionHandler(db).ExecuteAsync,
                 new ReconcileBankTransactionHandler(db).AuthorizeReplayAsync),
             RouteBankTransactionCommand value => Build(
                 "banking.transaction.route", RoutingResultContract,
                 new WriteLockPlan(WriteLockProtocol.BankingRoute,
-                    WriteLock.For("AuthSession", value.AuthSessionId),
-                    WriteLock.For("WorkspaceAccessContext", value.AccessContextId),
-                    WriteLock.For("BankTransaction", value.TransactionId)),
+                    value.AuthSessionId,
+                    value.AccessContextId,
+                    value.TransactionId),
                 value, new RouteBankTransactionHandler(db).ExecuteAsync,
                 new RouteBankTransactionHandler(db).AuthorizeReplayAsync),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
@@ -88,10 +88,10 @@ public static class BankingWriteSupport
     }
 
     private static WriteLockPlan Connection(int id) => new(
-        WriteLockProtocol.BankingConnection, WriteLock.For("BankConnection", id));
+        WriteLockProtocol.BankingConnection, id);
 
     private static WriteLockPlan Connection(Guid id) => new(
-        WriteLockProtocol.BankingConnection, WriteLock.For("BankConnection", id));
+        WriteLockProtocol.BankingConnection, id);
 
     private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
         string operationName, string resultContract, WriteLockPlan lockPlan, TCommand command,

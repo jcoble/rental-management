@@ -29,7 +29,7 @@ public static class AppointmentCrudWriteSupport
         return new("appointment.create", WriteIdempotencyPolicy.Required, command, ResultContract,
             command.WorkOrderId.HasValue
                 ? new WriteLockPlan(WriteLockProtocol.WorkOrder,
-                    WriteLock.For("WorkOrder", command.WorkOrderId.Value))
+                    command.WorkOrderId.Value)
                 : WriteLockPlan.None,
             executeAsync, authorizeReplayAsync);
     }
@@ -272,7 +272,7 @@ public static class AppointmentCrudWriteSupport
 
     private static WriteLockPlan AppointmentPlan(int appointmentId) => new(
         WriteLockProtocol.AppointmentWorkOrder,
-        WriteLock.For("Appointment", appointmentId));
+        appointmentId);
 
     private static Task<int?> CurrentWorkOrderIdAsync(
         RentalCommandDbContext db, int portfolioId, int appointmentId, CancellationToken ct) =>

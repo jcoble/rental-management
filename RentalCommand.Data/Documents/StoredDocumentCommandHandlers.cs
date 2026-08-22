@@ -26,7 +26,7 @@ public static class StoredDocumentWriteSupport
         Func<CreateStoredDocumentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync) =>
         new("stored-document.create", WriteIdempotencyPolicy.Required, command, CreateResultContract,
             new WriteLockPlan(WriteLockProtocol.Portfolio,
-                WriteLock.For("Portfolio", command.PortfolioId)),
+                command.PortfolioId),
             executeAsync, authorizeReplayAsync);
 
     public static TransactionalWrite<DeleteStoredDocumentCommand, DeleteStoredDocumentResult> Delete(
@@ -36,7 +36,7 @@ public static class StoredDocumentWriteSupport
         Func<DeleteStoredDocumentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync) =>
         new("stored-document.delete", WriteIdempotencyPolicy.Required, command, DeleteResultContract,
             new WriteLockPlan(WriteLockProtocol.StoredFile,
-                WriteLock.For("StoredFile", command.StoredFileId)),
+                command.StoredFileId),
             executeAsync, authorizeReplayAsync);
 
 }

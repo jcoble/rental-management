@@ -193,10 +193,10 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             MutationCodec.ContractName,
             new WriteLockPlan(
                 WriteLockProtocol.AuthorizationScopeUnit,
-                WriteLock.For("AuthSession", command.AuthSessionId),
-                WriteLock.For("WorkspaceAccessContext", command.AccessContextId),
-                WriteLock.For("Portfolio", command.PortfolioId),
-                WriteLock.For("Unit", command.UnitId)),
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.PortfolioId,
+                command.UnitId),
             executeAsync,
             AuthorizeLocalReplayAsync);
         return RequireWrites().ExecuteAsync(identity.IdempotencyKey, write, ct);

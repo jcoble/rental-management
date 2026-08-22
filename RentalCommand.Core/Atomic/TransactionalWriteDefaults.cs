@@ -38,33 +38,26 @@ public static class TransactionalWriteDefaults
         string operationName, TCommand request, string resultContract,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
-        WriteLock? entityLock = null)
+        WriteLockProtocol? entityLockProtocol = null, object? entityLockId = null)
         where TCommand : notnull, IAuthorizationScopedRequest
         where TResult : notnull =>
         new(operationName, WriteIdempotencyPolicy.Required, request, resultContract,
-            AuthorizationLockPlan(request, entityLock),
+            AuthorizationLockPlan(request, entityLockProtocol, entityLockId),
             executeAsync, authorizeReplayAsync);
 
     private static WriteLockPlan AuthorizationLockPlan(
-        IAuthorizationScopedRequest request, WriteLock? entityLock) => entityLock is null
+        IAuthorizationScopedRequest request,
+        WriteLockProtocol? entityLockProtocol,
+        object? entityLockId) => entityLockProtocol is null
         ? new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
-            WriteLock.For("AuthSession", request.AuthSessionId),
-            WriteLock.For("WorkspaceAccessContext", request.AccessContextId),
-            WriteLock.For("Portfolio", request.PortfolioId))
-        : new WriteLockPlan(entityLock.LockNamespace switch
-            {
-                "OwnerEntity" => WriteLockProtocol.AuthorizationScopeOwnerEntity,
-                "Vendor" => WriteLockProtocol.AuthorizationScopeVendor,
-                "Property" => WriteLockProtocol.AuthorizationScopeProperty,
-                "Unit" => WriteLockProtocol.AuthorizationScopeUnit,
-                "Tenant" => WriteLockProtocol.AuthorizationScopeTenant,
-                _ => throw new ArgumentException(
-                    "That authorization-scoped entity lock is not supported.", nameof(entityLock)),
-            },
-            WriteLock.For("AuthSession", request.AuthSessionId),
-            WriteLock.For("WorkspaceAccessContext", request.AccessContextId),
-            WriteLock.For("Portfolio", request.PortfolioId),
-            entityLock);
+            request.AuthSessionId,
+            request.AccessContextId,
+            request.PortfolioId)
+        : new WriteLockPlan(entityLockProtocol.Value,
+            request.AuthSessionId,
+            request.AccessContextId,
+            request.PortfolioId,
+            entityLockId!);
 
     public static void ValidateAuthorizationScope(IAuthorizationScopedRequest request)
     {
