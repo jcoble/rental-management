@@ -98,7 +98,7 @@ public class UnitController : ManagementControllerBase
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsRead,
                 new UnitCapabilityAuthorizationTarget(portfolioId, id),
-                ct)) return Forbid();
+                ct)) return NotFound(new { error = "Unit not found" });
         var item = await _service.GetAsync(portfolioId, id, ct);
         return item == null ? NotFound(new { error = "Unit not found" }) : Ok(item);
     }
@@ -118,7 +118,7 @@ public class UnitController : ManagementControllerBase
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsRead,
                 new UnitCapabilityAuthorizationTarget(portfolioId, id),
-                ct)) return Forbid();
+                ct)) return NotFound(new { error = "Unit not found" });
         var dashboard = await _dashboard.GetDashboardAsync(portfolioId, id, ct);
         return dashboard == null ? NotFound(new { error = "Unit not found" }) : Ok(dashboard);
     }
