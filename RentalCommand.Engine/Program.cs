@@ -69,6 +69,10 @@ builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
 builder.Services.AddAtomicPersistenceKernel();
 builder.Services.AddScoped<RentalCommand.Engine.Writes.IJobStepWriteExecutor,
     RentalCommand.Engine.Writes.JobStepWriteExecutor>();
+// Shared Api-namespace services hosted in the Engine (notifications, e-sign, notices,
+// conversations, LLM credentials) execute their writes through the request executor.
+builder.Services.AddScoped<RentalCommand.Api.Writes.IRequestWriteExecutor,
+    RentalCommand.Api.Writes.RequestWriteExecutor>();
 builder.Services.AddGeneratedInfrastructureStores();
 builder.Services.AddPendingFileUploadStore();
 

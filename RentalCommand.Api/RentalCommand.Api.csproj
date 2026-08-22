@@ -38,6 +38,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="RentalCommand.Engine" />
     <InternalsVisibleTo Include="RentalCommand.Api.Tests" />
     <InternalsVisibleTo Include="RentalCommand.Data.Tests" />
     <InternalsVisibleTo Include="RentalCommand.TestCommon" />
