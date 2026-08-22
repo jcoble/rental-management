@@ -87,7 +87,8 @@
 	const ALL_TYPES = 'all';
 	let typeValue = $state(readGridParam(initialParams, 'type') || ALL_TYPES);
 	const typeFilter = $derived(typeValue === ALL_TYPES ? '' : typeValue);
-	let statusFilter = $state(readGridParam(initialParams, 'status'));
+	let statusValue = $state(readGridParam(initialParams, 'status') || ALL_TYPES);
+	const statusFilter = $derived(statusValue === ALL_TYPES ? '' : statusValue);
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedSearch = debounced(() => search, 300);
@@ -503,12 +504,12 @@
 						{/each}
 					</Select.Content>
 				</Select.Root>
-				<Select.Root type="single" bind:value={statusFilter}>
+				<Select.Root type="single" bind:value={statusValue}>
 					<Select.Trigger class="h-9 w-44 text-sm" data-testid="property-status-filter">
 						{statusFilter ? formatPropertyStatus(statusFilter) : 'All statuses'}
 					</Select.Trigger>
 					<Select.Content>
-						<Select.Item value="" label="All statuses">All statuses</Select.Item>
+						<Select.Item value={ALL_TYPES} label="All statuses">All statuses</Select.Item>
 						{#each propertyStatusOptions as option}
 							<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 						{/each}
