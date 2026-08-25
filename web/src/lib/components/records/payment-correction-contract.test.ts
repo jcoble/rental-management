@@ -114,9 +114,11 @@ describe('payment correction contract', () => {
 				tenantAccountId: 41,
 				paymentEntryId: 812,
 				refundEntryId: 913,
+				providerPaymentAttemptId: null,
 				amount: 1275,
 				compensatedAllocationAmount: 1275,
-				compensatedAllocationCount: 2
+				compensatedAllocationCount: 2,
+				error: null
 			},
 			replayed: false
 		};

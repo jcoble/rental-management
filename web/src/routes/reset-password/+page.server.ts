@@ -9,7 +9,7 @@
 import { fail } from '@sveltejs/kit';
 import { createHash } from 'node:crypto';
 import type { Actions, PageServerLoad } from './$types';
-import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { serverPost } from '$lib/api/server-fetch';
 
 export const load: PageServerLoad = async ({ url }) => {
 	const userId = url.searchParams.get('userId');
@@ -50,19 +50,26 @@ export const actions: Actions = {
 			const operationKey = createHash('sha256')
 				.update(JSON.stringify({ userId, token }))
 				.digest('hex');
-			const response = await fetch(`${SERVER_API_BASE_URL}/auth/reset-password`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
-				body: JSON.stringify({ userId, token, newPassword })
-			});
+			const result = await serverPost(
+				'/auth/reset-password',
+				undefined,
+				{ userId, token, newPassword },
+				{ headers: { 'Idempotency-Key': operationKey } }
+			);
 
-			if (!response.ok) {
-				const errorData = await response.json().catch(() => ({ error: 'Password reset failed' }));
+			if (result.networkError) {
+				return fail(500, {
+					error: 'Unable to connect to the server. Please try again later.',
+					reset: false
+				});
+			}
+			if (result.status < 200 || result.status >= 300) {
+				const rawError = result.problem?.error;
 				const message =
-					typeof errorData.error === 'object'
-						? errorData.error?.message
-						: errorData.error;
-				return fail(response.status, {
+					typeof rawError === 'string'
+						? rawError
+						: (rawError as { message?: string } | undefined)?.message;
+				return fail(result.status, {
 					error: message || 'Password reset failed. The link may have expired.',
 					reset: false
 				});
