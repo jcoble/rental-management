@@ -13,7 +13,7 @@ describe('accounting books API contract', () => {
 			assert.match(source, new RegExp(`['"]${sort}['"]`));
 		}
 		assert.match(source, /sourceType: params\.sourceType/);
-		assert.match(source, /sourceId: String\(params\.sourceId\)/);
+		assert.match(source, /sourceId: params\.sourceId/);
 	});
 
 	it('binds the read-model fields and date semantics without client-side accounting math', () => {
