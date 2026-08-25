@@ -191,3 +191,105 @@ No commit was created. **Verified** `git add ...` failed with:
 The worktree’s `.git` file points to that shared administrative directory, while the allowed write
 root is only this worktree. **Verified** `git branch --show-current` reports `tsk-1018-be-b`; no
 branch was created, renamed, or removed.
+
+## Rework
+
+- Rework lane: be-b
+- Rework start time: 2026-08-25T18:00:00-04:00
+- Goal: restore the API test suite baseline after porting deleted int-portfolioId read overloads.
+
+### Rework disposition
+
+- **DONE** — inherited deletion commit `a219ad9bcc683cf874370fd0f30351c5b633c18a`.
+- **DONE** — test-porting commit `f21e5f48081ed4d52836dd23ff6d77c6c5edcc13`.
+- Moved the following SQLite test classes onto `MigratedPostgreSqlFixture`, preserving their
+  behavioral and SQL-translation assertions while exercising the production authorization
+  function: `ApplicationServiceTests`, `AppointmentServiceListTests`, `ExpenseServiceTests`,
+  `LoanServiceTests`, `OwnerDistributionServiceTests`, `RecurringExpenseServiceTests`,
+  `RecurringMaintenanceTaskServiceTests`, `TenantServiceTests`,
+  `WorkOrderCostsTimingAndProjectionTests`, `WorkOrderServiceListTests`, and
+  `WorkOrderStatusTimelineTests`.
+- Corrected the existing PostgreSQL scope setup in
+  `ConversationNotificationTests.ListAndGetAsync_AreReadOnlyAndProjectMessageCountsAndOrderedMessagesFromDatabase`,
+  `ConversationNotificationTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`,
+  `ConversationNotificationTests.ListPageAsync_AppliesSearchAndUnreadFilterInTwoSqlQueries`,
+  `ConversationNotificationTests.ListAndGetAsync_ProjectViewerAwareCounterpartyNames`,
+  `ConversationNotificationTests.GetUnreadCountAsync_SumsUnreadCountsInSql`,
+  `OwnerDistributionAuthorizationTests.ListPageCanFilterPropertyDistributionsDbSide`,
+  `InspectionChecklistServiceTests.ListTemplates_ReturnsBuiltIns_WithItems`,
+  `InspectionChecklistServiceTests.ListPageAsync_ReturnsDbCountAndFinalFullPage`,
+  `InspectionChecklistServiceTests.Create_FromTemplate_MaterializesPendingItems`,
+  `InspectionChecklistServiceTests.ScheduledInspection_AllowsChecklistQuestionCustomization`, and
+  `InspectionChecklistServiceTests.Complete_SpawnsWorkOrderPerFail_SetsCompleted_AndReport`.
+- The migrated SQLite reads were:
+  - `ApplicationServiceTests`: `ListPageAsync_ReturnsSqlCountAndRequestedWindow`,
+    `ListPageAsync_UnitIdFilter_ReturnsOnlyThatUnitsApplicationsDbSide`, and
+    `ListAndGetAsync_ReturnRequestedHomeNamesWithApplication`.
+  - `AppointmentServiceListTests.ListPageAsync_FiltersSortsAndPagesInSql`.
+  - `ExpenseServiceTests`: `ListPageAsync_FiltersWorkOrderReceiptsAndPagesInSql`,
+    `ListPageAsync_FiltersIncurredDateWindowInSql`, `ListPageAsync_SortsExpenseDateColumnsInSql`,
+    `GetAsync_ProjectsCanonicalScopeAndTypedAllocationsInSql`,
+    `ListPageAsync_FiltersSortsAndProjectsAllocationsInSqlWithoutDuplicates`, and
+    `GetAsync_OrdersReceiptLineItemsInSql`.
+  - `LoanServiceTests`: `ListPageAsync_FiltersByStartDate_AndReturnsPagedMetadata`,
+    `GetPaymentsAsync_ReturnsScheduleOrderedByPeriod`, and
+    `GetPaymentsAsync_AppliesStatusDueDateSortAndPagingServerSide`.
+  - `OwnerDistributionServiceTests.ListPageAsync_FiltersSortsAndPagesInSql`.
+  - `RecurringExpenseServiceTests.ListPageAsync_FiltersByNextRunDate_AndReturnsPagedMetadata`.
+  - `RecurringMaintenanceTaskServiceTests`: `ListAsync_ActiveOnly_FiltersInactive`,
+    `ListPageAsync_ReturnsSqlCountAndRequestedWindow`, and
+    `ListPageAsync_UnitQueryFiltersSortsAndPagesInTwoSqlCommands`.
+  - `TenantServiceTests`: `ListPageAsync_ReturnsSqlCountAndRequestedWindow`,
+    `ListPageAsync_PreservesActiveAndHistoricalRelationshipCounts`,
+    `ListPageAsync_UnitFilterKeepsCurrentOccupantWhenPropertyFilterDiffers`,
+    `ListPageAsync_TokenizesHyphenatedSearchTermsInSql`,
+    `ListPageAsync_AvailableForRentalExcludesCurrentResidentsInSql`,
+    `ListPageAsync_AvailableForRentalWithIncludedRelationshipKeepsCurrentParties`,
+    `ListPageAsync_UnitFilterReturnsCurrentOccupantsInSql`,
+    `ListPageAsync_PropertyFilterDisambiguatesDuplicateTenantNamesInSql`,
+    `DeleteAsync_ThrowsWhenTenantStillOccupiesAUnit`,
+    `DeleteAsync_ThrowsWhenTenantHasRentalRelationshipHistory`,
+    `DeleteAsync_SoftDeletesWhenTenantHasNoRentalRelationshipHistory`,
+    `GetAsync_ReportsDeleteStateForRentalRelationshipHistory`, and
+    `GetAsync_CountsNoticeGivenRelationshipAsOccupying`.
+  - `WorkOrderCostsTimingAndProjectionTests`: `GetAsync_ProjectsPropertyAndVendorAndTenantNames`,
+    `GetAsync_HasActiveDispatch_TrueOnlyWithAnOpenDispatch_NotMereVendorAssignment`, and
+    `ListAsync_ProjectsPropertyName`.
+  - `WorkOrderServiceListTests`: `ListPageAsync_FiltersSortsAndPagesInSql`,
+    `ListPageAsync_OpenOnlyFiltersClosedStatusesInSql`,
+    `ListPageAsync_FieldQueueSortsByPriorityThenRequestedDateInSql`,
+    `ListPageAsync_FiltersRequestedDateWindowInSql`, and
+    `ListPageAsync_SortsCompletedDateInSql`.
+  - `WorkOrderStatusTimelineTests.GetAsync_ReturnsTimelineOrderedOldestToNewest`.
+- Deleted `LoanServiceTests.GetAsync_AndPayments_RejectCrossPortfolio` and
+  `RecurringExpenseServiceTests.CrossPortfolio_CannotRead`: each existed only to exercise the
+  deleted unauthorized read overload, and a fabricated scope cannot validly call the PostgreSQL
+  authorization function.
+- Removed only the deleted-overload API-projection tails from
+  `RecurringMaintenanceServiceTests.FailedTask_DoesNotBlockHealthyTaskBehindIt` and renamed
+  `UnknownFailure_StoresSafeReasonWithCorrelationIdInApiPayload` to
+  `UnknownFailure_StoresSafeReasonWithCorrelationId`; both tests retain direct persisted safe-error
+  assertions, while the removed calls could not run against their intentionally SQLite worker fixture.
+
+### Rework verification
+
+- `MSBUILDDISABLENODEREUSE=1 dotnet build RentalCommand.sln -c Debug --nologo -v q` — exit 0:
+  `74 Warning(s)`, `0 Error(s)`, `Time Elapsed 00:01:00.82`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests --no-build --nologo` — exit 1:
+  `Failed: 11, Passed: 1421, Skipped: 0, Total: 1432, Duration: 4 m 55 s`.
+  None is an overload-porting failure. Five are explicitly listed machine failures:
+  `RecurringTenantChargeAtomicPostgreSqlTests.Create_DerivesTenantDimensions_AndWritesAuditAndOutbox`,
+  `BankingServiceTests.ConfirmMatch_WithInternalTransfer_UpdatesBothStatementLinesInOneReceipt`,
+  and the three named `InspectionChecklistServiceTests` failures. Six more were already present in
+  the supplied pre-rework log: `VendorDispatchServiceTests.VendorDone_ClosingSiblingDispatch_DoesNotIncrementJobsCompletedAgain`,
+  three `SandboxGuardAndSeederTests` timestamp assertions, and
+  `InspectionChecklistServiceTests.Complete_UsesBusinessClockForCompletionWorkOrdersAndReport` plus
+  `Complete_UsesCurrentSecurityAccessWhenBusinessClockPredatesAccess`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Core.Tests --no-build --nologo` — exit 0:
+  `Failed: 0, Passed: 82, Skipped: 0, Total: 82, Duration: 256 ms`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Engine.Tests --no-build --nologo` — exit 0:
+  `Failed: 0, Passed: 109, Skipped: 0, Total: 109, Duration: 14 s`.
+- `dotnet build-server shutdown` — exit 0; both MSBuild and VB/C# compiler servers shut down.
+- Read-only main isolation check for the vendor and three sandbox failures — exit 1:
+  vendor failed with the same sub-microsecond PostgreSQL truncation; the three sandbox tests passed
+  in that isolated run, although all three are recorded in the supplied pre-rework full-suite log.
