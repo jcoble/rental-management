@@ -25,7 +25,7 @@ public sealed class CancelVendorDispatchRule
     {
         var handler = new CancelVendorDispatchRule(db);
         return new TransactionalWrite<CancelVendorDispatchCommand, CancelVendorDispatchResult>(
-            "vendor-dispatch.cancel", WriteIdempotencyPolicy.Required, command, ResultContract,
+            "vendor-dispatch.cancel",  command, ResultContract,
             new WriteLockPlan(WriteLockProtocol.WorkOrder,
                 command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
@@ -171,10 +171,6 @@ public sealed class CancelVendorDispatchRule
             reason);
     }
 
-    public Task AuthorizeReplayAsync(
-        CancelVendorDispatchCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
-
     public async Task AuthorizeAsync(
         CancelVendorDispatchCommand command,
         IAtomicCommandContext context,
@@ -201,9 +197,6 @@ public sealed class CancelVendorDispatchRule
                 "The current workspace access no longer authorizes this vendor-dispatch cancellation.");
         }
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Vendor dispatch cancellations must use the shared write executor.");
 
     private static CancelVendorDispatchResult Empty(
         CancelVendorDispatchOutcome outcome,

@@ -6,7 +6,7 @@ namespace RentalCommand.Api.Services.Domain;
 /// JSON-bound dates arrive as <see cref="DateTimeKind.Unspecified"/> (treated as UTC) or
 /// <see cref="DateTimeKind.Local"/> (converted to UTC).
 /// </summary>
-internal static class DateTimeNormalization
+internal static class DateTimeExtensions
 {
     public static DateTime ToUtc(this DateTime value) => value.Kind switch
     {

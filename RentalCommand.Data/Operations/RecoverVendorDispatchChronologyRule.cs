@@ -26,7 +26,7 @@ public sealed class RecoverVendorDispatchChronologyRule
     {
         var handler = new RecoverVendorDispatchChronologyRule(db);
         return new TransactionalWrite<RecoverVendorDispatchChronologyCommand, RecoverVendorDispatchChronologyResult>(
-            "vendor-dispatch.recover-chronology", WriteIdempotencyPolicy.Required, command,
+            "vendor-dispatch.recover-chronology",  command,
             ResultContract, WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
@@ -401,10 +401,6 @@ public sealed class RecoverVendorDispatchChronologyRule
             result.WorkOrderUpdatedAtRepaired);
     }
 
-    public Task AuthorizeReplayAsync(
-        RecoverVendorDispatchChronologyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
-
     public async Task AuthorizeAsync(
         RecoverVendorDispatchChronologyCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -415,9 +411,6 @@ public sealed class RecoverVendorDispatchChronologyRule
             await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct),
             ct);
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Vendor dispatch chronology recovery must use the shared write executor.");
 
     private static async Task AuthorizeAsync(
         RecoverVendorDispatchChronologyCommand command,

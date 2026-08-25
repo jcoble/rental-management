@@ -26,7 +26,7 @@ public static class AppointmentCrudWriteSupport
         Func<CreateAppointmentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
     {
         AppointmentOperationValidation.Validate(command);
-        return new("appointment.create", WriteIdempotencyPolicy.Required, command, ResultContract,
+        return new("appointment.create",  command, ResultContract,
             command.WorkOrderId.HasValue
                 ? new WriteLockPlan(WriteLockProtocol.WorkOrder,
                     command.WorkOrderId.Value)
@@ -40,7 +40,7 @@ public static class AppointmentCrudWriteSupport
         Func<UpdateAppointmentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
     {
         AppointmentOperationValidation.Validate(command);
-        return new("appointment.update", WriteIdempotencyPolicy.Required, command, ResultContract,
+        return new("appointment.update",  command, ResultContract,
             AppointmentPlan(command.AppointmentId), executeAsync, authorizeReplayAsync);
     }
 
@@ -50,7 +50,7 @@ public static class AppointmentCrudWriteSupport
         Func<DeleteAppointmentCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
     {
         AppointmentOperationValidation.Validate(command);
-        return new("appointment.delete", WriteIdempotencyPolicy.Required, command, ResultContract,
+        return new("appointment.delete",  command, ResultContract,
             AppointmentPlan(command.AppointmentId), executeAsync, authorizeReplayAsync);
     }
 
@@ -94,7 +94,7 @@ public static class AppointmentCrudWriteSupport
         var snapshot = await AppointmentSnapshot.LoadAsync(db, command.PortfolioId, entity.Id, ct);
         await AppointmentTenantNotifications.StageAsync(
             db, context, entity, AppointmentTenantNotificationLifecycle.Scheduled, businessNow, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
             $"appointment-create:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
@@ -175,7 +175,7 @@ public static class AppointmentCrudWriteSupport
                 : AppointmentTenantNotificationLifecycle.Updated,
             businessNow,
             ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
             $"appointment-update:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
@@ -201,7 +201,7 @@ public static class AppointmentCrudWriteSupport
             command.Actor.UserId, ChangeReason: "Deleted appointment."));
         await AppointmentTenantNotifications.StageAsync(
             db, context, entity, AppointmentTenantNotificationLifecycle.Cancelled, businessNow, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
             $"appointment-delete:{command.DeliveryIdempotencyKey}", businessNow, operation: "delete"));
         return new(OperationMutationOutcome.Applied, entity.Id);
     }

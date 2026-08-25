@@ -41,7 +41,6 @@ public class OwnerEntityService : IOwnerEntityService
         _webBaseUrl = configuration?["App:WebBaseUrl"] ?? "https://localhost:5667";
     }
 
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<OwnerEntityResponse?> CreateAsync(
         WorkspaceReadScope scope,
         CreateOwnerEntityRequest request,
@@ -57,7 +56,6 @@ public class OwnerEntityService : IOwnerEntityService
         return DeserializeSnapshot<OwnerEntityResponse>(outcome.Value);
     }
 
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<OwnerEntityResponse?> UpdateAsync(
         WorkspaceReadScope scope,
         int id,
@@ -74,7 +72,6 @@ public class OwnerEntityService : IOwnerEntityService
         return DeserializeSnapshot<OwnerEntityResponse>(outcome.Value);
     }
 
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<bool> DeleteAsync(
         WorkspaceReadScope scope,
         int id,

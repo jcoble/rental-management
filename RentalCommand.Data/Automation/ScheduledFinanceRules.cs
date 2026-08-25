@@ -30,7 +30,7 @@ public static class ScheduledFinanceWriteSupport
         };
         return new TransactionalWrite<TCommand, ApplyScheduledFinanceBatchResult>(
             operationName,
-            WriteIdempotencyPolicy.Required,
+
             command,
             resultContract,
             WriteLockPlan.None,
@@ -521,13 +521,13 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchRule
         await context.FlushBusinessAsync(ct);
         foreach (var workOrder in generated)
         {
-            context.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderHandler.DataUpdate(
+            context.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderRule.DataUpdate(
                 workOrder.PortfolioId,
                 nameof(WorkOrder),
                 workOrder.Id,
                 $"recurring-maintenance-work-order:{command.ClaimToken:N}:{workOrder.RecurringMaintenanceTaskId}",
                 command.AppliedAtUtc));
-            context.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderHandler.DataUpdate(
+            context.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderRule.DataUpdate(
                 workOrder.PortfolioId,
                 nameof(RecurringMaintenanceTask),
                 workOrder.RecurringMaintenanceTaskId!.Value,

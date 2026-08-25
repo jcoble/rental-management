@@ -58,7 +58,7 @@ internal static class RecurringMaintenanceCrudWriteSupport
             authorizeReplayAsync) =>
         new(
             $"recurring-maintenance.{request.Operation.ToString().ToLowerInvariant()}",
-            WriteIdempotencyPolicy.Required,
+
             request,
             ResultContract,
             new WriteLockPlan(

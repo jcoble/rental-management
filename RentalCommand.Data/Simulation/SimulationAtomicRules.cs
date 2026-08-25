@@ -55,11 +55,9 @@ public static class SimulationWriteSupport
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull => new(
-            operationName, WriteIdempotencyPolicy.Required, command, resultContract,
+            operationName,  command, resultContract,
             WriteLockPlan.None, executeAsync, authorizeReplayAsync);
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy simulation writes are retired; use the shared write executor.");
 }
 
 public sealed class SetSimulationClockRule

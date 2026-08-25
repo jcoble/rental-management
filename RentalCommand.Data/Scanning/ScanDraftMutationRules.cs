@@ -46,7 +46,7 @@ public static class ScanDraftWriteSupport
 
         Validate(command);
         return new TransactionalWrite<TCommand, TResult>(
-            operationName, WriteIdempotencyPolicy.Required, command, resultContract,
+            operationName,  command, resultContract,
             lockPlan, executeAsync, authorizeReplayAsync);
     }
 

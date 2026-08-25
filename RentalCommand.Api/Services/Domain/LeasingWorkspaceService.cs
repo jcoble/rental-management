@@ -224,7 +224,9 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
                     .FirstOrDefault(),
                 PropertyName = unit.Property!.Name,
                 UnitNumber = unit.UnitNumber,
-                Address = unit.Property.AddressLine1 + ", " + unit.Property.City + ", " + unit.Property.State,
+                Address = AddressComposer.Compose(
+                    unit.Property.AddressLine1, null, unit.Property.City, unit.Property.State, null)
+                    ?? string.Empty,
                 ListingId = unit.RentalListings
                     .Where(listing => listing.DeletedAt == null)
                     .OrderByDescending(listing => listing.UpdatedAt)
@@ -412,7 +414,9 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
                     .FirstOrDefault(),
                 PropertyName = unit.Property!.Name,
                 UnitNumber = unit.UnitNumber,
-                Address = unit.Property.AddressLine1 + ", " + unit.Property.City + ", " + unit.Property.State,
+                Address = AddressComposer.Compose(
+                    unit.Property.AddressLine1, null, unit.Property.City, unit.Property.State, null)
+                    ?? string.Empty,
                 ListingId = unit.RentalListings.Where(listing => listing.DeletedAt == null)
                     .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
                     .Select(listing => (int?)listing.Id).FirstOrDefault(),

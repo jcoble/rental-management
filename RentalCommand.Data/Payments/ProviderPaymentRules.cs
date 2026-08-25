@@ -71,14 +71,12 @@ public static class ProviderPaymentWriteSupport
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull => new(operationName,
-            WriteIdempotencyPolicy.Required, command, resultContract, lockPlan,
+             command, resultContract, lockPlan,
             executeAsync, authorizeReplayAsync);
 
     private static WriteLockPlan TenantAccount(int id) => new(
         WriteLockProtocol.TenantAccount, id);
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic provider-payment writes are retired; use the shared write executor.");
 }
 
 public sealed class PrepareProviderPaymentCreateRule

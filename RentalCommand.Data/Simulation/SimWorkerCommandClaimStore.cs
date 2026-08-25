@@ -115,7 +115,7 @@ public static class SimWorkerTerminalWrite
         Validate(command);
         return new TransactionalWrite<SimWorkerTerminalCommand, SimWorkerTerminalResult>(
             OperationName,
-            WriteIdempotencyPolicy.Required,
+
             command,
             ResultContract,
             WriteLockPlan.None,

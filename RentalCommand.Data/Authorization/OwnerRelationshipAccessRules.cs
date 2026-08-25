@@ -19,7 +19,7 @@ public static class OwnerRelationshipAccessWriteSupport
     {
         var handler = new ActivateOwnerPortalAccessRule(db);
         return new TransactionalWrite<ActivateOwnerPortalAccessCommand, ActivateOwnerPortalAccessMutationResult>(
-            "owner-entity.portal-access.activate", WriteIdempotencyPolicy.Required, command,
+            "owner-entity.portal-access.activate",  command,
             "owner-portal-access.activation.v1", WriteLockPlan.None,
             handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
@@ -30,13 +30,11 @@ public static class OwnerRelationshipAccessWriteSupport
     {
         var handler = new RevokeOwnerPortalAccessRule(db);
         return new TransactionalWrite<RevokeOwnerPortalAccessCommand, RevokeOwnerPortalAccessMutationResult>(
-            "owner-entity.portal-access.revoke", WriteIdempotencyPolicy.Required, command,
+            "owner-entity.portal-access.revoke",  command,
             "owner-portal-access.revocation.v1", WriteLockPlan.None,
             handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy owner relationship writes are retired; use the shared write executor.");
 }
 
 public sealed class ActivateOwnerPortalAccessRule

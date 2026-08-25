@@ -11,36 +11,6 @@ using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Data.Operations;
 
-public sealed class CreateWorkOrderHandler
-{
-    public CreateWorkOrderHandler(RentalCommandDbContext db) { }
-
-    internal static OutboxMessage DataUpdate(
-        int portfolioId, string entityType, int entityId, string key, DateTime now,
-        string? operation = null) =>
-        CreateWorkOrderRule.DataUpdate(portfolioId, entityType, entityId, key, now, operation);
-}
-
-public sealed class AddStaffWorkOrderCommentHandler
-{
-    public AddStaffWorkOrderCommentHandler(RentalCommandDbContext db) { }
-
-    internal static WorkOrderStatusEvent AddActivity(
-        RentalCommandDbContext db,
-        IAtomicCommandContext context,
-        WorkOrder entity,
-        int portfolioId,
-        int actorUserId,
-        string actorLabel,
-        string kind,
-        string visibility,
-        string? note,
-        DateTime businessNow) =>
-        AddStaffWorkOrderCommentRule.AddActivity(
-            db, context, entity, portfolioId, actorUserId, actorLabel,
-            kind, visibility, note, businessNow);
-}
-
 public static class WorkOrderCrudWriteSupport
 {
     public const string StaffResultContract = "work-order.mutation.v2";
@@ -103,7 +73,7 @@ public static class WorkOrderCrudWriteSupport
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task<WorkOrderMutationResult>> execute,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplay)
         where TCommand : notnull, IAtomicCommandData =>
-        new(operation, WriteIdempotencyPolicy.Required, command, resultContract,
+        new(operation,  command, resultContract,
             lockPlan, execute, authorizeReplay);
 
     private static WriteLockPlan WorkOrderPlan(int workOrderId) => new(
@@ -415,7 +385,7 @@ public sealed class UpdateWorkOrderRule
                 _db, appointmentSync, context, businessNow, ct);
         var snapshot = await WorkOrderSnapshot.LoadAsync(
             _db, command.PortfolioId, entity.Id, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
             $"work-order-update:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
@@ -614,7 +584,7 @@ internal static class WorkOrderAppointmentSync
                 db, context, sync.Appointment, sync.Lifecycle, businessNow, ct);
         }
 
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             sync.Appointment.PortfolioId, nameof(Appointment), sync.Appointment.Id,
             $"appointment-work-order-sync:{sync.DeliveryIdempotencyKey}",
             businessNow, operation: sync.Operation));
@@ -680,7 +650,7 @@ public sealed class DeleteWorkOrderRule
         context.BindSemanticAudit(entity, new AtomicSemanticAudit(
             command.PortfolioId, nameof(WorkOrder), entity.Id, AuditLogOperation.Deleted,
             command.Actor.UserId, ChangeReason: "Deleted work order."));
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
             $"work-order-delete:{command.DeliveryIdempotencyKey}", businessNow, operation: "delete"));
         return new(OperationMutationOutcome.Applied, entity.Id);
     }
@@ -749,7 +719,7 @@ public sealed class CreateTenantWorkOrderRule
             ChangeReason: "Tenant submitted maintenance request."));
         await context.FlushBusinessAsync(ct);
         var snapshot = await WorkOrderSnapshot.LoadAsync(_db, command.PortfolioId, entity.Id, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
             $"tenant-work-order-create:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
@@ -795,7 +765,7 @@ public sealed class AddStaffWorkOrderCommentRule
                 visibility = command.IsPrivate ? "Private" : "Public",
             }), ChangeReason: "Added work order comment."));
         await context.FlushBusinessAsync(ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
             $"work-order-comment:{command.DeliveryIdempotencyKey}", command.BusinessNowUtc));
         return new(
             OperationMutationOutcome.Applied,
@@ -869,7 +839,7 @@ public sealed class AddTenantWorkOrderCommentRule
         if (entity.Status is WorkOrderStatus.Cancelled or WorkOrderStatus.Archived)
             return new(OperationMutationOutcome.NotFound, command.WorkOrderId);
 
-        var activity = AddStaffWorkOrderCommentHandler.AddActivity(_db, context, entity, command.PortfolioId,
+        var activity = AddStaffWorkOrderCommentRule.AddActivity(_db, context, entity, command.PortfolioId,
             command.TenantUserId, "Tenant", "Comment", "Public", command.Body, command.BusinessNowUtc);
         context.UseDatabaseWallClockForAudit(command.BusinessNowUtc);
         context.BindSemanticAudit(entity, new AtomicSemanticAudit(
@@ -878,7 +848,7 @@ public sealed class AddTenantWorkOrderCommentRule
             NewValues: JsonSerializer.Serialize(new { comment = true, visibility = "Public" }),
             ChangeReason: "Tenant added work order comment."));
         await context.FlushBusinessAsync(ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
             $"tenant-work-order-comment:{command.DeliveryIdempotencyKey}", command.BusinessNowUtc));
         return new(
             OperationMutationOutcome.Applied,
@@ -945,7 +915,7 @@ public sealed class UpdateTenantWorkOrderRule
         if (!changed)
             throw new DomainValidationException("At least one request field must change.");
 
-        var activity = AddStaffWorkOrderCommentHandler.AddActivity(_db, context, entity, command.PortfolioId,
+        var activity = AddStaffWorkOrderCommentRule.AddActivity(_db, context, entity, command.PortfolioId,
             command.TenantUserId, "Tenant", "Edit", "Public", "Resident updated request details.",
             command.BusinessNowUtc);
         context.UseDatabaseWallClockForAudit(command.BusinessNowUtc);
@@ -955,7 +925,7 @@ public sealed class UpdateTenantWorkOrderRule
             NewValues: JsonSerializer.Serialize(new { entity.Title, entity.Description }),
             ChangeReason: "Tenant updated work order request fields."));
         await context.FlushBusinessAsync(ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
             $"tenant-work-order-update:{command.DeliveryIdempotencyKey}", command.BusinessNowUtc));
         return new(
             OperationMutationOutcome.Applied,
@@ -1046,7 +1016,7 @@ public sealed class CancelTenantWorkOrderRule
         if (appointmentSync is not null)
             await WorkOrderAppointmentSync.StageLinkedAppointmentSideEffectsAsync(
                 _db, appointmentSync, context, command.BusinessNowUtc, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
             $"tenant-work-order-cancel:{command.DeliveryIdempotencyKey}", command.BusinessNowUtc));
         return new(
             OperationMutationOutcome.Applied,

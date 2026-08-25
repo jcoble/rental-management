@@ -440,12 +440,9 @@ internal static class CanonicalDemoLeaseSeeder
         foreach (var row in rows)
         {
             var agreement = row.Agreement;
-            var propertyAddress = string.Join(", ", new[]
-            {
-                row.AddressLine1,
-                row.AddressLine2,
-                $"{row.City}, {row.State} {row.PostalCode}".Trim(),
-            }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            var propertyAddress = AddressComposer.Compose(
+                row.AddressLine1, row.AddressLine2, row.City,
+                row.State, row.PostalCode) ?? string.Empty;
             var issuedAt = agreement.CreatedAtUtc.AddMinutes(1);
             var executedAt = issuedAt.AddMinutes(5);
             intents.Add(new CanonicalDemoLegalDocumentIntent(

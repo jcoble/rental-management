@@ -244,7 +244,7 @@ public static class AtomicGuidedTenantSetup
     {
         var handler = new AtomicGuidedTenantSetupRule(db);
         return new TransactionalWrite<AtomicGuidedTenantSetupCommand, AtomicGuidedTenantSetupResult>(
-            Identity(command).CommandType, WriteIdempotencyPolicy.Required, command, Codec.ContractName,
+            Identity(command).CommandType,  command, Codec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
 

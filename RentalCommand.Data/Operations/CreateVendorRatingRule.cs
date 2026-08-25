@@ -28,7 +28,7 @@ public sealed class CreateVendorRatingRule
             : new WriteLockPlan(WriteLockProtocol.Vendor,
                 command.VendorId);
         return new TransactionalWrite<CreateVendorRatingCommand, VendorRatingMutationResult>(
-            "vendor-rating.create", WriteIdempotencyPolicy.Required, command, ResultContract,
+            "vendor-rating.create",  command, ResultContract,
             locks, handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
@@ -102,13 +102,13 @@ public sealed class CreateVendorRatingRule
 
         var snapshot = await VendorRatingSnapshot.LoadAsync(
             _db, command.PortfolioId, rating.Id, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             command.PortfolioId,
             nameof(VendorRating),
             rating.Id,
             $"vendor-rating-create:{command.DeliveryIdempotencyKey}",
             businessNow));
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             command.PortfolioId,
             nameof(Vendor),
             vendor.Id,
@@ -116,10 +116,6 @@ public sealed class CreateVendorRatingRule
             businessNow));
         return new(OperationMutationOutcome.Applied, rating.Id, vendor.Id, snapshot);
     }
-
-    public Task AuthorizeReplayAsync(
-        CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
 
     public async Task AuthorizeAsync(
         CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -131,9 +127,6 @@ public sealed class CreateVendorRatingRule
                 command, _db, command.BusinessNowUtc, securityNow, tracking: false).AnyAsync(ct))
             throw new UnauthorizedAccessException("The active assignment cannot rate this vendor.");
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Vendor ratings must use the shared write executor.");
 
     private static IQueryable<Vendor> AuthorizedVendors(
         CreateVendorRatingCommand command,

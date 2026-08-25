@@ -77,11 +77,9 @@ public static class WorkspaceTeamWriteSupport
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull => new(
-            operationName, WriteIdempotencyPolicy.Required, command, resultContract,
+            operationName,  command, resultContract,
             WriteLockPlan.None, executeAsync, authorizeReplayAsync);
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy workspace Team writes are retired; use the shared write executor.");
 }
 
 internal static class WorkspaceTeamAuthoritySupport

@@ -54,11 +54,6 @@ public sealed class ReconcileNativeEsignAgreementFinancialsRule
             inserted);
     }
 
-    public async Task AuthorizeReplayAsync(
-        ReconcileNativeEsignAgreementFinancialsCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         ReconcileNativeEsignAgreementFinancialsCommand command,
         IAtomicCommandContext context,
@@ -104,11 +99,6 @@ public sealed class ReconcileNativeEsignAgreementFinancialsBatchRule
                 context, command.BatchSize, ct);
         return new ReconcileNativeEsignAgreementFinancialsBatchResult(charges.Count);
     }
-
-    public async Task AuthorizeReplayAsync(
-        ReconcileNativeEsignAgreementFinancialsBatchCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         ReconcileNativeEsignAgreementFinancialsBatchCommand command,

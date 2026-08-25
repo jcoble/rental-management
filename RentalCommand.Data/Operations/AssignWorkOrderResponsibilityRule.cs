@@ -32,7 +32,7 @@ public sealed class AssignWorkOrderResponsibilityRule
     {
         var handler = new AssignWorkOrderResponsibilityRule(db, accessRevisionGuard);
         return new TransactionalWrite<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult>(
-            "work-order-responsibility.assign", WriteIdempotencyPolicy.Required, command,
+            "work-order-responsibility.assign",  command,
             ResultContract, new WriteLockPlan(WriteLockProtocol.WorkOrderResponsibility),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
@@ -258,10 +258,6 @@ public sealed class AssignWorkOrderResponsibilityRule
                 assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
                 assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null);
 
-    public Task AuthorizeReplayAsync(
-        AssignWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
-
     public async Task AuthorizeAsync(
         AssignWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -269,9 +265,6 @@ public sealed class AssignWorkOrderResponsibilityRule
         _ = await AuthorizeActorAndLoadWorkOrderAsync(
             command, _db, command.BusinessNowUtc, securityNowUtc, ct);
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Work-order responsibility assignment must use the shared write executor.");
 
     private static async Task<WorkOrder> AuthorizeActorAndLoadWorkOrderAsync(
         AssignWorkOrderResponsibilityCommand command,

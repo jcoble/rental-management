@@ -23,7 +23,7 @@ public sealed class RecordTechnicianWorkEntryRule
     {
         var handler = new RecordTechnicianWorkEntryRule(db);
         return new TransactionalWrite<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult>(
-            "technician-work-entry.record", WriteIdempotencyPolicy.Required, command, ResultContract,
+            "technician-work-entry.record",  command, ResultContract,
             WorkOrderLock(command.WorkOrderId), handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
@@ -94,9 +94,6 @@ public sealed class RecordTechnicianWorkEntryRule
         return new(entry.Id, entry.WorkOrderId, entry.Kind, now);
     }
 
-    public Task AuthorizeReplayAsync(RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
-
     public async Task AuthorizeAsync(RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
@@ -108,9 +105,6 @@ public sealed class RecordTechnicianWorkEntryRule
 
     internal static WriteLockPlan WorkOrderLock(int workOrderId) => new(
         WriteLockProtocol.WorkOrder, workOrderId);
-
-    internal static InvalidOperationException RetiredPath() => new(
-        "Technician experience mutations must use the shared write executor.");
 
     private static void Validate(RecordTechnicianWorkEntryCommand command)
     {
@@ -148,7 +142,7 @@ public sealed class SendTechnicianAssignmentMessageRule
     {
         var handler = new SendTechnicianAssignmentMessageRule(db);
         return new TransactionalWrite<SendTechnicianAssignmentMessageCommand, SendTechnicianAssignmentMessageResult>(
-            "technician-assignment-message.send", WriteIdempotencyPolicy.Required, command,
+            "technician-assignment-message.send",  command,
             ResultContract, RecordTechnicianWorkEntryRule.WorkOrderLock(command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
@@ -237,9 +231,6 @@ public sealed class SendTechnicianAssignmentMessageRule
         return new(conversation.Id, message.Id, now);
     }
 
-    public Task AuthorizeReplayAsync(SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RecordTechnicianWorkEntryRule.RetiredPath();
-
     public async Task AuthorizeAsync(SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
@@ -268,7 +259,7 @@ public sealed class MarkTechnicianAssignmentConversationReadRule
     {
         var handler = new MarkTechnicianAssignmentConversationReadRule(db);
         return new TransactionalWrite<MarkTechnicianAssignmentConversationReadCommand, MarkTechnicianAssignmentConversationReadResult>(
-            "technician-assignment-conversation.read", WriteIdempotencyPolicy.Required, command,
+            "technician-assignment-conversation.read",  command,
             ResultContract, RecordTechnicianWorkEntryRule.WorkOrderLock(command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
@@ -290,9 +281,6 @@ public sealed class MarkTechnicianAssignmentConversationReadRule
         conversation.TechnicianUnreadCount = 0;
         return new(conversation.Id, true);
     }
-
-    public Task AuthorizeReplayAsync(MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RecordTechnicianWorkEntryRule.RetiredPath();
 
     public async Task AuthorizeAsync(MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct)
     {

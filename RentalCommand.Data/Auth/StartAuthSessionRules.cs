@@ -77,10 +77,6 @@ public sealed class IssueLoginContextSelectionChallengeRule
             command.ExpiresAtUtc);
     }
 
-    public Task AuthorizeReplayAsync(
-        IssueLoginContextSelectionChallengeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         IssueLoginContextSelectionChallengeCommand command,
         IAtomicCommandContext context,
@@ -264,10 +260,6 @@ public sealed class StartAuthSessionRule
             command.RefreshTokenFamilyId,
             command.CredentialId);
     }
-
-    public Task AuthorizeReplayAsync(
-        StartAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         StartAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct)

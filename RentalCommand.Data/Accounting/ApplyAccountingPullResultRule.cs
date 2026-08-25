@@ -44,11 +44,6 @@ public sealed class ApplyAccountingPullResultRule
         return result;
     }
 
-    public Task AuthorizeReplayAsync(
-        ApplyAccountingPullResultCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
-
     public async Task AuthorizeAsync(
         ApplyAccountingPullResultCommand command,
         IAtomicCommandContext context,
@@ -71,6 +66,4 @@ public sealed class ApplyAccountingPullResultRule
         }
     }
 
-    private static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic accounting-pull writes are retired; use the shared write executor.");
 }

@@ -2559,7 +2559,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                 provider.GetRequiredService<WorkspaceAccessRevisionGuard>());
             var write = new TransactionalWrite<UnsafeWorkspaceAssignmentMutationCommand, WorkspaceAccessMutationResult>(
                 identity.CommandType,
-                WriteIdempotencyPolicy.Required,
+
                 unsafeMutation,
                 codec.ContractName,
                 WriteLockPlan.None,

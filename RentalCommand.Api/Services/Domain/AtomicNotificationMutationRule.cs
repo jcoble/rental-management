@@ -920,7 +920,7 @@ public static class AtomicNotificationMutation
         var handler = new AtomicNotificationMutationRule(db);
         return new(
             Identity(command).CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             Codec.ContractName,
             WriteLockPlan.None,

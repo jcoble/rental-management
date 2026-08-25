@@ -145,7 +145,8 @@ public sealed class TenantAccountMoveOutStatementService : ITenantAccountMoveOut
         var photos = await LoadDepositPhotosAsync(scope, securityDepositAccountId, ct);
 
         var propertyLine =
-            $"{header.PropertyName} — {header.AddressLine1}, {header.City}, {header.State} {header.PostalCode}"
+            $"{header.PropertyName} — {AddressComposer.Compose(
+                header.AddressLine1, null, header.City, header.State, header.PostalCode) ?? string.Empty}"
                 .Trim(' ', '—');
         var data = new MoveOutStatementData
         {

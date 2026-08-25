@@ -36,7 +36,7 @@ public sealed class AiIntegrationAtomicContractTests
             Path.Combine(
                 AppContext.BaseDirectory,
                 "../../../../RentalCommand.Data/AiIntegrations/" +
-                "AiIntegrationCommandHandlers.cs"));
+                "AiIntegrationRules.cs"));
         var compactSource = Regex.Replace(source, @"\s+", " ");
 
         compactSource.Should().Contain(
@@ -52,7 +52,7 @@ public sealed class AiIntegrationAtomicContractTests
             Path.Combine(
                 AppContext.BaseDirectory,
                 "../../../../RentalCommand.Data/AiIntegrations/" +
-                "AiIntegrationCommandHandlers.cs"));
+                "AiIntegrationRules.cs"));
 
         source.Should().Contain("string.IsNullOrWhiteSpace(command.UsageEventIdentity)");
         source.Should().Contain("command.UsageEventIdentity.Length > 200");

@@ -54,7 +54,7 @@ public static class LeasePartyAccessWriteSupport
         };
         return new TransactionalWrite<TCommand, LeasePartyMutationResult>(
             operationName,
-            WriteIdempotencyPolicy.Required,
+
             command,
             resultContract,
             new WriteLockPlan(protocol,

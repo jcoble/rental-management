@@ -89,10 +89,6 @@ public sealed class IssueSessionRefreshCredentialRule
             command.CredentialId);
     }
 
-    public Task AuthorizeReplayAsync(
-        IssueSessionRefreshCredentialCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         IssueSessionRefreshCredentialCommand command,
         IAtomicCommandContext context,
@@ -373,10 +369,6 @@ public sealed class RotateSessionRefreshCredentialRule
             authority.PortfolioId,
             authority.AccessRevision);
     }
-
-    public Task AuthorizeReplayAsync(
-        RotateSessionRefreshCredentialCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         RotateSessionRefreshCredentialCommand command,

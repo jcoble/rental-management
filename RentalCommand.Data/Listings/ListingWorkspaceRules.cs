@@ -23,7 +23,7 @@ public static class ConnectedListingWriteSupport
         var handler = new AdmitConnectedListingIntentRule(db);
         return new TransactionalWrite<AdmitConnectedListingIntentCommand, ConnectedListingIntentResult>(
             $"listing-workspace.connected.{command.Operation.ToString().ToLowerInvariant()}.intent",
-            WriteIdempotencyPolicy.Required, command, "listing-workspace.connected-intent.result.v1",
+             command, "listing-workspace.connected-intent.result.v1",
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
@@ -32,7 +32,7 @@ public static class ConnectedListingWriteSupport
     {
         var handler = new PersistConnectedListingResultRule(db);
         return new TransactionalWrite<PersistConnectedListingResultCommand, ConnectedListingPersistenceResult>(
-            "listing-workspace.connected.persist-result", WriteIdempotencyPolicy.Required, command,
+            "listing-workspace.connected.persist-result",  command,
             "listing-workspace.connected-persistence.result.v1", WriteLockPlan.None,
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
@@ -42,7 +42,7 @@ public static class ConnectedListingWriteSupport
     {
         var handler = new ApplyConnectedListingResultRule(db);
         return new TransactionalWrite<ApplyConnectedListingResultCommand, ConnectedListingPersistenceResult>(
-            "listing-workspace.connected.apply-result", WriteIdempotencyPolicy.Required, command,
+            "listing-workspace.connected.apply-result",  command,
             "listing-workspace.connected-application.result.v1", WriteLockPlan.None,
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
@@ -52,7 +52,7 @@ public static class ConnectedListingWriteSupport
     {
         var handler = new IngestExternalListingSignalRule(db);
         return new TransactionalWrite<IngestExternalListingSignalCommand, IngestExternalListingSignalResult>(
-            "listing-workspace.signal.ingest", WriteIdempotencyPolicy.Required, command,
+            "listing-workspace.signal.ingest",  command,
             "listing-workspace.signal-ingest.result.v1", WriteLockPlan.None,
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
@@ -62,13 +62,11 @@ public static class ConnectedListingWriteSupport
     {
         var handler = new ConfirmExternalListingSignalRule(db);
         return new TransactionalWrite<ConfirmExternalListingSignalCommand, ListingWorkspaceMutationResult>(
-            "listing-workspace.signal.confirm", WriteIdempotencyPolicy.Required, command,
+            "listing-workspace.signal.confirm",  command,
             "listing-workspace.mutation.result.v1", WriteLockPlan.None,
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Connected listing mutations must use the shared write executor.");
 }
 
 public sealed class AdmitConnectedListingIntentRule
@@ -99,9 +97,6 @@ public sealed class AdmitConnectedListingIntentRule
                 target.Id, target.PublicationId, target.ContentVersion);
     }
 
-    public Task AuthorizeReplayAsync(AdmitConnectedListingIntentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ConnectedListingWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(AdmitConnectedListingIntentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
@@ -124,9 +119,6 @@ public sealed class PersistConnectedListingResultRule
             command.Status, command.DeliveryKey,
             command.DeliveryStatus, command.DeliveryError, command.ExternalListingId, command.ListingUrl);
     }
-
-    public Task AuthorizeReplayAsync(PersistConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ConnectedListingWriteSupport.RetiredPath();
 
     public Task AuthorizeAsync(PersistConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ValidateAdmissionAsync(command, _db, ct);
@@ -230,9 +222,6 @@ public sealed class ApplyConnectedListingResultRule
             ReconciliationRequired = !compatible,
         };
     }
-
-    public Task AuthorizeReplayAsync(ApplyConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ConnectedListingWriteSupport.RetiredPath();
 
     public Task AuthorizeAsync(ApplyConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ValidateProviderResultAsync(command, _db, ct);
@@ -348,9 +337,6 @@ public sealed class ConfirmExternalListingSignalRule
         return ListingWorkspaceCommandSupport.Applied(command, target.Listing.Id);
     }
 
-    public Task AuthorizeReplayAsync(ConfirmExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ConnectedListingWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(ConfirmExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
@@ -427,10 +413,6 @@ public sealed class IngestExternalListingSignalRule
             ChangeReason: "Ingested external listing signal"), now);
         return Result(signal);
     }
-
-    public Task AuthorizeReplayAsync(
-        IngestExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ConnectedListingWriteSupport.RetiredPath();
 
     public Task AuthorizeAsync(
         IngestExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>

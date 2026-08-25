@@ -182,11 +182,6 @@ public sealed class PrepareAccountingDisconnectRule
             refreshTokenCipherText);
     }
 
-    public Task AuthorizeReplayAsync(
-        PrepareAccountingDisconnectCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(
         PrepareAccountingDisconnectCommand command,
         IAtomicCommandContext context,
@@ -273,11 +268,6 @@ public sealed class FinalizeAccountingDisconnectRule
             connection.DisconnectedAt);
     }
 
-    public Task AuthorizeReplayAsync(
-        FinalizeAccountingDisconnectCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
-
     public Task AuthorizeAsync(
         FinalizeAccountingDisconnectCommand command,
         IAtomicCommandContext context,
@@ -362,11 +352,6 @@ public sealed class SetAccountingDirectionRule
             connection.PushEnabled,
             now);
     }
-
-    public Task AuthorizeReplayAsync(
-        SetAccountingDirectionCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
 
     public Task AuthorizeAsync(
         SetAccountingDirectionCommand command,
@@ -660,16 +645,13 @@ public static class AccountingWriteSupport
 
         return new TransactionalWrite<TCommand, TResult>(
             operationName,
-            WriteIdempotencyPolicy.Required,
+
             command,
             resultContract,
             lockPlan,
             executeAsync,
             authorizeReplayAsync);
     }
-
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic accounting writes are retired; use the shared write executor.");
 
     private static WriteLockPlan AuthorizationScope(Guid sessionId, int accessContextId, int portfolioId) =>
         new(

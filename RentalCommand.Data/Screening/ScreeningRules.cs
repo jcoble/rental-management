@@ -57,7 +57,7 @@ public static class ScreeningWriteSupport
                 value.ApplicationId, value.AuthSessionId, value.AccessContextId),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
-        return new TransactionalWrite<TCommand, TResult>(operationName, WriteIdempotencyPolicy.Required,
+        return new TransactionalWrite<TCommand, TResult>(operationName,
             command, resultContract, lockPlan, executeAsync, authorizeReplayAsync);
     }
 

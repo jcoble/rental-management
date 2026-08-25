@@ -1316,7 +1316,7 @@ public static class AtomicInspectionMutation
     {
         var handler = new AtomicInspectionMutationRule(db);
         return new TransactionalWrite<AtomicInspectionMutationCommand, AtomicInspectionMutationResult>(
-            Identity(command).CommandType, WriteIdempotencyPolicy.Required, command, Codec.ContractName,
+            Identity(command).CommandType,  command, Codec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
 

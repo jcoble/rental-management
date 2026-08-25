@@ -591,7 +591,7 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             new ScheduleEService(context.Db),
             new PropertyDispositionService(context.Db, TimeProvider.System),
             TimeProvider.System);
-        var access = new LeaseManagementReadContext(
+        var access = new WorkspaceReadScope(
             scope.PortfolioId,
             scope.UserId,
             scope.SessionId,

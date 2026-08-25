@@ -222,9 +222,9 @@ public sealed class LegalDocumentIssuancePreparationService : ILegalDocumentIssu
     private static LeaseAgreementRenderData ToAgreementRenderData(
         LegalDocumentIssuanceDraftSnapshot draft)
     {
-        var locality = $"{draft.City}, {draft.State} {draft.PostalCode}".Trim();
-        var address = string.Join(", ", new[] { draft.AddressLine1, draft.AddressLine2, locality }
-            .Where(part => !string.IsNullOrWhiteSpace(part)));
+        var address = AddressComposer.Compose(
+            draft.AddressLine1, draft.AddressLine2, draft.City,
+            draft.State, draft.PostalCode) ?? string.Empty;
         return new LeaseAgreementRenderData
         {
             PropertyId = draft.PropertyId,

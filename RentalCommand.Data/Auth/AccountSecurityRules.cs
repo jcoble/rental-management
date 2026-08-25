@@ -37,7 +37,7 @@ public static class AuthSessionWriteSupport
 
         return new TransactionalWrite<TCommand, TResult>(
             operationName,
-            WriteIdempotencyPolicy.Required,
+
             command,
             resultContract,
             WriteLockPlan.None,
@@ -45,8 +45,6 @@ public static class AuthSessionWriteSupport
             authorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy auth/session writes are retired; use the shared write executor.");
 }
 
 public sealed class BootstrapAccountRule
@@ -273,10 +271,6 @@ public sealed class BootstrapAccountRule
             workspace.AccessContextId);
     }
 
-    public Task AuthorizeReplayAsync(
-        BootstrapAccountCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         BootstrapAccountCommand command,
         IAtomicCommandContext context,
@@ -362,10 +356,6 @@ public sealed class ConfirmAccountEmailRule
             "Account email confirmed"), now);
         return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.Confirmed, user.Id);
     }
-
-    public Task AuthorizeReplayAsync(
-        ConfirmAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         ConfirmAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -466,10 +456,6 @@ public sealed class ResetAccountPasswordRule
         return new ResetAccountPasswordResult(ResetAccountPasswordOutcome.Reset, user.Id);
     }
 
-    public Task AuthorizeReplayAsync(
-        ResetAccountPasswordCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         ResetAccountPasswordCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -517,10 +503,6 @@ public sealed class ConfirmGoogleAccountEmailRule
             "Google-verified account email confirmed"), now);
         return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.Confirmed, user.Id);
     }
-
-    public Task AuthorizeReplayAsync(
-        ConfirmGoogleAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         ConfirmGoogleAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct)
@@ -583,10 +565,6 @@ public sealed class AuthEmailOutboxRule
             ChangeReason: "Transactional account email enqueued"), now);
         return new AuthEmailOutboxResult(true, user.Id, root.PortfolioId, command.EmailKind);
     }
-
-    public Task AuthorizeReplayAsync(
-        AuthEmailOutboxCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         AuthEmailOutboxCommand command, IAtomicCommandContext context, CancellationToken ct)

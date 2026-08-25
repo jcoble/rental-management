@@ -53,7 +53,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         [FromQuery] LeaseLegalHistoryQuery query,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var page = await _queryService.ListAgreementHistoryPageAsync(access, leaseManagementId, query, ct);
         return page is null
             ? NotFound(new { error = "Lease management relationship not found" })
@@ -69,7 +69,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         int leaseAgreementId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var draft = await _queryService.GetAgreementDraftAsync(
             access, leaseManagementId, leaseAgreementId, ct);
         return draft is null
@@ -86,7 +86,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         int leaseAgreementId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var progress = await _queryService.GetAgreementSignatureProgressAsync(
             access, leaseManagementId, leaseAgreementId, ct);
         return progress is null
@@ -103,7 +103,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         int sourceAgreementId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var series = await _queryService.GetEffectiveAddendumSeriesAsync(
             access, leaseManagementId, sourceAgreementId, ct);
         return series is null
@@ -120,7 +120,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         int artifactId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var reference = await _queryService.GetAgreementArtifactAsync(
             access, leaseManagementId, leaseAgreementId, artifactId, ct);
         if (reference is null) return NotFound(new { error = "Lease document not found" });
@@ -151,7 +151,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         int leaseAgreementId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var reference = await _queryService.GetAgreementSourceScanAsync(
             access, leaseManagementId, leaseAgreementId, ct);
         if (reference is null) return NotFound(new { error = "Lease source scan not found" });
@@ -402,7 +402,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
     {
         if (!TryPrepare(idempotencyKey, out var envelope, out var error)) return error!;
         var signerIds = await _queryService.ListAuthorizedAgreementIssueSignerIdsAsync(
-            new LeaseManagementReadContext(envelope.PortfolioId, envelope.UserId, envelope.SessionId,
+            new WorkspaceReadScope(envelope.PortfolioId, envelope.UserId, envelope.SessionId,
                 envelope.AccessContextId, envelope.AccessRevision),
             leaseManagementId,
             leaseAgreementId,

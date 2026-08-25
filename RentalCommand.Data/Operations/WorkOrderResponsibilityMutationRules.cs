@@ -32,7 +32,7 @@ public sealed class CloseWorkOrderResponsibilityRule
     {
         var handler = new CloseWorkOrderResponsibilityRule(db, accessRevisionGuard);
         return new TransactionalWrite<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult>(
-            "work-order-responsibility.close", WriteIdempotencyPolicy.Required, command,
+            "work-order-responsibility.close",  command,
             ResultContract, new WriteLockPlan(WriteLockProtocol.WorkOrderResponsibility),
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
@@ -113,9 +113,6 @@ public sealed class CloseWorkOrderResponsibilityRule
             [new WorkspaceAccessRevisionExpectation(accessContext.Id, accessContext.AccessRevision)]);
     }
 
-    public Task AuthorizeReplayAsync(CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
-
     public async Task AuthorizeAsync(CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
@@ -124,9 +121,6 @@ public sealed class CloseWorkOrderResponsibilityRule
             command.ActorUserId, command.ActorAuthSessionId, command.ActorAccessContextId,
             command.ActorAccessRevision, command.WorkOrderId, _db, securityNowUtc, businessNowUtc, ct);
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Work-order responsibility closure must use the shared write executor.");
 
     private static void Validate(CloseWorkOrderResponsibilityCommand command)
     {
@@ -152,7 +146,7 @@ public sealed class UpdateAssignedWorkOrderRule
     {
         var handler = new UpdateAssignedWorkOrderRule(db);
         return new TransactionalWrite<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult>(
-            "assigned-work-order.update", WriteIdempotencyPolicy.Required, command, ResultContract,
+            "assigned-work-order.update",  command, ResultContract,
             new WriteLockPlan(WriteLockProtocol.WorkspaceAccessContextWorkOrder,
                 command.ActorAccessContextId,
                 command.WorkOrderId),
@@ -239,18 +233,12 @@ public sealed class UpdateAssignedWorkOrderRule
             workOrder.ScheduledWindowEnd, workOrder.CompletedAt, businessNowUtc);
     }
 
-    public Task AuthorizeReplayAsync(UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
-
     public async Task AuthorizeAsync(UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         _ = await AuthorizeAndLoadAsync(command, _db, securityNowUtc, businessNowUtc, tracking: false, ct);
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Assigned work-order updates must use the shared write executor.");
 
     private static async Task<WorkOrder> AuthorizeAndLoadAsync(UpdateAssignedWorkOrderCommand command,
         RentalCommandDbContext db, DateTime securityNowUtc, DateTime businessNowUtc, bool tracking,

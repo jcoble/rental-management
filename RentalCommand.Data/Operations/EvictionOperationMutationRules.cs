@@ -24,7 +24,7 @@ public static class EvictionCrudWriteSupport
         Func<CreateEvictionCaseCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
     {
         EvictionOperationValidation.Validate(command);
-        return new("eviction-case.create", WriteIdempotencyPolicy.Required, command, ResultContract,
+        return new("eviction-case.create",  command, ResultContract,
             AuthorizationPlan(command.PortfolioId, command.Actor), executeAsync, authorizeReplayAsync);
     }
 
@@ -34,7 +34,7 @@ public static class EvictionCrudWriteSupport
         Func<UpdateEvictionCaseCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
     {
         EvictionOperationValidation.Validate(command);
-        return new("eviction-case.update", WriteIdempotencyPolicy.Required, command, ResultContract,
+        return new("eviction-case.update",  command, ResultContract,
             AuthorizationPlan(command.PortfolioId, command.Actor), executeAsync, authorizeReplayAsync);
     }
 
@@ -44,7 +44,7 @@ public static class EvictionCrudWriteSupport
         Func<AddEvictionCaseEventCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
     {
         EvictionOperationValidation.Validate(command);
-        return new("eviction-case.event.create", WriteIdempotencyPolicy.Required, command, ResultContract,
+        return new("eviction-case.event.create",  command, ResultContract,
             AuthorizationPlan(command.PortfolioId, command.Actor), executeAsync, authorizeReplayAsync);
     }
 
@@ -54,7 +54,7 @@ public static class EvictionCrudWriteSupport
         Func<DeleteEvictionCaseCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
     {
         EvictionOperationValidation.Validate(command);
-        return new("eviction-case.delete", WriteIdempotencyPolicy.Required, command, ResultContract,
+        return new("eviction-case.delete",  command, ResultContract,
             AuthorizationPlan(command.PortfolioId, command.Actor), executeAsync, authorizeReplayAsync);
     }
 
@@ -146,12 +146,12 @@ public sealed class CreateEvictionCaseRule
         await context.FlushBusinessAsync(ct);
         var snapshot = await EvictionCaseSnapshot.LoadAsync(
             db, command.PortfolioId, entity.Id, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             command.PortfolioId, nameof(EvictionCase), entity.Id,
             $"eviction-case-create:{command.DeliveryIdempotencyKey}", businessNow));
         foreach (var evt in entity.Events)
         {
-            context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+            context.StageOutbox(CreateWorkOrderRule.DataUpdate(
                 command.PortfolioId, nameof(EvictionCaseEvent), evt.Id,
                 $"eviction-event-create:{command.DeliveryIdempotencyKey}:{evt.Id}", businessNow));
         }
@@ -203,7 +203,7 @@ public sealed class UpdateEvictionCaseRule
         await context.FlushBusinessAsync(ct);
         var snapshot = await EvictionCaseSnapshot.LoadAsync(
             db, command.PortfolioId, entity.Id, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             command.PortfolioId, nameof(EvictionCase), entity.Id,
             $"eviction-case-update:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
@@ -263,10 +263,10 @@ public sealed class AddEvictionCaseEventRule
         await context.FlushBusinessAsync(ct);
         var snapshot = await EvictionCaseSnapshot.LoadAsync(
             db, command.PortfolioId, entity.Id, ct);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             command.PortfolioId, nameof(EvictionCaseEvent), evt.Id,
             $"eviction-event-create:{command.DeliveryIdempotencyKey}", businessNow));
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             command.PortfolioId, nameof(EvictionCase), entity.Id,
             $"eviction-case-event:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
@@ -306,7 +306,7 @@ public sealed class DeleteEvictionCaseRule
         context.BindSemanticAudit(entity, EvictionOperationAudit.Case(
             command.PortfolioId, entity.Id, AuditLogOperation.Deleted, command.Actor.UserId,
             entity.Status, entity.CaseNumber, "Deleted eviction case."));
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             command.PortfolioId, nameof(EvictionCase), entity.Id,
             $"eviction-case-delete:{command.DeliveryIdempotencyKey}", businessNow, operation: "delete"));
         return new(OperationMutationOutcome.Applied, entity.Id);

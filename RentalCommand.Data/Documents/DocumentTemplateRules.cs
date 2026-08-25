@@ -52,7 +52,7 @@ public static class DocumentTemplateWriteSupport
             case UpdateDocumentTemplateFieldCommand value: DocumentTemplateCommandSupport.Validate(value); break;
             case DeleteDocumentTemplateFieldCommand value: DocumentTemplateCommandSupport.Validate(value); break;
         }
-        return new(operationName, WriteIdempotencyPolicy.Required, command, ResultContract,
+        return new(operationName,  command, ResultContract,
             new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
                 actor.AuthSessionId,
                 actor.AccessContextId,
@@ -669,7 +669,7 @@ internal static class DocumentTemplateCommandSupport
     internal static void StageUpdate(
         IAtomicCommandContext context, int portfolioId, int templateId,
         string key, DateTime businessNowUtc, string operation) =>
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             portfolioId, nameof(DocumentTemplate), templateId,
             $"document-template:{operation}:{key}", businessNowUtc, operation));
 

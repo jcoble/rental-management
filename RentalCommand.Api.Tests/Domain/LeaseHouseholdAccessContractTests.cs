@@ -48,7 +48,7 @@ public sealed class LeaseHouseholdAccessContractTests
     {
         typeof(ApplicationUser).Should().BeDerivedFrom<IdentityUser<int>>();
         var source = File.ReadAllText(Path.Combine(
-            FindRepositoryRoot(), "RentalCommand.Data", "Leasing", "LeasePartyAccessCommandHandlers.cs"));
+            FindRepositoryRoot(), "RentalCommand.Data", "Leasing", "LeasePartyAccessRules.cs"));
 
         source.Should().Contain("\"TenantIdentityEmail\"");
         source.Should().Contain("EmailConfirmed = false");

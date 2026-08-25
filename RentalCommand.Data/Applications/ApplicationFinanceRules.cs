@@ -39,7 +39,7 @@ public static class ApplicationFinanceWriteSupport
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
         where TCommand : notnull, IAtomicCommandData => new(
             operationName,
-            WriteIdempotencyPolicy.Required,
+
             command,
             ResultContract,
             new WriteLockPlan(
@@ -48,8 +48,6 @@ public static class ApplicationFinanceWriteSupport
             executeAsync,
             authorizeReplayAsync);
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Application finance mutations must use the shared write executor.");
 }
 
 public sealed class RecordApplicationFeeRule
@@ -144,10 +142,6 @@ public sealed class RecordApplicationFeeRule
         return ApplicationFinanceCommandSupport.Posted(
             command.ApplicationId, account.Id, entry, accountCreated);
     }
-
-    public Task AuthorizeReplayAsync(
-        RecordApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ApplicationFinanceWriteSupport.RetiredPath();
 
     public Task AuthorizeAsync(
         RecordApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
@@ -280,10 +274,6 @@ public sealed class RefundApplicationFeeRule
         return ApplicationFinanceCommandSupport.Posted(
             command.ApplicationId, account.Entity.Id, entry, accountCreated: false);
     }
-
-    public Task AuthorizeReplayAsync(
-        RefundApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw ApplicationFinanceWriteSupport.RetiredPath();
 
     public Task AuthorizeAsync(
         RefundApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>

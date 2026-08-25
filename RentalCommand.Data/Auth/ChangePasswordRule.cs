@@ -80,10 +80,6 @@ public sealed class ChangePasswordRule
         return Result(ChangePasswordOutcome.Changed, command);
     }
 
-    public Task AuthorizeReplayAsync(
-        ChangePasswordCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         ChangePasswordCommand command, IAtomicCommandContext context, CancellationToken ct)
     {

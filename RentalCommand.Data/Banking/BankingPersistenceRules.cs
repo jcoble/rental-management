@@ -98,11 +98,9 @@ public static class BankingWriteSupport
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
         where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull => new(operationName, WriteIdempotencyPolicy.Required,
+        where TResult : notnull => new(operationName,
             command, resultContract, lockPlan, executeAsync, authorizeReplayAsync);
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic banking writes are retired; use the shared write executor.");
 }
 
 public sealed class PreparePlaidTokenExchangeRule

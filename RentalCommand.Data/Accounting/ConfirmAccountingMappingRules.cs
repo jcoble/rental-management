@@ -147,10 +147,6 @@ public sealed class ConfirmAccountingMappingRule
             hasMore);
     }
 
-    public Task AuthorizeReplayAsync(
-        ConfirmAccountingMappingCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
-
     public async Task AuthorizeAsync(
         ConfirmAccountingMappingCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -165,9 +161,6 @@ public sealed class ConfirmAccountingMappingRule
                 command.RequiredCapability, _db, now, ct))
             throw new UnauthorizedAccessException();
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic accounting-mapping writes are retired; use the shared write executor.");
 
     private async Task<bool> IsValidTargetAsync(
         ConfirmAccountingMappingCommand command,
@@ -691,10 +684,6 @@ public sealed class ContinueAccountingMappingPromotionRule
         return Result(ContinueAccountingMappingPromotionOutcome.Applied, command, promoted, job.PromotedCount, hasMore);
     }
 
-    public Task AuthorizeReplayAsync(
-        ContinueAccountingMappingPromotionCommand command, IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
-
     public async Task AuthorizeAsync(
         ContinueAccountingMappingPromotionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -709,9 +698,6 @@ public sealed class ContinueAccountingMappingPromotionRule
                 command.RequiredCapability, _db, now, ct))
             throw new UnauthorizedAccessException();
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic accounting-mapping writes are retired; use the shared write executor.");
 
     private static ContinueAccountingMappingPromotionResult Result(
         ContinueAccountingMappingPromotionOutcome outcome,

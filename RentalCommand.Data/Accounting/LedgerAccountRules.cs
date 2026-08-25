@@ -86,19 +86,12 @@ public sealed class CreateLedgerAccountRule
             LedgerAccountAtomicSupport.Snapshot(account, hasPostedLines: false));
     }
 
-    public Task AuthorizeReplayAsync(
-        CreateLedgerAccountCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
-
     public Task AuthorizeAsync(
         CreateLedgerAccountCommand command,
         IAtomicCommandContext context,
         CancellationToken ct) =>
         LedgerAccountAtomicSupport.AuthorizeReplayAsync(command, _db, ct);
 
-    private static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic ledger-account writes are retired; use the shared write executor.");
 }
 
 public sealed class UpdateLedgerAccountRule
@@ -297,19 +290,12 @@ public sealed class UpdateLedgerAccountRule
         return new(LedgerAccountMutationOutcome.Applied, nextSnapshot);
     }
 
-    public Task AuthorizeReplayAsync(
-        UpdateLedgerAccountCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
-
     public Task AuthorizeAsync(
         UpdateLedgerAccountCommand command,
         IAtomicCommandContext context,
         CancellationToken ct) =>
         LedgerAccountAtomicSupport.AuthorizeReplayAsync(command, _db, ct);
 
-    private static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic ledger-account writes are retired; use the shared write executor.");
 }
 
 internal static class LedgerAccountAtomicSupport

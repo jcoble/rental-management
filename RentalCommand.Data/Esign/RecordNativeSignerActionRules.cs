@@ -122,11 +122,6 @@ public sealed class RecordNativeSignatureRule
         return Applied(signer, request, allSigned);
     }
 
-    public async Task AuthorizeReplayAsync(
-        RecordNativeSignatureCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         RecordNativeSignatureCommand command,
         IAtomicCommandContext context,
@@ -304,11 +299,6 @@ public sealed class RecordNativeDeclineRule
             request.LeaseAgreementId, request.LeaseAddendumId,
             signer.Status, request.Status, false);
     }
-
-    public async Task AuthorizeReplayAsync(
-        RecordNativeDeclineCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         RecordNativeDeclineCommand command,

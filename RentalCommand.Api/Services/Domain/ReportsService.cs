@@ -851,7 +851,7 @@ public class ReportsService : IReportsService
     // ── Rent Ledger (accrual, per lease over a range) ──────────────────────────────────────────────
 
     public async Task<RentLedgerResponse> GetRentLedgerAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         ReportRangeQuery query,
         CancellationToken ct = default)
     {

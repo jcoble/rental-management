@@ -39,11 +39,9 @@ public static class OwnerPortalWriteSupport
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task<OwnerPortalCommandResult>> executeAsync,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync)
         where TCommand : notnull, IAtomicCommandData => new(
-            operationName, WriteIdempotencyPolicy.Required, command, resultContract,
+            operationName,  command, resultContract,
             WriteLockPlan.None, executeAsync, authorizeReplayAsync);
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy owner portal writes are retired; use the shared write executor.");
 }
 
 public sealed class DecideOwnerApprovalRule

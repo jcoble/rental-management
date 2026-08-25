@@ -154,7 +154,7 @@ public static class ScanProcessingTerminalWrite
         Validate(command);
         return new TransactionalWrite<ScanProcessingTerminalCommand, ScanProcessingTerminalResult>(
             OperationName,
-            WriteIdempotencyPolicy.Required,
+
             command,
             ResultContract,
             WriteLockPlan.None,

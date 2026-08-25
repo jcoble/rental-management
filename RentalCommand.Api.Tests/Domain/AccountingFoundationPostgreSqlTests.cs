@@ -540,7 +540,7 @@ public sealed class AccountingFoundationPostgreSqlTests
             ConcurrentJournalPostingHandler handler) =>
         new(
             identity.CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             ConcurrentPostingCodec.ContractName,
             WriteLockPlan.None,

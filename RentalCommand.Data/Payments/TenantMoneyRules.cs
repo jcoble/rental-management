@@ -105,7 +105,7 @@ public static class TenantMoneyWriteSupport
         };
         return new(
             operationName,
-            WriteIdempotencyPolicy.Required,
+
             command,
             resultContract,
             lockPlan,
