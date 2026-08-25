@@ -821,10 +821,17 @@ public class ConversationNotificationTests : IAsyncLifetime
         _db.ChangeTracker.Clear();
 
         var sut = CreateSut();
-        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
-            context.PortfolioId == 1 && context.UserId == 10);
-        var staffScope = new WorkspaceReadScope(
-            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
+        var staffScope = _db.SeedAdministratorScope(
+            1, nameof(ListAndGetAsync_AreReadOnlyAndProjectMessageCountsAndOrderedMessagesFromDatabase));
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {staffScope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {staffScope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {staffScope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {staffScope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {staffScope.AccessRevision.ToString()}, false);
+            """);
 
         var list = await sut.ListAuthorizedAsync(staffScope);
         var summary = list.Should().ContainSingle(c => c.Id == conversation.Id).Subject;
@@ -852,11 +859,17 @@ public class ConversationNotificationTests : IAsyncLifetime
 
         var sut = CreateSut();
 
+        var staffScope = _db.SeedAdministratorScope(1, nameof(ListPageAsync_ReturnsSqlCountAndRequestedWindow));
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {staffScope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {staffScope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {staffScope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {staffScope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {staffScope.AccessRevision.ToString()}, false);
+            """);
         _commands.Clear();
-        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
-            context.PortfolioId == 1 && context.UserId == 10);
-        var staffScope = new WorkspaceReadScope(
-            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
         var page = await sut.ListPageAuthorizedAsync(staffScope, new ConversationListQuery
         {
             Sort = "subject",
@@ -890,11 +903,18 @@ public class ConversationNotificationTests : IAsyncLifetime
             now.AddMinutes(-1),
             landlordUnreadCount: 2);
 
+        var staffScope = _db.SeedAdministratorScope(
+            1, nameof(ListPageAsync_AppliesSearchAndUnreadFilterInTwoSqlQueries));
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {staffScope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {staffScope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {staffScope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {staffScope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {staffScope.AccessRevision.ToString()}, false);
+            """);
         _commands.Clear();
-        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
-            context.PortfolioId == 1 && context.UserId == 10);
-        var staffScope = new WorkspaceReadScope(
-            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
         var page = await CreateSut().ListPageAuthorizedAsync(staffScope, new ConversationListQuery
         {
             Search = "sink",
@@ -959,10 +979,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             .SingleAsync();
 
         var sut = CreateSut();
-        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
-            context.PortfolioId == 1 && context.UserId == 10);
-        var staffScope = new WorkspaceReadScope(
-            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
+        var staffScope = _db.SeedAdministratorScope(
+            1, nameof(ListAndGetAsync_ProjectViewerAwareCounterpartyNames));
 
         _commands.Clear();
         var tenantPage = await sut.ListPageForTenantAsync(
@@ -978,6 +996,15 @@ public class ConversationNotificationTests : IAsyncLifetime
             sql.Contains("ManagementCompanyName", StringComparison.Ordinal) &&
             sql.Contains("FROM \"Conversations\"", StringComparison.OrdinalIgnoreCase));
 
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {staffScope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {staffScope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {staffScope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {staffScope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {staffScope.AccessRevision.ToString()}, false);
+            """);
         var staffPage = await sut.ListPageAuthorizedAsync(staffScope, new ConversationListQuery { Take = 20 });
         var staffSummary = staffPage.Items.Should().ContainSingle().Which;
         staffSummary.TenantName.Should().Be("Emily Chen");
@@ -1024,11 +1051,17 @@ public class ConversationNotificationTests : IAsyncLifetime
 
         var sut = CreateSut();
 
+        var staffScope = _db.SeedAdministratorScope(1, nameof(GetUnreadCountAsync_SumsUnreadCountsInSql));
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {staffScope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {staffScope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {staffScope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {staffScope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {staffScope.AccessRevision.ToString()}, false);
+            """);
         _commands.Clear();
-        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
-            context.PortfolioId == 1 && context.UserId == 10);
-        var staffScope = new WorkspaceReadScope(
-            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
         var unreadCount = await sut.GetUnreadCountAuthorizedAsync(staffScope);
 
         unreadCount.Should().Be(7);

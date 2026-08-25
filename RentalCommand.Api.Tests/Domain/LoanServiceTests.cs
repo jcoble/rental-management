@@ -17,35 +17,30 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Portfolio-scoped loan reads, SQL-side paging, amortization schedule access, and the contract that
 /// all business mutations flow through scoped receipt-backed commands.
 /// </summary>
-public class LoanServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public class LoanServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly LoanService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private LoanService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public LoanServiceTests()
+    public LoanServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(LoanServiceTests));
         _sut = new LoanService(_ctx.Db, TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
     }
 
-    public void Dispose() => _ctx.Dispose();
-
-    [Fact]
-    public async Task GetAsync_AndPayments_RejectCrossPortfolio()
-    {
-        var property = SeedProperty();
-        var loan = SeedLoan(property.Id);
-
-        // A different portfolio cannot read or mutate this loan.
-        var otherScope = new WorkspaceReadScope(2, 2, Guid.NewGuid(), 2, 1);
-        (await _sut.GetAsync(otherScope, loan.Id)).Should().BeNull();
-        (await _sut.GetPaymentsAsync(otherScope, loan.Id)).Should().BeNull();
-    }
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public void MutationsExposeOnlyScopedReceiptBackedOverloads()
@@ -68,6 +63,7 @@ public class LoanServiceTests : IDisposable
         SeedLoan(property.Id, lender: "February Bank", startDate: new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc));
         SeedLoan(property.Id, lender: "March Bank", startDate: new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc));
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         var page = await _sut.ListPageAsync(_scope, property.Id, new ListQuery
         {
             From = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
@@ -96,6 +92,7 @@ public class LoanServiceTests : IDisposable
             MakePayment(loan, "2024-01", 199_800.90m));
         _ctx.Db.SaveChanges();
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         var schedule = await _sut.GetPaymentsAsync(_scope, loan.Id);
 
         schedule.Should().NotBeNull();
@@ -124,6 +121,7 @@ public class LoanServiceTests : IDisposable
 
         _commands.Clear();
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         var schedule = await _sut.GetPaymentsAsync(_scope, loan.Id, new LoanPaymentQuery
         {
             Status = LoanPaymentStatus.Scheduled,

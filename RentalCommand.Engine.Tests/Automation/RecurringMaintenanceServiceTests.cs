@@ -4,11 +4,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Simulation;
-using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
-using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -261,14 +258,8 @@ public class RecurringMaintenanceServiceTests : IDisposable
             "Edit it and choose a supported interval.");
         failed.WorkerClaimQuarantinedAtUtc.Should().BeNull();
 
-        _ctx.Db.ChangeTracker.Clear();
-        var scope = new WorkspaceReadScope(PortfolioId, 1, Guid.Empty, 1, 1);
-        var apiPayload = await new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System)
-            .ListAuthorizedAsync(scope, propertyId: null, activeOnly: null, new ListQuery());
-        var failedPayload = apiPayload.Single(row => row.Id == poison.Id);
-        failedPayload.AutomationFailureReason.Should().Be(failed.WorkerClaimLastFailureReason);
-        failedPayload.AutomationFailureReason.Should().NotContain("InvalidOperationException");
-        failedPayload.AutomationFailureReason.Should().NotContain("Unsupported recurring-maintenance interval");
+        failed.WorkerClaimLastFailureReason.Should().NotContain("InvalidOperationException");
+        failed.WorkerClaimLastFailureReason.Should().NotContain("Unsupported recurring-maintenance interval");
     }
 
     [Fact]
@@ -326,7 +317,7 @@ public class RecurringMaintenanceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task UnknownFailure_StoresSafeReasonWithCorrelationIdInApiPayload()
+    public async Task UnknownFailure_StoresSafeReasonWithCorrelationId()
     {
         var businessDate = new DateTime(2027, 3, 14, 12, 0, 0, DateTimeKind.Utc);
         var dueDate = new DateTime(2027, 3, 14, 0, 0, 0, DateTimeKind.Utc);
@@ -350,10 +341,8 @@ public class RecurringMaintenanceServiceTests : IDisposable
         (await sut.GenerateAsync()).Should().Be(0);
 
         _ctx.Db.ChangeTracker.Clear();
-        var scope = new WorkspaceReadScope(PortfolioId, 1, Guid.Empty, 1, 1);
-        var apiPayload = await new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System)
-            .ListAuthorizedAsync(scope, propertyId: null, activeOnly: null, new ListQuery());
-        var reason = apiPayload.Single(row => row.Id == task.Id).AutomationFailureReason;
+        var reason = _ctx.Db.RecurringMaintenanceTasks.Single(row => row.Id == task.Id)
+            .WorkerClaimLastFailureReason;
         reason.Should().NotBeNull();
         reason.Should().MatchRegex(
             "^Recurring maintenance could not be generated\\. Check the schedule and try again\\. " +

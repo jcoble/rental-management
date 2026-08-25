@@ -32,6 +32,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private ServiceProvider _atomicServices = null!;
+    private RentalCommandDbContext _serviceDb = null!;
     private OwnerDistributionService _service = null!;
     private WorkspaceReadScope _scope;
 
@@ -41,8 +42,9 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
     {
         _ctx = await _fixture.CreateContextAsync();
         _atomicServices = AtomicDomainTestKernel.CreateForMoneyPostgreSql(_ctx.ConnectionString);
+        _serviceDb = _atomicServices.GetRequiredService<RentalCommandDbContext>();
         _service = new OwnerDistributionService(
-            _atomicServices.GetRequiredService<RentalCommandDbContext>(),
+            _serviceDb,
             TimeProvider.System,
             _atomicServices.GetRequiredService<IRequestWriteExecutor>());
         SeedPortfolio();
@@ -65,6 +67,15 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var otherProperty = SeedProperty(owner.Id, "Other Property");
         var assigned = SeedDistribution(owner.Id, assignedProperty.Id, 100m);
         var other = SeedDistribution(owner.Id, otherProperty.Id, 200m);
+        await _serviceDb.Database.OpenConnectionAsync();
+        await _serviceDb.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         var page = await _service.ListPageAsync(_scope, new OwnerDistributionListQuery
         {
             PropertyId = assignedProperty.Id,

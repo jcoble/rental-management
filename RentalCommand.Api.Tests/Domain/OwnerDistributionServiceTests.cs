@@ -18,25 +18,32 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Owner distributions are first-class owner payouts. They are portfolio-scoped, owner-scoped,
 /// optional-property-linked, soft-deleted, and never represented as expenses.
 /// </summary>
-public sealed class OwnerDistributionServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public sealed class OwnerDistributionServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int Year = 2026;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly OwnerDistributionService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private OwnerDistributionService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public OwnerDistributionServiceTests()
+    public OwnerDistributionServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new OwnerDistributionRecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new OwnerDistributionRecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(OwnerDistributionServiceTests));
         _sut = new OwnerDistributionService(
             _ctx.Db, TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public void MutationsExposeOnlyScopedReceiptBackedOverloads()
@@ -62,6 +69,7 @@ public sealed class OwnerDistributionServiceTests : IDisposable
         SeedDistribution(owner.Id, 999m, new DateTime(Year - 1, 2, 1, 0, 0, 0, DateTimeKind.Utc));
         SeedDistribution(otherOwner.Id, 300m, new DateTime(Year, 3, 1, 0, 0, 0, DateTimeKind.Utc));
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
 
         var page = await _sut.ListPageAsync(_scope, new OwnerDistributionListQuery

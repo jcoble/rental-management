@@ -1,5 +1,4 @@
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -22,45 +21,34 @@ namespace RentalCommand.Api.Tests.Domain;
 /// CompletedAt / EstimatedCost / ActualCost — including on a Completed order, which has no reopen
 /// workflow) and the display-name + unit-aggregate projections that the detail/list views read.
 /// </summary>
-public class WorkOrderCostsTimingAndProjectionTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name4)]
+public class WorkOrderCostsTimingAndProjectionTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteConnection _conn;
-    private readonly RentalCommandDbContext _db;
-    private readonly ServiceProvider _services;
-    private readonly WorkOrderService _workOrders;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private RentalCommandDbContext _serviceDb = null!;
+    private ServiceProvider _services = null!;
+    private WorkOrderService _workOrders = null!;
+    private WorkspaceReadScope _scope;
 
-    public WorkOrderCostsTimingAndProjectionTests()
+    public WorkOrderCostsTimingAndProjectionTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection($"Data Source=work-order-costs-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .Options;
-
-        _db = new AccountingServiceTestDbContext(options);
-        _db.Database.EnsureCreated();
-        _db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        _scope = SeedAdministratorScope();
-        _services = AtomicDomainTestKernel.CreateForWorkOrders(_conn.ConnectionString);
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _db = _ctx.Db;
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(WorkOrderCostsTimingAndProjectionTests));
+        _services = AtomicDomainTestKernel.CreateForWorkOrdersPostgreSql(_ctx.ConnectionString);
+        _serviceDb = _services.GetRequiredService<RentalCommandDbContext>();
 
         _workOrders = new WorkOrderService(
-            _services.GetRequiredService<RentalCommandDbContext>(),
+            _serviceDb,
             new NoopDataUpdate(),
             new NoopMessagePublisher(),
             Mock.Of<IFileStorage>(),
@@ -69,73 +57,10 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
     }
 
-    private WorkspaceReadScope SeedAdministratorScope()
+    public async Task DisposeAsync()
     {
-        var now = DateTime.UtcNow;
-        var user = new ApplicationUser
-        {
-            UserName = "work-order-projection@example.test",
-            NormalizedUserName = "WORK-ORDER-PROJECTION@EXAMPLE.TEST",
-            Email = "work-order-projection@example.test",
-            NormalizedEmail = "WORK-ORDER-PROJECTION@EXAMPLE.TEST",
-            DisplayName = "Work Order Projection Test Administrator",
-            SecurityStamp = Guid.NewGuid().ToString("N"),
-            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
-            CreatedAt = now,
-        };
-        var accessContext = new WorkspaceAccessContext
-        {
-            User = user,
-            PortfolioId = PortfolioId,
-            Status = WorkspaceAccessContextStatus.Active,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        var membership = new WorkspaceMembership
-        {
-            AccessContext = accessContext,
-            PortfolioId = PortfolioId,
-            Status = WorkspaceMembershipStatus.Active,
-            DefaultExperience = WorkspaceExperience.Management,
-            EffectiveFromUtc = now.AddMinutes(-1),
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        var assignment = new MembershipRoleAssignment
-        {
-            WorkspaceMembership = membership,
-            PortfolioId = PortfolioId,
-            RoleProfileId = AccessCatalog.Roles.Single(role =>
-                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
-            Status = MembershipRoleAssignmentStatus.Active,
-            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
-            EffectiveFromUtc = now.AddMinutes(-1),
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        var session = new AuthSession
-        {
-            Id = Guid.NewGuid(),
-            User = user,
-            ActiveAccessContext = accessContext,
-            Status = AuthSessionStatus.Active,
-            CreatedAtUtc = now,
-            LastSeenAtUtc = now,
-            ExpiresAtUtc = now.AddHours(1),
-        };
-
-        _db.AddRange(assignment, session);
-        _db.SaveChanges();
-
-        return new WorkspaceReadScope(
-            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
-    }
-
-    public void Dispose()
-    {
-        _services.Dispose();
-        _db.Dispose();
-        _conn.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -324,6 +249,15 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             Status = WorkOrderStatus.New,
         });
 
+        await _serviceDb.Database.OpenConnectionAsync();
+        await _serviceDb.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         var detail = await _workOrders.GetAuthorizedAsync(_scope, created!.Id);
 
         detail.Should().NotBeNull();
@@ -372,6 +306,15 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         });
         SeedDispatch(closed!.Id, vendor.Id, VendorDispatchStatus.Completed);
 
+        await _serviceDb.Database.OpenConnectionAsync();
+        await _serviceDb.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         (await _workOrders.GetAuthorizedAsync(_scope, assignedOnly!.Id))!.HasActiveDispatch
             .Should().BeFalse("assigning a vendor without dispatching must not claim the job was sent");
         (await _workOrders.GetAuthorizedAsync(_scope, dispatched.Id))!.HasActiveDispatch
@@ -392,6 +335,15 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             Status = WorkOrderStatus.New,
         });
 
+        await _serviceDb.Database.OpenConnectionAsync();
+        await _serviceDb.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         var list = await _workOrders.ListAuthorizedAsync(_scope, propertyId: null, unitId: null, vendorId: null, new ListQuery());
 
         list.Should().ContainSingle();

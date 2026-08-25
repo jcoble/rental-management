@@ -17,23 +17,30 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Covers the receipt-backed mutation contract and verifies recurring-maintenance list work stays
 /// translated to database count, projection, sorting, and paging queries.
 /// </summary>
-public class RecurringMaintenanceTaskServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public class RecurringMaintenanceTaskServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly RecurringMaintenanceTaskService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RecurringMaintenanceTaskService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public RecurringMaintenanceTaskServiceTests()
+    public RecurringMaintenanceTaskServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(RecurringMaintenanceTaskServiceTests));
         _sut = new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     // -----------------------------------------------------------------------
 
@@ -59,6 +66,7 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         SeedTask(property.Id, isActive: true, title: "Active one");
         SeedTask(property.Id, isActive: false, title: "Inactive one");
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         var all = await _sut.ListAuthorizedAsync(_scope, propertyId: null, activeOnly: null, new ListQuery());
         all.Should().HaveCount(2);
 
@@ -83,6 +91,7 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         SeedTask(property.Id, title: "Cedar filters");
         SeedTask(property.Id, title: "Delta filters");
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var result = await _sut.ListPageAuthorizedAsync(_scope, propertyId: null, activeOnly: null, new ListQuery
         {
@@ -126,6 +135,7 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         SeedTask(property.Id, title: "Bravo First Unit", unitId: firstUnit.Id);
         SeedTask(property.Id, title: "Aardvark Second Unit", unitId: secondUnit.Id);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var result = await _sut.ListPageAuthorizedAsync(
             _scope,
@@ -164,9 +174,12 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         task.WorkerClaimQuarantinedAtUtc = DateTime.UtcNow.AddMinutes(-1);
         _ctx.Db.SaveChanges();
 
-        using var services = AtomicDomainTestKernel.CreateForRecurringMaintenance(_ctx.ConnectionString);
+        using var services = AtomicDomainTestKernel.CreateForCoreCrudPostgreSql(_ctx.ConnectionString);
         using var serviceScope = services.CreateScope();
-        var service = serviceScope.ServiceProvider.GetRequiredService<RecurringMaintenanceTaskService>();
+        var service = new RecurringMaintenanceTaskService(
+            serviceScope.ServiceProvider.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
+            TimeProvider.System,
+            serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
 
         var response = operation switch
         {

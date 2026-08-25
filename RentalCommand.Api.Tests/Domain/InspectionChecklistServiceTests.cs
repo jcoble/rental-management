@@ -83,6 +83,15 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
     [Fact]
     public async Task ListTemplates_ReturnsBuiltIns_WithItems()
     {
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         var templates = await _service.ListTemplatesAuthorizedAsync(_scope);
 
         templates.Should().HaveCountGreaterThanOrEqualTo(3);
@@ -107,6 +116,15 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         SeedInspection(property, day1.AddDays(3), "Fourth");
 
         _executedSql.Clear();
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         var page = await _service.ListPageAuthorizedAsync(_scope, property.Id, new ListQuery
         {
             Skip = 2,
@@ -151,6 +169,15 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         created.Items.Select(i => i.SortOrder).Should().BeInAscendingOrder();
 
         // Items are persisted and reachable via GET detail.
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         var detail = await _service.GetAuthorizedAsync(_scope, created.Id);
         detail!.Items.Should().HaveCount(annualTemplate.Items.Count);
     }
@@ -208,6 +235,15 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
 
         (await _service.DeleteItemAuthorizedAsync(_scope, created.Id, second.Id, NextOperationKey())).Should().BeTrue();
 
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         var detail = await _service.GetAuthorizedAsync(_scope, created.Id);
         detail!.Items.Should().ContainSingle();
         detail.Items[0].Id.Should().Be(first.Id);
@@ -336,6 +372,15 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         report.FileSize.Should().BeGreaterThan(0);
 
         // The report is downloadable.
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         var download = await _service.GetReportAuthorizedAsync(_scope, created.Id);
         download.Should().NotBeNull();
         download!.Value.ContentType.Should().Be("application/pdf");

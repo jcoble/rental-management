@@ -13,18 +13,25 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class WorkOrderServiceListTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public class WorkOrderServiceListTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly WorkOrderService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private WorkOrderService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public WorkOrderServiceListTests()
+    public WorkOrderServiceListTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(WorkOrderServiceListTests));
         _sut = new WorkOrderService(
             _ctx.Db,
@@ -35,7 +42,7 @@ public class WorkOrderServiceListTests : IDisposable
             TimeProvider.System);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ListPageAsync_FiltersSortsAndPagesInSql()
@@ -46,6 +53,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("D-400", "West Market Lofts", WorkOrderStatus.New, WorkOrderPriority.High);
         SeedWorkOrder("E-500", "York House", WorkOrderStatus.Completed, WorkOrderPriority.Normal);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
@@ -82,6 +90,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("Closed cancelled", "West Market Lofts", WorkOrderStatus.Cancelled, WorkOrderPriority.Normal);
         SeedWorkOrder("Closed archived", "York House", WorkOrderStatus.Archived, WorkOrderPriority.Normal);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
@@ -111,6 +120,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("High earlier", "Harbor View Apartments", WorkOrderStatus.New, WorkOrderPriority.High, day1.AddDays(2));
         SeedWorkOrder("High oldest", "West Market Lofts", WorkOrderStatus.New, WorkOrderPriority.High, day1.AddDays(1));
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
@@ -141,6 +151,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("April 3", "Harbor View Apartments", WorkOrderStatus.New, WorkOrderPriority.Normal, day1.AddDays(2));
         SeedWorkOrder("April 4", "West Market Lofts", WorkOrderStatus.New, WorkOrderPriority.Normal, day1.AddDays(3));
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
@@ -170,6 +181,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("Completed third", "Elm Ridge Homes", WorkOrderStatus.Completed, WorkOrderPriority.Normal, day1, day1.AddDays(2));
         SeedWorkOrder("Completed second", "Harbor View Apartments", WorkOrderStatus.Completed, WorkOrderPriority.Normal, day1, day1.AddDays(1));
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {

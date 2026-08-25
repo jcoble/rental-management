@@ -1,6 +1,5 @@
 using FluentAssertions;
 using System.Data.Common;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
@@ -14,53 +13,39 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Money;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class ExpenseServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name4)]
+public class ExpenseServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteConnection _conn;
-    private readonly RentalCommandDbContext _db;
-    private readonly ExpenseService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private ExpenseService _sut = null!;
     private readonly List<string> _commands = [];
-    private readonly WorkspaceReadScope _scope;
+    private WorkspaceReadScope _scope;
 
-    public ExpenseServiceTests()
+    public ExpenseServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_commands))
-            .Options;
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        _db = _ctx.Db;
 
-        _db = new ExpenseServiceTestDbContext(options);
-        _db.Database.EnsureCreated();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(ExpenseServiceTests));
 
         _sut = new ExpenseService(
             _db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
     }
 
-    public void Dispose()
-    {
-        _db.Dispose();
-        _conn.Dispose();
-    }
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ListPageAsync_FiltersWorkOrderReceiptsAndPagesInSql()
@@ -73,6 +58,7 @@ public class ExpenseServiceTests : IDisposable
         SeedWorkOrderExpense(otherUnitId, "Other unit", DateTime.UtcNow, 50m);
 
         _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
         var page = await _sut.ListPageAsync(
             _scope,
             propertyId: null,
@@ -114,6 +100,7 @@ public class ExpenseServiceTests : IDisposable
         SeedDirectUnitExpense(unitId, "Feb 5 supply", day1.AddDays(4), 50m);
 
         _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
         var page = await _sut.ListPageAsync(
             _scope,
             propertyId: null,
@@ -150,6 +137,7 @@ public class ExpenseServiceTests : IDisposable
         SeedDirectUnitExpense(unitId, "Paid Mar 2", day1, 30m, dueDate: day1.AddDays(9), paidAt: day1.AddDays(1));
 
         _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
         var paidPage = await _sut.ListPageAsync(
             _scope,
             propertyId: null,
@@ -210,6 +198,7 @@ public class ExpenseServiceTests : IDisposable
 
         _commands.Clear();
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         var result = await _sut.GetAsync(_scope, expense.Id);
 
         result.Should().NotBeNull();
@@ -255,6 +244,7 @@ public class ExpenseServiceTests : IDisposable
         _db.SaveChanges();
 
         _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
         var page = await _sut.ListPageAsync(
             _scope,
             propertyId: null,
@@ -303,6 +293,7 @@ public class ExpenseServiceTests : IDisposable
         await _db.SaveChangesAsync();
 
         _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
         var result = await _sut.GetAsync(_scope, expense.Id);
 
         result.Should().NotBeNull();
@@ -527,9 +518,4 @@ public class ExpenseServiceTests : IDisposable
     {
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
-}
-
-internal sealed class ExpenseServiceTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
-{
-    public ExpenseServiceTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }
