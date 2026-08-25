@@ -5,7 +5,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/time/app_clock.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
-import '../money/money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'payment_detail_screen.dart';
 import 'payments_repository.dart';
 

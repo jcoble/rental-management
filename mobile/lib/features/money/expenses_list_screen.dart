@@ -7,7 +7,7 @@ import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'expense_detail_screen.dart';
 import 'expense_models.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'money_repository.dart';
 
 /// Lists the portfolio's expenses, newest first. Each row opens the expense

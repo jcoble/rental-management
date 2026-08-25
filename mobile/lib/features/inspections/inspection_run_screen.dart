@@ -7,10 +7,10 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../home/mobile_quick_action_fab.dart';
-import 'inspections_list_screen.dart'
-    show InspectionStatusChip, fmtInspectionDate;
+import 'inspections_list_screen.dart' show InspectionStatusChip;
 import 'inspections_models.dart';
 import 'inspections_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 String _mimeFromExtension(String filename) {
   final lower = filename.toLowerCase();
@@ -395,7 +395,7 @@ class _RunBody extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                'Scheduled ${fmtInspectionDate(detail.scheduledFor.toLocal())}',
+                'Scheduled ${dateFmt(detail.scheduledFor.toLocal())}',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: cs.onSurfaceVariant,
                 ),

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../accounting/accounting_models.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 
 /// The plain-English money snapshot card ("money in / out / kept" + who's
 /// behind), shared by the Today dashboard and the Money tab.

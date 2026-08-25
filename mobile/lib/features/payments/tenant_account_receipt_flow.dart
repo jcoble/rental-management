@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
-import '../money/money_format.dart';
+import '../../core/presentation/formatting.dart';
 import '../scan/scan_repository.dart';
 import 'payments_repository.dart';
 import 'payments_screen.dart';

@@ -28,7 +28,7 @@ import '../payments/payment_detail_screen.dart';
 import '../payments/tenant_account_receipt_flow.dart';
 import 'expense_detail_screen.dart';
 import 'expense_form_sheet.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'money_repository.dart';
 import 'overdue_screen.dart';
 import 'transaction_models.dart';

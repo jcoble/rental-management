@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_controller.dart';
-import '../money/money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'accounting_help.dart';
 import 'accounting_help_tip.dart';
 import 'accounting_book_models.dart';

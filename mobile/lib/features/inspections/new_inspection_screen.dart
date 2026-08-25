@@ -3,9 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
-import 'inspections_list_screen.dart' show fmtInspectionDate;
 import 'inspections_models.dart';
 import 'inspections_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 String _fmtIso(DateTime d) =>
     '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -390,7 +390,7 @@ class _DateField extends StatelessWidget {
           labelText: label,
           suffixIcon: const Icon(Icons.calendar_today_outlined, size: 18),
         ),
-        child: Text(fmtInspectionDate(date), style: theme.textTheme.bodyMedium),
+        child: Text(dateFmt(date), style: theme.textTheme.bodyMedium),
       ),
     );
   }

@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/time/app_clock.dart';
 import '../home/mobile_quick_action_fab.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'tenant_ledger_models.dart';
 import 'tenant_ledger_repository.dart';
 

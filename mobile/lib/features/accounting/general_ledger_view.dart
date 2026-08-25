@@ -5,7 +5,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/presentation/plain_english_labels.dart';
 import '../../core/theme/app_tokens.dart';
 import '../home/mobile_domain_chrome.dart';
-import '../money/money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'accounting_book_models.dart';
 import 'accounting_books_repository.dart';
 import 'accounting_help.dart';

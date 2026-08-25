@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import 'property_loans_repository.dart';
+import 'property_labels.dart';
 
 Future<bool> showPropertyLoanFormSheet(
   BuildContext context, {
@@ -282,7 +283,7 @@ class _PropertyLoanFormSheetState
                     .map(
                       (status) => DropdownMenuItem(
                         value: status,
-                        child: Text(_statusLabel(status)),
+                        child: Text(loanStatusLabel(status)),
                       ),
                     )
                     .toList(),
@@ -398,8 +399,3 @@ String _moneyInput(double value) => value == value.roundToDouble()
 String _decimalInput(double value) => value == value.roundToDouble()
     ? value.toStringAsFixed(0)
     : value.toString();
-
-String _statusLabel(String status) => switch (status) {
-  'PaidOff' => 'Paid off',
-  _ => status,
-};

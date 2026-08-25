@@ -13,29 +13,11 @@ import '../home/mobile_quick_action_helpers.dart';
 import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_impact_card.dart';
 import 'deposits_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 String _fmtCurrency(double amount, [String currency = 'USD']) {
   final value = amount.toStringAsFixed(2);
   return currency == 'USD' ? '\$$value' : '$value $currency';
-}
-
-String _fmtDate(DateTime value) {
-  const months = [
-    '',
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-  return '${months[value.month]} ${value.day}, ${value.year}';
 }
 
 String _location(TenantAccountDeposit account) {
@@ -530,7 +512,7 @@ class _DepositDetailSheet extends ConsumerWidget {
           ),
           _InfoRow(
             label: 'Created',
-            value: _fmtDate(account.createdAtUtc.toLocal()),
+            value: dateFmt(account.createdAtUtc.toLocal()),
           ),
           const SizedBox(height: 20),
           AccountingImpactCard(
@@ -1079,7 +1061,7 @@ class _DateField extends StatelessWidget {
   Widget build(BuildContext context) => ListTile(
     contentPadding: EdgeInsets.zero,
     title: const Text('Effective date'),
-    subtitle: Text(_fmtDate(value)),
+    subtitle: Text(dateFmt(value)),
     trailing: const Icon(Icons.calendar_today_outlined),
     onTap: () async {
       final selected = await showDatePicker(

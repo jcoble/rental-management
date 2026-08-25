@@ -10,7 +10,7 @@ import '../../core/files/document_opener.dart';
 import '../../core/theme/app_recipes.dart';
 import '../accounting/accounting_help.dart';
 import '../accounting/accounting_help_tip.dart';
-import '../money/money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'tenant_portal_repository.dart';
 
 typedef TenantStatementSharer =
@@ -585,7 +585,7 @@ class _BalanceHeader extends StatelessWidget {
                     : _signedMoney(account.nextDueAmount, account.currency),
                 detail: account.nextDueOn == null
                     ? null
-                    : _shortDate(account.nextDueOn!),
+                    : dateFmt(account.nextDueOn!),
               ),
               _BalanceMetric(
                 key: const Key('tenant-portal-deposit-held'),
@@ -694,7 +694,7 @@ class _HistoryCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _shortDate(entry.effectiveOn),
+                      dateFmt(entry.effectiveOn),
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: scheme.onSurfaceVariant,
                       ),
@@ -1063,7 +1063,7 @@ String tenantPortalStatementHtml({
     )
     ..writeln('</dl>')
     ..writeln(
-      '<p>${history.periodFrom == null ? 'Account opening' : _shortDate(history.periodFrom!)} – ${_shortDate(history.periodTo)}</p>',
+      '<p>${history.periodFrom == null ? 'Account opening' : dateFmt(history.periodFrom!)} – ${dateFmt(history.periodTo)}</p>',
     )
     ..writeln(
       '<table><thead><tr><th>Date</th><th>What happened</th><th>Amount</th><th>Balance</th></tr></thead><tbody>',
@@ -1076,7 +1076,7 @@ String tenantPortalStatementHtml({
   } else {
     for (final entry in history.items) {
       statement.writeln(
-        '<tr><td>${_shortDate(entry.effectiveOn)}</td>'
+        '<tr><td>${dateFmt(entry.effectiveOn)}</td>'
         '<td>${tenantPortalLedgerLabel(entry)}</td>'
         '<td>${escape.convert(_signedMoney(entry.signedAmount, history.currency))}</td>'
         '<td>${escape.convert(_signedMoney(entry.runningBalance, history.currency))}</td></tr>',
@@ -1111,5 +1111,3 @@ String _signedMoney(num value, String currency) {
       : '${currency.trim()} ${amount.substring(1)}';
   return value < 0 ? '−$display' : display;
 }
-
-String _shortDate(DateTime date) => dateFmt(date);

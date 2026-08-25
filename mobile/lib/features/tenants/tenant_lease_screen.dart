@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
-import '../money/money_format.dart';
+import '../../core/presentation/formatting.dart';
 import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_portal_repository.dart';
 

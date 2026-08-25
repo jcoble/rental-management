@@ -65,6 +65,7 @@ import 'mobile_quick_action_helpers.dart';
 import 'mobile_role_shell.dart';
 import 'mobile_shell_actions.dart';
 import 'owner_landing_screen.dart';
+import '../../core/presentation/formatting.dart';
 
 Future<void> _openGoLiveSheetAndRefreshHome(
   BuildContext context,
@@ -1564,7 +1565,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
                   title: 'Next due',
                   value: account?.nextDueOn == null
                       ? 'None'
-                      : _shortDate(account!.nextDueOn!),
+                      : shortDateFmt(account!.nextDueOn!),
                   subtitle: account?.nextDueOn == null
                       ? (accountId == null
                             ? 'Choose an account'
@@ -1700,7 +1701,7 @@ class _PayItemCard extends StatelessWidget {
         ? 'Past due'
         : charge.dueOn == null
         ? 'No due date'
-        : 'Due ${_shortDate(charge.dueOn!)}';
+        : 'Due ${shortDateFmt(charge.dueOn!)}';
 
     return Card(
       child: Padding(
@@ -1893,25 +1894,6 @@ class _AutopayCard extends StatelessWidget {
       ),
     );
   }
-}
-
-String _shortDate(DateTime date) {
-  const months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-  if (date.year <= 1) return '';
-  return '${months[date.month - 1]} ${date.day}';
 }
 
 class _TenantAccountLeaseTab extends StatelessWidget {

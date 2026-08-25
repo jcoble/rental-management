@@ -8,7 +8,7 @@ import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_impact_card.dart';
 import '../properties/capital_assets_repository.dart';
 import 'expense_models.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'money_repository.dart';
 import 'receipt_attachment_repository.dart';
 import 'receipt_upload_sheet.dart';
