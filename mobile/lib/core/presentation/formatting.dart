@@ -1,5 +1,5 @@
-/// Shared money and date formatting for the whole app: the thousands-separated
-/// `$1,234.56` money style and the `Mar 3, 2026` date style.
+// Shared money and date formatting for the whole app: the thousands-separated
+// `$1,234.56` money style and the `Mar 3, 2026` date style.
 
 /// Month abbreviations indexed by month number (1–12); index 0 is unused.
 const monthAbbrs = [
