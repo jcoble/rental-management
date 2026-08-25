@@ -9,7 +9,7 @@ import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_impact_card.dart';
 import '../activity/activity_history_screen.dart';
 import '../home/mobile_quick_action_fab.dart';
-import '../money/money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'payments_repository.dart';
 
 final paymentDetailProvider = FutureProvider.autoDispose

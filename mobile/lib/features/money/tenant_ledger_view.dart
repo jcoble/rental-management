@@ -9,7 +9,7 @@ import '../accounting/accounting_help.dart';
 import '../accounting/accounting_help_tip.dart';
 import '../deposits/deposits_repository.dart';
 import '../units/units_repository.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'one_time_charge_sheet.dart';
 import 'record_payment_sheet.dart';
 import 'recurring_charge_sheet.dart';

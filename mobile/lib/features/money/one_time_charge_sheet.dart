@@ -8,7 +8,7 @@ import '../accounting/accounting_books_repository.dart';
 import '../accounting/accounting_help.dart';
 import '../accounting/accounting_help_tip.dart';
 import '../home/mobile_quick_action_fab.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'tenant_ledger_models.dart';
 import 'tenant_ledger_repository.dart';
 

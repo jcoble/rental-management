@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:rental_command/core/presentation/date_labels.dart';
+import 'package:rental_command/core/presentation/formatting.dart';
 
 void main() {
   test('canonical year-month values use understandable short month labels', () {

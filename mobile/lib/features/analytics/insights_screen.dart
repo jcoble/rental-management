@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/presentation/date_labels.dart';
+import '../../core/presentation/formatting.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'analytics_repository.dart';
 

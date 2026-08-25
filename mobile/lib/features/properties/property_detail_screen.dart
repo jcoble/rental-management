@@ -11,7 +11,7 @@ import '../../core/auth/mobile_access_policy.dart';
 import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_impact_card.dart';
 import '../activity/activity_history_screen.dart';
-import '../money/money_format.dart' as money;
+import '../../core/presentation/formatting.dart' as money;
 import '../scan/scan_capture.dart';
 import '../scan/scan_review_screen.dart';
 import '../units/unit_command_center_screen.dart';

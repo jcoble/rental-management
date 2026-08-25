@@ -10,7 +10,7 @@ import '../../core/files/document_opener.dart';
 import '../../core/theme/app_recipes.dart';
 import '../accounting/accounting_help.dart';
 import '../accounting/accounting_help_tip.dart';
-import '../money/money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'tenant_portal_repository.dart';
 
 typedef TenantStatementSharer =
