@@ -756,7 +756,7 @@ class _FinancialEffectsEditor extends StatelessWidget {
             child: ListTile(
               title: Text(effects[index].description),
               subtitle: Text(
-                '${_effectTypeLabel(effects[index].effectType)} · '
+                '${leaseEffectTypeLabel(effects[index].effectType)} · '
                 '${effects[index].currency} ${effects[index].amount.toStringAsFixed(2)}\n'
                 '${effects[index].chargeCode}',
               ),
@@ -930,7 +930,7 @@ class _FinancialEffectSheetState extends State<_FinancialEffectSheet> {
                 for (final type in _types)
                   DropdownMenuItem(
                     value: type,
-                    child: Text(_effectTypeLabel(type)),
+                    child: Text(leaseEffectTypeLabel(type)),
                   ),
               ],
               onChanged: (value) {
@@ -1013,7 +1013,7 @@ class _FinancialEffectSheetState extends State<_FinancialEffectSheet> {
   );
 }
 
-String _effectTypeLabel(String value) => switch (value) {
+String leaseEffectTypeLabel(String value) => switch (value) {
   'RecurringRentDelta' => 'Recurring rent change',
   'OneTimeCharge' => 'One-time charge',
   'DepositObligationDelta' => 'Deposit obligation change',

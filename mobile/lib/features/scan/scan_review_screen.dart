@@ -21,6 +21,7 @@ import 'scan_models.dart';
 import 'scan_repository.dart';
 import 'scan_target_options.dart';
 import '../../core/presentation/formatting.dart';
+import '../properties/property_labels.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -4142,12 +4143,6 @@ String _formatDate(DateTime value) {
   return '${value.year}-$month-$day';
 }
 
-String _loanPaymentStatusLabel(String status) => switch (status) {
-  'Paid' => 'Paid',
-  'Scheduled' => 'Scheduled',
-  _ => status,
-};
-
 class _LoanReviewModeSection extends StatelessWidget {
   const _LoanReviewModeSection({
     required this.mode,
@@ -4413,7 +4408,7 @@ class _ExistingLoanPaymentPicker extends ConsumerWidget {
                             (payment) => DropdownMenuItem(
                               value: payment.id,
                               child: Text(
-                                '${_formatDate(payment.dueDate)} - ${moneyFmt(payment.totalAmount)} total - ${_loanPaymentStatusLabel(payment.status)}',
+                                '${_formatDate(payment.dueDate)} - ${moneyFmt(payment.totalAmount)} total - ${loanPaymentStatusLabel(payment.status)}',
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -4724,7 +4719,7 @@ class _LoanPaymentSummary extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Due ${_formatDate(payment.dueDate)} - ${_loanPaymentStatusLabel(payment.status)}',
+              'Due ${_formatDate(payment.dueDate)} - ${loanPaymentStatusLabel(payment.status)}',
               style: theme.textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.w600,
               ),

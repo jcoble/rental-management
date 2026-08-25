@@ -41,3 +41,11 @@ unit_command_center (`Not set` guard), scan_list, property_documents, team, leas
 leases_list, lease_detail, addendum_action_sheets, owner_landing; owner_reports `_fmtMonth`;
 tenant_notices `_shortDate` (date + time); scan_review `_formatDate` (ISO `yyyy-MM-dd`);
 and every ISO serializer (`_dateOnly`, `_fmtIso`, `_dateInput`, `_dateOnlyQuery`).
+
+### Item 4 — duplicate label switches
+- `_effectTypeLabel`: one copy left, now `leaseEffectTypeLabel` in
+  `leases/addendum_action_sheets.dart`; successor_agreement_sheet imports it.
+- `_loanPaymentStatusLabel` and the `PaidOff -> 'Paid off'` switch: both now live in
+  `properties/property_labels.dart` as `loanPaymentStatusLabel` and `loanStatusLabel`;
+  property_detail_screen, property_loan_form_sheet and scan_review_screen import them.
+- Left alone as out of scope: the wider `plainEnglishLabel` sweep.

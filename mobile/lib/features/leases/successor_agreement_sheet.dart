@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/lease.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import 'leases_repository.dart';
+import 'addendum_action_sheets.dart';
 
 enum LeaseSuccessorOperation { correction, restatement, renewal, monthToMonth }
 
@@ -406,7 +407,7 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
                       contentPadding: EdgeInsets.zero,
                       dense: true,
                       title: Text(
-                        '${_effectTypeLabel(effect.effectType)} · '
+                        '${leaseEffectTypeLabel(effect.effectType)} · '
                         '${effect.currency} ${effect.amount.toStringAsFixed(2)}',
                       ),
                       subtitle: Text(
@@ -587,13 +588,6 @@ String _purposeLabel(String purpose) => switch (purpose) {
   'Rules' => 'Rules',
   'Other' => 'Other',
   _ => purpose,
-};
-
-String _effectTypeLabel(String effectType) => switch (effectType) {
-  'RecurringRentDelta' => 'Recurring rent change',
-  'OneTimeCharge' => 'One-time charge',
-  'DepositObligationDelta' => 'Deposit obligation change',
-  _ => effectType,
 };
 
 String _effectDates(LeaseAgreementRenewalFinancialEffectSummary effect) {

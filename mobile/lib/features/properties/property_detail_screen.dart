@@ -1887,7 +1887,7 @@ class _LoanTileState extends ConsumerState<_LoanTile> {
             subtitle: Text(
               '${money.moneyFmt(loan.currentBalance, whole: true)} balance  ·  '
               '${money.moneyFmt(loan.monthlyPrincipalInterest + loan.monthlyEscrow, whole: true)}/mo  ·  '
-              '${_loanStatusLabel(loan.status)}',
+              '${loanStatusLabel(loan.status)}',
               style: TextStyle(
                 fontSize: 12,
                 color: colorScheme.onSurfaceVariant,
@@ -2101,7 +2101,7 @@ class _LoanPaymentRow extends StatelessWidget {
                 ),
               ),
               Text(
-                _loanPaymentStatusLabel(payment.status),
+                loanPaymentStatusLabel(payment.status),
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: statusColor,
                   fontWeight: FontWeight.w600,
@@ -2204,17 +2204,6 @@ class _ScheduleMetric extends StatelessWidget {
     );
   }
 }
-
-String _loanStatusLabel(String status) => switch (status) {
-  'PaidOff' => 'Paid off',
-  _ => status,
-};
-
-String _loanPaymentStatusLabel(String status) => switch (status) {
-  'Paid' => 'Paid',
-  'Scheduled' => 'Scheduled',
-  _ => status,
-};
 
 String _decimalLabel(double value) => value == value.roundToDouble()
     ? value.toStringAsFixed(0)
