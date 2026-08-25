@@ -39,7 +39,7 @@ String moneyFmt(num amount, {bool whole = false}) {
     buf.write(intPart[i]);
   }
   final cents = decPart == null ? '' : '.$decPart';
-  return '\$${isNegative ? '-' : ''}$buf$cents';
+  return '${isNegative ? '-' : ''}\$$buf$cents';
 }
 
 /// `Mar 3, 2026`

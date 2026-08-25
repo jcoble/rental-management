@@ -4,7 +4,7 @@ import 'package:rental_command/core/presentation/formatting.dart';
 void main() {
   test('money shows cents by default and whole dollars on request', () {
     expect(moneyFmt(1234.5), r'$1,234.50');
-    expect(moneyFmt(-1234.5), r'$-1,234.50');
+    expect(moneyFmt(-1234.5), r'-$1,234.50');
     expect(moneyFmt(1200, whole: true), r'$1,200');
     expect(moneyFmt(1234.56, whole: true), r'$1,235');
   });
