@@ -58,6 +58,11 @@
 	const loansTotalCount = $derived(loansQuery.data?.totalCount ?? 0);
 
 
+	/** Loan dates come from free-form rows; show nothing when the value is not a real date. */
+	function fmtDate(value: string): string {
+		return isNaN(new Date(value).getTime()) ? '' : formatDateOnly(value);
+	}
+
 	const statusOptions = [
 		{ value: 'Active', label: 'Active' },
 		{ value: 'PaidOff', label: 'Paid off' },
@@ -361,7 +366,7 @@
 							{#each scheduleRows as row (row.id)}
 								<tr class="border-t border-border/60">
 									<td class="py-1 pr-3">{row.periodKey}</td>
-									<td class="py-1 pr-3">{formatDateOnly(row.dueDate)}</td>
+									<td class="py-1 pr-3">{fmtDate(row.dueDate)}</td>
 									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.interestAmount)}</td>
 									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.principalAmount)}</td>
 									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.escrowAmount)}</td>
@@ -369,7 +374,7 @@
 									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.balanceAfter)}</td>
 									<td class="py-1 text-right">
 										{#if row.status === 'Paid'}
-											<span class="font-medium text-success">Paid {row.paidDate ? formatDateOnly(row.paidDate) : ''}</span>
+											<span class="font-medium text-success">Paid {row.paidDate ? fmtDate(row.paidDate) : ''}</span>
 										{:else if canManage}
 											<Button
 												variant="outline"

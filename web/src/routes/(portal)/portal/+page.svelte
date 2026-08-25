@@ -28,7 +28,6 @@
 		AlertTriangle,
 		ClipboardList
 	} from '@lucide/svelte';
-	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const queryClient = useQueryClient();
 	const authState = getAuthState();
@@ -172,7 +171,8 @@
 	}
 
 	function money(value: number | string | null | undefined, currency = 'USD') {
-		return formatAccountingCurrency(Number(value ?? 0), currency);
+		const amount = Number(value ?? 0);
+		return amount.toLocaleString(undefined, { style: 'currency', currency });
 	}
 
 	function date(value: string | null | undefined) {

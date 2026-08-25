@@ -8,7 +8,6 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { formatLeaseAnswerText } from '$lib/portal/lease-answer-display';
 	import { formatDateOnly } from '$lib/utils/date';
-	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const leasesQuery = createQuery(() => ({ queryKey: ['portal-lease-page'], queryFn: () => portal.leases() }));
 
@@ -17,7 +16,7 @@
 	const primaryLease = $derived(leasesQuery.data?.[0]);
 
 	function money(value: number | string | null | undefined) {
-		return formatAccountingCurrency(Number(value ?? 0));
+		return Number(value ?? 0).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
 	}
 
 	// --- "Ask This Lease" Q&A (grounded in the tenant's own lease) ---

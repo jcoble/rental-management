@@ -145,3 +145,38 @@ Tests changed in this lane:
   and its one assertion, because that helper is deleted (rule a).
 - `src/lib/leases/lease-action-hub-contract.test.ts:96` — the source-text assertion now looks for
   `formatAccountingCurrency(summary.baseRentAmount)` instead of the deleted `money(...)` (rule a).
+
+## Rework — restore identical output at the four review sites
+
+Review returned REWORK: four places where swapping in the canonical formatter changed what the
+page shows. Each is restored at the site only; `formatAccountingCurrency`, `formatDate` and
+`formatDateOnly` are untouched.
+
+1. Variable-currency amounts — the canonical formatter pins two fraction digits, so a JPY or KWD
+   amount rendered with the wrong number of decimals. Restored the prior local `money` helper
+   (plain `Intl.NumberFormat('en-US', { style: 'currency', currency })`, digits left to Intl):
+   - `web/src/lib/components/records/PaymentDetail.svelte` (hero amount, correction amount)
+   - `web/src/routes/(protected)/deposits/[id]/+page.svelte` (held/received/deductions/refunded
+     and the two dialog descriptions)
+2. Portal currency — restored viewer-locale `toLocaleString(undefined, …)` in the local `money`
+   helper on `web/src/routes/(portal)/portal/+page.svelte` and
+   `web/src/routes/(portal)/portal/lease/+page.svelte`.
+3. Document dates — restored the local `formatDate` using `toLocaleDateString(undefined, …)` in
+   `web/src/lib/components/shared/DocumentsPanel.svelte`; that file is now byte-identical to main.
+4. Defensive date guards — `formatDateOnly` returns the raw string for an unparseable value, while
+   the prior helpers returned `''`. Added a two-line local guard that returns `''` and otherwise
+   delegates to `formatDateOnly`:
+   - `web/src/lib/components/property/PropertyLoansSection.svelte` `fmtDate` (loan schedule due and
+     paid dates)
+   - `web/src/routes/(protected)/properties/[id]/+page.svelte` `fmtDateOnly` (in-service date, both
+     render sites)
+
+No tests changed in the rework. `rg -c "style: 'currency'" web/src` now lists five files: the
+canonical `accounting-display.ts` plus the four variable-currency / viewer-locale sites restored
+above, which the rework spec expected.
+
+| Command | Exit |
+|---|---|
+| `pnpm --dir web check` | 0 (5623 files, 0 errors, 18 pre-existing warnings) |
+| `pnpm --dir web check:native` | 0 |
+| `pnpm --dir web test` | 1 — 886 tests, 881 pass, 5 fail, the same five pre-existing failures |

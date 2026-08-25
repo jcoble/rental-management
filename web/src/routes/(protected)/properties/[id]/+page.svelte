@@ -180,6 +180,11 @@
 	let selectedOwnerLabel = $state<string | null>(null);
 	let initialOwnerEntityId = $state('');
 
+	/** Show nothing rather than the raw value when the stored date is not a real date. */
+	function fmtDateOnly(value: string): string {
+		return isNaN(new Date(value).getTime()) ? '' : formatDateOnly(value);
+	}
+
 	function ownershipLabel(ownerships: Property['ownerships']): string {
 		if (ownerships.length === 0) return 'No owner assigned';
 		return ownerships
@@ -782,7 +787,7 @@
 			<DetailCard title="Tax basis" icon={Info} accent="muted" testid="property-detail-tax-basis-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? formatAccountingCurrency(property.purchasePrice) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.purchasePrice} testid="property-detail-purchase-price" morphName="vt-prop-purchase-price" />
 				<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? formatAccountingCurrency(property.landValue) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.landValue} testid="property-detail-land-value" morphName="vt-prop-land-value" />
-				{@render inlineFieldWrap('property-detail-in-service-date', 'In-service date', property.inServiceDate ? formatDateOnly(property.inServiceDate) : '—', propertyFormErrors.inServiceDate, propertyInServiceDateControl, editingProperty, 'vt-prop-in-service-date', true)}
+				{@render inlineFieldWrap('property-detail-in-service-date', 'In-service date', property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—', propertyFormErrors.inServiceDate, propertyInServiceDateControl, editingProperty, 'vt-prop-in-service-date', true)}
 				<InlineField label="Manual annual depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={property.manualAnnualDepreciation != null ? formatAccountingCurrency(property.manualAnnualDepreciation) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.manualAnnualDepreciation} testid="property-detail-manual-depreciation" morphName="vt-prop-manual-depreciation" />
 				<InlineField label="Accumulated depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={formatAccountingCurrency(property.accumulatedDepreciation ?? 0)} editing={false} type="number" testid="property-detail-accumulated-depreciation" class="sm:col-span-2" morphName="vt-prop-accumulated-depreciation" />
 			</DetailCard>
@@ -893,7 +898,7 @@
 				>
 					<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? formatAccountingCurrency(property.purchasePrice) : '—'} editing={false} type="number" testid="property-basis-purchase-price" />
 					<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? formatAccountingCurrency(property.landValue) : '—'} editing={false} type="number" testid="property-basis-land-value" />
-					<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? formatDateOnly(property.inServiceDate) : '—'} editing={false} testid="property-basis-in-service" />
+					<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={false} testid="property-basis-in-service" />
 					<InlineField label="Accumulated depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={formatAccountingCurrency(property.accumulatedDepreciation ?? 0)} editing={false} type="number" testid="property-basis-accumulated" />
 				</DetailCard>
 			</div>
