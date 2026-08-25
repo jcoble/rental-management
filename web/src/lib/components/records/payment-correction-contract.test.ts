@@ -10,7 +10,7 @@ import type {
 	RefundTenantPaymentRequest,
 	TenantMoneyCommandResponse,
 	TenantPaymentRefundResult
-} from '../../api/endpoints/payments.ts';
+} from '../../api/endpoints/tenant-money.ts';
 
 const clientStub =
 	'data:text/javascript,export const api={get(){throw new Error("API calls are not expected in this pure contract test")}};export function fetchApi(){throw new Error("API calls are not expected in this pure contract test")}';
@@ -19,7 +19,7 @@ registerHooks({
 	resolve(specifier, context, nextResolve) {
 		if (
 			specifier === '../client' &&
-			context.parentURL?.endsWith('/api/endpoints/payments.ts')
+			context.parentURL?.endsWith('/api/endpoints/tenant-money.ts')
 		) {
 			return { url: clientStub, shortCircuit: true };
 		}
@@ -31,7 +31,7 @@ const {
 	buildTenantPaymentRefundRequest,
 	isTenantPaymentRefundConflict,
 	linkedTenantPaymentRefund
-} = await import('../../api/endpoints/payments.ts');
+} = await import('../../api/endpoints/tenant-money.ts');
 
 const originalReceipt = {
 	tenantAccountId: 41,

@@ -44,7 +44,7 @@ describe("Who's behind canonical paging contract", () => {
       pageSource,
       /accounting\.pastDue\(\{ skip, take: PAGE_SIZE \}\)/
     );
-    assert.match(pageSource, /payments\.recordReceipt\(lease\.tenantAccountId/);
+    assert.match(pageSource, /tenantMoney\.recordReceipt\(lease\.tenantAccountId/);
     assert.match(pageSource, /targetChargeEntryId: null/);
     assert.match(pageSource, /amount: data\.amount/);
     assert.match(pageSource, /allocateOldestCharges: true/);

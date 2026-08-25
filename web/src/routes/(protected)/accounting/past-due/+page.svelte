@@ -12,7 +12,7 @@
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { accounting } from '$lib/api/endpoints/accounting';
-	import { payments } from '$lib/api/endpoints/payments';
+	import { tenantMoney } from '$lib/api/endpoints/tenant-money';
 	import type { PastDueLease } from '$lib/types';
 	import { loadAllOpenCharges } from '$lib/accounting/past-due-preview';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -118,7 +118,7 @@
 	const markPaidMutation = createMutation(() => ({
 		mutationFn: async ({ lease, data }: { lease: PastDueLease; data: PastDuePaymentSubmission }) => {
 			receiptOperationKey ??= crypto.randomUUID();
-			return payments.recordReceipt(lease.tenantAccountId, receiptOperationKey, {
+			return tenantMoney.recordReceipt(lease.tenantAccountId, receiptOperationKey, {
 				amount: data.amount,
 				effectiveOn: data.paidDate,
 				description: data.notes || `Payment for ${lease.relationshipNumber || 'tenant account'}`,
