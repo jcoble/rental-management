@@ -89,7 +89,7 @@ export const actions: Actions = {
 				const errorMessage =
 					typeof rawError === 'string'
 						? rawError
-						: (rawError as { message?: string } | undefined)?.message ?? result.error;
+						: (rawError as { message?: string } | undefined)?.message ?? 'Login failed';
 				// The API marks an unverified-email login with an EMAIL_NOT_VERIFIED: prefix. Surface a
 				// clean boolean (and keep the email) so the page can offer a "resend verification" action
 				// instead of just printing the raw marker string.

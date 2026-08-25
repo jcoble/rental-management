@@ -41,7 +41,7 @@ export const load: PageServerLoad = async ({ url }) => {
 				typeof rawError === 'string'
 					? rawError
 					: (rawError as { message?: string } | undefined)?.message;
-			return { success: false, error: message || 'Verification failed.' };
+			return { success: false, error: message || 'Verification failed' };
 		}
 
 		return { success: true, message: result.data?.message ?? 'Email verified.' };

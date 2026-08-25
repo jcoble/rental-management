@@ -100,7 +100,7 @@ export const actions: Actions = {
 				const details =
 					typeof errorData.details === 'string' ? errorData.details : undefined;
 				return fail(result.status, {
-					error: message || 'Registration failed. Please try again.',
+					error: message || 'Registration failed',
 					details,
 					displayName,
 					email

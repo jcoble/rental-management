@@ -70,7 +70,7 @@ export const actions: Actions = {
 						? rawError
 						: (rawError as { message?: string } | undefined)?.message;
 				return fail(result.status, {
-					error: message || 'Password reset failed. The link may have expired.',
+					error: message || 'Password reset failed',
 					reset: false
 				});
 			}
