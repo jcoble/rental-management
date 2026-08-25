@@ -76,6 +76,21 @@ public class RecurringMaintenanceTaskServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetAuthorizedAsync_ProjectsAutomationFailureReason()
+    {
+        var property = SeedProperty();
+        var task = SeedTask(property.Id);
+        task.WorkerClaimLastFailureReason = "Safe automation failure";
+        _ctx.Db.SaveChanges();
+
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var response = await _sut.GetAuthorizedAsync(_scope, task.Id);
+
+        response.Should().NotBeNull();
+        response!.AutomationFailureReason.Should().Be("Safe automation failure");
+    }
+
+    [Fact]
     public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
     {
         var property = SeedProperty();

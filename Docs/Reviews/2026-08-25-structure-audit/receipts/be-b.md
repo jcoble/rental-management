@@ -293,3 +293,7 @@ branch was created, renamed, or removed.
 - Read-only main isolation check for the vendor and three sandbox failures — exit 1:
   vendor failed with the same sub-microsecond PostgreSQL truncation; the three sandbox tests passed
   in that isolated run, although all three are recorded in the supplied pre-rework full-suite log.
+
+- Review fix — restored PostgreSQL coverage of the authorized recurring-maintenance read projection
+  for a non-null `AutomationFailureReason`; solution build, 7 filtered API tests, and 109 engine
+  tests passed, and the build servers shut down successfully. Commit: this commit.
