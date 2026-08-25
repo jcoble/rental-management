@@ -4,7 +4,6 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -64,7 +63,6 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<CompanionFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -1753,7 +1751,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
     {
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         object outcome = command switch
         {
             PostTenantChargeCommand value => await RunPostCharge(value, new PostTenantChargeRule(db)),

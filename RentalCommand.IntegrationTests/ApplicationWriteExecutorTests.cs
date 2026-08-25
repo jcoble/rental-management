@@ -10,7 +10,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Applications;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -51,7 +50,7 @@ public sealed class ApplicationWriteExecutorTests : IAsyncLifetime
         await using var services = BuildServices();
         await using var serviceScope = services.CreateAsyncScope();
         var service = serviceScope.ServiceProvider.GetRequiredService<ApplicationService>();
-        var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
         _locks.Expect(scope);
         var updated = await service.UpdateAuthorizedAsync(
@@ -197,7 +196,7 @@ public sealed class ApplicationWriteExecutorTests : IAsyncLifetime
         await using var serviceScope = services.CreateAsyncScope();
         var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var service = serviceScope.ServiceProvider.GetRequiredService<ApplicationService>();
-        var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
         (await service.UpdateAuthorizedAsync(scope, application.Id, scopedRequest,
             scope.UserId, "legacy-application ")).Should().NotBeNull();
@@ -232,7 +231,6 @@ public sealed class ApplicationWriteExecutorTests : IAsyncLifetime
         services.AddSingleton(Mock.Of<IAuditTrailService>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<ApplicationService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString)

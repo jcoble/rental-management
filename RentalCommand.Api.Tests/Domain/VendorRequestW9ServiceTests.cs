@@ -6,7 +6,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -43,7 +42,6 @@ public sealed class VendorRequestW9ServiceTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_ctx.ConnectionString)
                 .AddInterceptors(new RequestGucConnectionInterceptor(_scope))
@@ -61,7 +59,7 @@ public sealed class VendorRequestW9ServiceTests : IAsyncLifetime
         _services.GetRequiredService<RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
         TimeProvider.System,
-        _services.GetRequiredService<IRequestWriteExecutor>());
+        _services.GetRequiredService<IWriteExecutor>());
 
     private Vendor SeedVendor(string? phone)
     {

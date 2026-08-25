@@ -366,7 +366,7 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
         new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-        services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+        services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
 
     private async Task<int> CountAppointmentNotificationsAsync(int appointmentId, string type)
     {

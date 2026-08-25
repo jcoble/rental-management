@@ -14,7 +14,6 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
 using RentalCommand.Data.Scanning;
-using RentalCommand.Engine.Writes;
 using RentalCommand.Engine.Workers;
 using RentalCommand.TestCommon;
 
@@ -56,7 +55,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         // DbContext over the one shared in-memory connection — matching production scoping.
         services.AddScoped<RentalCommandDbContext>(_ => new ScanTestDbContext(options));
         services.AddScoped<IScanProcessingClaimStore, TestScanProcessingClaimStore>();
-        services.AddScoped<IJobStepWriteExecutor, TestJobStepWriteExecutor>();
+        services.AddScoped<IWriteExecutor, TestJobStepWriteExecutor>();
         services.AddSingleton<ILlmProvider>(_llm);
         services.AddSingleton<IWorkspaceLlmExtractionProvider>(_llm);
         services.AddSingleton<IWorkspaceLlmCredentialResolver>(_credentials);
@@ -791,9 +790,9 @@ public class ScanProcessingWorkerFailureTests : IDisposable
 
     /// <summary>
     /// SQLite substitute for the PostgreSQL terminal-write callback. The worker still constructs and
-    /// submits the real command through IJobStepWriteExecutor; only the provider-specific SQL is replaced.
+    /// submits the real command through IWriteExecutor; only the provider-specific SQL is replaced.
     /// </summary>
-    private sealed class TestJobStepWriteExecutor(RentalCommandDbContext db) : IJobStepWriteExecutor
+    private sealed class TestJobStepWriteExecutor(RentalCommandDbContext db) : IWriteExecutor
     {
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string stepKey,

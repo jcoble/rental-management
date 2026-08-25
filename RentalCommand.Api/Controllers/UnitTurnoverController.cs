@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data;
@@ -15,12 +14,12 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class UnitTurnoverController : ManagementControllerBase
 {
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
 
     public UnitTurnoverController(
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         RentalCommandDbContext db,
         TimeProvider timeProvider)
     {

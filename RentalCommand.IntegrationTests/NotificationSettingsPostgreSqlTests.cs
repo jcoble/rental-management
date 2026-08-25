@@ -7,7 +7,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -522,7 +521,6 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(outboxFailure);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<NotificationFoundationService>();
         services.AddScoped<DeviceService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>

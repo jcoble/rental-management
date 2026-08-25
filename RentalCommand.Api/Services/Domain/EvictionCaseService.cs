@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -20,10 +19,10 @@ public class EvictionCaseService : IEvictionCaseService
     private static readonly string[] ReadCapabilities = [CapabilityKeys.RentalsRead];
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
 
     public EvictionCaseService(RentalCommandDbContext db, IDataUpdateService dataUpdate,
-        TimeProvider timeProvider, IRequestWriteExecutor? writes = null)
+        TimeProvider timeProvider, IWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
@@ -84,7 +83,7 @@ public class EvictionCaseService : IEvictionCaseService
             request.RespondentLeaseManagementPartyIds.ToArray(), request.Status,
             request.FiledOnDate?.ToUtc(), request.HearingDate?.ToUtc(), request.CourtName,
             request.CaseNumber, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             EvictionCrudWriteSupport.IdempotencyKey(idempotencyKey),
             EvictionCrudWriteSupport.Write(command, CreateEvictionCaseAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
@@ -98,7 +97,7 @@ public class EvictionCaseService : IEvictionCaseService
             scope.PortfolioId, Actor(scope), id, request.Status, request.FiledOnDate?.ToUtc(),
             request.HearingDate?.ToUtc(), request.ResolvedOnDate?.ToUtc(), request.CourtName,
             request.CaseNumber, request.Resolution, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             EvictionCrudWriteSupport.IdempotencyKey(idempotencyKey),
             EvictionCrudWriteSupport.Write(command, UpdateEvictionCaseAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
@@ -111,7 +110,7 @@ public class EvictionCaseService : IEvictionCaseService
         var command = new AddEvictionCaseEventCommand(
             scope.PortfolioId, Actor(scope), id, request.EventType, request.EventDate.ToUtc(),
             request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             EvictionCrudWriteSupport.IdempotencyKey(idempotencyKey),
             EvictionCrudWriteSupport.Write(command, AddEvictionCaseEventAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
@@ -122,7 +121,7 @@ public class EvictionCaseService : IEvictionCaseService
     {
         var command = new DeleteEvictionCaseCommand(
             scope.PortfolioId, Actor(scope), id, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             EvictionCrudWriteSupport.IdempotencyKey(idempotencyKey),
             EvictionCrudWriteSupport.Write(command, DeleteEvictionCaseAsync, AuthorizeReplayAsync), ct);
         return outcome.Value.Outcome == OperationMutationOutcome.Applied;
@@ -159,9 +158,6 @@ public class EvictionCaseService : IEvictionCaseService
     private Task AuthorizeReplayAsync(
         DeleteEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         DeleteEvictionCaseRule.AuthorizeAsync(_db, command, context, ct);
-
-    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
-        "The shared request write executor is required for eviction case changes.");
 
     private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
         scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);

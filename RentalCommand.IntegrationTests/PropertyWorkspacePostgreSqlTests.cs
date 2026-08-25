@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -134,7 +133,7 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
         _commands.Clear();
         var unitPage = await unitService.ListWithHealthPageAsync(scope, new UnitHealthListQuery
         {
@@ -161,7 +160,8 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
             Mock.Of<IMessagePublisher>(),
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
         var workOrderPage = await workOrderService.ListPageAuthorizedAsync(
             scope,
@@ -185,7 +185,7 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
             _context.Db,
             Mock.Of<IFileStorage>(),
             TimeProvider.System,
-            Mock.Of<IRequestWriteExecutor>());
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
         var expensePage = await expenseService.ListPageAsync(
             scope,
@@ -247,7 +247,8 @@ public sealed class PropertyWorkspacePostgreSqlTests : IAsyncLifetime
     }
 
     private PropertyService NewService() =>
-        new(_context.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
+        new(_context.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
 
     private async Task<WorkspaceReadScope> SeedAdministratorScopeAsync()
     {

@@ -5,7 +5,6 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Esign;
 using RentalCommand.Data.Esign;
 using RentalCommand.Data;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -83,7 +82,7 @@ public sealed class NativeEsignReconciliationService
             {
                 await using var batchScope = _scopeFactory.CreateAsyncScope();
                 var db = batchScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-                var writes = batchScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>();
+                var writes = batchScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
                 var command = new ReconcileNativeEsignAgreementFinancialsBatchCommand(
                     runToken, BatchSize - claims.Count);
                 var outcome = await writes.ExecuteAsync(runToken.ToString("N"),

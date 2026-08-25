@@ -8,7 +8,6 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
@@ -30,7 +29,7 @@ public sealed class LeaseManagementControllerTests
     {
         CancelPlannedRelationshipCommand? capturedCommand = null;
         var canceledAt = new DateTime(2026, 7, 24, 12, 0, 0, DateTimeKind.Utc);
-        var writes = new Mock<IRequestWriteExecutor>(MockBehavior.Strict);
+        var writes = new Mock<IWriteExecutor>(MockBehavior.Strict);
         writes.Setup(service => service.ExecuteAsync<
                 CancelPlannedRelationshipCommand, CancelPlannedRelationshipResult>(
                 It.IsAny<string>(),
@@ -115,7 +114,7 @@ public sealed class LeaseManagementControllerTests
         TransferLeaseManagementCommand? capturedCommand = null;
         var returnedAt = new DateTime(2026, 7, 24, 13, 0, 0, DateTimeKind.Utc);
         var transferPublicId = Guid.Parse("84c89a66-9025-4fd7-aa4a-c015897aa7fd");
-        var writes = new Mock<IRequestWriteExecutor>(MockBehavior.Strict);
+        var writes = new Mock<IWriteExecutor>(MockBehavior.Strict);
         writes.Setup(service => service.ExecuteAsync<
                 TransferLeaseManagementCommand, TransferLeaseManagementResult>(
                 It.IsAny<string>(),
@@ -217,7 +216,7 @@ public sealed class LeaseManagementControllerTests
                 "Drafts, signatures, payments, and autopay must be resolved."),
             CloseOutcome(CloseTenantAccountOutcome.Closed, null, closedAt),
         ]);
-        var writes = new Mock<IRequestWriteExecutor>(MockBehavior.Strict);
+        var writes = new Mock<IWriteExecutor>(MockBehavior.Strict);
         writes.Setup(service => service.ExecuteAsync<
                 CloseTenantAccountCommand, CloseTenantAccountResult>(
                 It.IsAny<string>(),
@@ -277,7 +276,7 @@ public sealed class LeaseManagementControllerTests
             AtomicCommandDisposition.Executed,
             Guid.NewGuid());
 
-    private static LeaseManagementController CreateLeaseController(IRequestWriteExecutor writes) =>
+    private static LeaseManagementController CreateLeaseController(IWriteExecutor writes) =>
         WithAccess(new LeaseManagementController(
             Mock.Of<ILeaseManagementQueryService>(),
             Mock.Of<ILeaseQaService>(),
@@ -288,7 +287,7 @@ public sealed class LeaseManagementControllerTests
                 new DbContextOptionsBuilder<RentalCommandDbContext>().Options)));
 
     private static TenantAccountLifecycleController CreateCloseController(
-        IRequestWriteExecutor writes) =>
+        IWriteExecutor writes) =>
         WithAccess(new TenantAccountLifecycleController(
             writes,
             new RentalCommandDbContext(

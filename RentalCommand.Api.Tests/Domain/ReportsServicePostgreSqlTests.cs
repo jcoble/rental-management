@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
@@ -106,7 +107,9 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             context.Db,
             new OwnerStatementService(context.Db, TimeProvider.System),
             new ScheduleEService(context.Db),
-            new PropertyDispositionService(context.Db, TimeProvider.System),
+            new PropertyDispositionService(
+                context.Db, TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>()),
             TimeProvider.System);
 
         var report = await sut.GetGeneralLedgerAsync(scope, new ReportRangeQuery
@@ -589,7 +592,9 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             context.Db,
             new OwnerStatementService(context.Db, TimeProvider.System),
             new ScheduleEService(context.Db),
-            new PropertyDispositionService(context.Db, TimeProvider.System),
+            new PropertyDispositionService(
+                context.Db, TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>()),
             TimeProvider.System);
         var access = new WorkspaceReadScope(
             scope.PortfolioId,
@@ -629,7 +634,9 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             context.Db,
             new OwnerStatementService(context.Db, TimeProvider.System),
             new ScheduleEService(context.Db),
-            new PropertyDispositionService(context.Db, TimeProvider.System),
+            new PropertyDispositionService(
+                context.Db, TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>()),
             TimeProvider.System);
         var controller = new ReportsController(service, TimeProvider.System)
         {

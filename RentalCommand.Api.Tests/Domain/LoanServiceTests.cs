@@ -4,7 +4,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -37,7 +36,7 @@ public class LoanServiceTests : IAsyncLifetime
     {
         _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(LoanServiceTests));
-        _sut = new LoanService(_ctx.Db, TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
+        _sut = new LoanService(_ctx.Db, TimeProvider.System, Mock.Of<IWriteExecutor>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();

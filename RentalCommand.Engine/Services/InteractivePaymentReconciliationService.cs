@@ -9,7 +9,6 @@ using RentalCommand.Core.Payments;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Payments;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -20,7 +19,7 @@ namespace RentalCommand.Engine.Services;
 public sealed class InteractivePaymentReconciliationService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IJobStepWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IInteractivePaymentProviderClient _provider;
     private readonly TimeProvider _timeProvider;
     private readonly InteractivePaymentReconciliationOptions _options;
@@ -29,7 +28,7 @@ public sealed class InteractivePaymentReconciliationService
 
     public InteractivePaymentReconciliationService(
         RentalCommandDbContext db,
-        IJobStepWriteExecutor writes,
+        IWriteExecutor writes,
         IInteractivePaymentProviderClient provider,
         TimeProvider timeProvider,
         IOptions<InteractivePaymentReconciliationOptions> options,
@@ -113,7 +112,7 @@ public sealed class InteractivePaymentReconciliationService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var isolated = new InteractivePaymentReconciliationService(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+            scope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>(),
             _timeProvider,
             Options.Create(_options),

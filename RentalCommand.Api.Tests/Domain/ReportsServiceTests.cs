@@ -3,6 +3,7 @@ using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Moq;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
@@ -54,7 +55,9 @@ public class ReportsServiceTests : IAsyncLifetime
             _db,
             new OwnerStatementService(_db, TimeProvider.System),
             new ScheduleEService(_db),
-            new PropertyDispositionService(_db, TimeProvider.System),
+            new PropertyDispositionService(
+                _db, TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>()),
             TimeProvider.System);
     }
 
@@ -1987,7 +1990,9 @@ public class ReportsServiceTests : IAsyncLifetime
             _db,
             new OwnerStatementService(_db, TimeProvider.System),
             new ScheduleEService(_db),
-            new PropertyDispositionService(_db, TimeProvider.System),
+            new PropertyDispositionService(
+                _db, TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>()),
             new FixedTimeProvider(new DateTimeOffset(D(2027, 1, 31))));
 
         var lease = SeedLease(currentProperty, SeedUnit("1", currentProperty.Id), SeedTenant("Ann", "Acre"), rent: 5_000m);
@@ -2029,7 +2034,9 @@ public class ReportsServiceTests : IAsyncLifetime
             _db,
             new OwnerStatementService(_db, TimeProvider.System),
             new ScheduleEService(_db),
-            new PropertyDispositionService(_db, TimeProvider.System),
+            new PropertyDispositionService(
+                _db, TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>()),
             new FixedTimeProvider(new DateTimeOffset(D(2027, 1, 31))));
 
         var lease = SeedLease(

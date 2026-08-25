@@ -47,7 +47,7 @@ public class TenantServiceTests : IAsyncLifetime
         _services = AtomicDomainTestKernel.CreateForCoreCrudPostgreSql(_ctx.ConnectionString, _timeProvider);
         _sut = new TenantService(
             _ctx.Db, Mock.Of<IDataUpdateService>(), _timeProvider,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         _writeSut = _services.GetRequiredService<TenantService>();
     }
 
@@ -928,7 +928,7 @@ public sealed class TenantServicePostgreSqlTests : IAsyncLifetime
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();

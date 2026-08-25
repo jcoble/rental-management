@@ -2,9 +2,9 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -37,7 +37,8 @@ public class RecurringMaintenanceTaskServiceTests : IAsyncLifetime
     {
         _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(RecurringMaintenanceTaskServiceTests));
-        _sut = new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System);
+        _sut = new RecurringMaintenanceTaskService(
+            _ctx.Db, TimeProvider.System, Mock.Of<IWriteExecutor>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();

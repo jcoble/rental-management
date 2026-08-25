@@ -6,7 +6,6 @@ using Moq;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Voice;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
@@ -50,7 +49,6 @@ public class VoiceConversationTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(
                     _ctx.Db.Database.GetDbConnection(),
@@ -69,7 +67,7 @@ public class VoiceConversationTests : IAsyncLifetime
 
     private VoiceIntakeService CreateSut() => new(
         _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-        _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
+        _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
         _llm.Object,
         _transcriber.Object,
         _storage.Object,

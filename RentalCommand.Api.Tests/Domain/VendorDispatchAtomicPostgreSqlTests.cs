@@ -537,7 +537,7 @@ public sealed class VendorDispatchAtomicPostgreSqlTests : IAsyncLifetime
     private VendorDispatchService Service(ServiceProvider services) => new(
         services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
-        services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>(),
+        services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>(),
         Mock.Of<ILogger<VendorDispatchService>>(),
         services.GetRequiredService<TimeProvider>());
 

@@ -6,7 +6,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
-using RentalCommand.Api.Writes;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
@@ -844,7 +843,7 @@ public class ScanServiceTests : IDisposable
     // Test doubles
     // -------------------------------------------------------------------------
 
-    private sealed class ScanRejectRequestWriteExecutor(RentalCommandDbContext db) : IRequestWriteExecutor
+    private sealed class ScanRejectRequestWriteExecutor(RentalCommandDbContext db) : IWriteExecutor
     {
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey,

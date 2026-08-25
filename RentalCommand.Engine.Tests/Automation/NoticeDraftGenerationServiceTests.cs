@@ -12,7 +12,6 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Tests.Automation;
 
@@ -110,7 +109,7 @@ public sealed class NoticeDraftGenerationServiceTests
     }
 
     private sealed class TestJobStepWriteExecutor(ClaimedTenantNoticeWorkItem work)
-        : IJobStepWriteExecutor
+        : IWriteExecutor
     {
         public Guid ExecutedToken { get; private set; }
 

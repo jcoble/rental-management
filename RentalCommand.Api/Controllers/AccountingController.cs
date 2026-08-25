@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -33,7 +32,7 @@ public class AccountingController : ManagementControllerBase
     private readonly IReportsService _reports;
     private readonly IAccountingLedgerReadModelService _ledgerReadModels;
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
 
     public AccountingController(
@@ -43,7 +42,7 @@ public class AccountingController : ManagementControllerBase
         IOwnerStatementEmailService ownerStatementEmail,
         IReportsService reports,
         IAccountingLedgerReadModelService ledgerReadModels,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         RentalCommandDbContext db,
         TimeProvider timeProvider)
     {

@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Import;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -47,7 +46,6 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
         services.AddSingleton<OutboxFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -379,7 +377,7 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
         var handler = new AtomicPaymentCsvImportRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
         return await scope.ServiceProvider
-            .GetRequiredService<IRequestWriteExecutor>()
+            .GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey,
                 AtomicPaymentCsvImport.Write(
                     command, handler.ExecuteAsync, handler.AuthorizeAsync));

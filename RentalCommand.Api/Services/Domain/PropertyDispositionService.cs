@@ -2,7 +2,6 @@ using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using System.Text;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -22,13 +21,13 @@ public class PropertyDispositionService : IPropertyDispositionService
     private static readonly string[] ReadCapabilities = [CapabilityKeys.MoneyOwnerReportsRead];
 
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
 
     public PropertyDispositionService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes)
     {
         _db = db;
         _writes = writes;

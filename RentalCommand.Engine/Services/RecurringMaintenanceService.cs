@@ -1,10 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Automation;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -81,7 +81,7 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
                     businessTimeZoneId);
             var handler = new ApplyClaimedRecurringMaintenanceBatchRule(
                 scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
-            var outcome = await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>().ExecuteAsync(
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
                 $"{claim.ClaimToken:N}:{claim.Id}",
                 ScheduledFinanceWriteSupport.Write(
                     command, handler.ExecuteAsync, handler.AuthorizeAsync),

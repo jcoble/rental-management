@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Operations;
@@ -19,13 +18,13 @@ namespace RentalCommand.Api.Controllers;
 public sealed class WorkOrderResponsibilityController : ManagementControllerBase
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly WorkOrderResponsibilityAccessRevisionGuard _accessRevisionGuard;
     private readonly TimeProvider _timeProvider;
 
     public WorkOrderResponsibilityController(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         WorkOrderResponsibilityAccessRevisionGuard accessRevisionGuard,
         TimeProvider timeProvider)
     {

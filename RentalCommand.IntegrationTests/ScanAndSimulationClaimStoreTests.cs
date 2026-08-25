@@ -15,7 +15,6 @@ using RentalCommand.Data.Scanning;
 using RentalCommand.Data.Security;
 using RentalCommand.Data.Simulation;
 using RentalCommand.Engine.Data;
-using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
@@ -432,7 +431,7 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         await using var services = BuildExecutorServices(recorder);
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>().ExecuteAsync(
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             ScanProcessingTerminalWrite.StepKey(command),
             ScanProcessingTerminalWrite.Write(db, command));
     }
@@ -444,7 +443,7 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         await using var services = BuildExecutorServices(recorder);
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>().ExecuteAsync(
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             SimWorkerTerminalWrite.StepKey(command),
             SimWorkerTerminalWrite.Write(db, command));
     }
@@ -490,7 +489,6 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
         {
             options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(provider);

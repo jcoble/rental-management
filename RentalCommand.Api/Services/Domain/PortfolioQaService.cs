@@ -11,7 +11,6 @@ using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.AiIntegrations;
-using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -24,7 +23,7 @@ public class PortfolioQaService : IPortfolioQaService
     private readonly IKnowledgeBaseService _kb;
     private readonly ILogger<PortfolioQaService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     // Compact JSON serializer — no indentation to minimise tokens.
     private static readonly JsonSerializerOptions _json = new()
@@ -135,7 +134,7 @@ public class PortfolioQaService : IPortfolioQaService
         IKnowledgeBaseService kb,
         ILogger<PortfolioQaService> logger,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _llm = llm;
@@ -521,7 +520,7 @@ public class PortfolioQaService : IPortfolioQaService
                 $"portfolio-qa:{portfolioId}:{operationId}:email",
                 $"portfolio-qa:{portfolioId}:{operationId}:sms",
                 _timeProvider.GetUtcNow().UtcDateTime);
-            var outcome = await _writes.ExecuteExactAsync(
+            var outcome = await _writes.ExecuteAsync(
                 $"{portfolioId}:{operationId}",
                 AiIntegrationWriteSupport.Write<PortfolioQaDeliveryCommand, PortfolioQaDeliveryResult>(
                     _db, command), ct);

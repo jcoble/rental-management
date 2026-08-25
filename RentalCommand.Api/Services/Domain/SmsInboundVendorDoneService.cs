@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -20,13 +19,13 @@ public sealed class SmsInboundVendorDoneService : ISmsInboundVendorDoneService
     private const string DispatchEntityType = "VendorDispatch";
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly ILogger<SmsInboundVendorDoneService> _logger;
 
     public SmsInboundVendorDoneService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         ILogger<SmsInboundVendorDoneService> logger)
     {
         _db = db;

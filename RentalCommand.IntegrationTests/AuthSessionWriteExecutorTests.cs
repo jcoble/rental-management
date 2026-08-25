@@ -3,7 +3,6 @@ using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Entities;
@@ -213,7 +212,7 @@ public sealed class AuthSessionWriteExecutorTests(MigratedPostgreSqlFixture fixt
             await fixtureDb.SaveChangesAsync();
         }
 
-        var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(key, write);
 
         outcome.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -328,7 +327,6 @@ public sealed class AuthSessionWriteExecutorTests(MigratedPostgreSqlFixture fixt
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider();

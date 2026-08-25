@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Payments;
@@ -17,11 +16,11 @@ namespace RentalCommand.Api.Controllers;
 public sealed class HistoricalRentRecoveryController : AuthenticatedPortfolioControllerBase
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public HistoricalRentRecoveryController(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _writes = writes;

@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
@@ -35,7 +34,7 @@ public class DemoDataSeeder
     private readonly RentalCommandDbContext _db;
     private readonly ILogger<DemoDataSeeder> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IAtomicCommandContext _atomicContext;
     private readonly ILeaseAgreementRenderer _agreementRenderer;
     private readonly ILeaseAgreementPdfGenerator _agreementPdf;
@@ -47,7 +46,7 @@ public class DemoDataSeeder
         RentalCommandDbContext db,
         ILogger<DemoDataSeeder> logger,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IAtomicCommandContext atomicContext,
         ILeaseAgreementRenderer agreementRenderer,
         ILeaseAgreementPdfGenerator agreementPdf,
@@ -166,7 +165,7 @@ public class DemoDataSeeder
             requirePendingSandboxOnboarding,
             businessNowUtc,
             operationKey);
-        await _writes.ExecuteExactAsync(
+        await _writes.ExecuteAsync(
             $"portfolio:{portfolioId}:{operationKey}",
             DemoSeedCommandRule.Write(_db, command), ct);
         await CompleteLegalArtifactsAsync(
@@ -189,7 +188,7 @@ public class DemoDataSeeder
         {
             var prepared = await PrepareLegalDocumentAsync(legalIntent, ct);
             var finalizeCommand = ToFinalizeCommand(prepared);
-            var outcome = await _writes.ExecuteExactAsync(
+            var outcome = await _writes.ExecuteAsync(
                 $"portfolio:{portfolioId}:agreement:{finalizeCommand.AgreementId}:v1",
                 DemoLegalDocumentFinalizeCommandRule.Write(_db, finalizeCommand), ct);
             if (outcome.Value.Skipped)
@@ -210,7 +209,7 @@ public class DemoDataSeeder
             portfolioId,
             actorUserId,
             _timeProvider.UtcNow());
-        await _writes.ExecuteExactAsync(
+        await _writes.ExecuteAsync(
             $"portfolio:{portfolioId}:standard-lease-addendum-template:v2",
             DemoLeaseAddendumTemplateCommandRule.Write(_db, addendumCommand), ct);
 

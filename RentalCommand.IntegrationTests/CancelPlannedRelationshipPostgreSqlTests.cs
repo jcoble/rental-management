@@ -1,7 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -40,7 +39,6 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString)
                 .UseAtomicPersistenceKernel(provider));
@@ -74,7 +72,7 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         var reversalCommand = ReverseLedger(scenario, openingBalance.Id, "opening-balance");
         var handler = new ReverseTenantLedgerEntryRule(
             _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
-        var reversal = await _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        var reversal = await _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(reversalCommand.DeliveryIdempotencyKey,
                 TenantMoneyWriteSupport.Write(
                     reversalCommand, handler.ExecuteAsync, handler.AuthorizeAsync));

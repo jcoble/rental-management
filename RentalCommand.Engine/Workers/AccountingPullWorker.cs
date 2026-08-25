@@ -4,7 +4,6 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Workers;
 
@@ -31,7 +30,7 @@ public sealed class AccountingPullWorker : EngineWorkerBase
         var db = scoped.GetRequiredService<RentalCommandDbContext>();
         var import = scoped.GetRequiredService<AccountingImportService>();
         var claims = scoped.GetRequiredService<IAccountingConnectionClaimStore>();
-        var writes = scoped.GetRequiredService<IJobStepWriteExecutor>();
+        var writes = scoped.GetRequiredService<IWriteExecutor>();
         var logger = scoped.GetRequiredService<ILogger<AccountingPullWorker>>();
         var batch = await claims.ClaimPullAsync(_claimOwner, ClaimLease, BatchSize, ct);
         var processed = 0;

@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Sandbox;
@@ -17,13 +16,13 @@ public sealed class SandboxService : ISandboxService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly Auth.DemoDataSeeder _demoSeeder;
 
     public SandboxService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         Auth.DemoDataSeeder demoSeeder)
     {
         _db = db;
@@ -56,7 +55,7 @@ public sealed class SandboxService : ISandboxService
             null,
             _timeProvider.GetUtcNow().UtcDateTime,
             idempotencyKey);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             Identity(scope, idempotencyKey),
             SandboxLifecycleWriteSupport.Write(_db, command), ct);
         return ToState(outcome.Value);
@@ -83,7 +82,7 @@ public sealed class SandboxService : ISandboxService
             },
             _timeProvider.GetUtcNow().UtcDateTime,
             idempotencyKey);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             Identity(scope, idempotencyKey),
             SandboxLifecycleWriteSupport.Write(_db, command), ct);
         if (choice == OnboardingChoice.Sandbox

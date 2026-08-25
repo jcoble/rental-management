@@ -10,7 +10,6 @@ using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
@@ -61,7 +60,6 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<NotificationFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -1974,8 +1972,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         var write = BankingWriteSupport.Write<TCommand, TResult>(db, command);
         write.OperationName.Should().Be(identity.CommandType);
         write.ResultContract.Should().Be(codec.ContractName);
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
-            .ExecuteExactAsync(identity.IdempotencyKey, write, ct);
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(identity.IdempotencyKey, write, ct);
     }
 
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();

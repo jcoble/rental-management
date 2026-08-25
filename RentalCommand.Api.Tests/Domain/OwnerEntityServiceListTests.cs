@@ -34,7 +34,9 @@ public class OwnerEntityServiceListTests : IAsyncLifetime
         _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(OwnerEntityServiceListTests));
         await _ctx.ActivateApiScopeAsync(_scope);
-        _sut = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
+        _sut = new OwnerEntityService(
+            _ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();

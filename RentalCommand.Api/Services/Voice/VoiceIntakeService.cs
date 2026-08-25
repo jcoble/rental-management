@@ -9,7 +9,6 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
-using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Scanning;
@@ -20,7 +19,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly ILlmProvider _llm;
     private readonly IAudioTranscriptionService _transcriber;
     private readonly IFileStorage _storage;
@@ -39,7 +38,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
 
     public VoiceIntakeService(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         ILlmProvider llm,
         IAudioTranscriptionService transcriber,
         IFileStorage storage,

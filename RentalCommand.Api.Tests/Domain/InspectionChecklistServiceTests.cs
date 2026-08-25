@@ -11,7 +11,6 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -69,7 +68,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             TimeProvider.System,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public async Task DisposeAsync()
@@ -510,7 +509,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         var dispatchService = new VendorDispatchService(
             _services.GetRequiredService<RentalCommandDbContext>(),
             new NoopInspectionDataUpdate(),
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>(),
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>(),
             NullLogger<VendorDispatchService>.Instance,
             TimeProvider.System);
         var dispatch = await dispatchService.DispatchAsync(PortfolioId, workOrderId,
@@ -584,7 +583,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         var doneService = new SmsInboundVendorDoneService(
             _services.GetRequiredService<RentalCommandDbContext>(),
             new NoopInspectionDataUpdate(),
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>(),
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>(),
             NullLogger<SmsInboundVendorDoneService>.Instance);
         var done = await doneService.TryHandleAsync(
             NextOperationKey(), vendor.Phone, "DONE", DateTime.UtcNow);
@@ -627,8 +626,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             appointmentDb,
             new NoopInspectionDataUpdate(),
             TimeProvider.System,
-            new RequestWriteExecutor(
-                appointmentScope.ServiceProvider.GetRequiredService<IWriteExecutor>()));
+            appointmentScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
         var editService = new WorkOrderService(
             editDb,
             new NoopInspectionDataUpdate(),
@@ -636,8 +634,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new InMemoryFileStorage(),
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System,
-            writes: new RequestWriteExecutor(
-                editScope.ServiceProvider.GetRequiredService<IWriteExecutor>()));
+            writes: editScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
         var commentService = new WorkOrderService(
             commentDb,
             new NoopInspectionDataUpdate(),
@@ -645,8 +642,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new InMemoryFileStorage(),
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System,
-            writes: new RequestWriteExecutor(
-                commentScope.ServiceProvider.GetRequiredService<IWriteExecutor>()));
+            writes: commentScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
 
         var appointmentTask = Task.Run(() => appointmentService.CreateAuthorizedAsync(
             _scope,
@@ -730,12 +726,12 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             updaterDb,
             new NoopInspectionDataUpdate(),
             TimeProvider.System,
-            updaterScope.ServiceProvider.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            updaterScope.ServiceProvider.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         var relinkService = new AppointmentService(
             relinkDb,
             new NoopInspectionDataUpdate(),
             TimeProvider.System,
-            relinkScope.ServiceProvider.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            relinkScope.ServiceProvider.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         appointmentGate.Arm();
         _reopenProgressionGate.Arm();
@@ -829,7 +825,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             logger,
             clock,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
 
@@ -894,7 +890,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
@@ -956,7 +952,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             TimeProvider.System,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
@@ -992,7 +988,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             retryScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             TimeProvider.System,
-            retryScope.ServiceProvider.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            retryScope.ServiceProvider.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         var secondError = await Record.ExceptionAsync(() => retryService.CompleteAuthorizedAsync(
             _scope, created.Id, userId: 7, operationKey));
 
@@ -1030,7 +1026,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
@@ -1074,7 +1070,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
@@ -1181,7 +1177,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
@@ -1249,7 +1245,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
@@ -1308,7 +1304,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
         var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest

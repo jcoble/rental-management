@@ -6,7 +6,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Authorization;
@@ -18,7 +17,6 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Notifications;
-using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 using Xunit;
 
@@ -59,8 +57,6 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         services.AddSingleton<CommandRecorder>();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -127,7 +123,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             var relationship = await SeedRelationshipAsync(setup, portfolio, actor, "Frozen", setupNow);
             var foundation = new NotificationFoundationService(
                 setup, TimeProvider.System,
-                setupScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+                setupScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
             await foundation.SeedSuppliedTemplatesAsync(
                 scope, "seed-frozen-notice-draft-templates", CancellationToken.None);
             var policy = await setup.TenantNoticePolicies.SingleAsync(row =>
@@ -297,7 +293,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
                 setup, portfolio.Id, first.PropertyId, now);
             var foundation = new NotificationFoundationService(
                 setup, TimeProvider.System,
-                setupScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+                setupScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
             await foundation.SeedSuppliedTemplatesAsync(
                 manualScope, "seed-notice-draft-templates", CancellationToken.None);
             var policy = await setup.TenantNoticePolicies.SingleAsync(row =>
@@ -395,7 +391,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             var selectedService = new NoticeDraftService(
                 executionDb,
                 new FixedTimeProvider(new DateTimeOffset(now)),
-                executionScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+                executionScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
             var selectedDrafts = await selectedService.ListAsync(
                 selectedPropertyScope, null, new ListQuery { Take = 20 });
             selectedDrafts.Should().ContainSingle();
@@ -853,7 +849,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var handler = new ApplyClaimedTenantNoticeDraftBatchRule(db);
-        return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>().ExecuteAsync(
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             TenantNoticeDraftAutomation.Identity(command).IdempotencyKey,
             TenantNoticeDraftAutomation.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }

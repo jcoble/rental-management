@@ -8,7 +8,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -33,7 +32,7 @@ public class ScanController : ManagementControllerBase
 {
     private readonly IScanService _scan;
     private readonly IScanUploadService _uploads;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IScanConfirmationTargetWriter _confirmationTargetWriter;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
@@ -62,7 +61,7 @@ public class ScanController : ManagementControllerBase
     public ScanController(
         IScanService scan,
         IScanUploadService uploads,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IScanConfirmationTargetWriter confirmationTargetWriter,
         RentalCommandDbContext db,
         IFileStorage files,

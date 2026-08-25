@@ -1,7 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -36,7 +35,6 @@ public sealed class LeasePartyAccessWritePostgreSqlTests : IAsyncLifetime
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(InterceptorNow));
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider(
@@ -184,7 +182,7 @@ public sealed class LeasePartyAccessWritePostgreSqlTests : IAsyncLifetime
             command,
             (request, context, token) => ExecuteHandlerAsync(db, request, context, token),
             (request, context, token) => AuthorizeAsync(db, request, context, token));
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(LeasePartyAccessWriteSupport.IdempotencyKey(command, digest), write);
     }
 

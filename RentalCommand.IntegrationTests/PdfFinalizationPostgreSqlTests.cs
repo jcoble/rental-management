@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -51,7 +50,7 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
         var seeded = await SeedDeclinedCaseAsync();
         await using var serviceScope = _services.CreateAsyncScope();
         var provider = serviceScope.ServiceProvider;
-        var writes = provider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = provider.GetRequiredService<IWriteExecutor>();
         var prepareCommand = new PrepareAdverseActionNoticeCommand(
                 PortfolioId,
                 seeded.Application.Id,
@@ -170,7 +169,7 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
             new UpdateInspectionRequest { Status = InspectionStatus.Scheduled },
             now);
         await using var serviceScope = _services.CreateAsyncScope();
-        var result = await serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+        var result = await serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             AtomicInspectionMutation.Identity(command).IdempotencyKey,
             AtomicInspectionMutation.Write(
                 serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(), command));
@@ -240,7 +239,6 @@ public sealed class PdfFinalizationPostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddPendingFileUploadStore();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider(new ServiceProviderOptions

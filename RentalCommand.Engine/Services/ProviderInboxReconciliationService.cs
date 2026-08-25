@@ -3,7 +3,6 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data;
 using RentalCommand.Data.Payments;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -13,14 +12,14 @@ public sealed class ProviderInboxReconciliationService
     internal static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
     private readonly IProviderInboxClaimStore _claimStore;
     private readonly RentalCommandDbContext _db;
-    private readonly IJobStepWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ProviderInboxReconciliationService> _logger;
 
     public ProviderInboxReconciliationService(
         IProviderInboxClaimStore claimStore,
         RentalCommandDbContext db,
-        IJobStepWriteExecutor writes,
+        IWriteExecutor writes,
         TimeProvider timeProvider,
         ILogger<ProviderInboxReconciliationService> logger)
     {

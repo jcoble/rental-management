@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -31,7 +30,7 @@ public class VendorServiceListTests : IDisposable
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
             TimeProvider.System,
-            Mock.Of<IRequestWriteExecutor>());
+            Mock.Of<IWriteExecutor>());
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -79,7 +78,7 @@ public class VendorServiceListTests : IDisposable
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
             new FrozenTimeProvider(new DateTimeOffset(2027, 1, 25, 5, 0, 0, TimeSpan.Zero)),
-            Mock.Of<IRequestWriteExecutor>());
+            Mock.Of<IWriteExecutor>());
 
         _commands.Clear();
         var result = await sut.ListPageAsync(scope, new ListQuery

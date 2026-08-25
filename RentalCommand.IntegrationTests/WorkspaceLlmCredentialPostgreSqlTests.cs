@@ -7,7 +7,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
-using RentalCommand.Api.Writes;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.AiIntegrations;
 using RentalCommand.Core.Atomic;
@@ -280,7 +279,7 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
     {
         var scanService = new ScanService(
             _context.Db,
-            Mock.Of<IRequestWriteExecutor>(),
+            Mock.Of<IWriteExecutor>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ScanService>.Instance,
             TimeProvider.System);
         var scope = new WorkspaceReadScope(
@@ -322,7 +321,7 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
     }
 
     private WorkspaceLlmCredentialService CreateService(
-        IRequestWriteExecutor? writes = null,
+        IWriteExecutor? writes = null,
         IDataProtectionProvider? dataProtection = null)
     {
         var authorization = new Mock<IWorkspaceAuthorizationEvaluator>();
@@ -402,7 +401,7 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
                 modelId));
     }
 
-    private sealed class InlineWorkspaceLlmAtomicUnitOfWork(RentalCommandDbContext db) : IRequestWriteExecutor
+    private sealed class InlineWorkspaceLlmAtomicUnitOfWork(RentalCommandDbContext db) : IWriteExecutor
     {
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey,
@@ -421,13 +420,6 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             };
             return new AtomicCommandOutcome<TResult>((TResult)result, AtomicCommandDisposition.Executed, Guid.NewGuid());
         }
-
-        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
-            string idempotencyKey,
-            TransactionalWrite<TCommand, TResult> write,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData
-            where TResult : notnull => ExecuteAsync(idempotencyKey, write, ct);
 
         private async Task<AiIntegrationStatusResult> ActivateAsync(
             ActivateWorkspaceLlmCredentialCommand command,
@@ -503,7 +495,7 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
         }
     }
 
-    private sealed class CapturingCredentialAtomicUnitOfWork : IRequestWriteExecutor
+    private sealed class CapturingCredentialAtomicUnitOfWork : IWriteExecutor
     {
         public List<IAtomicCommandData> Commands { get; } = [];
 
@@ -527,12 +519,6 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
                 Guid.NewGuid()));
         }
 
-        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
-            string idempotencyKey,
-            TransactionalWrite<TCommand, TResult> write,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData
-            where TResult : notnull => ExecuteAsync(idempotencyKey, write, ct);
     }
 
     private sealed class RandomizedTestDataProtectionProvider : IDataProtectionProvider

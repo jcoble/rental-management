@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Scanning;       // ReceiptExtractionSchema
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -13,7 +14,6 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Scanning;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Workers;
 
@@ -122,7 +122,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
         var workspaceProviders = scoped.GetServices<IWorkspaceLlmExtractionProvider>()
             .ToDictionary(provider => provider.ProviderKey, StringComparer.OrdinalIgnoreCase);
         var storage = scoped.GetRequiredService<IFileStorage>();
-        var writes = scoped.GetRequiredService<IJobStepWriteExecutor>();
+        var writes = scoped.GetRequiredService<IWriteExecutor>();
         var timeProvider = scoped.GetRequiredService<TimeProvider>();
         var logger = scoped.GetRequiredService<ILogger<ScanProcessingWorker>>();
         var claimStore = scoped.GetRequiredService<IScanProcessingClaimStore>();
@@ -537,7 +537,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
         {
             using var failScope = scoped.GetRequiredService<IServiceScopeFactory>().CreateScope();
             var failDb = failScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var failWrites = failScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>();
+            var failWrites = failScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
             // Hoist "now" so the command fingerprint and stored terminal timestamp are stable.
             var reviewedAt = failScope.ServiceProvider.GetRequiredService<TimeProvider>().UtcNow();
             var command = new ScanProcessingTerminalCommand(

@@ -6,7 +6,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -24,12 +23,12 @@ public sealed class WorkspaceInvitationsController : ControllerBase
 {
     private readonly RentalCommandDbContext _db;
     private readonly UserManager<ApplicationUser> _users;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public WorkspaceInvitationsController(
         RentalCommandDbContext db,
         UserManager<ApplicationUser> users,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _users = users;
@@ -94,7 +93,7 @@ public sealed class WorkspaceInvitationsController : ControllerBase
             Guid.NewGuid().ToString("N"));
         try
         {
-            var result = (await _writes.ExecuteExactAsync(
+            var result = (await _writes.ExecuteAsync(
                 $"{invitation.InvitedUserId}:{tokenHash}",
                 WorkspaceTeamWriteSupport.Write(_db, command), ct)).Value;
             return result.Outcome == ActivateWorkspaceInvitationOutcome.Activated

@@ -8,7 +8,6 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Payments;
-using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Payments;
 
@@ -35,7 +34,7 @@ public class StripePaymentService : IStripePaymentService
     private readonly ILogger<StripePaymentService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IInteractivePaymentProviderClient _interactiveProvider;
 
     public StripePaymentService(
@@ -44,7 +43,7 @@ public class StripePaymentService : IStripePaymentService
         ILogger<StripePaymentService> logger,
         TimeProvider timeProvider,
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IInteractivePaymentProviderClient? interactiveProvider = null)
     {
         _config = config.Value;
@@ -362,7 +361,7 @@ public class StripePaymentService : IStripePaymentService
         var now = _timeProvider.UtcNow();
         var command = await NormalizeVerifiedEventAsync(ev, now, ct);
         var key = $"stripe:{ev.Id}";
-        var outcome = await _writes.ExecuteExactAsync(key,
+        var outcome = await _writes.ExecuteAsync(key,
             ProviderPaymentWriteSupport.Write<RecordVerifiedProviderPaymentEventCommand,
                 RecordVerifiedProviderPaymentEventResult>(_db, "payments.provider-event.record", command), ct);
 

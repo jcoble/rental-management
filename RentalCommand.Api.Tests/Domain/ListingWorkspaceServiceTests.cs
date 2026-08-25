@@ -4,7 +4,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -204,7 +203,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
     private static WorkspaceReadScope Scope() =>
         new(PortfolioId, 42, Guid.Parse("18e99783-e913-401d-8158-a7feb002667a"), 71, 4);
 
-    private sealed class CapturingRequestWriteExecutor : IRequestWriteExecutor
+    private sealed class CapturingRequestWriteExecutor : IWriteExecutor
     {
         public string? LastIdempotencyKey { get; private set; }
         public string? LastOperationName { get; private set; }

@@ -4,7 +4,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Automation;
@@ -1369,7 +1368,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
     {
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         var handler = new RecoverLateFeeChargesRule(db);
         return await writes.ExecuteAsync(
             command.DeliveryIdempotencyKey,
@@ -1386,7 +1385,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await using var scope = services.CreateAsyncScope();
         var handler = new ApplyScheduledRentChargeBatchRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(key, TenantMoneyWriteSupport.Write(
                 command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }
@@ -1400,7 +1399,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         await using var scope = services.CreateAsyncScope();
         var handler = new ApplyScheduledLateFeeChargeBatchRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(key, TenantMoneyWriteSupport.Write(
                 command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }

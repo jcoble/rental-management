@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -19,10 +18,10 @@ public class ExpenseService : IExpenseService
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public ExpenseService(RentalCommandDbContext db, IFileStorage files,
-        TimeProvider timeProvider, IRequestWriteExecutor writes)
+        TimeProvider timeProvider, IWriteExecutor writes)
     {
         _db = db;
         _files = files;
@@ -294,7 +293,7 @@ public class ExpenseService : IExpenseService
 
     private Task<AtomicCommandOutcome<AtomicMoneyMutationResult>> ExecuteAsync(
         AtomicMoneyMutationCommand command, CancellationToken ct) =>
-        _writes.ExecuteExactAsync(
+        _writes.ExecuteAsync(
             AtomicMoneyMutation.Identity(command).IdempotencyKey,
             AtomicMoneyMutation.Write(command, _db), ct);
 

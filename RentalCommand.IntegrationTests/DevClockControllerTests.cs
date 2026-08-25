@@ -6,7 +6,6 @@ using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Simulation;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
@@ -78,7 +77,7 @@ public sealed class DevClockControllerTests : IAsyncLifetime
             clockState,
             new FixedTimeZoneProvider("America/New_York"),
             requestScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            requestScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+            requestScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
         InstallAccessContext(controller, access);
 
         var jan1 = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -130,7 +129,7 @@ public sealed class DevClockControllerTests : IAsyncLifetime
             clockState,
             new FixedTimeZoneProvider("America/New_York"),
             requestScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            requestScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+            requestScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
         InstallAccessContext(controller, access);
 
         var set = Body(await controller.Set(
@@ -158,7 +157,7 @@ public sealed class DevClockControllerTests : IAsyncLifetime
             clockState,
             new FixedTimeZoneProvider("America/New_York"),
             requestScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            requestScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+            requestScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
         InstallAccessContext(controller, access);
 
         var instant = new DateTime(2027, 1, 29, 5, 0, 0, DateTimeKind.Utc);
@@ -200,7 +199,6 @@ public sealed class DevClockControllerTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_conn)
                 .UseAtomicPersistenceKernel(provider));

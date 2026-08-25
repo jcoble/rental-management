@@ -290,7 +290,9 @@ public sealed class PortalServiceBalanceTests
     }
 
     private static PortalService NewService(RentalCommandDbContext db) =>
-        new(db, Mock.Of<ILeaseQaService>(), TimeProvider.System);
+        new(
+            db, Mock.Of<ILeaseQaService>(), TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
 
     private static RentalCommandDbContext NewContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -327,7 +329,8 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         _commands.Clear();
 
         var page = await new PortalService(
-                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .ListTenantAccountChargesPageAsync(
                 scenario.Scope,
                 scenario.TenantAccountId,
@@ -358,7 +361,8 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
 
         _commands.Clear();
         var focusedLedgerPage = await new PortalService(
-                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .ListTenantAccountEntriesPageAsync(
                 scenario.Scope,
                 scenario.TenantAccountId,
@@ -381,7 +385,8 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
 
         _commands.Clear();
         var deniedPage = await new PortalService(
-                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .ListTenantAccountChargesPageAsync(
                 scenario.Scope,
                 scenario.UnauthorizedTenantAccountId,
@@ -398,7 +403,8 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         _commands.Clear();
 
         var page = await new PortalService(
-                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .ListTenantAccountsPageAsync(
                 scenario.Scope,
                 new PortalTenantAccountListQuery { Take = 20 });
@@ -422,7 +428,8 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         _commands.Clear();
 
         var page = await new PortalService(
-                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .ListTenantAccountEntriesPageAsync(
                 scenario.Scope,
                 scenario.TenantAccountId,
@@ -516,7 +523,8 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         _commands.Clear();
 
         var history = await new PortalService(
-                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .GetTenantAccountHistoryAsync(
                 scenario.Scope,
                 scenario.TenantAccountId,
@@ -569,7 +577,8 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         _commands.Clear();
 
         var history = await new PortalService(
-                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .GetTenantAccountHistoryAsync(
                 scenario.Scope,
                 scenario.TenantAccountId,
@@ -594,7 +603,8 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         _commands.Clear();
 
         var history = await new PortalService(
-                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .GetTenantAccountHistoryAsync(
                 scenario.Scope,
                 scenario.UnauthorizedTenantAccountId,

@@ -12,7 +12,6 @@ using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Api.Tests.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
@@ -70,7 +69,7 @@ public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
         SeedWorkspaceAuthority(user, DateTime.UtcNow);
 
         var result = await CreateService(
-            _services.GetRequiredService<IRequestWriteExecutor>(),
+            _services.GetRequiredService<IWriteExecutor>(),
             _services.GetRequiredService<RentalCommandDbContext>()).ResetPasswordAsync(
             user.Id.ToString(), ResetToken, "NewPassword123!", "test-password-reset");
 
@@ -163,7 +162,7 @@ public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
     }
 
     private AuthService CreateService(
-        IRequestWriteExecutor? writes = null,
+        IWriteExecutor? writes = null,
         RentalCommandDbContext? writeDb = null) => new(
         writeDb ?? _ctx.Db,
         _userManager,
@@ -181,11 +180,11 @@ public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
         }),
         Mock.Of<IAuthEmailSender>(),
         Mock.Of<ICanonicalAccountBootstrapService>(),
-        writes ?? Mock.Of<IRequestWriteExecutor>(),
+        writes ?? Mock.Of<IWriteExecutor>(),
         NullLogger<AuthService>.Instance,
         new SystemAuthSecurityClock());
 
-    private sealed class SuccessfulPasswordWriteExecutor : IRequestWriteExecutor
+    private sealed class SuccessfulPasswordWriteExecutor : IWriteExecutor
     {
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey,

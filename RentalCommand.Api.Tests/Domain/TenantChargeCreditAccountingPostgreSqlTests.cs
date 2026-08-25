@@ -11,7 +11,6 @@ using RentalCommand.Core.Payments;
 using RentalCommand.Core.Time;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Accounting;
@@ -38,7 +37,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
     private MigratedPostgreSqlTestContext _ctx = null!;
     private ServiceProvider _services = null!;
     private IServiceScope _serviceScope = null!;
-    private IRequestWriteExecutor _writes = null!;
+    private IWriteExecutor _writes = null!;
     private WorkspaceReadScope _scope;
 
     public TenantChargeCreditAccountingPostgreSqlTests(MigratedPostgreSqlFixture fixture) =>
@@ -54,7 +53,7 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         await FreezeSimulationClockAsync();
         _services = BuildServices(_ctx.ConnectionString, SimulatedEntryAtUtc);
         _serviceScope = _services.CreateScope();
-        _writes = _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        _writes = _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
     }
 
     public async Task DisposeAsync()
@@ -627,7 +626,6 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(utcNow));
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider));

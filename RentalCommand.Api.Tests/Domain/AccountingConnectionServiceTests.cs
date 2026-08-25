@@ -6,7 +6,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -211,7 +210,7 @@ public class AccountingConnectionServiceTests : IDisposable
         return new AccountingConnectionService(
             _ctx.Db, _dp, provider, settingsResolver, importService,
             TimeProvider.System,
-            Moq.Mock.Of<IRequestWriteExecutor>(),
+            Moq.Mock.Of<IWriteExecutor>(),
             NullLogger<AccountingConnectionService>.Instance);
     }
 

@@ -55,8 +55,10 @@ public class WorkOrderStatusTimelineTests : IAsyncLifetime
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
-        _portal = new PortalService(_db, new NoopLeaseQaService(), TimeProvider.System);
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
+        _portal = new PortalService(
+            _db, new NoopLeaseQaService(), TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public async Task DisposeAsync()

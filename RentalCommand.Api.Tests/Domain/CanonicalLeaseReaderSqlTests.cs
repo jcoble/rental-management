@@ -33,7 +33,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var sql = service.BuildHealthQuery(17)
             .OrderBy(row => row.UnitNumber)
@@ -72,7 +72,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var sql = service.BuildCanonicalResponseQuery(17)
             .OrderBy(unit => unit.UnitNumber)
@@ -104,7 +104,9 @@ public sealed class CanonicalLeaseReaderSqlTests
     public void Property_delete_guards_are_canonical_database_projections()
     {
         using var db = NewContext();
-        var service = new PropertyService(db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
+        var service = new PropertyService(
+            db, Mock.Of<IDataUpdateService>(), TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var propertySql = db.PropertyDeleteEligibility(17, 9).ToQueryString();
         var canonicalUnitSql = db.UnitDeleteEligibility(17, 42).ToQueryString();
@@ -153,7 +155,8 @@ public sealed class CanonicalLeaseReaderSqlTests
         var tenantService = new TenantService(
             db,
             Mock.Of<IDataUpdateService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
         var tenantResponseSql = tenantService.BuildDeleteEligibilityQuery(
                 db.Tenants.AsNoTracking().Where(tenant => tenant.PortfolioId == 17 && tenant.Id == 5),
                 17)
@@ -202,7 +205,8 @@ public sealed class CanonicalLeaseReaderSqlTests
         var service = new TenantService(
             db,
             Mock.Of<IDataUpdateService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var sql = service.BuildRelationshipCountQuery(
                 db.Tenants.AsNoTracking().Where(tenant => tenant.PortfolioId == 17),

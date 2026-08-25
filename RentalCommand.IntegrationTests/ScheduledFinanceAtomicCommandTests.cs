@@ -16,7 +16,6 @@ using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Automation;
 using RentalCommand.Engine.Services;
-using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 using Xunit;
 
@@ -56,7 +55,6 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<CompanionFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -474,7 +472,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         {
             var runDb = runScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var service = new DebtServiceService(
-                runScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+                runScope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
                 runDb,
                 new FixedTimeProvider(february20),
                 new FixedTimeZoneProvider(TimeZoneInfo.Utc),
@@ -983,7 +981,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         };
         write.OperationName.Should().Be(identity.CommandType);
         write.ResultContract.Should().Be(codec.ContractName);
-        return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey, write);
     }
 

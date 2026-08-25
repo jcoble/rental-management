@@ -9,7 +9,6 @@ using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -171,15 +170,8 @@ public class PublicApplicationsControllerTests : IDisposable
             => Task.FromResult(new LlmToolResult("noop", null, [], 0, 0, "noop"));
     }
 
-    private sealed class PublicSubmissionWriteExecutor(RentalCommandDbContext db) : IRequestWriteExecutor
+    private sealed class PublicSubmissionWriteExecutor(RentalCommandDbContext db) : IWriteExecutor
     {
-        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
-            string idempotencyKey,
-            TransactionalWrite<TCommand, TResult> write,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData
-            where TResult : notnull => ExecuteAsync(idempotencyKey, write, ct);
-
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey,
             TransactionalWrite<TCommand, TResult> write,

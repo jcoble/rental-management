@@ -2,7 +2,6 @@ using FluentAssertions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Screening;
@@ -197,7 +196,7 @@ public sealed class ScreeningWriteExecutorTests
         }
     }
 
-    private sealed class CapturingRequestExecutor : IRequestWriteExecutor
+    private sealed class CapturingRequestExecutor : IWriteExecutor
     {
         public string? OperationName { get; private set; }
         public string? IdempotencyKey { get; private set; }

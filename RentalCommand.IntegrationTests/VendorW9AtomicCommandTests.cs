@@ -6,7 +6,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -56,7 +55,6 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         services.AddSingleton<AuditFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -253,7 +251,7 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             null!,
             TimeProvider.System,
-            scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+            scope.ServiceProvider.GetRequiredService<IWriteExecutor>());
         var replay = await service.RequestW9Async(
             new WorkspaceReadScope(
                 _portfolioId, 73, _authSessionId, _accessContextId, _accessRevision),

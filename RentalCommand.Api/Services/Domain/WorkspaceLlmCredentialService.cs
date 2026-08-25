@@ -10,7 +10,6 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.AiIntegrations;
-using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -49,7 +48,7 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
     private readonly IReadOnlyDictionary<string, ILlmCredentialProbe> _probes;
     private readonly IWorkspaceAuthorizationEvaluator _authorization;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public WorkspaceLlmCredentialService(
         RentalCommandDbContext db,
@@ -57,7 +56,7 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
         IEnumerable<ILlmCredentialProbe> probes,
         IWorkspaceAuthorizationEvaluator authorization,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _protector = dataProtection.CreateProtector(ProtectorPurpose);
@@ -128,7 +127,7 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             ApiKeyIntentDigest(normalized.Provider, normalized.ModelId, normalized.ApiKey),
             Encrypt(normalized.ApiKey),
             now);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             MutationIdentity(access.PortfolioId, request.ClientOperationId),
             AiIntegrationWriteSupport.Write<ActivateWorkspaceLlmCredentialCommand, AiIntegrationStatusResult>(
                 _db, command), ct);
@@ -156,7 +155,7 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             ApiKeyIntentDigest(normalized.Provider, normalized.ModelId, normalized.ApiKey),
             Encrypt(normalized.ApiKey),
             now);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             MutationIdentity(access.PortfolioId, request.ClientOperationId),
             AiIntegrationWriteSupport.Write<RotateWorkspaceLlmCredentialCommand, AiIntegrationStatusResult>(
                 _db, command), ct);
@@ -176,7 +175,7 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             access.AccessContextId,
             access.AccessRevision,
             _timeProvider.GetUtcNow().UtcDateTime);
-        await _writes.ExecuteExactAsync(
+        await _writes.ExecuteAsync(
             MutationIdentity(access.PortfolioId, clientOperationId),
             AiIntegrationWriteSupport.Write<RemoveWorkspaceLlmCredentialCommand, RemoveWorkspaceLlmCredentialResult>(
                 _db, command), ct);
@@ -255,7 +254,7 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             outputUnits,
             estimatedCostUsd,
             _timeProvider.GetUtcNow().UtcDateTime);
-        await _writes.ExecuteExactAsync(
+        await _writes.ExecuteAsync(
             $"{portfolioId}:{stableIdentity}",
             AiIntegrationWriteSupport.Write<RecordLlmUsageEvidenceCommand, RecordLlmUsageEvidenceResult>(
                 _db, command), ct);

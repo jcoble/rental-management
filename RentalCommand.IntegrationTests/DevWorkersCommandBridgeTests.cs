@@ -10,14 +10,12 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
-using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Simulation;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
-using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 using Xunit;
 
@@ -88,7 +86,6 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_conn).UseAtomicPersistenceKernel(provider));
         services.AddScoped<ISimWorkerCommandClaimStore, SimWorkerCommandClaimStore>();
@@ -145,7 +142,6 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_conn).UseAtomicPersistenceKernel(provider));
         services.AddScoped<ISimWorkerCommandClaimStore, SimWorkerCommandClaimStore>();
@@ -185,11 +181,11 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
         var key = $"{access.PortfolioId}:{access.UserId}:worker-replay-proof";
         await using var scope = provider.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
-        var first = await writes.ExecuteExactAsync(
+        var first = await writes.ExecuteAsync(
             key, SimulationWriteSupport.Write<EnqueueSimulationWorkerCommand, EnqueueSimulationWorkerResult>(db, command));
-        var replay = await writes.ExecuteExactAsync(
+        var replay = await writes.ExecuteAsync(
             key, SimulationWriteSupport.Write<EnqueueSimulationWorkerCommand, EnqueueSimulationWorkerResult>(db, command));
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -211,7 +207,6 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_conn)
                 .UseAtomicPersistenceKernel(provider));

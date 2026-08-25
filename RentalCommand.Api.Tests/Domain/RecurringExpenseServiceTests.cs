@@ -2,7 +2,6 @@ using FluentAssertions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -35,7 +34,7 @@ public class RecurringExpenseServiceTests : IAsyncLifetime
         _ctx = await _fixture.CreateContextAsync();
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(RecurringExpenseServiceTests));
         _sut = new RecurringExpenseService(
-            _ctx.Db, TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
+            _ctx.Db, TimeProvider.System, Mock.Of<IWriteExecutor>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();

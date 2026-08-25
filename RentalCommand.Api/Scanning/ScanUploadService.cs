@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Imaging;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
@@ -18,7 +17,7 @@ namespace RentalCommand.Api.Scanning;
 
 public sealed class ScanUploadService : IScanUploadService
 {
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RentalCommand.Data.RentalCommandDbContext _db;
     private readonly IFileStorage _storage;
     private readonly IPendingFileUploadStore _pendingUploads;
@@ -27,7 +26,7 @@ public sealed class ScanUploadService : IScanUploadService
 
     public ScanUploadService(
         RentalCommand.Data.RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IFileStorage storage,
         IPendingFileUploadStore pendingUploads,
         IOptions<UploadSettings> settings,

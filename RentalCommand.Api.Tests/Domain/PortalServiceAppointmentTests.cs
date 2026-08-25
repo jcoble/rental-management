@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Moq;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.TestCommon;
 
@@ -12,7 +13,9 @@ public sealed class PortalServiceAppointmentTests : IDisposable
 
     public PortalServiceAppointmentTests()
     {
-        _sut = new PortalService(_ctx.Db, new NoopLeaseQaService(), TimeProvider.System);
+        _sut = new PortalService(
+            _ctx.Db, new NoopLeaseQaService(), TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public void Dispose() => _ctx.Dispose();

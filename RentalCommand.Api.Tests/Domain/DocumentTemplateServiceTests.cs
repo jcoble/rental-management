@@ -49,7 +49,7 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
         _sut = new DocumentTemplateService(
             _services.GetRequiredService<RentalCommandDbContext>(), _catalog, _files,
             _services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public async Task DisposeAsync()
@@ -226,7 +226,7 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
         var sut = new DocumentTemplateService(
             services.GetRequiredService<RentalCommandDbContext>(), _catalog, files,
             services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         await using var content = new MemoryStream("%PDF-1.7 sample"u8.ToArray());
 
         var result = await sut.UploadPdfAsync(
@@ -273,7 +273,7 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
         var sut = new DocumentTemplateService(
             services.GetRequiredService<RentalCommandDbContext>(), _catalog, files,
             services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         await using var firstContent = new MemoryStream("%PDF-1.7 first empty portfolio lease"u8.ToArray());
         var first = await sut.UploadPdfAsync(
@@ -328,7 +328,7 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
         var sut = new DocumentTemplateService(
             services.GetRequiredService<RentalCommandDbContext>(), _catalog, files,
             services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
         await using var content = new MemoryStream("%PDF-1.7 morgan selected scope lease"u8.ToArray());
 
         var result = await sut.UploadPdfAsync(
@@ -372,7 +372,7 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
         var sut = new DocumentTemplateService(
             services.GetRequiredService<RentalCommandDbContext>(), _catalog, new InMemoryFileStorage(),
             services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
-            services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var result = await sut.UpdateFieldAsync(
             scope,
@@ -438,8 +438,6 @@ public sealed class DocumentTemplateServiceTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<RentalCommand.Api.Writes.IRequestWriteExecutor,
-            RentalCommand.Api.Writes.RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             configureDatabase(builder);
