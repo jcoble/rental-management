@@ -62,6 +62,7 @@
 		RefreshCw,
 		FileText,
 	} from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const reportKey = $derived(page.params.report ?? '');
@@ -193,13 +194,6 @@
 	});
 
 	// --- Formatting ----------------------------------------------------------------------------------
-	function money(value: number | null | undefined) {
-		return new Intl.NumberFormat('en-US', {
-			style: 'currency',
-			currency: 'USD',
-			minimumFractionDigits: 2,
-		}).format(value || 0);
-	}
 	function pct(value: number | null | undefined) {
 		return `${(value ?? 0).toFixed(1)}%`;
 	}
@@ -517,18 +511,18 @@
 				{#each (rentRoll.properties?.length ? rentRoll.properties : [{ propertyId: 0, propertyName: '', rows: rentRoll.rows, unitCount: rentRoll.rows.length, leaseCount: rentRoll.leaseCount, totalBaseRent: rentRoll.totalMonthlyRent, totalMonthlyRent: rentRoll.totalMonthlyRent, totalSecurityDeposit: rentRoll.totalSecurityDeposit, totalDepositHeld: 0, totalCurrentBalance: 0 }]) as property (property.propertyId)}
 									<tr class="border-b bg-muted/20">
 										<td class="px-3 py-2 font-semibold" colspan="2">{property.propertyName || 'Portfolio'} <span class="font-normal text-muted-foreground">· {property.leaseCount} lease{property.leaseCount === 1 ? '' : 's'} / {property.unitCount} unit{property.unitCount === 1 ? '' : 's'}</span></td>
-					<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(property.totalBaseRent)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(property.totalDepositHeld)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(property.totalCurrentBalance)}</td>
+					<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(property.totalBaseRent)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(property.totalDepositHeld)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(property.totalCurrentBalance)}</td>
 										<td colspan="2"></td>
 									</tr>
 									{#each property.rows as r (r.unitId)}
 										<tr class="border-b last:border-0 hover:bg-muted/30">
 											<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
 											<td class="px-3 py-2">{r.tenantNames?.length ? r.tenantNames.join(', ') : (r.isVacant ? 'Vacant' : r.tenantName)}</td>
-						<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.baseRent)}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.depositHeld)}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums {r.currentBalance > 0 ? 'text-destructive' : ''}">{money(r.currentBalance)}</td>
+						<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(r.baseRent)}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(r.depositHeld)}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums {r.currentBalance > 0 ? 'text-destructive' : ''}">{formatAccountingCurrency(r.currentBalance)}</td>
 											<td class="px-3 py-2 text-xs text-muted-foreground">{r.isVacant ? '—' : `${formatDateOnly(r.startOn)} – ${r.endOn ? formatDateOnly(r.endOn) : 'Month to month'}`}</td>
 											<td class="px-3 py-2">{formatStatusLabel(r.statusName)}</td>
 										</tr>
@@ -538,9 +532,9 @@
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2" colspan="2">Portfolio · {rentRoll.portfolioTotals?.leaseCount ?? rentRoll.leaseCount} leases / {rentRoll.portfolioTotals?.unitCount ?? rentRoll.rows.length} units</td>
-					<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(rentRoll.portfolioTotals?.totalBaseRent ?? rentRoll.totalMonthlyRent)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(rentRoll.portfolioTotals?.totalDepositHeld ?? 0)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(rentRoll.portfolioTotals?.totalCurrentBalance ?? 0)}</td>
+					<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(rentRoll.portfolioTotals?.totalBaseRent ?? rentRoll.totalMonthlyRent)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(rentRoll.portfolioTotals?.totalDepositHeld ?? 0)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(rentRoll.portfolioTotals?.totalCurrentBalance ?? 0)}</td>
 									<td colspan="2"></td>
 								</tr>
 							</tfoot>
@@ -562,21 +556,21 @@
 								{#each agedReceivables.properties as property (property.propertyId)}
 									<tr class="border-b bg-muted/20">
 										<td class="px-3 py-2 font-semibold" colspan="2">{property.propertyName}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(property.buckets.current)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(property.buckets.days31To60)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(property.buckets.days61To90)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{money(property.buckets.over90)}</td>
-										<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums text-destructive">{money(property.totalOutstanding)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(property.buckets.current)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(property.buckets.days31To60)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(property.buckets.days61To90)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{formatAccountingCurrency(property.buckets.over90)}</td>
+										<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums text-destructive">{formatAccountingCurrency(property.totalOutstanding)}</td>
 									</tr>
 									{#each property.rows as r (r.tenantAccountId)}
 										<tr class="border-b last:border-0 hover:bg-muted/30">
 											<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
 											<td class="px-3 py-2">{r.tenantNames?.length ? r.tenantNames.join(', ') : r.tenantName}<div class="text-xs text-muted-foreground">Charge oldest {r.oldestChargeDate ? formatDateOnly(r.oldestChargeDate) : '—'}</div></td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums">{r.buckets.current ? money(r.buckets.current) : '—'}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days31To60 ? money(r.buckets.days31To60) : '—'}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days61To90 ? money(r.buckets.days61To90) : '—'}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{r.buckets.over90 ? money(r.buckets.over90) : '—'}</td>
-											<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums text-destructive">{money(r.total)}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums">{r.buckets.current ? formatAccountingCurrency(r.buckets.current) : '—'}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days31To60 ? formatAccountingCurrency(r.buckets.days31To60) : '—'}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days61To90 ? formatAccountingCurrency(r.buckets.days61To90) : '—'}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{r.buckets.over90 ? formatAccountingCurrency(r.buckets.over90) : '—'}</td>
+											<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums text-destructive">{formatAccountingCurrency(r.total)}</td>
 										</tr>
 									{/each}
 								{/each}
@@ -584,11 +578,11 @@
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2" colspan="2">Portfolio total</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(agedReceivables.portfolioTotals.current)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(agedReceivables.portfolioTotals.days31To60)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(agedReceivables.portfolioTotals.days61To90)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{money(agedReceivables.portfolioTotals.over90)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{money(agedReceivables.totalOutstanding)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(agedReceivables.portfolioTotals.current)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(agedReceivables.portfolioTotals.days31To60)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(agedReceivables.portfolioTotals.days61To90)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{formatAccountingCurrency(agedReceivables.portfolioTotals.over90)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{formatAccountingCurrency(agedReceivables.totalOutstanding)}</td>
 								</tr>
 							</tfoot>
 
@@ -614,25 +608,25 @@
 											<td class="px-3 py-2">{formatDateOnly(e.date)}</td>
 											<td class="px-3 py-2">{formatMoneyEntryLabel(e.type)}</td>
 											<td class="px-3 py-2 text-muted-foreground">{e.description}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums">{e.charge ? money(e.charge) : '—'}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{e.credit ? money(e.credit) : '—'}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums {e.balance > 0 ? 'text-destructive' : ''}">{money(e.balance)}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums">{e.charge ? formatAccountingCurrency(e.charge) : '—'}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{e.credit ? formatAccountingCurrency(e.credit) : '—'}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums {e.balance > 0 ? 'text-destructive' : ''}">{formatAccountingCurrency(e.balance)}</td>
 										</tr>
 									{/each}
 									<tr class="border-b bg-muted/10 font-medium">
 										<td class="px-3 py-1.5" colspan="3">Subtotal</td>
-										<td class="px-3 py-1.5 text-right font-mono tabular-nums">{money(l.totalCharged)}</td>
-										<td class="px-3 py-1.5 text-right font-mono tabular-nums text-success">{money(l.totalCredits)}</td>
-										<td class="px-3 py-1.5 text-right font-mono tabular-nums {l.balance > 0 ? 'text-destructive' : ''}">{money(l.balance)}</td>
+										<td class="px-3 py-1.5 text-right font-mono tabular-nums">{formatAccountingCurrency(l.totalCharged)}</td>
+										<td class="px-3 py-1.5 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(l.totalCredits)}</td>
+										<td class="px-3 py-1.5 text-right font-mono tabular-nums {l.balance > 0 ? 'text-destructive' : ''}">{formatAccountingCurrency(l.balance)}</td>
 									</tr>
 								{/each}
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2" colspan="3">Portfolio total</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(rentLedger.totalCharged)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(rentLedger.totalCredits)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums {rentLedger.totalBalance > 0 ? 'text-destructive' : ''}">{money(rentLedger.totalBalance)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(rentLedger.totalCharged)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(rentLedger.totalCredits)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums {rentLedger.totalBalance > 0 ? 'text-destructive' : ''}">{formatAccountingCurrency(rentLedger.totalBalance)}</td>
 								</tr>
 							</tfoot>
 
@@ -654,22 +648,22 @@
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.buckets.current ? money(r.buckets.current) : '—'}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days31To60 ? money(r.buckets.days31To60) : '—'}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days61To90 ? money(r.buckets.days61To90) : '—'}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{r.buckets.over90 ? money(r.buckets.over90) : '—'}</td>
-										<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums {r.total > 0 ? 'text-destructive' : ''}">{money(r.total)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.buckets.current ? formatAccountingCurrency(r.buckets.current) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days31To60 ? formatAccountingCurrency(r.buckets.days31To60) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days61To90 ? formatAccountingCurrency(r.buckets.days61To90) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{r.buckets.over90 ? formatAccountingCurrency(r.buckets.over90) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums {r.total > 0 ? 'text-destructive' : ''}">{formatAccountingCurrency(r.total)}</td>
 									</tr>
 								{/each}
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2" colspan="2">Totals</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(delinquency.totals.current)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(delinquency.totals.days31To60)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(delinquency.totals.days61To90)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{money(delinquency.totals.over90)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{money(delinquency.totalOutstanding)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(delinquency.totals.current)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(delinquency.totals.days31To60)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(delinquency.totals.days61To90)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{formatAccountingCurrency(delinquency.totals.over90)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{formatAccountingCurrency(delinquency.totalOutstanding)}</td>
 								</tr>
 							</tfoot>
 
@@ -687,18 +681,18 @@
 								{#each cashFlow.months as m (m.monthKey)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2 font-medium">{m.label}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(m.income)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(m.expense)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(m.net)}">{money(m.net)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(m.income)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(m.expense)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(m.net)}">{formatAccountingCurrency(m.net)}</td>
 									</tr>
 								{/each}
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2">Total</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(cashFlow.totalIncome)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(cashFlow.totalExpense)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(cashFlow.totalNet)}">{money(cashFlow.totalNet)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(cashFlow.totalIncome)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(cashFlow.totalExpense)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(cashFlow.totalNet)}">{formatAccountingCurrency(cashFlow.totalNet)}</td>
 								</tr>
 							</tfoot>
 
@@ -723,16 +717,16 @@
 										<td class="px-3 py-2">{e.description}{#if e.counterparty}<span class="text-muted-foreground"> · {e.counterparty}</span>{/if}</td>
 										<td class="px-3 py-2 text-muted-foreground">{formatMoneyCategoryLabel(e.category)}</td>
 										<td class="px-3 py-2 text-muted-foreground">{e.propertyName ?? '—'}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(e.amount)}">{money(e.amount)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(e.runningBalance)}">{money(e.runningBalance)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(e.amount)}">{formatAccountingCurrency(e.amount)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(e.runningBalance)}">{formatAccountingCurrency(e.runningBalance)}</td>
 									</tr>
 								{/each}
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
-									<td class="px-3 py-2" colspan="5">Income {money(generalLedger.totalIncome)} · Expense {money(generalLedger.totalExpense)}</td>
+									<td class="px-3 py-2" colspan="5">Income {formatAccountingCurrency(generalLedger.totalIncome)} · Expense {formatAccountingCurrency(generalLedger.totalExpense)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums">Net</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(generalLedger.closingBalance)}">{money(generalLedger.closingBalance)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(generalLedger.closingBalance)}">{formatAccountingCurrency(generalLedger.closingBalance)}</td>
 								</tr>
 							</tfoot>
 
@@ -750,18 +744,18 @@
 								{#each propertyPnl.rows as r (r.propertyId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2 font-medium">{r.propertyName}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.income)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(r.expense)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(r.net)}">{money(r.net)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(r.income)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(r.expense)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(r.net)}">{formatAccountingCurrency(r.net)}</td>
 									</tr>
 								{/each}
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2">Total</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(propertyPnl.totalIncome)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(propertyPnl.totalExpense)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(propertyPnl.totalNet)}">{money(propertyPnl.totalNet)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(propertyPnl.totalIncome)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(propertyPnl.totalExpense)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(propertyPnl.totalNet)}">{formatAccountingCurrency(propertyPnl.totalNet)}</td>
 								</tr>
 							</tfoot>
 
@@ -814,7 +808,7 @@
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.monthlyRent)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(r.monthlyRent)}</td>
 										<td class="px-3 py-2">{formatDateOnly(r.endOn)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {r.daysUntilExpiry < 0 ? 'text-destructive' : r.daysUntilExpiry <= 30 ? 'text-[var(--warning)]' : ''}">{r.daysUntilExpiry}</td>
 										<td class="px-3 py-2">{formatStatusLabel(r.statusName)}</td>
@@ -824,7 +818,7 @@
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2" colspan="2">{leaseExp.leaseCount} lease{leaseExp.leaseCount === 1 ? '' : 's'} expiring</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(leaseExp.totalMonthlyRent)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(leaseExp.totalMonthlyRent)}</td>
 									<td colspan="3"></td>
 								</tr>
 							</tfoot>
@@ -847,10 +841,10 @@
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.held)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {r.deductions > 0 ? 'text-[var(--warning)]' : ''}">{r.deductions ? money(r.deductions) : '—'}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.returned ? money(r.returned) : '—'}</td>
-										<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums text-success">{money(r.currentBalance)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(r.held)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {r.deductions > 0 ? 'text-[var(--warning)]' : ''}">{r.deductions ? formatAccountingCurrency(r.deductions) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.returned ? formatAccountingCurrency(r.returned) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums text-success">{formatAccountingCurrency(r.currentBalance)}</td>
 										<td class="px-3 py-2">{formatStatusLabel(r.statusName)}</td>
 									</tr>
 								{/each}
@@ -858,10 +852,10 @@
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2" colspan="2">Totals</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(deposits.totalHeld)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(deposits.totalDeductions)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(deposits.totalReturned)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(deposits.totalCurrentBalance)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(deposits.totalHeld)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{formatAccountingCurrency(deposits.totalDeductions)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(deposits.totalReturned)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{formatAccountingCurrency(deposits.totalCurrentBalance)}</td>
 									<td></td>
 								</tr>
 								<tr class="border-t bg-background font-normal print:hidden">
@@ -895,7 +889,7 @@
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2 font-medium">{r.vendorName}</td>
 										<td class="px-3 py-2 font-mono text-xs text-muted-foreground">{r.taxId ?? '—'}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.totalPaid)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(r.totalPaid)}</td>
 										<td class="px-3 py-2">{r.w9OnFile ? 'On file' : '—'}</td>
 										<td class="px-3 py-2">
 											{#if r.needsW9}<span class="mr-1 inline-flex rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs text-destructive">Needs W-9</span>{/if}
@@ -906,8 +900,8 @@
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
-									<td class="px-3 py-2" colspan="2">Total paid (threshold {money(vendor1099.threshold)})</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(vendor1099.totalPaid)}</td>
+									<td class="px-3 py-2" colspan="2">Total paid (threshold {formatAccountingCurrency(vendor1099.threshold)})</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(vendor1099.totalPaid)}</td>
 									<td colspan="2"></td>
 								</tr>
 							</tfoot>
@@ -926,18 +920,18 @@
 								{#each ownerDist.rows as r (r.ownerId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2 font-medium">{r.ownerName}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(r.netToOwner)}">{money(r.netToOwner)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.totalDistributed)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(r.undistributed)}">{money(r.undistributed)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(r.netToOwner)}">{formatAccountingCurrency(r.netToOwner)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(r.totalDistributed)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(r.undistributed)}">{formatAccountingCurrency(r.undistributed)}</td>
 									</tr>
 								{/each}
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2">Total to owners</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(ownerDist.totalNetToOwners)}">{money(ownerDist.totalNetToOwners)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(ownerDist.totalDistributed)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(ownerDist.totalUndistributed)}">{money(ownerDist.totalUndistributed)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(ownerDist.totalNetToOwners)}">{formatAccountingCurrency(ownerDist.totalNetToOwners)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(ownerDist.totalDistributed)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(ownerDist.totalUndistributed)}">{formatAccountingCurrency(ownerDist.totalUndistributed)}</td>
 								</tr>
 							</tfoot>
 
@@ -963,14 +957,14 @@
 										<td class="px-3 py-2">{formatStatusLabel(r.statusName)}</td>
 										<td class="px-3 py-2 text-muted-foreground">{r.vendorName ?? '—'}</td>
 										<td class="px-3 py-2">{formatDate(r.requestedAt)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.actualCost != null ? money(r.actualCost) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.actualCost != null ? formatAccountingCurrency(r.actualCost) : '—'}</td>
 									</tr>
 								{/each}
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
 									<td class="px-3 py-2" colspan="6">{workOrders.totalCount} total · {workOrders.openCount} open · {workOrders.completedCount} completed</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(workOrders.totalActualCost)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{formatAccountingCurrency(workOrders.totalActualCost)}</td>
 								</tr>
 							</tfoot>
 						{/if}

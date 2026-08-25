@@ -25,6 +25,8 @@
 	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import { currentOwnerStatementYear, ownerStatementYearOptions, watchOwnerStatementYear } from '$lib/accounting/owner-statement-years';
 	import { Check, FileBarChart, Mail, Plus, Trash2, XCircle } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	const DISTRIBUTION_METHODS: { value: DistributionMethod; label: string }[] = [
 		{ value: 'Ach', label: 'ACH' },
@@ -91,15 +93,6 @@
 		canCreateDistribution && hasCapability('money.reconciliation.destructive')
 	);
 
-	function money(value: number) {
-		return new Intl.NumberFormat('en-US', {
-			style: 'currency',
-			currency: 'USD',
-			minimumFractionDigits: 2,
-			maximumFractionDigits: 2
-		}).format(value || 0);
-	}
-
 	function localDateString(date: Date) {
 		const year = date.getFullYear();
 		const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -137,15 +130,6 @@
 			propertyId: 'none',
 			memo: ''
 		};
-	}
-
-	function formatDate(value: string) {
-		return new Intl.DateTimeFormat('en-US', {
-			month: 'short',
-			day: 'numeric',
-			year: 'numeric',
-			timeZone: 'UTC'
-		}).format(new Date(value));
 	}
 
 	function methodLabel(value: DistributionMethod) {
@@ -392,10 +376,10 @@
 					>
 						<p class="font-medium text-foreground">{owner.ownerName}</p>
 						<p class="mt-0.5 font-mono text-sm {owner.netToOwner >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
-							Net for owner: {money(owner.netToOwner)}
+							Net for owner: {formatAccountingCurrency(owner.netToOwner)}
 						</p>
 						<p class="mt-0.5 font-mono text-xs {owner.undistributed >= 0 ? 'text-muted-foreground' : 'text-destructive'}">
-							Still to pay: {money(owner.undistributed)}
+							Still to pay: {formatAccountingCurrency(owner.undistributed)}
 						</p>
 					</button>
 				{/each}
@@ -444,26 +428,26 @@
 						<Card.Root class="gap-0 py-0" data-testid="owners-report-total-income">
 							<Card.Content class="p-4">
 								<p class="text-xs text-muted-foreground">Total income</p>
-								<p class="font-mono tabular-nums text-2xl font-bold text-[var(--success)]">{money(report.totalIncome)}</p>
+								<p class="font-mono tabular-nums text-2xl font-bold text-[var(--success)]">{formatAccountingCurrency(report.totalIncome)}</p>
 							</Card.Content>
 						</Card.Root>
 						<Card.Root class="gap-0 py-0" data-testid="owners-report-total-expenses">
 							<Card.Content class="p-4">
 								<p class="text-xs text-muted-foreground">Total expenses</p>
-								<p class="font-mono tabular-nums text-2xl font-bold text-destructive">{money(report.totalExpenses)}</p>
+								<p class="font-mono tabular-nums text-2xl font-bold text-destructive">{formatAccountingCurrency(report.totalExpenses)}</p>
 							</Card.Content>
 						</Card.Root>
 						<Card.Root class="gap-0 py-0" data-testid="owners-report-mgmt-fee">
 							<Card.Content class="p-4">
 								<p class="text-xs text-muted-foreground">Management fee</p>
-								<p class="font-mono tabular-nums text-2xl font-bold text-destructive">{money(report.totalManagementFee)}</p>
+								<p class="font-mono tabular-nums text-2xl font-bold text-destructive">{formatAccountingCurrency(report.totalManagementFee)}</p>
 							</Card.Content>
 						</Card.Root>
 						<Card.Root class="gap-0 py-0" data-testid="owners-report-net">
 							<Card.Content class="p-4">
 								<p class="text-xs text-muted-foreground">Net to owner</p>
 								<p class="font-mono tabular-nums text-2xl font-bold {report.totalNetToOwner >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
-									{money(report.totalNetToOwner)}
+									{formatAccountingCurrency(report.totalNetToOwner)}
 								</p>
 							</Card.Content>
 						</Card.Root>
@@ -471,9 +455,9 @@
 							<Card.Content class="p-4">
 								<p class="text-xs text-muted-foreground">Still to pay</p>
 								<p class="font-mono tabular-nums text-2xl font-bold {report.undistributed >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
-									{money(report.undistributed)}
+									{formatAccountingCurrency(report.undistributed)}
 								</p>
-								<p class="mt-1 font-mono text-xs text-muted-foreground">Paid: {money(report.totalDistributed)}</p>
+								<p class="mt-1 font-mono text-xs text-muted-foreground">Paid: {formatAccountingCurrency(report.totalDistributed)}</p>
 							</Card.Content>
 						</Card.Root>
 					</div>
@@ -595,7 +579,7 @@
 											<tbody>
 												{#each distributions as distribution (distribution.id)}
 											<tr class="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/30" onclick={() => (selectedDistributionId = selectedDistributionId === distribution.id ? null : distribution.id)} data-testid="owner-distribution-row-{distribution.id}">
-														<td class="px-4 py-3 whitespace-nowrap">{formatDate(distribution.date)}</td>
+														<td class="px-4 py-3 whitespace-nowrap">{formatDateOnly(distribution.date)}</td>
 														<td class="px-4 py-3 whitespace-nowrap">{methodLabel(distribution.method)}</td>
 														<td class="px-4 py-3 whitespace-nowrap">
 															<span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {statusClass(distribution.status)}">
@@ -603,7 +587,7 @@
 															</span>
 														</td>
 														<td class="px-4 py-3">{distribution.propertyName ?? '—'}</td>
-														<td class="px-4 py-3 text-right font-mono tabular-nums">{money(distribution.amount)}</td>
+														<td class="px-4 py-3 text-right font-mono tabular-nums">{formatAccountingCurrency(distribution.amount)}</td>
 														<td class="min-w-56 px-4 py-3">
 															{#if distribution.status === 'Draft'}
 																<Input
@@ -655,7 +639,7 @@
 																				variant="ghost"
 																				size="icon"
 																				class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-																				aria-label={`Delete distribution ${money(distribution.amount)}`}
+																				aria-label={`Delete distribution ${formatAccountingCurrency(distribution.amount)}`}
 																				title="Delete draft"
 																				disabled={deleteDistributionMutation.isPending || distribution.status !== 'Draft'}
 																				onclick={() => deleteDistributionMutation.mutate(distribution.id)}
@@ -685,7 +669,7 @@
 								{:else if contributions.length === 0}<p class="text-sm text-muted-foreground">No owner contributions recorded for {selectedYear}.</p>
 								{:else}
 									<div class="space-y-2">{#each contributions as contribution (contribution.id)}
-										<button type="button" class="flex w-full justify-between rounded-lg border p-3 text-left" onclick={() => (selectedContributionId = selectedContributionId === contribution.id ? null : contribution.id)}><span>{formatDate(contribution.date)} · {contribution.propertyName ?? 'Portfolio'}</span><span class="font-mono">{money(contribution.amount)}</span></button>
+										<button type="button" class="flex w-full justify-between rounded-lg border p-3 text-left" onclick={() => (selectedContributionId = selectedContributionId === contribution.id ? null : contribution.id)}><span>{formatDateOnly(contribution.date)} · {contribution.propertyName ?? 'Portfolio'}</span><span class="font-mono">{formatAccountingCurrency(contribution.amount)}</span></button>
 										{#if selectedContributionId === contribution.id}<AccountingImpactCard sourceType="OwnerContribution" sourceId={contribution.id} />{/if}
 									{/each}</div>
 								{/if}
@@ -734,15 +718,15 @@
 											data-testid="owners-report-property-row-{prop.propertyId}"
 										>
 											<td class="px-4 py-3 font-medium text-foreground">{prop.propertyName}</td>
-											<td class="px-4 py-3 text-right font-mono tabular-nums text-[var(--success)]">{money(prop.rentalIncome)}</td>
-											<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{money(prop.expenses)}</td>
-											<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{money(prop.managementFee)}</td>
+											<td class="px-4 py-3 text-right font-mono tabular-nums text-[var(--success)]">{formatAccountingCurrency(prop.rentalIncome)}</td>
+											<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{formatAccountingCurrency(prop.expenses)}</td>
+											<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{formatAccountingCurrency(prop.managementFee)}</td>
 											<td
 												class="px-4 py-3 text-right font-mono tabular-nums font-semibold {prop.netToOwner >= 0
 													? 'text-[var(--success)]'
 													: 'text-destructive'}"
 											>
-												{money(prop.netToOwner)}
+												{formatAccountingCurrency(prop.netToOwner)}
 											</td>
 										</tr>
 										{/if}

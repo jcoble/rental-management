@@ -595,9 +595,6 @@
 		saveExpenseMutation.mutate({ id: editingExpenseId, data });
 	}
 
-	function money(value: number) {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value || 0);
-	}
 	// Short, compact date for the inline reconciliation chips (e.g. "Jun 3").
 	function shortDate(value: string | null | undefined) {
 		if (!value) return '';
@@ -788,7 +785,7 @@
 					data-testid="txn-match-chip-{t.id}"
 					class="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
 					disabled={confirmingMatchId === match.bankTransactionId}
-					aria-label={`Confirm bank match: ${match.name}, ${money(match.amount)} on ${shortDate(match.date)}`}
+					aria-label={`Confirm bank match: ${match.name}, ${formatAccountingCurrency(match.amount)} on ${shortDate(match.date)}`}
 					onclick={(ev: MouseEvent) => {
 						ev.stopPropagation();
 						confirmBankMatchMutation.mutate(match.bankTransactionId);
@@ -802,7 +799,7 @@
 						<p class="text-xs font-semibold">Found a matching bank line</p>
 						<p class="text-xs">
 							{match.name} ·
-							<span class="font-mono tabular-nums">{money(match.amount)}</span>
+							<span class="font-mono tabular-nums">{formatAccountingCurrency(match.amount)}</span>
 							· {shortDate(match.date)}
 						</p>
 						<p class="text-[11px] text-muted-foreground">Tap the chip to confirm — we won't count it twice.</p>
@@ -953,8 +950,8 @@
 			<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Net cash flow</p>
-					<p class="font-mono text-2xl font-bold tabular-nums {(reports?.netCashFlow || 0) < 0 ? 'text-destructive' : (reports?.netCashFlow || 0) > 0 ? 'text-success' : ''}">{money(reports?.netCashFlow || 0)}</p>
-					<p class="mt-1 text-xs text-muted-foreground"><span class="text-success">{money(reports?.totalIncome || 0)}</span> income / <span class="text-[var(--warning)]">{money(reports?.totalExpenses || 0)}</span> expenses</p>
+					<p class="font-mono text-2xl font-bold tabular-nums {(reports?.netCashFlow || 0) < 0 ? 'text-destructive' : (reports?.netCashFlow || 0) > 0 ? 'text-success' : ''}">{formatAccountingCurrency(reports?.netCashFlow || 0)}</p>
+					<p class="mt-1 text-xs text-muted-foreground"><span class="text-success">{formatAccountingCurrency(reports?.totalIncome || 0)}</span> income / <span class="text-[var(--warning)]">{formatAccountingCurrency(reports?.totalExpenses || 0)}</span> expenses</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="m3-tonal-card m3-tonal-card--violet gap-0 py-0">
@@ -1001,7 +998,7 @@
 									</span>
 									<span class="block text-xs text-muted-foreground">{formatMoneyEntryLabel(row.type)} · {row.counterparty ?? row.propertyName ?? 'General'}</span>
 								</span>
-								<span class="shrink-0 font-mono text-sm tabular-nums">{money(row.amount)}</span>
+								<span class="shrink-0 font-mono text-sm tabular-nums">{formatAccountingCurrency(row.amount)}</span>
 							</a>
 						{:else}
 							<p class="text-sm text-muted-foreground">No ledger activity yet.</p>
@@ -1022,9 +1019,9 @@
 						<a href="/properties/{property.propertyId}" class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
 							<span class="min-w-0">
 								<span class="block truncate text-sm">{property.propertyName}</span>
-								<span class="block text-xs text-muted-foreground">{money(property.income)} income / {money(property.expenses)} expenses</span>
+								<span class="block text-xs text-muted-foreground">{formatAccountingCurrency(property.income)} income / {formatAccountingCurrency(property.expenses)} expenses</span>
 							</span>
-							<span class="shrink-0 font-mono text-sm tabular-nums">{money(property.net)}</span>
+							<span class="shrink-0 font-mono text-sm tabular-nums">{formatAccountingCurrency(property.net)}</span>
 						</a>
 					{:else}
 						<p class="text-sm text-muted-foreground">No property report data yet.</p>
@@ -1043,7 +1040,7 @@
 					{#each (reports?.scheduleE ?? []).slice(0, 8) as line}
 						<div class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5">
 							<span class="truncate text-sm">{line.categoryName}</span>
-							<span class="shrink-0 font-mono text-sm tabular-nums">{money(line.total)}</span>
+							<span class="shrink-0 font-mono text-sm tabular-nums">{formatAccountingCurrency(line.total)}</span>
 						</div>
 					{:else}
 						<p class="text-sm text-muted-foreground">No Schedule E totals yet.</p>
@@ -1067,7 +1064,7 @@
 										{vendor.needsW9 ? 'Needs W-9' : vendor.needs1099Review ? 'Needs 1099 review' : 'Tracked vendor'}
 									</span>
 								</span>
-								<span class="shrink-0 font-mono text-sm tabular-nums">{money(vendor.totalPaid)}</span>
+								<span class="shrink-0 font-mono text-sm tabular-nums">{formatAccountingCurrency(vendor.totalPaid)}</span>
 							</a>
 						{:else}
 							<p class="text-sm text-muted-foreground">No vendors need 1099 review.</p>

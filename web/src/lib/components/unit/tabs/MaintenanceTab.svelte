@@ -10,7 +10,6 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { workOrderSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { money } from '../money';
 import { formatDateOnly } from '$lib/utils/date';
 import { formatStatusLabel } from '$lib/utils/status-labels';
 	import {
@@ -27,6 +26,7 @@ import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { Wrench, Receipt, Plus, X, ExternalLink, ArrowLeft } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		dashboard,
@@ -340,7 +340,7 @@ import { formatStatusLabel } from '$lib/utils/status-labels';
 						<dl class="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
 							<div><dt class="text-muted-foreground">Category</dt><dd>{w.category}</dd></div>
 							<div><dt class="text-muted-foreground">Requested</dt><dd>{formatDateOnly(w.requestedAt)}</dd></div>
-							<div><dt class="text-muted-foreground">Cost</dt><dd>{money(w.actualCost ?? w.estimatedCost ?? 0)}</dd></div>
+							<div><dt class="text-muted-foreground">Cost</dt><dd>{formatAccountingCurrency(w.actualCost ?? w.estimatedCost ?? 0)}</dd></div>
 						</dl>
 						<div class="mt-3 flex flex-wrap justify-end gap-2">
 							<Button
@@ -391,7 +391,7 @@ import { formatStatusLabel } from '$lib/utils/status-labels';
 				{#each workOrderReceipts as e (e.id)}
 					<li class="flex items-center justify-between py-1.5">
 						<span class="truncate">{formatDateOnly(e.incurredAt)} · {e.description}</span>
-						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={e.status} />{money(e.amount)}</span>
+						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={e.status} />{formatAccountingCurrency(e.amount)}</span>
 					</li>
 				{/each}
 			</ul>

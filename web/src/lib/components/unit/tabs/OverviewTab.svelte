@@ -1,11 +1,11 @@
 <script lang="ts">
 	import type { UnitDashboard } from '$lib/types';
-	import { money } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Home, DollarSign, Wrench, FileText, CalendarClock, User } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		dashboard,
@@ -55,7 +55,7 @@
 	<DetailCard title="Snapshot" icon={Home} accent="primary" testid="overview-snapshot">
 		<dl class="grid grid-cols-2 gap-3 text-sm">
 			<div><dt class="text-muted-foreground">Beds / Baths</dt><dd class="font-medium">{unit.bedrooms} / {unit.bathrooms}</dd></div>
-			<div><dt class="text-muted-foreground">Market rent</dt><dd class="font-medium">{money(unit.marketRent)}</dd></div>
+			<div><dt class="text-muted-foreground">Market rent</dt><dd class="font-medium">{formatAccountingCurrency(unit.marketRent)}</dd></div>
 			{#if unit.squareFeet}<div><dt class="text-muted-foreground">Size</dt><dd class="font-medium">{unit.squareFeet} sqft</dd></div>{/if}
 			{#if unit.floorPlan}<div><dt class="text-muted-foreground">Floor plan</dt><dd class="font-medium">{unit.floorPlan}</dd></div>{/if}
 			<div><dt class="text-muted-foreground">Status</dt><dd><StatusBadge status={unit.status} /></dd></div>
@@ -84,7 +84,7 @@
 				{#if lease}
 					<dl class="grid grid-cols-2 gap-2 border-t pt-2">
 						<div><dt class="text-muted-foreground">Lease</dt><dd class="font-medium">Signed lease on file</dd></div>
-						<div><dt class="text-muted-foreground">Rent</dt><dd class="font-medium">{money(lease.monthlyRent)}</dd></div>
+						<div><dt class="text-muted-foreground">Rent</dt><dd class="font-medium">{formatAccountingCurrency(lease.monthlyRent)}</dd></div>
 						<div><dt class="text-muted-foreground">Start</dt><dd>{formatDateOnly(lease.startDate)}</dd></div>
 						<div><dt class="text-muted-foreground">End</dt><dd>{formatDateOnly(lease.endDate)}</dd></div>
 					</dl>
@@ -101,7 +101,7 @@
 	<DetailCard title="Rent" icon={DollarSign} accent="warning" testid="overview-rent">
 		<div class="mb-2 flex items-center justify-between">
 			<span class="text-sm text-muted-foreground">Outstanding</span>
-			<span class="text-lg font-semibold">{money(dashboard.header.outstandingRentBalance)}</span>
+			<span class="text-lg font-semibold">{formatAccountingCurrency(dashboard.header.outstandingRentBalance)}</span>
 		</div>
 		{#if o.recentPayments.length === 0}
 			<p class="text-sm text-muted-foreground">No payments recorded.</p>
@@ -110,7 +110,7 @@
 				{#each o.recentPayments as p (p.id)}
 					<li class="flex items-center justify-between py-1.5">
 						<span>{formatDateOnly(p.paidDate ?? p.dueDate)} · {p.description || 'Payment received'}</span>
-						<span class="flex items-center gap-2"><StatusBadge status={p.status} />{money(p.amount)}</span>
+						<span class="flex items-center gap-2"><StatusBadge status={p.status} />{formatAccountingCurrency(p.amount)}</span>
 					</li>
 				{/each}
 			</ul>

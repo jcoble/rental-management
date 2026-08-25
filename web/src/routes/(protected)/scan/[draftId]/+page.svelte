@@ -64,6 +64,8 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { AlertTriangle, CheckCircle2, X } from '@lucide/svelte';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	const LINE_ITEMS_FIELD = 'line_items';
 
@@ -297,7 +299,7 @@
 	);
 
 	function loanPaymentLabel(payment: LoanPayment): string {
-		const dueDate = new Date(payment.dueDate).toLocaleDateString();
+		const dueDate = formatDateOnly(payment.dueDate);
 		return `${payment.periodKey} · due ${dueDate} · ${formatUsd(payment.totalAmount)} · ${formatStatusLabel(payment.status)}`;
 	}
 
@@ -1158,8 +1160,7 @@
 	}
 
 	function formatUsd(val: number | null): string {
-		if (val == null) return '';
-		return val.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+		return val == null ? '' : formatAccountingCurrency(val);
 	}
 
 	// A draft that was already confirmed in a PRIOR session (status Confirmed, no fresh in-session

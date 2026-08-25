@@ -36,11 +36,11 @@
 	import { BellRing, CalendarClock, Eye, FileDown, FilePenLine, FilePlus2, Home, ScanLine, Users } from '@lucide/svelte';
 	import { apiErrorMessage, showError } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
-	import { money } from '$lib/components/unit/money';
 	import { leaseAgreementChangeTypeLabel, leaseAgreementStatusLabel } from '$lib/leases/lease-list-labels';
 	import { outsideEsignLabel } from '$lib/leases/lease-signing-labels';
 	import type { LeaseManagementParty } from '$lib/types';
 	import type { ReturnPossessionActiveTenantUserAccess } from '$lib/api/endpoints/lease-managements';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	type SuccessorType = 'Correction' | 'Restatement' | 'Renewal' | 'MonthToMonth';
 	type SuccessorSelection = { source: LeaseAgreementSummary; changeType: SuccessorType };
@@ -356,7 +356,7 @@
 							</div>
 							<div class="space-y-1">
 								<dt class="text-xs font-medium text-muted-foreground">Base rent</dt>
-								<dd class="font-medium">{summary.baseRentAmount == null ? 'Not set' : `${money(summary.baseRentAmount)} per month`}</dd>
+								<dd class="font-medium">{summary.baseRentAmount == null ? 'Not set' : `${formatAccountingCurrency(summary.baseRentAmount)} per month`}</dd>
 							</div>
 							<div class="space-y-1">
 								<dt class="text-xs font-medium text-muted-foreground">Possession</dt>

@@ -52,17 +52,22 @@ function validCurrencyCode(value: string | null | undefined): string {
 	return normalized && /^[A-Z]{3}$/.test(normalized) ? normalized : 'USD';
 }
 
-/** Format a server-provided amount. This function never computes an amount. */
+/**
+ * Format a server-provided amount. This function never computes an amount.
+ * Pass `wholeDollars` for the summary tiles that deliberately drop the cents.
+ */
 export function formatAccountingCurrency(
 	value: number | null | undefined,
-	currency = 'USD'
+	currency = 'USD',
+	wholeDollars = false
 ): string {
 	if (value == null || !Number.isFinite(value)) return '—';
+	const digits = wholeDollars ? 0 : 2;
 	return new Intl.NumberFormat('en-US', {
 		style: 'currency',
 		currency: validCurrencyCode(currency),
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2
+		minimumFractionDigits: digits,
+		maximumFractionDigits: digits
 	}).format(value);
 }
 

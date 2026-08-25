@@ -6,6 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	type Kind = 'pipeline' | 'rentals' | 'calendar' | 'inbox';
 	let { kind }: { kind: Kind } = $props();
@@ -61,7 +62,7 @@
 	}
 
 	function money(value?: number | null): string {
-		return value == null ? 'Rent not set' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value);
+		return value == null ? 'Rent not set' : formatAccountingCurrency(value, 'USD', true);
 	}
 </script>
 

@@ -51,6 +51,7 @@
 		DollarSign,
 	} from '@lucide/svelte';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	// `applicationId` selects the record; `onDeleted` is the exit/close callback (the page has no
 	// delete) — the host uses it to clear the selection / navigate back to the list.
@@ -562,10 +563,6 @@
 		const d = new Date(value);
 		return isNaN(d.getTime()) ? '—' : d.toLocaleString();
 	}
-	function fmtMoney(value: number | null | undefined): string {
-		if (value == null) return '—';
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
-	}
 </script>
 
 <svelte:head>
@@ -681,7 +678,7 @@
 				<Card.Content class="grid grid-cols-2 gap-x-4 gap-y-4 text-sm">
 					<div class="col-span-2">{@render fieldRow('Current address', formatApplicationAddress(application))}</div>
 					{@render fieldRow('Employer', application.employer || '—')}
-					{@render fieldRow('Monthly income', fmtMoney(application.monthlyIncome))}
+					{@render fieldRow('Monthly income', formatAccountingCurrency(application.monthlyIncome))}
 				</Card.Content>
 			</Card.Root>
 

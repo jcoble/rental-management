@@ -96,6 +96,7 @@
 		ListChecks,
 		PiggyBank,
 	} from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const queryClient = useQueryClient();
 	const leaseSubmission = createLeaseSubmissionCoordinator(scan);
@@ -704,11 +705,7 @@
 
 	function unitSummary(unit: Unit): string {
 		const compactNumber = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
-		const rent = new Intl.NumberFormat('en-US', {
-			style: 'currency',
-			currency: 'USD',
-			maximumFractionDigits: 0,
-		}).format(unit.marketRent ?? 0);
+		const rent = formatAccountingCurrency(unit.marketRent ?? 0, 'USD', true);
 		return `${compactNumber.format(unit.bedrooms ?? 0)} bd · ${compactNumber.format(unit.bathrooms ?? 0)} ba · ${rent}/mo`;
 	}
 

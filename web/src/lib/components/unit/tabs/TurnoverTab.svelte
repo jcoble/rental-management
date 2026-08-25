@@ -5,9 +5,9 @@
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { money } from '../money';
 	import MaintenanceTab from './MaintenanceTab.svelte';
 	import { CalendarDays, ClipboardCheck, Clock3, ReceiptText, Wrench } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		dashboard,
@@ -110,8 +110,8 @@
 				<ReceiptText class="mt-0.5 h-5 w-5 text-primary" />
 				<div>
 					<p class="text-xs font-medium uppercase text-muted-foreground">Budget / actual</p>
-					<p class="mt-2 text-xl font-semibold">{money(summary.estimatedCost)} / {money(summary.actualCost)}</p>
-					<p class="mt-1 text-sm text-muted-foreground">{summary.receiptCount} receipt{summary.receiptCount === 1 ? '' : 's'} · {budgetVariance > 0 ? '+' : ''}{money(budgetVariance)}</p>
+					<p class="mt-2 text-xl font-semibold">{formatAccountingCurrency(summary.estimatedCost)} / {formatAccountingCurrency(summary.actualCost)}</p>
+					<p class="mt-1 text-sm text-muted-foreground">{summary.receiptCount} receipt{summary.receiptCount === 1 ? '' : 's'} · {budgetVariance > 0 ? '+' : ''}{formatAccountingCurrency(budgetVariance)}</p>
 				</div>
 			</div>
 		</section>

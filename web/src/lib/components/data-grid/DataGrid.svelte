@@ -37,6 +37,7 @@
 	import { cn } from '$lib/utils.js';
 	import { Loader2, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import EmptyState from '$lib/components/shared/EmptyState.svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 	import * as Table from '$lib/components/ui/table/index.js';
 
 	type Props = {
@@ -186,7 +187,7 @@
 	function formatValue(val: unknown, format?: ColumnDef<T>['format']): string {
 		if (val == null) return '–';
 		if (format === 'currency' && typeof val === 'number') {
-			return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
+			return formatAccountingCurrency(val);
 		}
 		if (format === 'number' && typeof val === 'number') {
 			return new Intl.NumberFormat('en-US').format(val);

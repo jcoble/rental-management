@@ -16,6 +16,7 @@
 	import DashboardBriefing from './DashboardBriefing.svelte';
 	import { dashboardActivityHref } from '$lib/navigation/dashboard-activity-href';
 	import { recordHref } from '$lib/navigation/record-href';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
@@ -35,8 +36,9 @@
 	}));
 	const canOpenGettingStarted = $derived(hasCapability('security.manage'));
 
+	// The dashboard tiles deliberately drop the cents.
 	function money(value: number) {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
+		return formatAccountingCurrency(value || 0, 'USD', true);
 	}
 
 </script>
