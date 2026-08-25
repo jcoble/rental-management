@@ -26,6 +26,7 @@
 	import { currentOwnerStatementYear, ownerStatementYearOptions, watchOwnerStatementYear } from '$lib/accounting/owner-statement-years';
 	import { Check, FileBarChart, Mail, Plus, Trash2, XCircle } from '@lucide/svelte';
 	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	const DISTRIBUTION_METHODS: { value: DistributionMethod; label: string }[] = [
 		{ value: 'Ach', label: 'ACH' },
@@ -129,15 +130,6 @@
 			propertyId: 'none',
 			memo: ''
 		};
-	}
-
-	function formatDate(value: string) {
-		return new Intl.DateTimeFormat('en-US', {
-			month: 'short',
-			day: 'numeric',
-			year: 'numeric',
-			timeZone: 'UTC'
-		}).format(new Date(value));
 	}
 
 	function methodLabel(value: DistributionMethod) {
@@ -587,7 +579,7 @@
 											<tbody>
 												{#each distributions as distribution (distribution.id)}
 											<tr class="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/30" onclick={() => (selectedDistributionId = selectedDistributionId === distribution.id ? null : distribution.id)} data-testid="owner-distribution-row-{distribution.id}">
-														<td class="px-4 py-3 whitespace-nowrap">{formatDate(distribution.date)}</td>
+														<td class="px-4 py-3 whitespace-nowrap">{formatDateOnly(distribution.date)}</td>
 														<td class="px-4 py-3 whitespace-nowrap">{methodLabel(distribution.method)}</td>
 														<td class="px-4 py-3 whitespace-nowrap">
 															<span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {statusClass(distribution.status)}">
@@ -677,7 +669,7 @@
 								{:else if contributions.length === 0}<p class="text-sm text-muted-foreground">No owner contributions recorded for {selectedYear}.</p>
 								{:else}
 									<div class="space-y-2">{#each contributions as contribution (contribution.id)}
-										<button type="button" class="flex w-full justify-between rounded-lg border p-3 text-left" onclick={() => (selectedContributionId = selectedContributionId === contribution.id ? null : contribution.id)}><span>{formatDate(contribution.date)} · {contribution.propertyName ?? 'Portfolio'}</span><span class="font-mono">{formatAccountingCurrency(contribution.amount)}</span></button>
+										<button type="button" class="flex w-full justify-between rounded-lg border p-3 text-left" onclick={() => (selectedContributionId = selectedContributionId === contribution.id ? null : contribution.id)}><span>{formatDateOnly(contribution.date)} · {contribution.propertyName ?? 'Portfolio'}</span><span class="font-mono">{formatAccountingCurrency(contribution.amount)}</span></button>
 										{#if selectedContributionId === contribution.id}<AccountingImpactCard sourceType="OwnerContribution" sourceId={contribution.id} />{/if}
 									{/each}</div>
 								{/if}

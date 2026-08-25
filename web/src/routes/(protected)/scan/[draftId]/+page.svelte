@@ -65,6 +65,7 @@
 	import { AlertTriangle, CheckCircle2, X } from '@lucide/svelte';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	const LINE_ITEMS_FIELD = 'line_items';
 
@@ -298,7 +299,7 @@
 	);
 
 	function loanPaymentLabel(payment: LoanPayment): string {
-		const dueDate = new Date(payment.dueDate).toLocaleDateString();
+		const dueDate = formatDateOnly(payment.dueDate);
 		return `${payment.periodKey} · due ${dueDate} · ${formatUsd(payment.totalAmount)} · ${formatStatusLabel(payment.status)}`;
 	}
 

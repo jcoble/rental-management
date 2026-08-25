@@ -17,6 +17,7 @@
 	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight, ScanLine } from '@lucide/svelte';
 	import { scanHref } from '$lib/scan/scan-context';
 	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
@@ -56,10 +57,6 @@
 	const loansList = $derived(loansQuery.data?.items ?? []);
 	const loansTotalCount = $derived(loansQuery.data?.totalCount ?? 0);
 
-	function fmtDate(value: string): string {
-		const d = new Date(value);
-		return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
-	}
 
 	const statusOptions = [
 		{ value: 'Active', label: 'Active' },
@@ -364,7 +361,7 @@
 							{#each scheduleRows as row (row.id)}
 								<tr class="border-t border-border/60">
 									<td class="py-1 pr-3">{row.periodKey}</td>
-									<td class="py-1 pr-3">{fmtDate(row.dueDate)}</td>
+									<td class="py-1 pr-3">{formatDateOnly(row.dueDate)}</td>
 									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.interestAmount)}</td>
 									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.principalAmount)}</td>
 									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.escrowAmount)}</td>
@@ -372,7 +369,7 @@
 									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.balanceAfter)}</td>
 									<td class="py-1 text-right">
 										{#if row.status === 'Paid'}
-											<span class="font-medium text-success">Paid {row.paidDate ? fmtDate(row.paidDate) : ''}</span>
+											<span class="font-medium text-success">Paid {row.paidDate ? formatDateOnly(row.paidDate) : ''}</span>
 										{:else if canManage}
 											<Button
 												variant="outline"

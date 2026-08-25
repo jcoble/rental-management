@@ -7,6 +7,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { Plus } from '@lucide/svelte';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	type Props = {
 		propertyId: number;
@@ -87,7 +88,7 @@
 		{:else}
 			<ul class="divide-y rounded-lg border">
 				{#each query.data.items as task (task.id)}
-					<li class="flex items-center justify-between gap-3 p-3 text-sm" data-testid={task.testId}><span class="font-medium">{task.title}</span><span class="text-muted-foreground">{task.recurrenceInterval} · {new Date(task.nextDueDate).toLocaleDateString()}</span></li>
+					<li class="flex items-center justify-between gap-3 p-3 text-sm" data-testid={task.testId}><span class="font-medium">{task.title}</span><span class="text-muted-foreground">{task.recurrenceInterval} · {formatDateOnly(task.nextDueDate)}</span></li>
 				{/each}
 			</ul>
 		{/if}

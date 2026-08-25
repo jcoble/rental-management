@@ -8,6 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { FileText, Image, Trash2, Upload, AlertCircle, FolderOpen } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
+	import { formatDate } from '$lib/utils/date';
 
 	let {
 		entityType,
@@ -117,9 +118,6 @@
 		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 	}
 
-	function formatDate(iso: string): string {
-		return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-	}
 </script>
 
 <Card.Root data-testid="documents-panel">
