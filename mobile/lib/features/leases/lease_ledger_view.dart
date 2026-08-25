@@ -5,27 +5,6 @@ import '../../core/api/api_exception.dart';
 import 'leases_repository.dart';
 import '../../core/presentation/formatting.dart';
 
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String _fmtDate(DateTime d) {
-  if (d.year <= 1) return '';
-  return '${_monthNames[d.month]} ${d.day}, ${d.year}';
-}
-
 /// A self-contained, scrollable "account history" for one lease: the running
 /// totals card followed by every charge/payment with its plain-English "why".
 ///
@@ -185,7 +164,10 @@ class _BalanceCard extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  child: _Total(label: 'Paid', value: moneyFmt(ledger.totalPaid)),
+                  child: _Total(
+                    label: 'Paid',
+                    value: moneyFmt(ledger.totalPaid),
+                  ),
                 ),
               ],
             ),
@@ -239,7 +221,8 @@ class _LedgerEntryCard extends StatelessWidget {
     // A payment reduces what's owed; show it green and signed.
     final isPayment = entry.type.toLowerCase() == 'payment';
     final amountColor = isPayment ? Colors.green.shade700 : cs.onSurface;
-    final signedAmount = '${isPayment ? '-' : ''}${moneyFmt(entry.amount.abs())}';
+    final signedAmount =
+        '${isPayment ? '-' : ''}${moneyFmt(entry.amount.abs())}';
 
     return Card(
       child: Padding(
@@ -302,11 +285,11 @@ class _LedgerEntryCard extends StatelessWidget {
                           ),
                         ),
                       ],
-                      if (_fmtDate(entry.date).isNotEmpty) ...[
+                      if (dateFmt(entry.date).isNotEmpty) ...[
                         const SizedBox(height: 2),
                         Text(
                           [
-                            _fmtDate(entry.date),
+                            dateFmt(entry.date),
                             if (entry.status.isNotEmpty) entry.status,
                           ].join(' · '),
                           style: theme.textTheme.bodySmall?.copyWith(

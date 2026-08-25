@@ -7,24 +7,9 @@ import '../../core/api/api_exception.dart';
 import '../home/mobile_domain_navigation.dart';
 import 'message_models.dart';
 import 'messages_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-const _months = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
 
 /// Short timestamp under a bubble: "9:30 AM" or "Jun 1, 9:30 AM" if not today.
 String _fmtBubbleTime(DateTime d) {
@@ -41,7 +26,7 @@ String _fmtBubbleTime(DateTime d) {
       local.month == now.month &&
       local.day == now.day;
   if (sameDay) return time;
-  return '${_months[local.month]} ${local.day}, $time';
+  return '${shortDateFmt(local)}, $time';
 }
 
 /// Landlord-facing label for a channel string ('Sms' → 'Text').

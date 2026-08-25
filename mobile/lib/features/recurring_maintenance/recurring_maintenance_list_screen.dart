@@ -10,24 +10,6 @@ import 'recurring_maintenance_models.dart';
 import 'recurring_maintenance_repository.dart';
 import '../../core/presentation/formatting.dart';
 
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String fmtDueDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
-
 String _fmtMoney(double? value) => value == null ? '—' : moneyFmt(value);
 
 String _fmtApiTime(String? raw) {
@@ -357,7 +339,7 @@ class _TaskCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    'Next: ${fmtDueDate(task.nextDueDate)}',
+                    'Next: ${dateFmt(task.nextDueDate)}',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: colorScheme.onSurfaceVariant,
                     ),

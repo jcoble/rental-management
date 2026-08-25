@@ -1,27 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/config/app_config.dart';
+import '../../core/presentation/formatting.dart';
 
 // ── Date formatting ───────────────────────────────────────────────────────────
-
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String formatApplicationDate(DateTime d) =>
-    '${_monthNames[d.month]} ${d.day}, ${d.year}';
 
 String _padTwo(int n) => n.toString().padLeft(2, '0');
 
@@ -29,7 +11,7 @@ String formatApplicationDateTime(DateTime d) {
   final local = d.toLocal();
   final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
   final period = local.hour < 12 ? 'AM' : 'PM';
-  return '${formatApplicationDate(local)}  '
+  return '${dateFmt(local)}  '
       '$hour:${_padTwo(local.minute)} $period';
 }
 

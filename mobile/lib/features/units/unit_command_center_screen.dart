@@ -856,7 +856,8 @@ class _UnitOverviewTab extends ConsumerWidget {
             if (header.outstandingRentBalance > 0)
               _InfoChip(
                 icon: Symbols.attach_money_rounded,
-                label: '${moneyFmt(header.outstandingRentBalance, whole: true)} due',
+                label:
+                    '${moneyFmt(header.outstandingRentBalance, whole: true)} due',
               ),
             _InfoChip(
               icon: Symbols.build_rounded,
@@ -2429,7 +2430,7 @@ class _UnitApplicationsTabState extends ConsumerState<_UnitApplicationsTab> {
                         subtitle: Text(
                           app.submittedAtUtc == null
                               ? 'Not yet submitted'
-                              : 'Submitted ${formatApplicationDate(app.submittedAtUtc!.toLocal())}',
+                              : 'Submitted ${dateFmt(app.submittedAtUtc!.toLocal())}',
                         ),
                         trailing: ApplicationStatusChip(status: app.status),
                         onTap: () => _openDetail(app.id),
@@ -3758,4 +3759,3 @@ String _formatDate(DateTime date) {
   if (date.year <= 1) return 'Not set';
   return '${date.month}/${date.day}/${date.year}';
 }
-

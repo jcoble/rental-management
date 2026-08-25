@@ -773,7 +773,7 @@ class _DetailBody extends StatelessWidget {
               if (app.dateOfBirth != null)
                 _DetailRow(
                   label: 'Date of birth',
-                  value: formatApplicationDate(app.dateOfBirth!.toLocal()),
+                  value: dateFmt(app.dateOfBirth!.toLocal()),
                 ),
               if (app.currentAddress != null)
                 _DetailRow(
@@ -805,9 +805,7 @@ class _DetailBody extends StatelessWidget {
               if (app.desiredMoveInDate != null)
                 _DetailRow(
                   label: 'Desired move-in',
-                  value: formatApplicationDate(
-                    app.desiredMoveInDate!.toLocal(),
-                  ),
+                  value: dateFmt(app.desiredMoveInDate!.toLocal()),
                 ),
               _DetailRow(
                 label: 'Status',

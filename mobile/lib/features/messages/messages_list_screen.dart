@@ -18,24 +18,9 @@ import '../tenants/tenants_repository.dart';
 import 'message_models.dart';
 import 'message_detail_screen.dart';
 import 'messages_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-const _months = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
 
 /// Relative-ish timestamp for the thread list: "9:30 AM" today, "Mon" this
 /// week, otherwise "Jun 1".
@@ -59,7 +44,7 @@ String _fmtRelative(DateTime d) {
     const wd = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     return wd[local.weekday];
   }
-  return '${_months[local.month]} ${local.day}';
+  return '${monthAbbrs[local.month]} ${local.day}';
 }
 
 String _tenantDisplayName(Tenant t) {

@@ -12,24 +12,6 @@ import 'tenants_list_screen.dart';
 import 'tenants_repository.dart';
 import '../../core/presentation/formatting.dart';
 
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String _fmt(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
-
 /// Loads a tenant by id, then shows [TenantDetailScreen]. Use this when the
 /// caller only has a tenant id (e.g. a relationship's party link, or an approved
 /// application that created a tenant).
@@ -370,7 +352,10 @@ class _TenantInfoCard extends StatelessWidget {
                     label: 'Emergency',
                     value: tenant.emergencyContact!,
                   ),
-                _KeyValue(label: 'Member since', value: _fmt(tenant.createdAt)),
+                _KeyValue(
+                  label: 'Member since',
+                  value: dateFmt(tenant.createdAt),
+                ),
                 if (tenant.activeLeaseCount != null)
                   _KeyValue(
                     label: 'Active leases',
@@ -490,7 +475,7 @@ class _LeaseSummaryTile extends StatelessWidget {
                   Expanded(
                     child: Text(
                       'Unit ${lease.unitNumber}  ·  '
-                      '${lease.termStartOn == null ? 'Agreement not issued' : '${_fmt(lease.termStartOn!)} – ${lease.termEndOn == null ? 'Month-to-month' : _fmt(lease.termEndOn!)}'}',
+                      '${lease.termStartOn == null ? 'Agreement not issued' : '${dateFmt(lease.termStartOn!)} – ${lease.termEndOn == null ? 'Month-to-month' : dateFmt(lease.termEndOn!)}'}',
                       style: TextStyle(
                         fontSize: 12,
                         color: colorScheme.onSurfaceVariant,

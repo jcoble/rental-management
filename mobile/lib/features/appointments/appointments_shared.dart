@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/presentation/formatting.dart';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -21,25 +22,6 @@ const appointmentStatuses = [
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String formatAppointmentDate(DateTime d) =>
-    '${_monthNames[d.month]} ${d.day}, ${d.year}';
-
 String _padTwo(int n) => n.toString().padLeft(2, '0');
 
 String formatAppointmentTime(DateTime d) {
@@ -49,7 +31,7 @@ String formatAppointmentTime(DateTime d) {
 }
 
 String formatAppointmentDateTime(DateTime d) =>
-    '${formatAppointmentDate(d)}  ${formatAppointmentTime(d)}';
+    '${dateFmt(d)}  ${formatAppointmentTime(d)}';
 
 String friendlyAppointmentType(String type) {
   switch (type) {

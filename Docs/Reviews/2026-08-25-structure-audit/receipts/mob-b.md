@@ -26,3 +26,18 @@ Deleted display money helpers and routed them at `moneyFmt`; added the single op
   `_fmtNum`.
 - Test changed: `test/analytics_rent_labels_test.dart` asserted the deleted `_fmtCurrency`
   call text; updated to the `moneyFmt` call it now reads.
+
+### Item 3 — one date formatter
+Deleted 13 copies of the month-name table; every `MMM d, yyyy` helper now calls `dateFmt`.
+Deleted: tenant_detail `_fmt`, work_order_detail `_fmtDate` + `_fmtEditDate`, property_detail
+`_formatDate`, lease_ledger_view `_fmtDate`, deposits `_fmtDate`, applications_shared
+`formatApplicationDate`, recurring_maintenance_list `fmtDueDate`, inspections_list
+`fmtInspectionDate`, appointments_shared `formatAppointmentDate`, home_shell `_shortDate`
+(now `shortDateFmt`), portal `_shortDate` wrapper.
+Rewired onto the shared month table: work_order_timeline `formatTimelineMoment`,
+message_detail `_fmtBubbleTime`, messages_list `_fmtRelative`.
+Deliberately kept (distinct formats): the numeric `M/d/yyyy` helpers in owner_reports,
+unit_command_center (`Not set` guard), scan_list, property_documents, team, leasing,
+leases_list, lease_detail, addendum_action_sheets, owner_landing; owner_reports `_fmtMonth`;
+tenant_notices `_shortDate` (date + time); scan_review `_formatDate` (ISO `yyyy-MM-dd`);
+and every ISO serializer (`_dateOnly`, `_fmtIso`, `_dateInput`, `_dateOnlyQuery`).

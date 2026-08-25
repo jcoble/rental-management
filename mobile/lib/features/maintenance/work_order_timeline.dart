@@ -1,28 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../core/models/models.dart';
-
-const _months = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
+import '../../core/presentation/formatting.dart';
 
 String formatTimelineMoment(DateTime d) {
   final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
   final m = d.minute.toString().padLeft(2, '0');
   final ampm = d.hour < 12 ? 'AM' : 'PM';
-  return '${_months[d.month]} ${d.day}, ${d.year} · $h:$m $ampm';
+  return '${dateFmt(d)} · $h:$m $ampm';
 }
 
 /// Human-readable label for a WorkOrderStatus enum value.

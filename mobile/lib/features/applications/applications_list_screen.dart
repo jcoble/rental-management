@@ -282,7 +282,7 @@ class _ApplicationCard extends StatelessWidget {
     final appliedFor = StringBuffer('Property #${app.propertyId}');
     if (app.unitId != null) appliedFor.write('  ·  Unit #${app.unitId}');
     final submittedLabel = app.submittedAtUtc != null
-        ? 'Submitted ${formatApplicationDate(app.submittedAtUtc!.toLocal())}'
+        ? 'Submitted ${dateFmt(app.submittedAtUtc!.toLocal())}'
         : 'Not yet submitted';
     final incomeLabel = app.monthlyIncome != null
         ? ' · ${moneyFmt(app.monthlyIncome!, whole: true)}/mo'

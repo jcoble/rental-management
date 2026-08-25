@@ -31,24 +31,6 @@ import 'property_loan_form_sheet.dart';
 import 'property_loans_repository.dart';
 import 'property_workspace_sections.dart';
 
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String _formatDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
-
 String _formatOwnerships(Property property) {
   if (property.ownerships.isEmpty) return 'No owner assigned';
   return property.ownerships
@@ -1587,7 +1569,7 @@ class _LeaseTile extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 'Unit ${lease.unitNumber}  ·  '
-                '${lease.termStartOn == null ? 'Agreement not issued' : '${_formatDate(lease.termStartOn!)} – ${lease.termEndOn == null ? 'Month-to-month' : _formatDate(lease.termEndOn!)}'}',
+                '${lease.termStartOn == null ? 'Agreement not issued' : '${money.dateFmt(lease.termStartOn!)} – ${lease.termEndOn == null ? 'Month-to-month' : money.dateFmt(lease.termEndOn!)}'}',
                 style: TextStyle(
                   fontSize: 12,
                   color: colorScheme.onSurfaceVariant,
@@ -1685,7 +1667,7 @@ class _CapitalAssetTile extends StatelessWidget {
                 children: [
                   _ScheduleMetric(
                     label: 'In service',
-                    value: _formatDate(asset.inServiceDate),
+                    value: money.dateFmt(asset.inServiceDate),
                   ),
                   _ScheduleMetric(
                     label: '${asset.depreciationYear} depreciation',
@@ -1703,7 +1685,7 @@ class _CapitalAssetTile extends StatelessWidget {
                   if (asset.disposedOnDate != null)
                     _ScheduleMetric(
                       label: 'Disposed',
-                      value: _formatDate(asset.disposedOnDate!),
+                      value: money.dateFmt(asset.disposedOnDate!),
                     ),
                 ],
               ),
@@ -1758,7 +1740,7 @@ class _DispositionTile extends StatelessWidget {
                 ),
               ),
               title: Text(
-                'Closed ${_formatDate(disposition.closedOnDate)}',
+                'Closed ${money.dateFmt(disposition.closedOnDate)}',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   fontWeight: FontWeight.w600,
                 ),
@@ -2112,7 +2094,7 @@ class _LoanPaymentRow extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'Due ${_formatDate(payment.dueDate)}',
+                  'Due ${money.dateFmt(payment.dueDate)}',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),
