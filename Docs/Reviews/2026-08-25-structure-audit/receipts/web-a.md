@@ -23,3 +23,4 @@
 - `pnpm --dir web install --frozen-lockfile`, `check`, `check:native`, `build`: all exit 0.
 - `pnpm --dir web test`: one failure remains, `src/lib/leases/lease-action-hub-contract.test.ts`, which fails identically on main (pre-existing source-text assertion on a dialog this lane did not touch).
 - Fix: `src/routes/(portal)/portal/payments/account-history-contract.test.ts` asserted the source text `/history${queryString(params)}`; updated to match the shared `buildListQuery` call the lane introduced.
+- Review fix: restored `web/src/lib/components/ui/command/` — `web/component-tests/ModalDismissGuardHarness.svelte:4` still imports it (the audit's rg missed `component-tests/`).
