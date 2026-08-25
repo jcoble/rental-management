@@ -64,6 +64,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { AlertTriangle, CheckCircle2, X } from '@lucide/svelte';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const LINE_ITEMS_FIELD = 'line_items';
 
@@ -1158,8 +1159,7 @@
 	}
 
 	function formatUsd(val: number | null): string {
-		if (val == null) return '';
-		return val.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+		return val == null ? '' : formatAccountingCurrency(val);
 	}
 
 	// A draft that was already confirmed in a PRIOR session (status Confirmed, no fresh in-session

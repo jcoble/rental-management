@@ -24,6 +24,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { FileText, Image as ImageIcon, Upload } from '@lucide/svelte';
 	import { businessDateOrToday } from '$lib/utils/business-date';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const queryClient = useQueryClient();
 	const tenantAccountId = $derived(parseInt(page.params.id ?? '0', 10));
@@ -246,10 +247,6 @@
 		refundMutation.mutate({ operationKey: refundOperation.key, body });
 	}
 
-	function money(value: number, currency = 'USD') {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(value ?? 0);
-	}
-
 	const depositStatusMap: Record<string, { label?: string; class: string }> = {
 		NotFunded: { label: 'Not funded', class: 'm3-tone-chip border m3-tone--warning' },
 		Held: { class: 'm3-tone-chip border m3-tone--info' },
@@ -350,10 +347,10 @@
 			<Card.Header><Card.Title class="text-base">Deposit summary</Card.Title></Card.Header>
 			<Card.Content>
 				<dl class="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-4">
-					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Held balance</dt><dd class="mt-0.5 font-mono text-sm font-semibold tabular-nums" data-testid="deposit-detail-held-balance">{money(deposit.heldBalance, deposit.currency)}</dd></div>
-					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total received</dt><dd class="mt-0.5 font-mono text-sm tabular-nums">{money(deposit.totalReceived, deposit.currency)}</dd></div>
-					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total deductions</dt><dd class="mt-0.5 font-mono text-sm tabular-nums">{money(deposit.totalDeductions, deposit.currency)}</dd></div>
-					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total refunded</dt><dd class="mt-0.5 font-mono text-sm tabular-nums">{money(deposit.totalRefunded, deposit.currency)}</dd></div>
+					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Held balance</dt><dd class="mt-0.5 font-mono text-sm font-semibold tabular-nums" data-testid="deposit-detail-held-balance">{formatAccountingCurrency(deposit.heldBalance, deposit.currency)}</dd></div>
+					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total received</dt><dd class="mt-0.5 font-mono text-sm tabular-nums">{formatAccountingCurrency(deposit.totalReceived, deposit.currency)}</dd></div>
+					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total deductions</dt><dd class="mt-0.5 font-mono text-sm tabular-nums">{formatAccountingCurrency(deposit.totalDeductions, deposit.currency)}</dd></div>
+					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total refunded</dt><dd class="mt-0.5 font-mono text-sm tabular-nums">{formatAccountingCurrency(deposit.totalRefunded, deposit.currency)}</dd></div>
 					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Opened</dt><dd class="mt-0.5 text-sm">{formatDateOnly(deposit.createdAtUtc) || deposit.createdAtUtc}</dd></div>
 				</dl>
 				<details class="mt-5 rounded-md border border-border bg-muted/20" data-testid="deposit-technical-details">
@@ -409,7 +406,7 @@
 
 <Dialog.Root open={showDeductionForm} onOpenChange={(open) => { if (!open) showDeductionForm = false; }}>
 	<Dialog.Content class="max-w-md">
-		<Dialog.Header><Dialog.Title>Add deduction</Dialog.Title><Dialog.Description>Apply deposit funds to a documented tenant charge. Held balance: {deposit ? money(deposit.heldBalance, deposit.currency) : ''}.</Dialog.Description></Dialog.Header>
+		<Dialog.Header><Dialog.Title>Add deduction</Dialog.Title><Dialog.Description>Apply deposit funds to a documented tenant charge. Held balance: {deposit ? formatAccountingCurrency(deposit.heldBalance, deposit.currency) : ''}.</Dialog.Description></Dialog.Header>
 		<div class="space-y-3">
 			<div><span class="mb-1 block text-xs text-muted-foreground">Reason</span><Input bind:value={deductionReason} placeholder="Carpet cleaning, broken window…" />{#if deductionErrors.reason}<p class="mt-1 text-xs text-destructive">{deductionErrors.reason}</p>{/if}</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Amount</span><Input bind:value={deductionAmount} inputmode="decimal" mask="currency" placeholder="0.00" />{#if deductionErrors.amount}<p class="mt-1 text-xs text-destructive">{deductionErrors.amount}</p>{/if}</div>
@@ -426,7 +423,7 @@
 
 <Dialog.Root open={showRefundForm} onOpenChange={(open) => { if (!open) showRefundForm = false; }}>
 	<Dialog.Content class="max-w-md">
-		<Dialog.Header><Dialog.Title>Record deposit refund</Dialog.Title><Dialog.Description>Leave amount blank to refund the full held balance of {deposit ? money(deposit.heldBalance, deposit.currency) : ''}.</Dialog.Description></Dialog.Header>
+		<Dialog.Header><Dialog.Title>Record deposit refund</Dialog.Title><Dialog.Description>Leave amount blank to refund the full held balance of {deposit ? formatAccountingCurrency(deposit.heldBalance, deposit.currency) : ''}.</Dialog.Description></Dialog.Header>
 		<div class="space-y-3">
 			<div><span class="mb-1 block text-xs text-muted-foreground">Amount (optional)</span><Input bind:value={refundAmount} inputmode="decimal" mask="currency" placeholder="Full held balance" />{#if refundErrors.amount}<p class="mt-1 text-xs text-destructive">{refundErrors.amount}</p>{/if}</div>
 			<div>

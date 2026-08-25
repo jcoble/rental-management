@@ -52,6 +52,7 @@
 	import { businessDateOrToday } from '$lib/utils/business-date';
 	import type { UnitLeaseSummary } from '$lib/types';
 	import { ArrowLeft } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const queryClient = useQueryClient();
 	const id = $derived(Number(page.params.id));
@@ -660,7 +661,7 @@
 				<div class="flex items-center justify-between gap-3">
 					<span class="text-muted-foreground">Security deposit</span>
 					<span class="font-mono font-medium tabular-nums">
-						{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(moveInDialogLease.securityDeposit)}
+						{formatAccountingCurrency(moveInDialogLease.securityDeposit)}
 					</span>
 				</div>
 				{#if moveInAppointment}

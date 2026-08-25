@@ -10,6 +10,7 @@
 	import type { WorkspaceExperience } from '$lib/types/user';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	type LeasingRecord = 'rentals' | 'applications' | 'appointments' | 'conversations' | 'move-ins';
 
@@ -68,9 +69,7 @@
 	}
 
 	function money(value?: number | null): string {
-		return value == null
-			? 'Not set'
-			: new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+		return value == null ? 'Not set' : formatAccountingCurrency(value);
 	}
 </script>
 

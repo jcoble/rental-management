@@ -27,6 +27,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		tenantAccountId,
@@ -79,10 +80,6 @@
 	$effect(() => {
 		if (isMismatchedUnitSelection(receipt, expectedUnitId)) onUnitMismatch?.();
 	});
-
-	function money(value: number, currency = 'USD') {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(value);
-	}
 
 	function postedAt(value: string) {
 		const date = new Date(value);
@@ -160,7 +157,7 @@
 		<HeroCard tone="success" testid="payment-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
 			<div>
 				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{detailCopy.amountLabel}</p>
-				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{money(receipt.amount, receipt.currency)}</p>
+				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{formatAccountingCurrency(receipt.amount, receipt.currency)}</p>
 				<p class="mt-2 text-sm text-muted-foreground">{formatDateOnly(receipt.effectiveOn)} · {formatResidentName(receipt.tenantName)}</p>
 			</div>
 			<div class="flex flex-col items-end gap-3">
@@ -190,7 +187,7 @@
 				<dl class="mt-4 grid gap-3 rounded-md bg-muted/30 p-3 text-sm sm:grid-cols-3">
 					<div><dt class="text-xs text-muted-foreground">Rental</dt><dd class="font-medium">{correction.propertyName} · Unit {correction.unitNumber}</dd></div>
 					<div><dt class="text-xs text-muted-foreground">Tenant</dt><dd class="font-medium">{correction.tenantName}</dd></div>
-					<div><dt class="text-xs text-muted-foreground">Original payment</dt><dd class="font-medium">{money(correction.amount, receipt.currency)} · {formatDateOnly(receipt.effectiveOn)}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Original payment</dt><dd class="font-medium">{formatAccountingCurrency(correction.amount, receipt.currency)} · {formatDateOnly(receipt.effectiveOn)}</dd></div>
 				</dl>
 				<div class="mt-4 grid gap-3 sm:grid-cols-2">
 					<label class="text-xs font-medium text-muted-foreground">Correction date<DatePicker bind:value={correction.effectiveOn} todayValue={moneyDate} /></label>

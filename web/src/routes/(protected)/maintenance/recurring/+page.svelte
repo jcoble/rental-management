@@ -21,6 +21,7 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -87,11 +88,6 @@
 		const suffix = hour >= 12 ? 'PM' : 'AM';
 		const displayHour = hour % 12 || 12;
 		return `${displayHour}:${minute.toString().padStart(2, '0')} ${suffix}`;
-	}
-
-	function formatCurrency(value: number | null | undefined): string {
-		if (value == null) return '—';
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
 	}
 
 	const tasks = $derived(tasksQuery.data?.items ?? []);
@@ -187,8 +183,8 @@
 
 {#snippet budgetCell(t: RecurringMaintenanceTask)}
 	<div class="text-right text-sm" data-testid="recurring-task-budget-{t.id}">
-		<p class="font-mono tabular-nums">{formatCurrency(t.estimatedCost)}</p>
-		<p class="font-mono text-xs tabular-nums text-muted-foreground">{formatCurrency(t.monthlyEstimatedCost)}/mo</p>
+		<p class="font-mono tabular-nums">{formatAccountingCurrency(t.estimatedCost)}</p>
+		<p class="font-mono text-xs tabular-nums text-muted-foreground">{formatAccountingCurrency(t.monthlyEstimatedCost)}/mo</p>
 	</div>
 {/snippet}
 

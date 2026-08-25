@@ -23,6 +23,7 @@
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import PastDuePaymentDialog, { type PastDuePaymentSubmission } from '$lib/components/accounting/PastDuePaymentDialog.svelte';
 	import { AlertTriangle, CheckCircle2, MessageSquare, ChevronLeft, ChevronRight, CircleCheckBig, Loader2 } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -48,8 +49,9 @@
 		}
 	});
 
+	// Past-due amounts read as whole dollars on this page.
 	function money(value: number) {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
+		return formatAccountingCurrency(value || 0, 'USD', true);
 	}
 
 	function displayName(lease: PastDueLease): string {

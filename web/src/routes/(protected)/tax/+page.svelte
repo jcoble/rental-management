@@ -17,6 +17,7 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { FileText, Receipt, MessageSquare, AlertTriangle } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const CURRENT_YEAR = new Date().getFullYear();
 	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
@@ -63,15 +64,6 @@
 			showError(apiErrorMessage(err));
 		}
 	}));
-
-	function money(value: number) {
-		return new Intl.NumberFormat('en-US', {
-			style: 'currency',
-			currency: 'USD',
-			minimumFractionDigits: 2,
-			maximumFractionDigits: 2
-		}).format(value || 0);
-	}
 
 	async function handleDownload() {
 		downloading = true;
@@ -236,7 +228,7 @@
 											{v.vendorName}
 										</a>
 									</td>
-									<td class="py-2 pr-6 text-right tabular-nums">{money(v.totalPaid)}</td>
+									<td class="py-2 pr-6 text-right tabular-nums">{formatAccountingCurrency(v.totalPaid)}</td>
 									<td class="py-2 pr-4">
 										{#if v.w9OnFile}
 											<span
@@ -305,8 +297,8 @@
 		{#if report.unallocatedActivity.requiresAllocation}
 			<div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100" data-testid="tax-unallocated-warning">
 				<p class="font-semibold">Tax activity needs a property before filing</p>
-				<p class="mt-1">{report.unallocatedActivity.incomeEntryCount} income entries ({money(report.unallocatedActivity.rentalIncome)}) and {report.unallocatedActivity.expenseCount} expenses ({money(report.unallocatedActivity.totalExpenses)}) are not assigned to a property, so they are excluded from the Schedule E property lines below.</p>
-				<p class="mt-2 font-medium">Reconciled activity: {money(report.reconciledTotalRentalIncome)} income − {money(report.reconciledTotalExpenses)} expenses = {money(report.reconciledNetIncome)} net.</p>
+				<p class="mt-1">{report.unallocatedActivity.incomeEntryCount} income entries ({formatAccountingCurrency(report.unallocatedActivity.rentalIncome)}) and {report.unallocatedActivity.expenseCount} expenses ({formatAccountingCurrency(report.unallocatedActivity.totalExpenses)}) are not assigned to a property, so they are excluded from the Schedule E property lines below.</p>
+				<p class="mt-2 font-medium">Reconciled activity: {formatAccountingCurrency(report.reconciledTotalRentalIncome)} income − {formatAccountingCurrency(report.reconciledTotalExpenses)} expenses = {formatAccountingCurrency(report.reconciledNetIncome)} net.</p>
 			</div>
 		{/if}
 		<!-- Grand-total summary cards -->
@@ -314,13 +306,13 @@
 			<Card.Root class="gap-0 py-0" data-testid="tax-total-income">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Total rental income</p>
-					<p class="text-2xl font-bold text-[var(--success)]">{money(report.totalRentalIncome)}</p>
+					<p class="text-2xl font-bold text-[var(--success)]">{formatAccountingCurrency(report.totalRentalIncome)}</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="gap-0 py-0" data-testid="tax-total-expenses">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Total expenses</p>
-					<p class="text-2xl font-bold text-destructive">{money(report.totalExpenses)}</p>
+					<p class="text-2xl font-bold text-destructive">{formatAccountingCurrency(report.totalExpenses)}</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="gap-0 py-0" data-testid="tax-net-income">
@@ -331,7 +323,7 @@
 							? 'text-[var(--success)]'
 							: 'text-destructive'}"
 					>
-						{money(report.netIncome)}
+						{formatAccountingCurrency(report.netIncome)}
 					</p>
 				</Card.Content>
 			</Card.Root>
@@ -350,11 +342,11 @@
 						<div class="mb-3 grid gap-3 sm:grid-cols-3">
 							<div>
 								<p class="text-xs text-muted-foreground">Rental income</p>
-								<p class="text-lg font-semibold text-[var(--success)]">{money(property.rentalIncome)}</p>
+								<p class="text-lg font-semibold text-[var(--success)]">{formatAccountingCurrency(property.rentalIncome)}</p>
 							</div>
 							<div>
 								<p class="text-xs text-muted-foreground">Total expenses</p>
-								<p class="text-lg font-semibold text-destructive">{money(property.totalExpenses)}</p>
+								<p class="text-lg font-semibold text-destructive">{formatAccountingCurrency(property.totalExpenses)}</p>
 							</div>
 							<div>
 								<p class="text-xs text-muted-foreground">Net income</p>
@@ -363,7 +355,7 @@
 										? 'text-[var(--success)]'
 										: 'text-destructive'}"
 								>
-									{money(property.netIncome)}
+									{formatAccountingCurrency(property.netIncome)}
 								</p>
 							</div>
 						</div>
@@ -385,7 +377,7 @@
 											{#each property.expensesByCategory as item (item.category)}
 												<tr class="border-b border-border/50 last:border-0">
 													<td class="py-1.5 text-foreground">{formatExpenseCategory(item.category)}</td>
-													<td class="py-1.5 text-right tabular-nums">{money(item.amount)}</td>
+													<td class="py-1.5 text-right tabular-nums">{formatAccountingCurrency(item.amount)}</td>
 												</tr>
 											{/each}
 										</tbody>

@@ -27,6 +27,7 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import { Ban, Check, Landmark, Link2, RefreshCw, RotateCcw, Upload, X } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	type PlaidWindow = Window &
 		typeof globalThis & {
@@ -144,10 +145,6 @@
 		statusFilter;
 		transactionSkip = 0;
 	});
-
-	function money(value: number) {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
-	}
 
 	// Local-time formatter for timestamps (e.g. lastSyncedAt). Date-only fields like postedAt
 	// use formatDateOnly instead, so they don't shift a day back in behind-UTC zones.
@@ -501,7 +498,7 @@
 									</p>
 									<p class="text-xs text-muted-foreground">{formatDateOnly(item.transaction.postedAt)}</p>
 									<p class="mt-1 font-mono text-sm {item.transaction.amount >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
-										{money(item.transaction.amount)}
+										{formatAccountingCurrency(item.transaction.amount)}
 									</p>
 								</div>
 								<div class="rounded-md border border-border bg-muted/30 p-3">
@@ -627,7 +624,7 @@
 											<p class="text-xs text-muted-foreground">{transaction.institutionName} / {transaction.accountName}</p>
 										</td>
 										<td class="whitespace-nowrap px-4 py-3 text-right font-mono {transaction.amount >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
-											{money(transaction.amount)}
+											{formatAccountingCurrency(transaction.amount)}
 										</td>
 										<td class="min-w-56 px-4 py-3">
 											<Select.Root

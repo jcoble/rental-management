@@ -35,6 +35,7 @@
 	} from '$lib/maintenance/work-order-dispatch';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 	import { hasCapability } from '$lib/stores/auth.svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		workOrderId,
@@ -423,11 +424,6 @@
 	const availableTransitions = $derived(
 		wo ? caps.allowedStatusTransitions : []
 	);
-
-	function formatCurrency(val: number | undefined | null): string {
-		if (val == null) return '—';
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
-	}
 
 	function utcIsoToLocalInput(value: string | null | undefined): string {
 		if (!value) return '';
@@ -899,10 +895,10 @@
 				{@render dateField({ label: 'Completed', value: form.completedAt, setValue: (v) => (form.completedAt = v), display: wo.completedAt ? formatDateOnly(wo.completedAt) : '', error: formErrors.completedAt, testid: 'work-order-detail-completed' })}
 			{/if}
 			{#if caps.canViewCosts && (editing || wo.estimatedCost != null)}
-				<InlineField label="Estimated Cost" type="number" bind:value={form.estimatedCost} display={wo.estimatedCost != null ? formatCurrency(wo.estimatedCost) : ''} {editing} error={formErrors.estimatedCost} testid="work-order-detail-estimated-cost" placeholder="0.00" />
+				<InlineField label="Estimated Cost" type="number" bind:value={form.estimatedCost} display={wo.estimatedCost != null ? formatAccountingCurrency(wo.estimatedCost) : ''} {editing} error={formErrors.estimatedCost} testid="work-order-detail-estimated-cost" placeholder="0.00" />
 			{/if}
 			{#if caps.canViewCosts && (editing || wo.actualCost != null)}
-				<InlineField label="Actual Cost" type="number" bind:value={form.actualCost} display={wo.actualCost != null ? formatCurrency(wo.actualCost) : ''} {editing} error={formErrors.actualCost} testid="work-order-detail-actual-cost" placeholder="0.00" />
+				<InlineField label="Actual Cost" type="number" bind:value={form.actualCost} display={wo.actualCost != null ? formatAccountingCurrency(wo.actualCost) : ''} {editing} error={formErrors.actualCost} testid="work-order-detail-actual-cost" placeholder="0.00" />
 			{/if}
 		</DetailCard>
 

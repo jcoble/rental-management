@@ -16,6 +16,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
@@ -150,9 +151,6 @@
 		{ key: 'actions', title: '', align: 'right', width: '5rem', mobileRole: 'hidden', cell: actionsCell }
 	];
 
-	function fmtMoney(value: number): string {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
-	}
 </script>
 
 {#snippet actionsCell(disposition: PropertyDisposition)}
@@ -175,15 +173,15 @@
 			{#each list.slice(0, 1) as disposition}
 				<div class="rounded-md border border-border bg-muted/20 px-3 py-2">
 					<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Net proceeds</p>
-					<p class="mt-1 font-mono text-lg font-semibold tabular-nums">{fmtMoney(disposition.netSaleProceeds)}</p>
+					<p class="mt-1 font-mono text-lg font-semibold tabular-nums">{formatAccountingCurrency(disposition.netSaleProceeds)}</p>
 				</div>
 				<div class="rounded-md border border-border bg-muted/20 px-3 py-2">
 					<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Adjusted basis</p>
-					<p class="mt-1 font-mono text-lg font-semibold tabular-nums">{fmtMoney(disposition.adjustedBasis)}</p>
+					<p class="mt-1 font-mono text-lg font-semibold tabular-nums">{formatAccountingCurrency(disposition.adjustedBasis)}</p>
 				</div>
 				<div class="rounded-md border border-border bg-muted/20 px-3 py-2">
 					<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Estimated gain / loss</p>
-					<p class="mt-1 font-mono text-lg font-semibold tabular-nums">{fmtMoney(disposition.gainLoss)}</p>
+					<p class="mt-1 font-mono text-lg font-semibold tabular-nums">{formatAccountingCurrency(disposition.gainLoss)}</p>
 				</div>
 			{/each}
 		</div>
