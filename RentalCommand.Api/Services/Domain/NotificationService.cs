@@ -91,7 +91,6 @@ public class NotificationService : INotificationService
         return await query.CountAsync(ct);
     }
 
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<bool> MarkAsReadAsync(
         WorkspaceReadScope scope,
         int notificationId,
