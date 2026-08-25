@@ -6,13 +6,13 @@ import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/models/models.dart' hide Vendor;
+import '../../core/models/models.dart';
 import '../../core/time/app_clock.dart';
 import '../../core/utils/date_wire.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../vendors/vendors_repository.dart';
-import 'work_order_form_shell.dart';
 import 'work_orders_repository.dart';
 
 Future<void> showCreateWorkOrderSheet({
@@ -518,21 +518,21 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
 
     return Form(
       key: _formKey,
-      child: WorkOrderFormShell(
+      child: TabbedFormSheet(
         title: 'New Work Order',
         saveLabel: 'Save Work Order',
         saving: _saving,
         error: _error,
         onSave: _submit,
         tabs: [
-          WorkOrderFormTabSpec(
+          TabbedFormStepSpec(
             label: 'Location',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [propertyField, gap, unitField],
             ),
           ),
-          WorkOrderFormTabSpec(
+          TabbedFormStepSpec(
             label: 'Issue',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -573,7 +573,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
               ],
             ),
           ),
-          WorkOrderFormTabSpec(
+          TabbedFormStepSpec(
             label: 'Schedule',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -667,7 +667,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
               ],
             ),
           ),
-          WorkOrderFormTabSpec(
+          TabbedFormStepSpec(
             label: 'Assign',
             validate: _validateArrivalWindow,
             child: Column(
@@ -729,7 +729,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
               ],
             ),
           ),
-          WorkOrderFormTabSpec(
+          TabbedFormStepSpec(
             label: 'Attach',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

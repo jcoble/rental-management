@@ -8,7 +8,7 @@ import '../../core/api/dio_client.dart';
 import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart' show Property, Unit;
 import '../properties/properties_repository.dart';
-import '../vendors/vendors_models.dart' show Vendor;
+import '../vendors/vendors_models.dart';
 import '../vendors/vendors_repository.dart';
 import 'recurring_maintenance_models.dart';
 

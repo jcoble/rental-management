@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:rental_command/core/navigation/mobile_restoration_state.dart';
+import 'package:rental_command/core/router/mobile_restoration_state.dart';
 
 void main() {
   test('round trips only bounded primitive Unit navigation state', () {
