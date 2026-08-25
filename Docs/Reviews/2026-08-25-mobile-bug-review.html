@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mobile Bug Review — 2026-08-25</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #ffffff; --border: #e3e2dd; --border-strong: #cfcec8;
+    --text: #23221f; --muted: #6d6b64; --faint: #94918a;
+    --high: #b3261e; --high-bg: #fce9e7; --med: #9a6400; --med-bg: #fdf1dc;
+    --low: #4a6b8a; --low-bg: #e9f0f6; --done: #2e6b41; --done-bg: #e6f2ea;
+    --accent: #23221f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17171a; --surface: #1f1f23; --border: #313136; --border-strong: #43434a;
+      --text: #e8e7e3; --muted: #a3a19a; --faint: #7c7a73;
+      --high: #ff8a80; --high-bg: #3a1f1d; --med: #f0bd6a; --med-bg: #3a2e1a;
+      --low: #9dc0dd; --low-bg: #1e2b36; --done: #8fd4a6; --done-bg: #1d2f24;
+      --accent: #e8e7e3;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 40px 24px 96px; }
+  header { border-bottom: 1px solid var(--border-strong); padding-bottom: 22px; margin-bottom: 26px; }
+  h1 { font-size: 26px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0; }
+  .caveat {
+    margin-top: 16px; padding: 12px 14px; border-left: 3px solid var(--border-strong);
+    background: var(--surface); color: var(--muted); font-size: 13.5px; border-radius: 0 6px 6px 0;
+  }
+  .bar {
+    position: sticky; top: 0; z-index: 5; background: var(--bg);
+    padding: 14px 0 12px; margin-bottom: 8px; border-bottom: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  }
+  .progress { flex: 1 1 220px; min-width: 200px; }
+  .progress-track { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--done); width: 0%; transition: width .18s ease; }
+  .progress-label { font-size: 12.5px; color: var(--muted); margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; }
+  button.f {
+    font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 999px; cursor: pointer;
+    background: var(--surface); color: var(--muted); border: 1px solid var(--border-strong);
+  }
+  button.f[aria-pressed="true"] { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  button.reset { border-style: dashed; }
+  .area-tag {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--faint); white-space: nowrap;
+  }
+  #list { margin-top: 18px; }
+  .bug {
+    display: flex; gap: 13px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 9px; padding: 15px 16px; margin-bottom: 9px;
+  }
+  .bug.done { opacity: .5; border-color: var(--border); background: var(--done-bg); }
+  .bug.done .title { text-decoration: line-through; text-decoration-thickness: 1px; }
+  .bug.done .detail { display: none; }
+  input[type=checkbox] {
+    appearance: none; -webkit-appearance: none; flex: 0 0 auto;
+    width: 19px; height: 19px; margin: 2px 0 0; border-radius: 5px;
+    border: 1.5px solid var(--border-strong); background: var(--bg); cursor: pointer;
+    position: relative; transition: background .12s, border-color .12s;
+  }
+  input[type=checkbox]:checked { background: var(--done); border-color: var(--done); }
+  input[type=checkbox]:checked::after {
+    content: ""; position: absolute; left: 6px; top: 2px; width: 5px; height: 10px;
+    border: solid var(--surface); border-width: 0 2px 2px 0; transform: rotate(42deg);
+  }
+  input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .body { flex: 1 1 auto; min-width: 0; }
+  .head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .title { font-weight: 600; font-size: 15px; margin: 0; flex: 1 1 340px; }
+  .chip {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+  }
+  .sev-high { color: var(--high); background: var(--high-bg); }
+  .sev-medium { color: var(--med); background: var(--med-bg); }
+  .sev-low { color: var(--low); background: var(--low-bg); }
+  .conf { font-size: 11px; color: var(--faint); letter-spacing: .04em; white-space: nowrap; }
+  .loc { margin: 7px 0 0; font-size: 12.5px; }
+  .loc code { color: var(--muted); }
+  .detail { margin-top: 9px; font-size: 14px; }
+  .detail p { margin: 0 0 6px; }
+  .detail p:last-child { margin-bottom: 0; }
+  .lbl { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .875em; background: var(--bg); border: 1px solid var(--border);
+    padding: 1px 4px; border-radius: 4px; word-break: break-word;
+  }
+  .bug.done code { background: transparent; }
+  .patterns { margin-top: 46px; border-top: 1px solid var(--border-strong); padding-top: 26px; }
+  .patterns h2 { font-size: 18px; margin: 0 0 4px; }
+  .patterns > p.sub { margin-bottom: 16px; }
+  .pattern { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 14px 16px; margin-bottom: 9px; }
+  .pattern h3 { margin: 0 0 5px; font-size: 14.5px; }
+  .pattern p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .clean { margin-top: 34px; }
+  .clean h2 { font-size: 18px; margin: 0 0 10px; }
+  .clean ul { margin: 0; padding-left: 20px; color: var(--muted); font-size: 13.5px; }
+  .clean li { margin-bottom: 5px; }
+  footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--faint); font-size: 12.5px; }
+  .empty { color: var(--muted); font-style: italic; padding: 20px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Rental Command mobile — bug review</h1>
+  <p class="sub">25 August 2026 · 42 findings · 6 parallel Opus 5 reviewers · 258 Dart files, ~118,000 lines under <code>mobile/lib</code></p>
+  <div class="caveat">
+    <strong>Static review only.</strong> No builds, tests, or analyzer runs were performed.
+    <em>Confirmed</em> means a reviewer read the code and the failure path is clear from the source;
+    <em>suspected</em> means it looks wrong but depends on runtime behaviour or code outside the reviewed lane.
+    Verify each before fixing. Checkbox state is stored in this browser only.
+  </div>
+</header>
+
+<div class="bar">
+  <div class="progress">
+    <div class="progress-track"><div class="progress-fill" id="fill"></div></div>
+    <div class="progress-label" id="plabel">0 of 42 fixed</div>
+  </div>
+  <div class="filters" id="filters">
+    <button class="f" data-sev="all" aria-pressed="true">All</button>
+    <button class="f" data-sev="high" aria-pressed="false">High</button>
+    <button class="f" data-sev="medium" aria-pressed="false">Medium</button>
+    <button class="f" data-sev="low" aria-pressed="false">Low</button>
+    <button class="f" data-sev="open" aria-pressed="false">Open only</button>
+    <button class="f reset" id="reset">Clear all</button>
+  </div>
+</div>
+
+<main id="list"></main>
+
+<section class="patterns">
+  <h2>Cross-cutting patterns</h2>
+  <p class="sub">Fix these once at the root rather than 20 times at the call sites.</p>
+  <div class="pattern">
+    <h3>Date-wire discipline (local vs UTC)</h3>
+    <p>Six findings trace to the same confusion. <code>core/utils/date_wire.dart:23-29</code> already provides <code>localToWireIso</code>, but only the maintenance feature uses it. <code>core/models/lease.dart:2</code> parses server date-only strings into <em>local</em> midnights, and <code>core/time/app_clock.dart</code> returns UTC normally but <em>local</em> on its 404 fallback — so every consumer is silently zone-dependent. Affects #4, #12, #18, #26, #28, #34.</p>
+  </div>
+  <div class="pattern">
+    <h3>PATCH bodies that omit emptied fields cannot clear anything</h3>
+    <p>Building a request body with <code>if (field.isNotEmpty)</code> and sending it as a PATCH means an emptied field is read as "leave unchanged". The user sees a success message and the old value survives. <code>work_order_detail_screen.dart</code> already solves this correctly for unit and tenant with explicit <code>clearUnit</code>/<code>clearTenant</code> flags. Affects #9, #22.</p>
+  </div>
+  <div class="pattern">
+    <h3>Detail-screen mutations do not invalidate list providers</h3>
+    <p>Four separate screens refresh only their own detail provider after a mutation, leaving the list behind them stale. In every case the <em>delete</em> path in the same file invalidates the list correctly, which marks these as omissions rather than deliberate choices. Affects #19, #20, #21, #23.</p>
+  </div>
+  <div class="pattern">
+    <h3>State written after an await with no guard</h3>
+    <p>Riverpod notifiers assigning <code>state</code> after an await without <code>ref.mounted</code>, widgets calling <code>setState</code> or using <code>ref</code> after an await without <code>mounted</code>, and loaders with no request-generation counter so a stale response can clobber a newer one. <code>activity_repository.dart</code> and <code>accounting_repository.dart</code> already implement both guards correctly. Affects #16, #17, #24, #29, #37, #38, #39, #40, #41.</p>
+  </div>
+  <div class="pattern">
+    <h3>Idempotency applied inconsistently</h3>
+    <p><code>IdempotentMutation.run</code> retains a key across an ambiguous failure and clears it on success. Banking bypasses it entirely and mints a fresh UUID per attempt; the multi-notice send loop defeats it by retrying calls that already succeeded. Affects #2, #3, #7.</p>
+  </div>
+  <div class="pattern">
+    <h3>Failures swallowed with no user feedback</h3>
+    <p><code>try</code>/<code>finally</code> with no <code>catch</code>, or a bare <code>await</code> in a loader, so an API error escapes to the zone handler and the UI simply does nothing. The user reasonably concludes the action succeeded. Affects #25, #35.</p>
+  </div>
+</section>
+
+<section class="clean">
+  <h2>Looked at hard and cleared</h2>
+  <ul>
+    <li><strong>No client-side money aggregation anywhere.</strong> Every total, balance, NOI, trial-balance and running-balance figure is read from a server field — no <code>fold</code>/<code>sum</code>/<code>groupBy</code> over a fetched list, and no cents-vs-dollars unit mixups.</li>
+    <li><strong>Role and capability gating fails closed.</strong> <code>core/auth/mobile_access_policy.dart:156-310</code> defaults to <code>false</code>, every call site guards on an authenticated state first, and <code>/access-denied</code> is explicitly allowed so the deny redirect cannot loop. No portfolio-scoping or IDOR leak found.</li>
+    <li><strong>Single-flight token refresh is correct.</strong> The completer is nulled before completion under an <code>identical</code> check and the mutation-replay guard fails closed on stale-revision recovery.</li>
+    <li><strong>Scan confirm and upload idempotency are sound.</strong> A per-draft <code>clientOperationId</code> is retained across failures and the upload operation keys on payload hash plus context, so neither path can double-create.</li>
+    <li><strong>Confidence scale is consistently 0.0–1.0</strong> end to end — no 0–1 versus 0–100 mix-up.</li>
+    <li><strong>Work-order transitions are server-driven</strong> via <code>capabilities.allowedStatusTransitions</code>, so no invalid-state action is offered from a hardcoded client enum.</li>
+    <li><strong>Controller and timer disposal is near-universal</strong> across the reviewed lanes; the exceptions are listed above.</li>
+  </ul>
+</section>
+
+<footer>
+  Not covered in depth: <code>unit_command_center_screen.dart</code>, <code>owner_reports_screen.dart</code>,
+  <code>property_detail_screen.dart</code> (grep-level pass only), <code>core/theme/*</code>,
+  several <code>core/widgets</code> files, <code>tenant_notices_screen.dart</code>,
+  and the register/reset/forgot/verify auth screens.
+</footer>
+
+</div>
+
+<script type="application/json" id="data">
+[
+{"id":1,"sev":"high","area":"Appointments","status":"Confirmed","title":"Every appointment time is stored and displayed off by the device's UTC offset","loc":"mobile/lib/features/appointments/appointments_screen.dart:519, 559-560","breaks":"In Pacific time a user picks \"Aug 26, 10:00 AM\". The wire value is `2026-08-26T10:00:00.000` and the server stores it as 10:00 UTC — 3:00 AM local. Reading it back displays the raw UTC instant.","why":"`_combineDateAndTime` builds a local-kind `DateTime`, and Dart's `toIso8601String()` omits the offset for non-UTC values, so the offset is lost on the way out. On the way back, `core/models/appointment.dart:59-60` parses the Z-suffixed response and no appointments screen calls `.toLocal()`. Both directions are wrong, so the errors do not cancel. The repo already has `localToWireIso` in `core/utils/date_wire.dart:23-29` for exactly this, and maintenance uses it at `work_order_detail_screen.dart:1953-1956`."},
+{"id":2,"sev":"high","area":"Money & Banking","status":"Confirmed","title":"Banking mutations mint a fresh idempotency key on every attempt","loc":"mobile/lib/features/banking/banking_repository.dart:15-18","breaks":"A user taps Confirm on a bank-match card; the request commits server-side but the response is lost to a timeout. They tap Confirm again. The second POST carries a different `operationKey`, so the server cannot recognise it as a replay.","why":"`_operation()` calls `_uuid.v4()` inline on every invocation, and it is called fresh inside `match`, `clearMatch`, `confirmMatch` (line 100), `dismissMatch` and `routeTransaction`. Every other money-mutating repository routes through `IdempotentMutation.run` (`money_repository.dart:470, 495, 521, 544`; `accounting_repository.dart:80, 99`; `payments_repository.dart:686`), whose documented purpose is to retain the key across an ambiguous failure. Banking is the one opt-out. The `expectedUpdatedAtUtc` concurrency field guards a stale-read replay, which is not the same protection."},
+{"id":3,"sev":"high","area":"Money & Banking","status":"Confirmed","title":"Bank review-card action buttons never disable while in flight, so a double-tap fires two mutations","loc":"mobile/lib/features/banking/banking_screen.dart:535-543, 551-562","breaks":"A double-tap on Confirm or \"Not a match\" issues two independent POSTs, each with its own operation key per finding #2 — a genuine double-confirm of a bank match.","why":"`_ReviewCard` is a `ConsumerWidget` (line 422) with no state at all, so there is no `_saving` flag; `onPressed` is unconditional and `run()` (lines 435-452) only shows a snackbar on completion. The deposit and receipt sheets in the same lane all hold a `bool _saving` and pass `onPressed: saving ? null : onSubmit` (`deposits_screen.dart:947-949`)."},
+{"id":4,"sev":"high","area":"Money & Banking","status":"Confirmed","title":"Tenant-ledger period window is computed from the UTC calendar date, showing the wrong months every evening at month end","loc":"mobile/lib/features/money/tenant_ledger_view.dart:72, 79-80","breaks":"A US Eastern landlord opens the tenant ledger at 21:00 on Aug 31 with the 3-month filter. The range resolves to Jul 1 – Sep 30 instead of Jun 1 – Aug 31: June's charges vanish and an empty September is included.","why":"`_dateOnly(value) => DateUtils.dateOnly(value.toUtc())` converts the instant to UTC before truncating. In production `appNowProvider` returns a local `DateTime.now()` (`core/time/app_clock.dart:29`, the 404 branch), so `.toUtc()` rolls the calendar day forward for every negative-offset zone after (24 − offset):00 local. `tenantLedgerPeriodRange` then builds the month window off that rolled-forward date. The `.toUtc()` is correct for the simulation clock (already UTC, per the comment at `app_clock.dart:23-25`) but is applied unconditionally."},
+{"id":5,"sev":"high","area":"Owner Reports","status":"Confirmed","title":"Owner distributions list parses a paged envelope from an endpoint that returns a bare JSON array","loc":"mobile/lib/features/owner_reports/owner_reports_repository.dart:373-383","breaks":"\"Recorded distributions\" for any owner or year renders empty or errors out. The landlord never sees payouts that exist in the database.","why":"The call is `_dio.get<Map<String, dynamic>>('/owner-distributions', …)` reading `response.data?['items']` (line 382), but `GET /api/v1/owner-distributions` returns `IReadOnlyList<OwnerDistributionResponse>` — a bare array (`RentalCommand.Api/Controllers/OwnerDistributionController.cs:27-33`). The envelope shape lives on the sibling `/owner-distributions/page` route. Dio's cast of a `List` to `Map` fails, so the call can never return rows. The adjacent `listContributions` (lines 393-403) does it correctly with `get<List<dynamic>>`, marking this as a copy/paste slip between siblings."},
+{"id":6,"sev":"high","area":"Leases","status":"Confirmed","title":"Lease renewal start date lands one day early on the annual DST fall-back day","loc":"mobile/lib/features/leases/successor_agreement_sheet.dart:60-70","breaks":"A lease with `termEndOn = 2026-11-01` (US DST ends that day). The computed renewal start is `2026-11-01T23:00` local, so it serialises back to `2026-11-01` — the same calendar day the old term ends. The renewal is submitted with an overlapping term, and the renewal's end date inherits the shift.","why":"`add(const Duration(days: 1))` adds 24 hours of absolute time to a local midnight, but that calendar day has 25 hours. `_date()` in `core/models/lease.dart:2` parses the server's date-only string with `DateTime.tryParse`, yielding a local non-UTC midnight, and `_dateOnly` (`leases_repository.dart:1535-1536`) serialises local wall-clock. The same defect appears at :61, :67, `addendum_action_sheets.dart:1064` and `household_management_sheet.dart:77`. `DateUtils.addDaysToDate`, which normalises, is used nowhere in the lane."},
+{"id":7,"sev":"high","area":"Notices","status":"Confirmed","title":"A partially failed multi-notice send re-approves already-sent notices with a fresh idempotency key","loc":"mobile/lib/features/notices/create_tenant_notice.dart:223-233","breaks":"Two drafts are generated. Draft A approves fine, draft B throws, the loop aborts and the sheet stays open. The landlord taps \"Send notice\" again and draft A is approved a second time — the tenant receives the notice twice, by email and SMS.","why":"`_sendableDrafts` is computed from `widget.drafts`, which is never refreshed, so A's local status is still `Draft` on the retry. `IdempotentMutation.run` (`core/api/idempotent_mutation.dart:11-17`) removes the pending key on success, so A's retry generates a brand-new UUID and the server sees an unrelated request. The idempotency guard protects an ambiguous failure, not a successful call re-issued after a sibling failed."},
+{"id":8,"sev":"high","area":"Tenants","status":"Confirmed","title":"Clearing a tenant's email, phone or emergency contact silently does nothing","loc":"mobile/lib/features/tenants/tenants_list_screen.dart:495-502","breaks":"A tenant has a stale email. The landlord opens Edit Tenant, deletes the email and taps Save Changes. The sheet closes with a success snackbar, but the old email is still on the record — and will keep receiving notices via the Email channel.","why":"The body is built with `if (_emailCtrl.text.trim().isNotEmpty) 'email': …`, so an emptied field omits the key entirely, and `updateTenant` issues a PATCH (`tenants_repository.dart:207-212`) where an absent key means \"leave unchanged\". There is no way to send null to clear a field. Create and edit share this one body builder, so the create path is correct and only the edit path is broken."},
+{"id":9,"sev":"high","area":"Scan & AI","status":"Confirmed","title":"Confirming an AI action overwrites the text of a newer, unrelated chat answer","loc":"mobile/lib/features/ai/qa_screen.dart:190-201","breaks":"The user taps Confirm on an expense draft, then sends a new question while it is executing. If the new answer lands first, the confirm handler rewrites it with \"Created expense #42 for $50.00\". The real answer is permanently lost, and the stale draft card re-attaches to that bubble.","why":"The input row stays enabled during execution — `pending: qa.pending` at line 408 ignores `executingAction`, and `ask()`'s guard at line 113 checks only `state.pending`. `executeAction()` then identifies the turn to update positionally via `updatedHistory.last` after its await, rather than by an id captured before it. Compounding this, `ask()` sets `clearAction: true` (line 121) mid-flight and `executeAction()` restores `actionDraft: draft` at line 206, resurrecting a card the new question had cleared."},
+{"id":10,"sev":"high","area":"Messages","status":"Confirmed","title":"Reopening a conversation serves a stale thread and never re-marks it read","loc":"mobile/lib/features/messages/messages_repository.dart:245-248, 291-296","breaks":"A landlord opens conversation A, backs out, a tenant reply arrives, and they tap A again. The screen shows the message list from the first visit — the new message is absent — and the mark-read POST is never re-sent, so the inbox badge keeps counting a message the user is looking at.","why":"`conversationProvider` is a plain `NotifierProvider.family`, not `.autoDispose`, so its state outlives the popped screen, and `build()` calls `load()` exactly once via `Future.microtask` at provider creation. `MessageDetailScreen` has no `initState` refresh. `activity_history_screen.dart:55-64` explicitly calls `.refresh()` on every mount for exactly this reason. `load()`'s own comment at lines 257-258 states that opening the thread marks it read server-side — which now happens only on the first open per app session."},
+{"id":11,"sev":"high","area":"Core & Auth","status":"Mixed","title":"Refresh path can persist an empty refresh token, permanently killing the session","loc":"mobile/lib/core/auth/auth_interceptor.dart:317, 335","breaks":"A `/auth/refresh` response whose body omits `refreshToken` but whose headers carry a cookie-clearing `Set-Cookie: rc_refresh_token=; Expires=…` overwrites the good refresh token in secure storage with an empty string. The next 401 posts an empty token, gets 401 back, and the interceptor forces a logout. The user is signed out with no recovery short of re-entering credentials.","why":"`extractRefreshTokenFromCookies` (lines 38-41) computes `end == start` for an empty cookie value and returns `''`, not null. `resolveRefreshToken` (lines 20-29) rejects only an empty body token and returns the cookie result verbatim. At line 335 `newRefreshToken ?? refreshToken` is a null-check only, so the empty string wins over the still-valid stored token. Both other call sites guard correctly with `.isEmpty` (`auth_repository.dart:65` and `:155`). Confirmed as a client mechanism; suspected on whether the server ever emits that header on this route."},
+{"id":12,"sev":"medium","area":"Money & Banking","status":"Confirmed","title":"\"This month\" and \"Year to date\" periods are computed in UTC and can display the previous calendar month","loc":"mobile/lib/features/money/money_screen.dart:507-513, 526-532","breaks":"A landlord at UTC+13 opens Money at 10:00 on Sep 1 local. UTC is still Aug 31, so the card is labelled \"This month\" while the footer reads \"Aug 1, 2026 – Aug 31, 2026\" and every figure is August's. The mirror case hits negative offsets on the last evening of a month.","why":"All three builders start from `DateTime.now().toUtc()`, and `_dateOnlyQuery` (`accounting/accounting_books_repository.dart:8`) serialises with `toIso8601String().split('T').first`, which emits the UTC calendar date. The Custom branch at lines 787-791 passes local DateTimes from `showDateRangePicker`, whose ISO string preserves the local date — so custom and preset ranges disagree about what a date means."},
+{"id":13,"sev":"medium","area":"Money & Banking","status":"Confirmed","title":"Cancelling the custom date-range picker leaves the dropdown reading \"Custom\" over the old period's data","loc":"mobile/lib/features/money/money_screen.dart:744, 776-793","breaks":"The user picks \"Custom\" then backs out of the date-range sheet. The dropdown now reads \"Custom\", but `onRequestChanged` was never called, so the figures below are still \"This month\" — the user reads month-to-date numbers believing they are a custom range.","why":"`DropdownButtonFormField` commits the selection to its own `FormFieldState` before invoking `onChanged`, and the field carries a `const Key('money-overview-period')` so that state survives the rebuild. `initialValue: request.label` only seeds the first build, so nothing reverts the label when `range == null` at line 785."},
+{"id":14,"sev":"medium","area":"Maintenance","status":"Confirmed","title":"Clearing a work order's estimated or actual cost is a silent no-op","loc":"mobile/lib/features/maintenance/work_order_detail_screen.dart:1964-1965","breaks":"A job has estimatedCost $500. The landlord opens Edit, deletes the field, taps Save and sees success — the cost is still $500 on reload. Same for a value retyped as unparseable text.","why":"`_parseOptionalAmount` (lines 1901-1905) returns null for empty or unparseable text, and the PATCH body uses Dart's null-aware entry `'estimatedCost': ?estimatedCost`, which omits the key entirely when null. `updateWorkOrder` is a partial PATCH, so the server leaves the old value. The same submit handles the identical problem for unit and tenant with explicit `clearUnit`/`clearTenant` flags (lines 1938-1942, 1955-1957); costs got no equivalent."},
+{"id":15,"sev":"medium","area":"Maintenance","status":"Confirmed","title":"Work-order reassign and unassign can throw an unhandled StateError from a bottom-sheet button","loc":"mobile/lib/features/maintenance/work_order_detail_screen.dart:299-306, 339-343","breaks":"If the currently-assigned technician's access context is not among the reassignment candidates, tapping Reassign or Unassign throws. The user sees nothing happen and no error message.","why":"Both sites call `candidates.firstWhere(...)` with no `orElse`. The two lists come from separate calls — `listResponsibilities` versus `listResponsibilityCandidates` — so they can legitimately diverge. The surrounding try/catch at line ~213 wraps only the initial `Future.wait` load, not these later async closures, so the throw becomes an unhandled Future error rather than reaching `_showError`."},
+{"id":16,"sev":"medium","area":"Core & Auth","status":"Confirmed","title":"MyAlertsNotifier assigns state after an await with no ref.mounted guard on an autoDispose provider","loc":"mobile/lib/features/settings/notification_foundation_repository.dart:806, 814-815, 827","breaks":"Open Settings → My alerts and immediately tap back, or tap Save and back out before the PUT returns. Popping the only watcher disposes the notifier while the request is in flight, and the subsequent `state = …` throws a StateError on a disposed Riverpod 3 notifier.","why":"`myAlertsProvider` is `NotifierProvider.autoDispose` (lines 799-802). `load()` sets state twice around an await and `save()` sets it after `await _repository.updateMyAlerts(current)`, neither guarded. In `load()` the throw is an unhandled async error from an unawaited `Future.microtask(load)`; in `save()` it is swallowed because the screen only shows errors `if (mounted)`. The codebase convention is the opposite — `accounting_repository.dart:185` and `notifications_repository.dart:104` both check `if (!ref.mounted) return;`. `load()` also has no request-generation counter, so two Retry taps can land out of order."},
+{"id":17,"sev":"medium","area":"Money & Banking","status":"Confirmed","title":"setState after await with no mounted guard in the expense edit sheet's error path","loc":"mobile/lib/features/money/expense_detail_screen.dart:694","breaks":"The user taps Save on the edit-expense sheet then dismisses it before the PATCH returns; the API returns a 400 or 409 and Flutter throws \"setState() called after dispose()\".","why":"The `on ApiException catch (e) { setState(() => _error = e.message); }` at lines 693-694 has no guard, while the `finally` immediately below at line 696 does check `if (mounted)`. Every other submit handler in the lane guards its catch (`deposits_screen.dart:754-755`, `payments_screen.dart:324-325`), so this is an omission rather than a pattern."},
+{"id":18,"sev":"medium","area":"Home & Dashboard","status":"Confirmed","title":"Dashboard greeting and \"today\" date are computed in UTC","loc":"mobile/lib/features/home/home_shell.dart:2210-2215, 2398-2400","breaks":"At 6:00 PM Pacific (01:00 UTC the next day) the header reads \"Good morning\" over tomorrow's date.","why":"`appNowProvider` deliberately returns a UTC DateTime (`core/time/app_clock.dart:26`, with a comment explaining why it is correct for the server's business-date math). `_greeting(now)` reads `now.hour` and `_formattedDate(now)` reads weekday, month and day straight off that UTC instant with no `.toLocal()`. Note also that `app_clock.dart:29` returns a local `DateTime.now()` on the 404 fallback, so these two call sites silently switch zones depending on whether `/dev/clock` exists."},
+{"id":19,"sev":"medium","area":"Home & Dashboard","status":"Confirmed","title":"Landlord \"Today\" pull-to-refresh does not refresh two of the five tiles it shows","loc":"mobile/lib/features/home/home_shell.dart:2246-2248","breaks":"After a landlord replies to a message or closes a work order, pulling to refresh leaves \"Latest messages\" and \"Work Orders\" showing stale rows indefinitely.","why":"The Today tab watches briefing, latestMessages, fieldQueue, moneySnapshot and appNow (lines 2229-2233), but `RefreshIndicator.onRefresh` invalidates only briefing, money and appNow. The file's own `_openGoLiveSheetAndRefreshHome` (lines 75-77) invalidates exactly briefing plus latestMessages plus fieldQueue, showing the intended set. Secondary: `onRefresh` is synchronous, so the spinner retracts before any data lands."},
+{"id":20,"sev":"medium","area":"Appointments","status":"Confirmed","title":"Appointments list is stale after a status change or delete on the detail screen","loc":"mobile/lib/features/appointments/appointment_detail_screen.dart:55-67, 88-105","breaks":"Cancel or delete an appointment from its detail screen and pop back — the list still shows the old status, or the deleted row. Only a manual pull-to-refresh clears it.","why":"`_updateStatus` refreshes only `appointmentDetailProvider(id)` and `_confirmDelete` just pops. Neither touches `appointmentsProvider`, which is a plain non-autoDispose `NotifierProvider` loaded once from `initState` (`appointments_screen.dart:58-61`). `_openDetail` pushes without awaiting a result or refreshing."},
+{"id":21,"sev":"medium","area":"Applications","status":"Confirmed","title":"Approve, decline and withdraw never invalidate the applications list","loc":"mobile/lib/features/applications/application_detail_screen.dart:50-53","breaks":"Open an application from the list, approve it, tap back. The list still shows it as \"Submitted\" with the old status chip, and the Submitted status filter still returns it.","why":"`_refresh()` invalidates only `applicationDetailProvider` and `applicationScreeningProvider`, and it is the sole refresh call in `_approve` (:91), `_decline` (:135) and `_withdraw` (:169). The delete path immediately below at lines 266-270 also invalidates `applicationsPageProvider` and both `applicationsProvider` variants, which shows the omission in the three status transitions is an oversight. The list providers are autoDispose but the list route is still mounted underneath, keeping the stale cache alive."},
+{"id":22,"sev":"medium","area":"Appointments","status":"Confirmed","title":"Appointment end time is never validated against the start time","loc":"mobile/lib/features/appointments/appointments_screen.dart:532-542, 544-591","breaks":"A user sets start Aug 26 2:00 PM and end Aug 26 1:00 PM; the sheet saves it with no error. There is no overlap detection anywhere in the feature either.","why":"`_validateDetailsStep` only checks `start != null`, the Schedule tab has no `validate:` callback, and `_submit` sends both timestamps without comparing them. `TabbedFormSheet._validateCurrentStep` (`core/widgets/tabbed_form_sheet.dart:134-139`) validates only the current tab's own fields, so no cross-tab check exists in this flow."},
+{"id":23,"sev":"medium","area":"Tenants","status":"Confirmed","title":"Editing a tenant from the detail screen leaves the tenants list showing the old name","loc":"mobile/lib/features/tenants/tenant_detail_screen.dart:99-108","breaks":"Open a tenant from the list, tap Edit, change the last name, save, tap back. The list row still shows the previous name and is still sorted by it.","why":"`_showEditSheet` (line 119) passes `onSaved: _refresh`, and `_refresh` only refreshes `tenantDetailProvider` and invalidates `tenantLeaseManagementsProvider`. The delete path in the same class (lines 194-196) invalidates `tenantsPageProvider` and `tenantsProvider` as well, and the add path in the list screen does it correctly too — the edit path is the omission."},
+{"id":24,"sev":"medium","area":"Notices","status":"Confirmed","title":"Generating and approving notices swallows API failures with no user feedback","loc":"mobile/lib/features/notices/notices_screen.dart:18-21, 210-219","breaks":"The \"Generate drafts\" button does nothing on a 4xx or 5xx and the queue stays empty. A failed approve leaves the card looking untouched with no error shown, so the landlord reasonably assumes the notice went out.","why":"The refresh button awaits `generate()` with no try/catch and no `catchError`, so the ApiException escapes into `FlutterError.onError` as an unhandled async error. `_approve` (lines 214-219) and `_dismiss` (lines 222-229) both have `try`/`finally` with no `catch`. Contrast `create_tenant_notice.dart:240-241`, which surfaces `e.message` into `_error`."},
+{"id":25,"sev":"medium","area":"Home & Dashboard","status":"Suspected","title":"A non-management user with no hub capabilities crashes the shell on build","loc":"mobile/lib/features/home/home_shell.dart:358-380, 946-955","breaks":"`_availableLandlordTabs` returns an empty list when the experience is not management and none of rentals, work or inbox is permitted. Then `selectedIndex = tabs.length - 1 = -1` (line 947), and line 955 evaluates `landlordTabs[-1]` — a RangeError, followed by `IndexedStack(index: -1)`.","why":"The `tabs.isEmpty` fallback at lines 375-378 fires only for `WorkspaceExperience.management`, so the author knew the list could be empty and guarded exactly one branch. Every other index path in the file is guarded. Suspected because reachability depends on capability configuration outside the reviewed lane."},
+{"id":26,"sev":"medium","area":"Scan & AI","status":"Confirmed","title":"Scan dates render in UTC, so evening scans show tomorrow's date","loc":"mobile/lib/features/scan/scan_list_screen.dart:306-308","breaks":"A scan created at 7:00 PM US Eastern on Aug 25 shows \"8/26/2026\" in the scan list.","why":"`ScanDraft.createdAt` is `DateTime.tryParse(json['createdAt'])` with no `.toLocal()` (`scan_models.dart:320-321`), and the column is `timestamp with time zone`, so the parsed value is UTC. `_formatDate` reads month, day and year straight off it. Every sibling feature converts — `messages_list_screen.dart:44`, `activity_history_screen.dart:947`, `notifications_inbox_screen.dart:228`, `units_repository.dart:1229` — scan is the outlier."},
+{"id":27,"sev":"medium","area":"Scan & AI","status":"Confirmed","title":"Scan review polls the draft every 1.5 seconds forever with no budget","loc":"mobile/lib/features/scan/scan_review_screen.dart:1309-1316","breaks":"If the Engine is down or a draft is wedged in Pending, the review screen issues `GET /scans/{id}` every 1500 ms for as long as it stays open — indefinite battery and network drain, with no error state ever shown.","why":"`_ensurePolling` creates a bare `Timer.periodic` whose only exit conditions are `!mounted` and the status leaving Pending or Processing (lines 1299-1304). The sibling flow does this correctly: `guided_rental_flow.dart:104-148` polls against a 180-second budget with backoff and surfaces \"Reading the lease took too long.\""},
+{"id":28,"sev":"medium","area":"Scan & AI","status":"Confirmed","title":"\"Text/email me this\" delivery status attaches to whichever answer is newest, not the one delivered","loc":"mobile/lib/features/ai/qa_screen.dart:223-227, 581-582","breaks":"The user asks Q1, taps \"Email me this\", then asks Q2 while the delivery is in flight. Q2 resolves first, so \"Emailed to you.\" renders under Q2's answer — telling the landlord the wrong answer was sent to them.","why":"`deliveringChannel` and `deliveryNote` are single global fields on `_QaState` rendered against `isLastAssistant` rather than tied to the delivered turn, and `ask()` (line 113) has no mutual guard with `deliver()`."},
+{"id":29,"sev":"medium","area":"Scan & AI","status":"Confirmed","title":"Action-draft card freezes as a dead Confirm button after a failed execute","loc":"mobile/lib/features/ai/qa_screen.dart:202-210, 853-858","breaks":"`executeAction()` returns a non-Created terminal status such as InvalidDraft. The card keeps rendering its Confirm button, but the button can never succeed. There is no dismiss or retry affordance — the only escape is asking an entirely new question.","why":"`actionDraft` is only cleared on a `'Created'` status (line 206), while `canConfirm` requires `status == 'DraftReady'` (lines 854-858), which is now false. Real non-Created paths exist server-side at `RentalCommand.Api/Services/Domain/AssistantActionService.cs:92, 116, 142`."},
+{"id":30,"sev":"medium","area":"Voice","status":"Confirmed","title":"Voice conversation uses ref after an await with no mounted check","loc":"mobile/lib/features/voice/tell_me_screen.dart:128-136","breaks":"The user taps stop then immediately backs out of \"Tell me\" while `file.readAsBytes()` is in flight. `ref.read(...)` at line 131 runs on a disposed ConsumerState, throwing \"Cannot use ref after the widget was disposed\", and the recorded turn is dropped.","why":"`_stopAndSend` checks `mounted` at line 120 after `_recorder.stop()`, but not after the second await at line 128, before three separate `ref` uses at lines 131-136."},
+{"id":31,"sev":"medium","area":"Voice","status":"Suspected","title":"TTS \"speaking\" flag is cleared by its own stop(), unlocking the mic mid-speech","loc":"mobile/lib/features/voice/tell_me_screen.dart:61-66, 42-44","breaks":"On the second and later prompts of a conversation, the app announces the question while the mic button is enabled and labelled \"Tap to answer\". A user who answers promptly records over the app's own voice.","why":"`_speak` sets `_speaking = true` (line 63) and then awaits `_tts.stop()` (line 65). Stopping the previous utterance fires the cancel handler registered at line 42, which sets `_speaking = false` — after which `_tts.speak(text)` runs with the flag already cleared. `_toggleMic` (line 73) and `canTap` (line 247) both gate on that flag. Suspected because it depends on flutter_tts invoking the cancel handler on `stop()`, which could not be verified without running it."},
+{"id":32,"sev":"medium","area":"Voice","status":"Suspected","title":"VoiceTurn.complete defaults to true when the server omits it","loc":"mobile/lib/features/voice/voice_intake_models.dart:61","breaks":"Any response missing `complete` drives `phaseForTurn` (line 115) straight to the review phase, showing the \"Save it\" card for a draft with unfilled required slots. Tapping it calls `confirm(id, const {})` and creates a half-empty record.","why":"A completeness flag should fail closed. `ambiguous` on the very next line correctly defaults to false; `complete` defaulting to true is the inverted one of the pair."},
+{"id":33,"sev":"low","area":"Core & Auth","status":"Confirmed","title":"SignalrService.dispose() closes the event controller before the hub is stopped","loc":"mobile/lib/core/realtime/signalr_service.dart:167-170","breaks":"On provider disposal, `_controller.close()` runs first and `disconnect()` is fired unawaited, so the hub is still live for at least one more event-loop turn. Any EntityUpdated or EntityDeleted frame landing in that window reaches `_controller.add(...)` at line 162 and throws \"Cannot add event after closing\" from inside the SignalR callback.","why":"`dispose()` is `_controller.close(); disconnect();` — the second call returns a Future nobody awaits, and `_handleEvent` (lines 152-165) has no `isClosed` check. Related, same file: `connect()` dereferences `_hub!` at line 84 after `await _hub!.start()`, so a `disconnect()` racing the connect (which nulls `_hub` at line 96) makes that line throw a null-check TypeError, silently swallowed by the catch at line 85 and logged as a connect failure that never happened."},
+{"id":34,"sev":"low","area":"Money & Banking","status":"Confirmed","title":"DepositsNotifier.loadMore() has no error handling, so a failed \"load more\" silently does nothing","loc":"mobile/lib/features/deposits/deposits_repository.dart:378-392","breaks":"The user scrolls to the end of the deposits list on a flaky connection; the paged request throws; the spinner stops and no message appears. The list looks complete when it is not.","why":"Unlike its siblings `TransactionsNotifier.loadMore` (`money/transactions_controller.dart:114-117`) and `PastDueNotifier.loadMore` (`accounting/accounting_repository.dart:227-236`), which both catch and surface the error, this method awaits the repository bare. The caller at `deposits_screen.dart:91-101` has only a `finally`, no `catch`, so the exception escapes to the zone handler unseen."},
+{"id":35,"sev":"low","area":"Money & Banking","status":"Confirmed","title":"Banking transactions list is hard-capped at 50 rows with no paging and no truncation indicator","loc":"mobile/lib/features/banking/banking_repository.dart:36","breaks":"A portfolio with more than 50 imported bank lines shows only the first 50. The screen offers no \"load more\", and the summary counts above the list will visibly disagree with it.","why":"`queryParameters` is `{'skip': 0, 'take': 50}` with both values literal, and only `data['items']` is read from the envelope — the `totalCount` the server returns is discarded at line 43. The summary counts come from a separate `/banking/summary` call at line 21."},
+{"id":36,"sev":"low","area":"Maintenance","status":"Suspected","title":"A second vendor can be dispatched while a dispatch is already active","loc":"mobile/lib/features/maintenance/work_order_detail_screen.dart:890-897","breaks":"With an active dispatch the UI shows \"Cancel dispatch\" and still keeps \"Text a vendor\" enabled, so a second vendor can be dispatched for the same job.","why":"The \"Text a vendor\" guard checks only `!isCompleted && status != 'cancelled'` and ignores `hasActiveDispatch`, which the adjacent Cancel-dispatch branch at lines 898-910 does read. Suspected because whether the server rejects the duplicate is outside the reviewed lane."},
+{"id":37,"sev":"low","area":"Scan & AI","status":"Confirmed","title":"_pickDate calls setState after showDatePicker with no mounted check","loc":"mobile/lib/features/scan/guided_rental_flow.dart:373-381","breaks":"The date picker is open when the route is popped; the picker returns a date and setState runs on a disposed State, throwing \"setState() called after dispose()\".","why":"A copy/paste omission — the two other pickers in the same file guard correctly, at lines 661 and 703, both checking `&& mounted`."},
+{"id":38,"sev":"low","area":"Scan & AI","status":"Confirmed","title":"Date picker can be opened with initialDate before firstDate","loc":"mobile/lib/features/scan/guided_rental_flow.dart:653-660, 694-702","breaks":"Pick a custom rent-start date while the lease start is still blank (firstDate falls back to `DateTime(2000)`, user picks 2024), then set the lease start to 2026 and reopen the picker. `showDatePicker` trips its `assert(!initialDate.isBefore(firstDate))` — a debug crash and undefined clamping in release.","why":"`firstDate` is recomputed from the now-changed `_start` on each open, but the previously stored `_rentTrackingStartOn` / `_possessionGivenOn` is passed through as `initialDate` unvalidated."},
+{"id":39,"sev":"low","area":"Scan & AI","status":"Confirmed","title":"ref.invalidate after await Navigator.push with no mounted check","loc":"mobile/lib/features/scan/scan_list_screen.dart:189-195 (same pattern at 101-109)","breaks":"If the scan tab is torn down while the review screen is open, `ref.invalidate(_scanListProvider(status))` runs on a disposed ConsumerWidget element and throws.","why":"`_startCapture` guards `context.mounted` before the push at line 99 but not before the invalidate at lines 108-109; the tile's `onTap` has no guard at all."},
+{"id":40,"sev":"low","area":"Scan & AI","status":"Confirmed","title":"Same mounted gap in the scan-review WorkOrder confirm branch","loc":"mobile/lib/features/scan/scan_review_screen.dart:1455-1457","breaks":"Backing out mid-confirm on a WorkOrder draft throws after the record has already been created server-side.","why":"`await ref.read(workOrdersProvider.notifier).refresh()` at line 1455 is followed by `ref.invalidate(unitDashboardProvider(unitId))` at line 1457, with the next `mounted` check not until line 1460."},
+{"id":41,"sev":"low","area":"Notifications","status":"Suspected","title":"InboxNotifier.load() has no request-generation guard","loc":"mobile/lib/features/notifications/notifications_repository.dart:138-148","breaks":"The automatic `Future.microtask(load)` at lines 130-133 racing a pull-to-refresh: whichever request resolves last wins, so an older page can clobber a newer one — and a markRead or markAllRead landing between them has its effect visually reverted.","why":"`state = AsyncValue.data(page)` is applied unconditionally after the await. The sibling `ActivityHistoryNotifier` guards exactly this with a `_requestGeneration` counter checked after every await (`activity_repository.dart:59, 74, 92, 100, 107, 121, 128`)."},
+{"id":42,"sev":"low","area":"Places","status":"Confirmed","title":"Address autocomplete overlay is never dismissed on focus loss","loc":"mobile/lib/features/places/address_autocomplete_field.dart:31, 42, 131","breaks":"Type three or more characters into an address field so suggestions appear, then tap a different field instead of picking one. The dropdown keeps floating over the rest of the form until the user types in that field again.","why":"The FocusNode created at line 31 has no listener anywhere in the file — the overlay is removed only in `_pick`, when suggestions go empty, or on dispose."}
+]
+</script>
+
+<script>
+(function () {
+  var STORE = 'rc-mobile-bug-review-2026-08-25';
+  var bugs = JSON.parse(document.getElementById('data').textContent);
+  var list = document.getElementById('list');
+  var fill = document.getElementById('fill');
+  var plabel = document.getElementById('plabel');
+  var filter = 'all';
+  var done = {};
+
+  try {
+    var raw = localStorage.getItem(STORE);
+    if (raw) done = JSON.parse(raw) || {};
+  } catch (e) { done = {}; }
+
+  function save() {
+    try { localStorage.setItem(STORE, JSON.stringify(done)); } catch (e) {}
+  }
+
+  function esc(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function fmt(s) {
+    return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+  }
+
+  function matches(b) {
+    if (filter === 'all') return true;
+    if (filter === 'open') return !done[b.id];
+    return b.sev === filter;
+  }
+
+  function render() {
+    list.innerHTML = '';
+    var shown = bugs.filter(matches);
+    if (!shown.length) {
+      list.innerHTML = '<p class="empty">Nothing matches this filter.</p>';
+    }
+    shown.forEach(function (b) {
+      var el = document.createElement('div');
+      el.className = 'bug' + (done[b.id] ? ' done' : '');
+      el.innerHTML =
+        '<input type="checkbox" id="b' + b.id + '"' + (done[b.id] ? ' checked' : '') +
+          ' aria-label="Mark finding ' + b.id + ' fixed">' +
+        '<div class="body">' +
+          '<div class="head">' +
+            '<label class="title" for="b' + b.id + '">' + b.id + '. ' + esc(b.title) + '</label>' +
+            '<span class="chip sev-' + b.sev + '">' + b.sev + '</span>' +
+            '<span class="conf">' + esc(b.status) + '</span>' +
+            '<span class="area-tag">' + esc(b.area) + '</span>' +
+          '</div>' +
+          '<p class="loc"><code>' + esc(b.loc) + '</code></p>' +
+          '<div class="detail">' +
+            '<p><span class="lbl">What breaks</span><br>' + fmt(b.breaks) + '</p>' +
+            '<p><span class="lbl">Why</span><br>' + fmt(b.why) + '</p>' +
+          '</div>' +
+        '</div>';
+      el.querySelector('input').addEventListener('change', function (ev) {
+        if (ev.target.checked) done[b.id] = true; else delete done[b.id];
+        save();
+        el.classList.toggle('done', !!done[b.id]);
+        if (filter === 'open') render();
+        progress();
+      });
+      list.appendChild(el);
+    });
+    progress();
+  }
+
+  function progress() {
+    var n = bugs.filter(function (b) { return done[b.id]; }).length;
+    var openHigh = bugs.filter(function (b) { return b.sev === 'high' && !done[b.id]; }).length;
+    fill.style.width = (n / bugs.length * 100) + '%';
+    plabel.textContent = n + ' of ' + bugs.length + ' fixed · ' + openHigh + ' high-severity open';
+  }
+
+  document.getElementById('filters').addEventListener('click', function (ev) {
+    var btn = ev.target.closest('button.f');
+    if (!btn) return;
+    if (btn.id === 'reset') {
+      if (!confirm('Clear all checkmarks?')) return;
+      done = {}; save(); render(); return;
+    }
+    filter = btn.dataset.sev;
+    Array.prototype.forEach.call(this.querySelectorAll('button.f[data-sev]'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.sev === filter));
+    });
+    render();
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
