@@ -134,8 +134,7 @@ public sealed class AccountingTokenServiceTests : IAsyncLifetime
     {
         var qbOptions = new QuickBooksOptions { ClientId = "id", ClientSecret = "secret", Environment = "sandbox" };
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions));
-        var providerResolver = new AccountingProviderResolver(new[] { provider });
-        return new AccountingTokenService(_dp, providerResolver, settingsResolver,
+        return new AccountingTokenService(_dp, provider, settingsResolver,
             new AccountingConnectionClaimStore(_ctx.Db), TimeProvider.System,
             NullLogger<AccountingTokenService>.Instance);
     }

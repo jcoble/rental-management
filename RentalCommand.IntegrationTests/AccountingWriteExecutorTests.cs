@@ -921,7 +921,6 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
         services.AddSingleton<IDataProtectionProvider>(new EphemeralDataProtectionProvider());
         services.AddSingleton(options.Object);
         services.AddSingleton<IAccountingProvider>(provider.Object);
-        services.AddSingleton<AccountingProviderResolver>();
         services.AddSingleton<AccountingAppSettingsResolver>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();

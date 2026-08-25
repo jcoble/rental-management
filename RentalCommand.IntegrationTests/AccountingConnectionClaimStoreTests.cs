@@ -770,11 +770,11 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     {
         var execution = CreateWriteExecution(applyCommands);
         var db = execution.Db;
-        var (providerResolver, settingsResolver) = CreateResolvers(provider);
+        var settingsResolver = CreateSettings();
         var claims = new AccountingConnectionClaimStore(db);
         var import = new AccountingImportService(
-            db, _dataProtection, providerResolver, settingsResolver,
-            new AccountingTokenService(_dataProtection, providerResolver, settingsResolver,
+            db, _dataProtection, provider, settingsResolver,
+            new AccountingTokenService(_dataProtection, provider, settingsResolver,
                 claims, TimeProvider.System, NullLogger<AccountingTokenService>.Instance),
             claims,
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
@@ -784,9 +784,9 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     private AccountingTokenService CreateTokenService(
         IAccountingProvider provider, IAccountingConnectionClaimStore claims)
     {
-        var (providerResolver, settingsResolver) = CreateResolvers(provider);
+        var settingsResolver = CreateSettings();
         return new AccountingTokenService(
-            _dataProtection, providerResolver, settingsResolver,
+            _dataProtection, provider, settingsResolver,
             claims, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
     }
 
@@ -795,16 +795,16 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     {
         var execution = CreateWriteExecution();
         var db = execution.Db;
-        var (providerResolver, settingsResolver) = CreateResolvers(provider);
+        var settingsResolver = CreateSettings();
         var claims = new AccountingConnectionClaimStore(db);
         var tokenService = new AccountingTokenService(
-            _dataProtection, providerResolver, settingsResolver, claims,
+            _dataProtection, provider, settingsResolver, claims,
             TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         var import = new AccountingImportService(
-            db, _dataProtection, providerResolver, settingsResolver, tokenService, claims,
+            db, _dataProtection, provider, settingsResolver, tokenService, claims,
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
-            db, _dataProtection, providerResolver, settingsResolver, import,
+            db, _dataProtection, provider, settingsResolver, import,
             TimeProvider.System, execution.Writes,
             NullLogger<AccountingConnectionService>.Instance);
     }
@@ -861,14 +861,13 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             inner.ReconcileAbandonedTokenRotationsAsync(ct);
     }
 
-    private static (AccountingProviderResolver Provider, AccountingAppSettingsResolver Settings) CreateResolvers(
-        IAccountingProvider provider)
+    private static AccountingAppSettingsResolver CreateSettings()
     {
         var settings = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(new QuickBooksOptions
         {
             ClientId = "client", ClientSecret = "secret", Environment = "sandbox",
         }));
-        return (new AccountingProviderResolver([provider]), settings);
+        return settings;
     }
 
     private RentalCommandDbContext NewContext()
