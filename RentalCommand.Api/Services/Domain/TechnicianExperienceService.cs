@@ -231,7 +231,8 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
         row.ScheduledFor, row.ScheduledWindowEnd, row.UpdatedAt, row.UnreadMessageCount);
 
     private static string Address(string line1, string? line2, string city, string state, string postal) =>
-        AddressComposer.Compose(line1, line2, city, state, postal) ?? string.Empty;
+        string.Join(", ", new[] { line1, line2, city, $"{state} {postal}" }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
 
     internal sealed record TechnicianAssignmentReadRow(
         int Id, int PropertyId, int? UnitId, string Title, string Category, WorkOrderStatus Status,

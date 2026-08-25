@@ -533,9 +533,12 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         var landlordName = !string.IsNullOrWhiteSpace(agreement.LandlordName)
             ? agreement.LandlordName
             : agreement.PortfolioName;
-        var propertyAddress = AddressComposer.Compose(
-            agreement.AddressLine1, agreement.AddressLine2, agreement.City,
-            agreement.State, agreement.PostalCode) ?? string.Empty;
+        var propertyAddress = string.Join(", ", new[]
+            {
+                agreement.AddressLine1,
+                agreement.AddressLine2,
+                $"{agreement.City}, {agreement.State} {agreement.PostalCode}".Trim(),
+            }.Where(s => !string.IsNullOrWhiteSpace(s)));
 
         return new LeaseAgreementRenderData
         {

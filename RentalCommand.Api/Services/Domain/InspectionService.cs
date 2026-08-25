@@ -747,8 +747,7 @@ public class InspectionService : IInspectionService
             NotApplicableCount = summary.NotApplicableCount,
             PendingCount = summary.PendingCount,
             Items = items,
-            PropertyLine = $"{header.PropertyName} — {AddressComposer.Compose(
-                header.AddressLine1, null, header.City, header.State, header.PostalCode) ?? string.Empty}",
+            PropertyLine = $"{header.PropertyName} — {header.AddressLine1}, {header.City}, {header.State} {header.PostalCode}",
             UnitLine = header.UnitNumber is null ? null : $"Unit {header.UnitNumber}",
             PhotosByItemId = photos,
         };

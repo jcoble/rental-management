@@ -270,9 +270,12 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         var tenantName = primarySigner?.NameSnapshot ?? string.Empty;
         var relationship = addendum?.LeaseManagement ?? agreement.LeaseManagement!;
         var property = relationship.Property!;
-        var propertyAddress = AddressComposer.Compose(
-            property.AddressLine1, property.AddressLine2, property.City,
-            property.State, property.PostalCode) ?? string.Empty;
+        var propertyAddress = string.Join(", ", new[]
+            {
+                property.AddressLine1,
+                property.AddressLine2,
+                $"{property.City}, {property.State} {property.PostalCode}".Trim(),
+            }.Where(value => !string.IsNullOrWhiteSpace(value)));
 
         var originalDocumentBytes = await TryLoadOriginalDocumentBytesAsync(sigRequest, ct);
         var signerRows = await _db.SignatureSigners.AsNoTracking()
