@@ -74,3 +74,7 @@ started exited with the script. Other agents' chromium processes were left alone
 ### Left in place, out of scope
 The full-month-name tables (`January`…`December`) in owner_reports `_fmtMonth`, home_shell
 `_formattedDate` and ai/briefing_screen `_format` — a different table from the abbreviations.
+
+## Rework (controller, after SOL review)
+- `moneyFmt` now decides the sign after whole-dollar rounding, so `moneyFmt(-0.4, whole: true)` is `$0` as the deleted helpers produced (pinned by a test); negatives render `-$1,234.56`.
+- `formatAppointmentDateTime` formats unguarded again (`Jan 1, 0  12:00 AM` for the `DateTime(0)` sentinel, as before) instead of going through `dateFmt`, which blanks years ≤ 1.

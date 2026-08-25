@@ -7,6 +7,7 @@ void main() {
     expect(moneyFmt(-1234.5), r'-$1,234.50');
     expect(moneyFmt(1200, whole: true), r'$1,200');
     expect(moneyFmt(1234.56, whole: true), r'$1,235');
+    expect(moneyFmt(-0.4, whole: true), r'$0');
   });
 
   test('dates read as Aug 25, 2026', () {

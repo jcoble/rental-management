@@ -20,12 +20,13 @@ const monthAbbrs = [
 
 /// `$1,234.56`, or `$1,235` when [whole] is set (rounded, no cents).
 String moneyFmt(num amount, {bool whole = false}) {
-  final isNegative = amount < 0;
-  final abs = amount.abs();
+  final num value = whole ? amount.round() : amount;
+  final isNegative = value < 0;
+  final abs = value.abs();
   final String intPart;
   final String? decPart;
   if (whole) {
-    intPart = abs.round().toString();
+    intPart = abs.toString();
     decPart = null;
   } else {
     final parts = abs.toStringAsFixed(2).split('.');
