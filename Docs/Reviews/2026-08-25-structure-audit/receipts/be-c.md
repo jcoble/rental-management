@@ -80,6 +80,14 @@ Commands were run one at a time in the required order after implementation:
 
 The nine API failures were timestamp-precision failures in the existing PostgreSQL/SQLite timing tests. Filtered runs verified, for example, `VendorDispatchServiceTests` expected `2026-08-25 21:26:30.4779554` but stored `2026-08-25 21:26:30.477955`, and `InspectionChecklistServiceTests` expected `2026-08-25 21:38:13.5655888` but stored `2026-08-25 21:38:13.565588`; no changed executor behavior appeared in those stacks.
 
+## Rework round 1 completion (Verified)
+
+- DONE in commit `39c92ac3`: corrected the key-bound audit. No production or test file changed because the shared executor already enforces the exact persisted bound and the former exact path already enforced it through `AtomicCommandIdentity`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet build RentalCommand.sln -c Debug --nologo -v q` — exit `0`; `36 Warning(s)`, `0 Error(s)`, `Time Elapsed 00:00:03.47`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Data.Tests --no-build --nologo` — exit `0`; `Passed!  - Failed:     0, Passed:   125, Skipped:     0, Total:   125, Duration: 5 s - RentalCommand.Data.Tests.dll (net10.0)`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests --no-build --nologo --filter "FullyQualifiedName~Inspection|FullyQualifiedName~WriteExecutor|FullyQualifiedName~Atomic"` — exit `1`; 151 passed and four known pre-existing failures: two `InspectionChecklist Complete_*` timestamp-precision failures, `RecurringTenantCharge Create_DerivesTenantDimensions`, and `InspectionChecklist RecoverChronologyAuthorizedAsync_*`.
+- `dotnet build-server shutdown` — exit `0`; both the compiler and MSBuild servers shut down successfully.
+
 ## Test-file change receipt (Verified)
 
 The complete changed-test-file set is the 140 paths produced by:
