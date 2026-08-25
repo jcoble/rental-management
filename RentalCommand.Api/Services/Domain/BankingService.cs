@@ -762,11 +762,11 @@ public class BankingService : IBankingService
         var authorizedProperties = _db.Properties.AsNoTracking()
             .WhereAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
         var authorizedExpenses = _db.Expenses.AsNoTracking()
-            .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
         var authorizedLoans = _db.Loans.AsNoTracking()
-            .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
         var authorizedDistributions = _db.OwnerDistributions.AsNoTracking()
-            .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
         var allProperties = _db.AuthorizedAllPropertyAssignments(
             scope,
             CapabilityKeys.MoneyReconciliationOperate,
@@ -1157,13 +1157,13 @@ public class BankingService : IBankingService
                 .WhereAuthorized(_db, scopedAccess, CapabilityKeys.MoneyReconciliationOperate, now);
             receiptEntries = receiptEntries.Where(entry => authorizedProperties.Any(property =>
                 property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId));
-            expenses = expenses.WhereMoneyAuthorized(
+            expenses = expenses.WhereAuthorized(
                 _db, scopedAccess, CapabilityKeys.MoneyReconciliationOperate, now);
-            var authorizedLoans = _db.Loans.AsNoTracking().WhereMoneyAuthorized(
+            var authorizedLoans = _db.Loans.AsNoTracking().WhereAuthorized(
                 _db, scopedAccess, CapabilityKeys.MoneyReconciliationOperate, now);
             loanPayments = loanPayments.Where(payment =>
                 authorizedLoans.Any(loan => loan.Id == payment.LoanId));
-            ownerDistributions = ownerDistributions.WhereMoneyAuthorized(
+            ownerDistributions = ownerDistributions.WhereAuthorized(
                 _db, scopedAccess, CapabilityKeys.MoneyReconciliationOperate, now);
         }
 

@@ -150,7 +150,7 @@ public class OwnerEntityServiceListTests : IAsyncLifetime
         await _ctx.Db.SaveChangesAsync();
 
         var query = _ctx.Db.AtomicAuditLogs.AsNoTracking()
-            .WhereAuthorizedForReports(_ctx.Db, _scope, DateTime.UtcNow)
+            .WhereAuthorized(_ctx.Db, _scope, DateTime.UtcNow)
             .Where(row => row.EntityType == nameof(OwnerEntity) && row.EntityId == owner.Id);
         var sql = query.ToQueryString();
         var rows = await query.ToListAsync();
@@ -189,7 +189,7 @@ public class OwnerEntityServiceListTests : IAsyncLifetime
             _scope.AccessRevision + 1);
 
         var rows = await _ctx.Db.AtomicAuditLogs.AsNoTracking()
-            .WhereAuthorizedForReports(_ctx.Db, stale, DateTime.UtcNow)
+            .WhereAuthorized(_ctx.Db, stale, DateTime.UtcNow)
             .Where(row => row.EntityType == nameof(OwnerEntity) && row.EntityId == owner.Id)
             .ToListAsync();
 

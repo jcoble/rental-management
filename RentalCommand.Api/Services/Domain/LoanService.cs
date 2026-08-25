@@ -48,7 +48,7 @@ public class LoanService : ILoanService
         WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var filtered = BuildListQuery(
-            _db.Loans.AsNoTracking().WhereMoneyAuthorized(
+            _db.Loans.AsNoTracking().WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
             scope.PortfolioId, propertyId, query);
         return BuildPageAsync(filtered, query, ct);
@@ -124,7 +124,7 @@ public class LoanService : ILoanService
 
     public Task<LoanResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
         GetAsync(
-            _db.Loans.AsNoTracking().WhereMoneyAuthorized(
+            _db.Loans.AsNoTracking().WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
             scope.PortfolioId, id, ct);
 
@@ -216,7 +216,7 @@ public class LoanService : ILoanService
         WorkspaceReadScope scope, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default)
     {
         var loanInScope = await _db.Loans.AsNoTracking()
-            .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow())
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow())
             .AnyAsync(loan => loan.Id == loanId, ct);
         if (!loanInScope)
             return null;

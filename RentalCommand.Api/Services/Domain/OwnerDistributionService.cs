@@ -54,7 +54,7 @@ public class OwnerDistributionService : IOwnerDistributionService
         WorkspaceReadScope scope, OwnerDistributionListQuery query, CancellationToken ct = default)
     {
         var filtered = BuildListQuery(
-            _db.OwnerDistributions.AsNoTracking().WhereMoneyAuthorized(
+            _db.OwnerDistributions.AsNoTracking().WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyOwnerReportsRead, _timeProvider.UtcNow()),
             scope.PortfolioId, query);
         return BuildPageAsync(filtered, query, ct);
@@ -85,7 +85,7 @@ public class OwnerDistributionService : IOwnerDistributionService
     public Task<OwnerDistributionResponse?> GetAsync(
         WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
         GetAsync(
-            _db.OwnerDistributions.AsNoTracking().WhereMoneyAuthorized(
+            _db.OwnerDistributions.AsNoTracking().WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyOwnerReportsRead, _timeProvider.UtcNow()),
             scope.PortfolioId, id, ct);
 
