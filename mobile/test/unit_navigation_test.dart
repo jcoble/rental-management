@@ -11,7 +11,7 @@ import 'package:rental_command/core/auth/auth_controller.dart';
 import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/core/models/lease.dart';
 import 'package:rental_command/core/models/unit.dart';
-import 'package:rental_command/core/navigation/mobile_restoration_state.dart';
+import 'package:rental_command/core/router/mobile_restoration_state.dart';
 import 'package:rental_command/core/theme/app_theme.dart';
 import 'package:rental_command/core/widgets/mobile_pill_tab_bar.dart';
 import 'package:rental_command/features/activity/activity_repository.dart';

@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_exception.dart';
-import '../navigation/mobile_restoration_state.dart';
+import '../router/mobile_restoration_state.dart';
 import '../push/push_service.dart';
 import '../../features/onboarding/onboarding_repository.dart';
 import 'auth_models.dart';

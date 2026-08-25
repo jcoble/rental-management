@@ -40,19 +40,12 @@ typedef TenantLedgerPageKey = ({
 
 typedef TenantLedgerSummaryKey = ({int tenantAccountId, int months});
 
-abstract interface class AccountingDetailModeStore {
-  Future<TenantLedgerDetailMode> read();
-
-  Future<void> write(TenantLedgerDetailMode mode);
-}
-
-class SecureAccountingDetailModeStore implements AccountingDetailModeStore {
-  SecureAccountingDetailModeStore([FlutterSecureStorage? storage])
+class AccountingDetailModeStore {
+  AccountingDetailModeStore([FlutterSecureStorage? storage])
     : _storage = storage ?? const FlutterSecureStorage();
 
   final FlutterSecureStorage _storage;
 
-  @override
   Future<TenantLedgerDetailMode> read() async {
     final value = await _storage.read(key: accountingDetailModeStorageKey);
     return value == TenantLedgerDetailMode.advanced.name
@@ -60,13 +53,12 @@ class SecureAccountingDetailModeStore implements AccountingDetailModeStore {
         : TenantLedgerDetailMode.simple;
   }
 
-  @override
   Future<void> write(TenantLedgerDetailMode mode) =>
       _storage.write(key: accountingDetailModeStorageKey, value: mode.name);
 }
 
 final accountingDetailModeStoreProvider = Provider<AccountingDetailModeStore>(
-  (ref) => SecureAccountingDetailModeStore(),
+  (ref) => AccountingDetailModeStore(),
 );
 
 DateTime _dateOnly(DateTime value) => DateUtils.dateOnly(value.toUtc());

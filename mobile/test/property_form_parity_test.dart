@@ -538,13 +538,15 @@ Property _property({
     id: 1,
     portfolioId: 1,
     ownerships: [
-      PropertyOwnership(
+      (
         id: 17,
         ownerEntityId: 42,
         ownerName: ownerName,
         ownershipSharePercent: 100,
         effectiveFromUtc: DateTime(2026),
+        effectiveToUtc: null,
         statementRecipientName: ownerName,
+        statementRecipientEmail: null,
         payeeName: ownerName,
       ),
     ],
