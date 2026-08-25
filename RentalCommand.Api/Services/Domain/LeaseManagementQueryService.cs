@@ -23,7 +23,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public async Task<LeaseManagementListResponse> ListPageAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         LeaseManagementListQuery query,
         CancellationToken ct = default)
     {
@@ -43,14 +43,14 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public Task<DateOnly> GetPortfolioBusinessDateAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         CancellationToken ct = default) =>
         _db.Database
             .SqlQuery<DateOnly>($"SELECT rc_business_date({access.PortfolioId}) AS \"Value\"")
             .SingleAsync(ct);
 
     public async Task<LeaseManagementDetailResponse?> GetAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         CancellationToken ct = default)
     {
@@ -86,20 +86,20 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public Task<bool> CanReadAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         CancellationToken ct = default) =>
         BuildLeaseWorkspaceReadManagementQuery(access)
             .AnyAsync(management => management.Id == leaseManagementId, ct);
 
     public Task<LeaseQaAgreementFacts?> GetLeaseQaAgreementAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         CancellationToken ct = default) =>
         BuildLeaseQaAgreementQuery(access, leaseManagementId).SingleOrDefaultAsync(ct);
 
     internal IQueryable<LeaseQaAgreementFacts> BuildLeaseQaAgreementQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId) =>
         from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
         join status in _db.LeaseAgreementStatusProjections.AsNoTracking()
@@ -132,7 +132,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             agreement.ExecutedArtifact.StoredFile!.FileName);
 
     public async Task<IReadOnlyList<int>> ListAuthorizedAgreementIssueSignerIdsAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId,
         CancellationToken ct = default) =>
@@ -140,7 +140,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .ToArrayAsync(ct);
 
     internal IQueryable<int> BuildAuthorizedAgreementIssueSignerQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId) =>
         BuildAgreementPreparationManagementQuery(access)
@@ -153,7 +153,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .Select(signer => signer.Id);
 
     public async Task<IReadOnlyList<int>> ListAuthorizedAddendumIssueSignerIdsAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAddendumId,
         CancellationToken ct = default) =>
@@ -161,7 +161,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .ToArrayAsync(ct);
 
     internal IQueryable<int> BuildAuthorizedAddendumIssueSignerQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAddendumId) =>
         BuildAgreementPreparationManagementQuery(access)
@@ -174,19 +174,19 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .Select(signer => signer.Id);
 
     private IQueryable<LeaseManagement> BuildAgreementPreparationManagementQuery(
-        LeaseManagementReadContext access) =>
+        WorkspaceReadScope access) =>
         BuildAuthorizedManagementQuery(
             access,
             [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare]);
 
     private IQueryable<LeaseManagement> BuildLeaseWorkspaceReadManagementQuery(
-        LeaseManagementReadContext access) =>
+        WorkspaceReadScope access) =>
         BuildAuthorizedManagementQuery(
             access,
             [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingAgreementsPrepare]);
 
     public async Task<ReturnPossessionContextResponse> GetReturnPossessionContextAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         CancellationToken ct = default)
     {
@@ -202,7 +202,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public async Task<LeaseAgreementHistoryPageResponse?> ListAgreementHistoryPageAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         LeaseLegalHistoryQuery query,
         CancellationToken ct = default)
@@ -228,7 +228,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public async Task<LeaseAgreementDraftDetailResponse?> GetAgreementDraftAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId,
         CancellationToken ct = default)
@@ -277,7 +277,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public async Task<LeasePartyLegalBasisPageResponse?> ListEligiblePartyLegalBasisPageAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         ListQuery query,
         CancellationToken ct = default)
@@ -308,7 +308,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     internal IQueryable<LeasePartyLegalBasisResponse> BuildEligiblePartyLegalBasisQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         ListQuery query) =>
             from management in BuildAgreementPreparationManagementQuery(access)
@@ -337,7 +337,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             };
 
     public Task<LeaseAgreementSignatureProgressResponse?> GetAgreementSignatureProgressAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId,
         CancellationToken ct = default) =>
@@ -345,7 +345,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .SingleOrDefaultAsync(ct);
 
     public Task<LeaseAgreementEffectiveAddendumSeriesResponse?> GetEffectiveAddendumSeriesAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int sourceAgreementId,
         CancellationToken ct = default) =>
@@ -353,7 +353,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .SingleOrDefaultAsync(ct);
 
     public async Task<LeaseAddendumHistoryPageResponse?> ListAddendumHistoryPageAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         LeaseLegalHistoryQuery query,
         CancellationToken ct = default)
@@ -379,7 +379,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public async Task<LeaseAddendumEligibleBaseAgreementPageResponse?> ListAddendumEligibleBaseAgreementsAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         ListQuery query,
         CancellationToken ct = default)
@@ -408,7 +408,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public async Task<LeaseAddendumSignerCandidatesResponse?> GetAddendumSignerCandidatesAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         CancellationToken ct = default)
     {
@@ -424,7 +424,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public async Task<LeaseAddendumDraftDetailResponse?> GetAddendumDraftAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAddendumId,
         CancellationToken ct = default)
@@ -467,7 +467,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     public Task<LegalArtifactFileReference?> GetAgreementArtifactAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId,
         int artifactId,
@@ -476,7 +476,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .SingleOrDefaultAsync(ct);
 
     public Task<LegalArtifactFileReference?> GetAgreementSourceScanAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId,
         CancellationToken ct = default) =>
@@ -487,7 +487,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .FirstOrDefaultAsync(ct);
 
     public Task<LegalArtifactFileReference?> GetAddendumArtifactAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAddendumId,
         int artifactId,
@@ -496,7 +496,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .SingleOrDefaultAsync(ct);
 
     public async Task<LeaseLedgerResponse?> GetLedgerAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int skip = 0,
         int? take = null,
@@ -540,7 +540,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     internal IQueryable<LeaseManagementSummaryResponse> BuildSummaryQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         LeaseManagementListQuery query)
     {
         var rows = BuildSummaryBaseQuery(access, CapabilityKeys.RentalsRead);
@@ -574,7 +574,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     private IQueryable<LeaseManagementSummaryResponse> BuildSummaryBaseQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         string capabilityKey) =>
         from management in BuildAuthorizedManagementQuery(access, capabilityKey)
         join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
@@ -656,13 +656,13 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         };
 
     internal IQueryable<LeaseManagementSummaryResponse> BuildDetailHeaderQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId) =>
         BuildSummaryBaseQuery(access, CapabilityKeys.RentalsRead)
             .Where(summary => summary.LeaseManagementId == leaseManagementId);
 
     internal IQueryable<LeaseManagementPartyResponse> BuildPartyQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId) =>
         from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join party in _db.LeaseManagementParties.AsNoTracking()
@@ -691,7 +691,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         };
 
     internal IQueryable<LeaseManagementPartyResponse> BuildCurrentPartiesQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId) =>
         BuildPartyQuery(access, leaseManagementId)
             .Where(party => party.IsCurrent)
@@ -700,7 +700,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .ThenBy(party => party.LeaseManagementPartyId);
 
     internal IQueryable<ActiveTenantUserAccessResponse> BuildCurrentPartyAccessQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId) =>
         from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
@@ -772,7 +772,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         };
 
     internal IQueryable<LeaseAgreementDraftDetailReadRow> BuildAgreementDraftDetailQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId) =>
         from management in BuildLeaseWorkspaceReadManagementQuery(access)
@@ -882,7 +882,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         };
 
     internal IQueryable<LeaseAddendumEligibleBaseAgreementResponse> BuildAddendumEligibleBaseAgreementQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId) =>
         from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join agreement in _db.LeaseAgreements.AsNoTracking()
@@ -906,7 +906,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         };
 
     internal IQueryable<LeaseAddendumDraftDetailReadRow> BuildAddendumDraftDetailQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAddendumId) =>
         from management in BuildLeaseWorkspaceReadManagementQuery(access)
@@ -996,7 +996,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         };
 
     internal IQueryable<LeaseAgreementSignatureProgressResponse> BuildAgreementSignatureProgressQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId) =>
         from management in BuildLeaseWorkspaceReadManagementQuery(access)
@@ -1073,7 +1073,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         };
 
     internal IQueryable<LeaseAgreementEffectiveAddendumSeriesResponse> BuildEffectiveAddendumSeriesQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int sourceAgreementId)
     {
@@ -1190,7 +1190,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     internal IQueryable<LeaseLegalHistoryCountsReadRow> BuildLegalHistoryCountsQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId) =>
         BuildLeaseWorkspaceReadManagementQuery(access)
             .Where(management => management.Id == leaseManagementId)
@@ -1217,7 +1217,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             });
 
     internal IQueryable<LeaseAgreementHistoryResponse> BuildAgreementHistoryQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         LeaseLegalHistoryQuery query)
     {
@@ -1342,7 +1342,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     internal IQueryable<LeaseAddendumHistoryResponse> BuildAddendumHistoryQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         LeaseLegalHistoryQuery query)
     {
@@ -1443,7 +1443,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     }
 
     internal IQueryable<LegalArtifactFileReference> BuildAgreementArtifactFileQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId,
         int artifactId) =>
@@ -1464,7 +1464,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         select new LegalArtifactFileReference(artifact.Id, artifact.StorageKey, artifact.FileName, artifact.ContentType);
 
     internal IQueryable<LegalArtifactFileReference> BuildAddendumArtifactFileQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAddendumId,
         int artifactId) =>
@@ -1485,7 +1485,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         select new LegalArtifactFileReference(artifact.Id, artifact.StorageKey, artifact.FileName, artifact.ContentType);
 
     internal IQueryable<AgreementSourceScanFileReadRow> BuildAgreementSourceScanFileQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         int leaseAgreementId) =>
         from management in BuildLeaseWorkspaceReadManagementQuery(access)
@@ -1513,7 +1513,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         };
 
     internal IQueryable<CanonicalLedgerHeaderReadRow> BuildCanonicalLedgerHeaderQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId) =>
         from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.MoneyBalancesRead)
         where management.Id == leaseManagementId
@@ -1582,12 +1582,12 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         };
 
     internal IQueryable<LeaseManagement> BuildAuthorizedManagementQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         string capabilityKey) =>
         BuildAuthorizedManagementQuery(access, [capabilityKey]);
 
     internal IQueryable<LeaseManagement> BuildAuthorizedManagementQuery(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         IReadOnlyCollection<string> capabilityKeys)
     {
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;

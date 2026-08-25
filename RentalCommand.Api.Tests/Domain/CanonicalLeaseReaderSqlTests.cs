@@ -946,7 +946,7 @@ public sealed class CanonicalLeaseReaderSqlTests
     private static LeaseManagementQueryService NewLeaseManagementQueryService(RentalCommandDbContext db) =>
         new(db, TimeProvider.System);
 
-    private static LeaseManagementReadContext ReadAccess() =>
+    private static WorkspaceReadScope ReadAccess() =>
         new(17, 5, Guid.Parse("77777777-7777-7777-7777-777777777777"), 12, 3);
 
     private static RentalCommand.Core.Authorization.WorkspaceReadScope ReadScope() =>

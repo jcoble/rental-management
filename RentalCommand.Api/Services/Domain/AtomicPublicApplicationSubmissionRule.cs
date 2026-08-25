@@ -141,11 +141,6 @@ public sealed class AtomicPublicApplicationSubmissionRule
             "Thank you. Your application has been received.");
     }
 
-    public Task AuthorizeReplayAsync(
-        AtomicPublicApplicationSubmissionCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
-
     public async Task AuthorizeAsync(
         AtomicPublicApplicationSubmissionCommand command,
         IAtomicCommandContext context,
@@ -215,8 +210,6 @@ public sealed class AtomicPublicApplicationSubmissionRule
         return null;
     }
 
-    private static InvalidOperationException RetiredPath() => new(
-        "Public application submissions must use the shared write executor.");
 }
 
 public static class AtomicPublicApplicationSubmission
@@ -233,7 +226,7 @@ public static class AtomicPublicApplicationSubmission
         var handler = new AtomicPublicApplicationSubmissionRule(db);
         return new(
             identity.CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             Codec.ContractName,
             WriteLockPlan.None,

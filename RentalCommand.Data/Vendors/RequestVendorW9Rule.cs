@@ -24,7 +24,7 @@ public sealed class RequestVendorW9Rule
     {
         var handler = new RequestVendorW9Rule(db);
         return new TransactionalWrite<RequestVendorW9Command, RequestVendorW9Result>(
-            "vendor-w9.request", WriteIdempotencyPolicy.Required, command, ResultContract,
+            "vendor-w9.request",  command, ResultContract,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
@@ -101,10 +101,6 @@ public sealed class RequestVendorW9Rule
         return new RequestVendorW9Result(RequestVendorW9Outcome.Queued, target.NormalizedPhone);
     }
 
-    public Task AuthorizeReplayAsync(
-        RequestVendorW9Command command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
-
     public async Task AuthorizeAsync(
         RequestVendorW9Command command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -118,9 +114,6 @@ public sealed class RequestVendorW9Rule
                 "The active assignment cannot replay this vendor W-9 request.");
         }
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Vendor W-9 requests must use the shared write executor.");
 
     internal static IQueryable<Vendor> AuthorizedVendors(
         RequestVendorW9Command command,

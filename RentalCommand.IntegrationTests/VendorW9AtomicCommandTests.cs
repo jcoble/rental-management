@@ -217,7 +217,6 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
             value => Equals(value, _portfolioId),
             "portfolio scope must be enforced by the translated query");
         typeof(RequestVendorW9Rule).GetMethod("ExecuteAsync").Should().NotBeNull();
-        typeof(RequestVendorW9Rule).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
     }
 
     [SkippableFact]

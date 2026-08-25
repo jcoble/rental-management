@@ -84,7 +84,7 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
         var handler = new EnqueueMorningBriefingsRule(db);
         return new(
             Identity(command).CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             ResultCodec.ContractName,
             WriteLockPlan.None,

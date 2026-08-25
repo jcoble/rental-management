@@ -14,49 +14,11 @@ public sealed record CreateLedgerAccountCommand(
     string Code,
     string Name,
     [property: JsonConverter(typeof(JsonStringEnumConverter))] AccountType AccountType,
-    [property: JsonConverter(typeof(JsonStringEnumConverter))] NormalBalance? RequestedNormalBalance,
     int? ParentAccountId,
     string? SystemKey,
     [property: JsonConverter(typeof(JsonStringEnumConverter))] ScheduleECategory? ScheduleECategory,
     bool IsActive,
-    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData
-{
-    /// <summary>
-    /// Compatibility overload for callers that do not send the legacy normal-balance field. The
-    /// handler always derives the persisted value from <see cref="AccountType"/>.
-    /// </summary>
-    public CreateLedgerAccountCommand(
-        int portfolioId,
-        int actorUserId,
-        Guid actorAuthSessionId,
-        int actorAccessContextId,
-        long actorAccessRevision,
-        string code,
-        string name,
-        AccountType accountType,
-        int? parentAccountId,
-        string? systemKey,
-        ScheduleECategory? scheduleECategory,
-        bool isActive,
-        string deliveryIdempotencyKey)
-        : this(
-            portfolioId,
-            actorUserId,
-            actorAuthSessionId,
-            actorAccessContextId,
-            actorAccessRevision,
-            code,
-            name,
-            accountType,
-            null,
-            parentAccountId,
-            systemKey,
-            scheduleECategory,
-            isActive,
-            deliveryIdempotencyKey)
-    {
-    }
-}
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 /// <summary>Atomic update/deactivation/deletion contract for one chart-of-accounts account.</summary>
 public sealed record UpdateLedgerAccountCommand(

@@ -560,7 +560,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         _db.Add(workOrder);
         var flush = await context.FlushBusinessAsync(ct);
         EnrichCreatedTargetAudit(command, extractedFieldsJson, context, flush, workOrder);
-        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderRule.DataUpdate(
             command.PortfolioId,
             nameof(WorkOrder),
             workOrder.Id,

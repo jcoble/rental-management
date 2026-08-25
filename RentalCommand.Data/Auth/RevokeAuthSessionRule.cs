@@ -85,10 +85,6 @@ public sealed class RevokeAuthSessionRule
         return new RevokeAuthSessionResult(true, command.AuthSessionId);
     }
 
-    public Task AuthorizeReplayAsync(
-        RevokeAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         RevokeAuthSessionCommand command,
         IAtomicCommandContext context,

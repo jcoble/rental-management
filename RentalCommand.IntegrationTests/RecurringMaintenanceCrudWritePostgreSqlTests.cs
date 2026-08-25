@@ -181,13 +181,13 @@ public sealed class RecurringMaintenanceCrudWritePostgreSqlTests : IAsyncLifetim
     }
 
     [Fact]
-    public async Task MutationWithoutSharedExecutor_ThrowsRetiredPathMessage()
+    public async Task MutationWithoutSharedExecutor_RequiresWriteExecutor()
     {
         var sut = new RecurringMaintenanceTaskService(_context.Db, TimeProvider.System);
         var scope = new WorkspaceReadScope(1, 1, Guid.NewGuid(), 1, 1);
 
         Func<Task> act = () => sut.CreateAuthorizedAsync(
-            scope, CreateRequest(1, "Retired path"), "retired-recurring-path");
+            scope, CreateRequest(1, "Missing executor"), "recurring-missing-executor");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("The shared request write executor is required for recurring maintenance changes.");

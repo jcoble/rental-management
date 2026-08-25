@@ -41,7 +41,7 @@ public static class TransactionalWriteDefaults
         WriteLockProtocol? entityLockProtocol = null, object? entityLockId = null)
         where TCommand : notnull, IAuthorizationScopedRequest
         where TResult : notnull =>
-        new(operationName, WriteIdempotencyPolicy.Required, request, resultContract,
+        new(operationName,  request, resultContract,
             AuthorizationLockPlan(request, entityLockProtocol, entityLockId),
             executeAsync, authorizeReplayAsync);
 

@@ -21,7 +21,6 @@ public interface IRequestWriteExecutor
             "This request executor does not support exact legacy keys.");
 }
 
-[WriteEntryPoint(WriteEntryPointKind.Transactional)]
 internal sealed class RequestWriteExecutor(IWriteExecutor executor) : IRequestWriteExecutor
 {
     public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(

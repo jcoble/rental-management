@@ -40,7 +40,7 @@ public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixtu
             var handler = scope.ServiceProvider.GetRequiredService<CanaryHandler>();
             var write = new TransactionalWrite<CanaryCommand, CanaryResult>(
                 identity.CommandType,
-                WriteIdempotencyPolicy.Required,
+
                 command,
                 ResultCodec.ContractName,
                 new WriteLockPlan(

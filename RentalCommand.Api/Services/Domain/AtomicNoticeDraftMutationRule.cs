@@ -475,7 +475,7 @@ public static class AtomicNoticeDraftMutation
         var handler = new AtomicNoticeDraftMutationRule(db);
         return new(
             Identity(command).CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             Codec.ContractName,
             WriteLockPlan.None,

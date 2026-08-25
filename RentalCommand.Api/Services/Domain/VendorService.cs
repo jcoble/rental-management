@@ -90,7 +90,6 @@ public class VendorService : IVendorService
             .FirstOrDefaultAsync(v => v.Id == id, ct);
     }
 
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<VendorResponse?> CreateAsync(
         WorkspaceReadScope scope,
         CreateVendorRequest request,
@@ -107,7 +106,6 @@ public class VendorService : IVendorService
         return DeserializeSnapshot<VendorResponse>(outcome.Value);
     }
 
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<VendorResponse?> UpdateAsync(
         WorkspaceReadScope scope,
         int id,
@@ -125,7 +123,6 @@ public class VendorService : IVendorService
         return DeserializeSnapshot<VendorResponse>(outcome.Value);
     }
 
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<bool> DeleteAsync(
         WorkspaceReadScope scope,
         int id,

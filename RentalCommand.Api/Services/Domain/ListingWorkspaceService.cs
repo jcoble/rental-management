@@ -188,7 +188,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             operationName, command.PortfolioId, command.UnitId, clientOperationId);
         var write = new TransactionalWrite<TCommand, ListingWorkspaceMutationResult>(
             operationName,
-            WriteIdempotencyPolicy.Required,
+
             command,
             MutationCodec.ContractName,
             new WriteLockPlan(

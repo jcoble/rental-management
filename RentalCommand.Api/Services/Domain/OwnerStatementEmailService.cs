@@ -334,7 +334,7 @@ public static class QueueOwnerStatementEmail
         var handler = new QueueOwnerStatementEmailRule(db);
         return new(
             Identity(command).CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             Codec.ContractName,
             WriteLockPlan.None,

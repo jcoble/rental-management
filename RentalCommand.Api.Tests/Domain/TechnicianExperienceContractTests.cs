@@ -141,9 +141,9 @@ public sealed class TechnicianExperienceContractTests
     {
         var repositoryRoot = FindRepositoryRoot();
         var entrySource = File.ReadAllText(Path.Combine(repositoryRoot, "RentalCommand.Data",
-            "Operations", "TechnicianExperienceCommandHandlers.cs"));
+            "Operations", "TechnicianExperienceRules.cs"));
         var statusSource = File.ReadAllText(Path.Combine(repositoryRoot, "RentalCommand.Data",
-            "Operations", "WorkOrderResponsibilityMutationHandlers.cs"));
+            "Operations", "WorkOrderResponsibilityMutationRules.cs"));
 
         entrySource.Should().Contain("AuthorizeAsync(");
         entrySource.Should().Contain("CapabilityKeys.AssignedWorkTimeMaterialsManage");

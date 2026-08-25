@@ -46,7 +46,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         [FromQuery] LeaseManagementListQuery query,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access))
+        if (!TryReadWorkspaceScope(out var access))
         {
             return Forbid();
         }
@@ -59,7 +59,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
     public async Task<ActionResult<PrepareMoveInContextResponse>> PrepareMoveInContext(
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access))
+        if (!TryReadWorkspaceScope(out var access))
         {
             return Forbid();
         }
@@ -75,7 +75,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         int leaseManagementId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access))
+        if (!TryReadWorkspaceScope(out var access))
         {
             return Forbid();
         }
@@ -93,7 +93,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var page = await _queryService.ListEligiblePartyLegalBasisPageAsync(
             access, leaseManagementId, query, ct);
         return page is null
@@ -114,7 +114,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         int leaseManagementId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access))
+        if (!TryReadWorkspaceScope(out var access))
         {
             return Forbid();
         }
@@ -135,7 +135,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         [FromQuery] int skip = 0,
         [FromQuery] int? take = null)
     {
-        if (!TryReadAccessContext(out var access))
+        if (!TryReadWorkspaceScope(out var access))
         {
             return Forbid();
         }
@@ -157,7 +157,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         {
             return BadRequest(new { error = "Question is required." });
         }
-        if (!TryReadAccessContext(out var access))
+        if (!TryReadWorkspaceScope(out var access))
         {
             return Forbid();
         }

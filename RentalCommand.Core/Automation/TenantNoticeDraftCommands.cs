@@ -31,7 +31,7 @@ public static class TenantNoticeDraftAutomation
             Task> authorizeAsync) =>
         new(
             Identity(command).CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             Codec.ContractName,
             WriteLockPlan.None,

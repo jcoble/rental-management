@@ -280,7 +280,7 @@ public static class AtomicWorkspaceCoreMutation
     {
         var handler = new AtomicWorkspaceCoreMutationRule(db);
         return new TransactionalWrite<AtomicWorkspaceCoreMutationCommand, AtomicWorkspaceCoreMutationResult>(
-            Identity(command).CommandType, WriteIdempotencyPolicy.Required, command, Codec.ContractName,
+            Identity(command).CommandType,  command, Codec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
 

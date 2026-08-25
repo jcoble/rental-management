@@ -129,11 +129,6 @@ public sealed class RecordNativeEsignViewRule
             request.Id);
     }
 
-    public async Task AuthorizeReplayAsync(
-        RecordNativeEsignViewCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         RecordNativeEsignViewCommand command,
         IAtomicCommandContext context,

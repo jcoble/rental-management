@@ -9,15 +9,6 @@ namespace RentalCommand.Data.Tests.Operations;
 
 public sealed class WorkOperationAtomicContractTests
 {
-    [Theory]
-    [InlineData(typeof(CreateVendorRatingRule), typeof(CreateVendorRatingCommand))]
-    public void Every_live_operation_handler_reauthorizes_receipt_replay(
-        Type handlerType, Type commandType)
-    {
-        handlerType.GetMethod("AuthorizeReplayAsync", [commandType, typeof(IAtomicCommandContext), typeof(CancellationToken)])
-            .Should().NotBeNull();
-    }
-
     [Fact]
     public void Receipt_codec_preserves_the_original_response_snapshot()
     {

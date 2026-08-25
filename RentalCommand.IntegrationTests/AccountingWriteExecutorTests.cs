@@ -477,7 +477,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
 
     private static CreateLedgerAccountCommand CreateLedger() => new(
         1, 7, SessionId, 8, 9, "", "Frozen income", AccountType.Expense,
-        null, 41, null, ScheduleECategory.Other, true, "ledger-create");
+        41, null, ScheduleECategory.Other, true, "ledger-create");
 
     private static UpdateLedgerAccountCommand UpdateLedger(bool delete) => new(
         1, 7, SessionId, 8, 9, 42, delete ? null : "Frozen update", null,

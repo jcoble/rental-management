@@ -52,11 +52,6 @@ public sealed class ResendNativeEsignInvitationRule
         return new(target.SignatureRequestId, target.SignatureSignerId, resendKey);
     }
 
-    public async Task AuthorizeReplayAsync(
-        ResendNativeEsignInvitationCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         ResendNativeEsignInvitationCommand command,
         IAtomicCommandContext context,

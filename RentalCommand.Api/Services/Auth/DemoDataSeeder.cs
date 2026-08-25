@@ -1504,7 +1504,7 @@ public sealed class DemoLeaseAddendumTemplateCommandRule
     {
         var handler = new DemoLeaseAddendumTemplateCommandRule(db);
         return new TransactionalWrite<EnsureDemoLeaseAddendumTemplateCommand, EnsureDemoLeaseAddendumTemplateResult>(
-            CommandType, WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
+            CommandType,  command, ResultCodec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
 
@@ -1649,7 +1649,7 @@ public sealed class DemoSeedCommandRule
     {
         var handler = new DemoSeedCommandRule(db);
         return new TransactionalWrite<SeedDemoPortfolioCommand, SeedDemoPortfolioResult>(
-            "sandbox.demo-seed", WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
+            "sandbox.demo-seed",  command, ResultCodec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
 
@@ -1779,7 +1779,7 @@ public sealed class DemoLegalDocumentFinalizeCommandRule
     {
         var handler = new DemoLegalDocumentFinalizeCommandRule(db);
         return new TransactionalWrite<FinalizeDemoLegalDocumentCommand, FinalizeDemoLegalDocumentResult>(
-            "sandbox.demo-legal-finalize", WriteIdempotencyPolicy.Required, command, ResultCodec.ContractName,
+            "sandbox.demo-legal-finalize",  command, ResultCodec.ContractName,
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
 

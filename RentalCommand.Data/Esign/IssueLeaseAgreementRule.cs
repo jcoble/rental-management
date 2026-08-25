@@ -80,11 +80,9 @@ public static class NativeEsignWriteSupport
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeAsync)
         where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull => new(operationName, WriteIdempotencyPolicy.Required,
+        where TResult : notnull => new(operationName,
             command, resultContract, lockPlan, executeAsync, authorizeAsync);
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic native e-sign writes are retired; use the shared write executor.");
 }
 
 /// <summary>Canonical Agreement issuance. No legacy Lease row is read or changed.</summary>
@@ -307,9 +305,6 @@ public sealed class IssueLeaseAgreementRule
         }
         return new(packet.PublicId, command.LeaseManagementId, agreement.Id, packet.Id, artifact.Id);
     }
-
-    public async Task AuthorizeReplayAsync(IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
-        => throw NativeEsignWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
     {

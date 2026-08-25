@@ -551,7 +551,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         where TResult : notnull =>
         new(
             identity.CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             codec.ContractName,
             WriteLockPlan.None,

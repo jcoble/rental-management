@@ -1254,7 +1254,7 @@ public static class AtomicNoticeDelivery
         var handler = new AtomicNoticeDeliveryRule(db);
         return new(
             Identity(command).CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             Codec.ContractName,
             WriteLockPlan.None,

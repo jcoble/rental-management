@@ -27,7 +27,7 @@ public sealed class DispatchWorkOrderToVendorRule
     {
         var handler = new DispatchWorkOrderToVendorRule(db);
         return new TransactionalWrite<DispatchWorkOrderToVendorCommand, DispatchWorkOrderToVendorResult>(
-            "vendor-dispatch.create", WriteIdempotencyPolicy.Required, command, ResultContract,
+            "vendor-dispatch.create",  command, ResultContract,
             new WriteLockPlan(WriteLockProtocol.WorkOrder,
                 command.WorkOrderId),
             handler.ExecuteAsync, handler.AuthorizeAsync);
@@ -166,10 +166,6 @@ public sealed class DispatchWorkOrderToVendorRule
             dispatch.Message);
     }
 
-    public Task AuthorizeReplayAsync(
-        DispatchWorkOrderToVendorCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw RetiredPath();
-
     public async Task AuthorizeAsync(
         DispatchWorkOrderToVendorCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
@@ -194,9 +190,6 @@ public sealed class DispatchWorkOrderToVendorRule
                 "The current workspace access no longer authorizes this work-order dispatch.");
         }
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Vendor dispatches must use the shared write executor.");
 
     internal static IQueryable<WorkOrder> WhereManagementAuthorized(
         IQueryable<WorkOrder> workOrders,

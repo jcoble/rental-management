@@ -23,13 +23,11 @@ public static class ConversationWriteSupport
     {
         var handler = new SendConversationMessageRule(db);
         return new TransactionalWrite<SendConversationMessageCommand, SendConversationMessageResult>(
-            operationName, WriteIdempotencyPolicy.Required, command,
+            operationName,  command,
             "conversation-message-result.v1", WriteLockPlan.None,
             handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy conversation writes are retired; use the shared write executor.");
 }
 
 public sealed class SendConversationMessageRule
