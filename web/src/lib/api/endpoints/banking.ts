@@ -16,6 +16,7 @@ import type {
 	SyncBankConnectionResponse
 } from '$lib/types';
 import { api } from '../client';
+import { buildListQuery } from '../list-params';
 
 export const banking = {
 	summary: () => api.get<BankingSummary>('/banking/summary'),
@@ -27,12 +28,12 @@ export const banking = {
 		api.post<BankConnection>('/banking/plaid/exchange-public-token', request),
 	syncConnection: (id: number) => api.post<SyncBankConnectionResponse>(`/banking/connections/${id}/sync`, {}),
 	transactions: (params: { status?: string; skip?: number; take?: number } = {}) => {
-		const query = new URLSearchParams();
-		if (params.status) query.set('status', params.status);
-		if (params.skip !== undefined) query.set('skip', String(params.skip));
-		if (params.take !== undefined) query.set('take', String(params.take));
-		const suffix = query.toString();
-		return api.get<BankTransactionListResponse>(`/banking/transactions${suffix ? `?${suffix}` : ''}`);
+		const query = buildListQuery(undefined, {
+			status: params.status,
+			skip: params.skip,
+			take: params.take
+		});
+		return api.get<BankTransactionListResponse>(`/banking/transactions${query}`);
 	},
 	importTransactions: (request: ImportBankTransactionsRequest) =>
 		api.post<ImportBankTransactionsResponse>('/banking/transactions/import', request),
@@ -45,11 +46,11 @@ export const banking = {
 		request: Pick<ConfirmBankMatchRequest, 'operationKey' | 'expectedUpdatedAtUtc'>
 	) => api.post<BankTransaction>(`/banking/transactions/${id}/clear-match`, request),
 	reviewQueue: (params: { skip?: number; take?: number } = {}) => {
-		const query = new URLSearchParams();
-		if (params.skip !== undefined) query.set('skip', String(params.skip));
-		if (params.take !== undefined) query.set('take', String(params.take));
-		const suffix = query.toString();
-		return api.get<BankReviewQueueResponse>(`/banking/review-queue${suffix ? `?${suffix}` : ''}`);
+		const query = buildListQuery(undefined, {
+			skip: params.skip,
+			take: params.take
+		});
+		return api.get<BankReviewQueueResponse>(`/banking/review-queue${query}`);
 	},
 	confirmMatch: (id: number, request: ConfirmBankMatchRequest) =>
 		api.post<OperationalBankTransaction>(`/banking/transactions/${id}/confirm-match`, request),

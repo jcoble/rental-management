@@ -28,9 +28,7 @@ registerHooks({
 
 const {
 	buildTenantAccountChargesPagePath,
-	buildTenantAccountDepositsPagePath,
-	buildTenantAccountEntriesPagePath,
-	buildTenantAccountReversalsPath
+	buildTenantAccountEntriesPagePath
 } = await import('../../api/endpoints/tenant-accounts.ts');
 
 describe('unit payment canonical identity contract', () => {
@@ -90,19 +88,6 @@ describe('unit payment canonical identity contract', () => {
 		assert.equal(
 			buildTenantAccountChargesPagePath(41, { skip: 40, take: 20, sort: '-effectiveOn' }),
 			'/tenant-accounts/41/charges/page?skip=40&take=20&sort=-effectiveOn'
-		);
-		assert.equal(
-			buildTenantAccountDepositsPagePath({
-				tenantAccountId: 41,
-				skip: 60,
-				take: 20,
-				sort: '-createdAtUtc'
-			}),
-			'/tenant-accounts/deposits/page?tenantAccountId=41&skip=60&take=20&sort=-createdAtUtc'
-		);
-		assert.equal(
-			buildTenantAccountReversalsPath(41),
-			'/tenant-accounts/41/reversals'
 		);
 		assert.equal(
 			buildExpenseListPagePath(9, {

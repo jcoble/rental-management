@@ -1,7 +1,5 @@
-import { api, fetchApi, refreshToken } from '../client';
+import { api, downloadFile, fetchApi } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
-import { CLIENT_API_BASE_URL } from '$lib/config';
-import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
 import { browser } from '$app/environment';
 
 export type SecurityDepositStatus =
@@ -143,26 +141,9 @@ export const securityDeposits = {
 export async function downloadMoveOutStatement(tenantAccountId: number): Promise<void> {
 	if (!browser) return;
 
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const response = await fetch(
-		`${CLIENT_API_BASE_URL}/tenant-accounts/${tenantAccountId}/deposit/move-out-statement`,
-		{
-			credentials: 'include',
-			headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-		}
+	const blob = await downloadFile(
+		`/tenant-accounts/${tenantAccountId}/deposit/move-out-statement`
 	);
-
-	if (!response.ok) throw new Error(`Move-out statement download failed (${response.status})`);
-
-	const blob = await response.blob();
 	const objectUrl = URL.createObjectURL(blob);
 	const anchor = document.createElement('a');
 	anchor.href = objectUrl;

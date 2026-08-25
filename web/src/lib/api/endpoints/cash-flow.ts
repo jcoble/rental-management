@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { buildListQuery } from '../list-params';
 
 export interface CashFlowParams {
 	from?: string;
@@ -34,13 +35,12 @@ export interface CashFlowSummaryResponse {
 }
 
 export function buildCashFlowPath(params: CashFlowParams = {}): string {
-	const query = new URLSearchParams();
-	if (params.from) query.set('from', params.from);
-	if (params.to) query.set('to', params.to);
-	if (params.propertyId != null) query.set('propertyId', String(params.propertyId));
-	for (const propertyId of params.propertyIds ?? []) query.append('propertyIds', String(propertyId));
-	const queryString = query.toString();
-	return `/accounting/cash-flow${queryString ? `?${queryString}` : ''}`;
+	return `/accounting/cash-flow${buildListQuery(undefined, {
+		from: params.from,
+		to: params.to,
+		propertyId: params.propertyId,
+		propertyIds: params.propertyIds
+	})}`;
 }
 
 export const cashFlow = {

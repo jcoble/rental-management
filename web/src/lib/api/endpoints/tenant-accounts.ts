@@ -1,9 +1,5 @@
 import { api } from '../client';
-
-export interface TenantMoneyCommandResponse<T> {
-	value: T;
-	replayed: boolean;
-}
+import { buildListQuery } from '../list-params';
 
 export interface TenantAccountListItem {
 	tenantAccountId: number;
@@ -127,22 +123,6 @@ export interface TenantCharge {
 	isPastDue: boolean;
 }
 
-export interface TenantAccountDeposit {
-	securityDepositAccountId: number;
-	tenantAccountId: number;
-	leaseManagementId: number;
-	propertyId: number;
-	unitId: number;
-	accountNumber: string;
-	relationshipNumber: string;
-	currency: string;
-	totalReceived: number;
-	totalDeductions: number;
-	totalRefunded: number;
-	heldBalance: number;
-	status: string;
-}
-
 export interface TenantChargePage extends Page<TenantCharge> {
 	tenantAccountId: number;
 	leaseManagementId: number;
@@ -165,82 +145,43 @@ export interface EntryListParams extends ListParams {
 	direction?: string;
 }
 
-export interface ReverseTenantLedgerEntryRequest {
-	reversesEntryId: number;
-	effectiveOn: string;
-	reason: string;
-	sourceStoredFileId?: number | null;
-}
-
-export interface TenantLedgerMutationResult {
-	found: boolean;
-	applied: boolean;
-	tenantAccountId: number;
-	ledgerEntryId: number;
-	reversesEntryId?: number | null;
-	entryType: string;
-	direction: string;
-	amount: number;
-	allocatedAmount: number;
-	allocationCount: number;
-	error?: string | null;
-}
-
-function queryString(params: object): string {
-	const query = new URLSearchParams();
-	for (const [key, value] of Object.entries(params)) {
-		if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
-	}
-	const text = query.toString();
-	return text ? `?${text}` : '';
-}
-
 export function buildTenantAccountEntriesPagePath(
 	tenantAccountId: number,
 	params: EntryListParams = {}
 ): string {
-	return `/tenant-accounts/${tenantAccountId}/entries/page${queryString(params)}`;
+	return `/tenant-accounts/${tenantAccountId}/entries/page${buildListQuery(
+		undefined,
+		params as Record<string, string | number | null | undefined>
+	)}`;
 }
 
 export function buildTenantAccountChargesPagePath(
 	tenantAccountId: number,
 	params: ListParams = {}
 ): string {
-	return `/tenant-accounts/${tenantAccountId}/charges/page${queryString(params)}`;
-}
-
-export function buildTenantAccountDepositsPagePath(
-	params: ListParams & { tenantAccountId?: number } = {}
-): string {
-	return `/tenant-accounts/deposits/page${queryString(params)}`;
-}
-
-export function buildTenantAccountReversalsPath(tenantAccountId: number): string {
-	return `/tenant-accounts/${tenantAccountId}/reversals`;
+	return `/tenant-accounts/${tenantAccountId}/charges/page${buildListQuery(
+		undefined,
+		params as Record<string, string | number | null | undefined>
+	)}`;
 }
 
 export const tenantAccounts = {
 	listPage: (params: ListParams = {}) =>
-		api.get<Page<TenantAccountListItem>>(`/tenant-accounts/page${queryString(params)}`),
+		api.get<Page<TenantAccountListItem>>(`/tenant-accounts/page${buildListQuery(
+			undefined,
+			params as Record<string, string | number | null | undefined>
+		)}`),
 	get: (tenantAccountId: number) =>
 		api.get<TenantAccountDetail>(`/tenant-accounts/${tenantAccountId}`),
 	entriesPage: (params: EntryListParams = {}) =>
-		api.get<EntryPage<TenantLedgerEntryGlobal>>(`/tenant-accounts/entries/page${queryString(params)}`),
+		api.get<EntryPage<TenantLedgerEntryGlobal>>(`/tenant-accounts/entries/page${buildListQuery(
+			undefined,
+			params as Record<string, string | number | null | undefined>
+		)}`),
 	accountEntriesPage: (tenantAccountId: number, params: EntryListParams = {}) =>
 		api.get<EntryPage<TenantLedgerEntry>>(buildTenantAccountEntriesPagePath(tenantAccountId, params)),
 	chargesPage: (tenantAccountId: number, params: ListParams = {}) =>
 		api.get<TenantChargePage>(buildTenantAccountChargesPagePath(tenantAccountId, params)),
-	depositsPage: (params: ListParams & { tenantAccountId?: number } = {}) =>
-		api.get<Page<TenantAccountDeposit>>(buildTenantAccountDepositsPagePath(params)),
 	entry: (tenantAccountId: number, tenantLedgerEntryId: number) =>
 		api.get<TenantLedgerEntryDetail>(`/tenant-accounts/${tenantAccountId}/entries/${tenantLedgerEntryId}`),
-	reverseEntry: (
-		tenantAccountId: number,
-		operationKey: string,
-		body: ReverseTenantLedgerEntryRequest
-	) => api.post<TenantMoneyCommandResponse<TenantLedgerMutationResult>>(
-		buildTenantAccountReversalsPath(tenantAccountId),
-		body,
-		{ headers: { 'Idempotency-Key': operationKey } }
-	),
 };

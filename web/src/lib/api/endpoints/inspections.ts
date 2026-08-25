@@ -8,9 +8,7 @@ import type {
 	InspectionTemplate,
 	InspectionTemplateInput,
 } from '$lib/types';
-import { api, refreshToken } from '../client';
-import { CLIENT_API_BASE_URL } from '$lib/config';
-import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
+import { api, downloadFile } from '../client';
 import { browser } from '$app/environment';
 import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
@@ -119,27 +117,7 @@ export const inspections = {
 export async function openInspectionReport(id: number): Promise<void> {
 	if (!browser) return;
 
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/inspections/${id}/report`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-	});
-
-	if (!response.ok) {
-		throw new Error(`Report download failed (${response.status})`);
-	}
-
-	const blob = await response.blob();
+	const blob = await downloadFile(`/inspections/${id}/report`);
 	const objectUrl = URL.createObjectURL(blob);
 	const opened = window.open(objectUrl, '_blank');
 	if (!opened) {

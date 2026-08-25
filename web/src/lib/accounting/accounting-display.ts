@@ -3,6 +3,7 @@ import type {
 	JournalSourceType,
 	NormalBalance
 } from '$lib/api/endpoints/accounting-books';
+import { sentenceCaseIdentifier } from './money-display';
 
 export type AccountingEntrySide = 'debit' | 'credit';
 export type AccountingChangeKind = 'increase' | 'decrease';
@@ -39,17 +40,6 @@ const SOURCE_TYPE_LABELS: Record<JournalSourceType, string> = {
 	OwnerDistribution: 'Owner distribution',
 	OpeningBalance: 'Opening balance'
 };
-
-function sentenceCaseIdentifier(value: string): string {
-	const words = value
-		.replace(/[_-]+/g, ' ')
-		.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-		.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-		.trim();
-
-	if (!words) return '—';
-	return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
-}
 
 function validDate(value: string | Date | null | undefined): Date | null {
 	if (!value) return null;
@@ -108,7 +98,7 @@ export function formatSourceTypeLabel(
 	value: JournalSourceType | string | null | undefined
 ): string {
 	if (!value) return '—';
-	return SOURCE_TYPE_LABELS[value as JournalSourceType] ?? sentenceCaseIdentifier(value);
+	return SOURCE_TYPE_LABELS[value as JournalSourceType] ?? (sentenceCaseIdentifier(value) || '—');
 }
 
 export function formatAccountTypeLabel(value: AccountType | null | undefined): string {
@@ -132,7 +122,7 @@ export function formatSimpleAccountGroupLabel(
 		return 'Money owed to you';
 	}
 	if (account.accountType === 'Asset') return 'Cash & bank';
-	return sentenceCaseIdentifier(String(account.accountType));
+	return sentenceCaseIdentifier(String(account.accountType)) || '—';
 }
 
 export function formatAccountPickerLabel(

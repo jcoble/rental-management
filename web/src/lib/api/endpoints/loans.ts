@@ -5,6 +5,7 @@ import {
   buildLoanListPath,
   type LoanListParams,
 } from "./loan-list-path";
+import { buildListQuery } from "../list-params";
 
 /** Lifecycle of a per-property loan (mortgage). */
 export type LoanStatus = "Active" | "PaidOff" | "Closed";
@@ -73,13 +74,12 @@ export interface LoanPaymentListParams {
 }
 
 function buildLoanPaymentsPath(id: number, params?: LoanPaymentListParams): string {
-  const search = new URLSearchParams();
-  if (params?.status) search.set("status", params.status);
-  if (params?.skip != null) search.set("skip", String(params.skip));
-  if (params?.take != null) search.set("take", String(params.take));
-  if (params?.sort) search.set("sort", params.sort);
-  const query = search.toString();
-  return `/loans/${id}/payments${query ? `?${query}` : ""}`;
+	return `/loans/${id}/payments${buildListQuery(undefined, {
+		status: params?.status,
+		skip: params?.skip,
+		take: params?.take,
+		sort: params?.sort
+	})}`;
 }
 
 export const loans = {

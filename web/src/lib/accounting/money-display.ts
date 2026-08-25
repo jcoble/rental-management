@@ -33,7 +33,7 @@ const MONEY_CATEGORY_LABELS: Record<string, string> = {
 	Repairs: 'Repairs & maintenance',
 };
 
-function sentenceCaseIdentifier(value: string): string {
+export function sentenceCaseIdentifier(value: string): string {
 	const words = value
 		.replace(/[_-]+/g, ' ')
 		.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
