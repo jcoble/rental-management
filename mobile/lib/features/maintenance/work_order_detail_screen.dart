@@ -21,6 +21,7 @@ import '../vendors/rate_vendor_sheet.dart';
 import '../vendors/vendors_repository.dart';
 import 'work_order_timeline.dart';
 import 'work_orders_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,18 +42,6 @@ const _months = [
 ];
 
 String _fmtDate(DateTime d) => '${_months[d.month]} ${d.day}, ${d.year}';
-
-String _fmtCost(double cost) {
-  final parts = cost.toStringAsFixed(2).split('.');
-  final intPart = parts[0];
-  final buf = StringBuffer();
-  final len = intPart.length;
-  for (var i = 0; i < len; i++) {
-    if (i > 0 && (len - i) % 3 == 0) buf.write(',');
-    buf.write(intPart[i]);
-  }
-  return '\$$buf.${parts[1]}';
-}
 
 /// Human-readable labels for status values (delegates to the shared helper).
 String _statusLabel(String s) => workOrderStatusLabel(s);
@@ -1558,14 +1547,14 @@ class _DetailGrid extends StatelessWidget {
           if (capabilities.canViewCosts && workOrder.estimatedCost != null)
             _DetailRow(
               label: 'Est. cost',
-              value: _fmtCost(workOrder.estimatedCost!),
+              value: moneyFmt(workOrder.estimatedCost!),
               theme: theme,
               colorScheme: colorScheme,
             ),
           if (capabilities.canViewCosts && workOrder.actualCost != null)
             _DetailRow(
               label: 'Actual cost',
-              value: _fmtCost(workOrder.actualCost!),
+              value: moneyFmt(workOrder.actualCost!),
               theme: theme,
               colorScheme: colorScheme,
               isLast: true,

@@ -31,20 +31,6 @@ import 'property_loan_form_sheet.dart';
 import 'property_loans_repository.dart';
 import 'property_workspace_sections.dart';
 
-String _formatCurrency(double amount) {
-  final rounded = amount.round();
-  // Insert commas: e.g. 1200 -> $1,200
-  final s = rounded.toString();
-  final buf = StringBuffer(r'$');
-  final start = s.length % 3;
-  if (start > 0) buf.write(s.substring(0, start));
-  for (var i = start; i < s.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(s.substring(i, i + 3));
-  }
-  return buf.toString();
-}
-
 const _monthNames = [
   '',
   'Jan',
@@ -1369,7 +1355,7 @@ class _WorkspaceUnitTile extends StatelessWidget {
           unit.unitNumber.isEmpty ? 'Unit' : 'Unit ${unit.unitNumber}',
         ),
         subtitle: Text(
-          '${_formatCurrency(unit.marketRent)}/mo · ${unit.openWorkOrderCount} open ${unit.openWorkOrderCount == 1 ? 'work order' : 'work orders'}',
+          '${money.moneyFmt(unit.marketRent, whole: true)}/mo · ${unit.openWorkOrderCount} open ${unit.openWorkOrderCount == 1 ? 'work order' : 'work orders'}',
         ),
         trailing: Text(unit.status),
         onTap: () => openUnitCommandCenter(context, unitId: unit.id),
@@ -1584,7 +1570,7 @@ class _LeaseTile extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    _formatCurrency(lease.baseRentAmount ?? 0),
+                    money.moneyFmt(lease.baseRentAmount ?? 0, whole: true),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: colorScheme.primary,
@@ -1917,8 +1903,8 @@ class _LoanTileState extends ConsumerState<_LoanTile> {
               ),
             ),
             subtitle: Text(
-              '${_formatCurrency(loan.currentBalance)} balance  ·  '
-              '${_formatCurrency(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/mo  ·  '
+              '${money.moneyFmt(loan.currentBalance, whole: true)} balance  ·  '
+              '${money.moneyFmt(loan.monthlyPrincipalInterest + loan.monthlyEscrow, whole: true)}/mo  ·  '
               '${_loanStatusLabel(loan.status)}',
               style: TextStyle(
                 fontSize: 12,
@@ -2114,7 +2100,7 @@ class _LoanPaymentRow extends StatelessWidget {
                 ),
               ),
               Text(
-                _formatCurrency(payment.totalAmount),
+                money.moneyFmt(payment.totalAmount, whole: true),
                 style: theme.textTheme.bodyMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
@@ -2148,19 +2134,19 @@ class _LoanPaymentRow extends StatelessWidget {
             children: [
               _ScheduleMetric(
                 label: 'Interest',
-                value: _formatCurrency(payment.interestAmount),
+                value: money.moneyFmt(payment.interestAmount, whole: true),
               ),
               _ScheduleMetric(
                 label: 'Principal',
-                value: _formatCurrency(payment.principalAmount),
+                value: money.moneyFmt(payment.principalAmount, whole: true),
               ),
               _ScheduleMetric(
                 label: 'Escrow',
-                value: _formatCurrency(payment.escrowAmount),
+                value: money.moneyFmt(payment.escrowAmount, whole: true),
               ),
               _ScheduleMetric(
                 label: 'Balance',
-                value: _formatCurrency(payment.balanceAfter),
+                value: money.moneyFmt(payment.balanceAfter, whole: true),
               ),
             ],
           ),

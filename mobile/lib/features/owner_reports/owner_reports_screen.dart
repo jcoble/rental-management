@@ -12,23 +12,9 @@ import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_impact_card.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'owner_reports_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-String _fmtCurrency(double amount) {
-  final isNegative = amount < 0;
-  final abs = amount.abs();
-  final parts = abs.toStringAsFixed(2).split('.');
-  final intPart = parts[0];
-  final decPart = parts[1];
-  final buf = StringBuffer();
-  final len = intPart.length;
-  for (var i = 0; i < len; i++) {
-    if (i > 0 && (len - i) % 3 == 0) buf.write(',');
-    buf.write(intPart[i]);
-  }
-  return '\$${isNegative ? '-' : ''}$buf.$decPart';
-}
 
 String _fmtDate(DateTime value) {
   final local = value.toLocal();
@@ -929,7 +915,7 @@ bool _isScalar(Object? value) =>
 @visibleForTesting
 String ownerReportDisplayValue(Object? value, {String? key}) {
   if (value is num) {
-    if (_isMoneyMetricKey(key)) return _fmtCurrency(value.toDouble());
+    if (_isMoneyMetricKey(key)) return moneyFmt(value.toDouble());
     return _fmtNumber(value);
   }
   return value?.toString() ?? '-';
@@ -1181,13 +1167,13 @@ class _OwnerSummaryListItem extends StatelessWidget {
       ),
       supporting: [
         Text(
-          'Distributed ${_fmtCurrency(owner.totalDistributed)}',
+          'Distributed ${moneyFmt(owner.totalDistributed)}',
           style: theme.textTheme.bodySmall?.copyWith(
             color: cs.onSurfaceVariant,
           ),
         ),
         Text(
-          'Undistributed ${_fmtCurrency(owner.undistributed)}',
+          'Undistributed ${moneyFmt(owner.undistributed)}',
           style: theme.textTheme.bodySmall?.copyWith(
             color: cs.onSurfaceVariant,
           ),
@@ -1198,7 +1184,7 @@ class _OwnerSummaryListItem extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
-            _fmtCurrency(owner.netToOwner),
+            moneyFmt(owner.netToOwner),
             style: theme.textTheme.titleSmall?.copyWith(
               fontWeight: FontWeight.w700,
               color: isPositive ? null : cs.error,
@@ -1341,7 +1327,7 @@ class _StatementBody extends ConsumerWidget {
       builder: (_) => AlertDialog(
         title: const Text('Delete distribution?'),
         content: Text(
-          'Remove the ${_fmtCurrency(distribution.amount)} '
+          'Remove the ${moneyFmt(distribution.amount)} '
           '${distribution.method.label} distribution from '
           '${_fmtDate(distribution.date)}?',
         ),
@@ -1422,40 +1408,40 @@ class _StatementBody extends ConsumerWidget {
               children: [
                 _StatRow(
                   label: 'Total Income',
-                  value: _fmtCurrency(statement.totalIncome),
+                  value: moneyFmt(statement.totalIncome),
                   theme: theme,
                   textColor: cs.onPrimaryContainer,
                 ),
                 _StatRow(
                   label: 'Total Expenses',
-                  value: _fmtCurrency(statement.totalExpenses),
+                  value: moneyFmt(statement.totalExpenses),
                   theme: theme,
                   textColor: cs.onPrimaryContainer,
                 ),
                 _StatRow(
                   label: 'Management Fee',
-                  value: _fmtCurrency(statement.totalManagementFee),
+                  value: moneyFmt(statement.totalManagementFee),
                   theme: theme,
                   textColor: cs.onPrimaryContainer,
                 ),
                 const Divider(height: 12),
                 _StatRow(
                   label: 'Net to Owner',
-                  value: _fmtCurrency(statement.totalNetToOwner),
+                  value: moneyFmt(statement.totalNetToOwner),
                   theme: theme,
                   textColor: cs.onPrimaryContainer,
                   bold: true,
                 ),
                 _StatRow(
                   label: 'Distributed',
-                  value: _fmtCurrency(statement.totalDistributed),
+                  value: moneyFmt(statement.totalDistributed),
                   theme: theme,
                   textColor: cs.onPrimaryContainer,
                 ),
                 const Divider(height: 12),
                 _StatRow(
                   label: 'Undistributed',
-                  value: _fmtCurrency(statement.undistributed),
+                  value: moneyFmt(statement.undistributed),
                   theme: theme,
                   textColor: cs.onPrimaryContainer,
                   bold: true,
@@ -1511,15 +1497,15 @@ class _StatementBody extends ConsumerWidget {
                       children: [
                         _TableCell(text: p.propertyName),
                         _TableCell(
-                          text: _fmtCurrency(p.rentalIncome),
+                          text: moneyFmt(p.rentalIncome),
                           align: TextAlign.right,
                         ),
                         _TableCell(
-                          text: _fmtCurrency(p.expenses),
+                          text: moneyFmt(p.expenses),
                           align: TextAlign.right,
                         ),
                         _TableCell(
-                          text: _fmtCurrency(p.netToOwner),
+                          text: moneyFmt(p.netToOwner),
                           align: TextAlign.right,
                           bold: true,
                         ),
@@ -1560,7 +1546,7 @@ class _OwnerContributionsSection extends StatelessWidget {
           children: [
             for (final item in items)
               ExpansionTile(
-                title: Text(_fmtCurrency(item.amount)),
+                title: Text(moneyFmt(item.amount)),
                 subtitle: Text(
                   '${_fmtDate(item.date)} • ${item.propertyName ?? 'Portfolio'}',
                 ),
@@ -1700,7 +1686,7 @@ class _DistributionTile extends StatelessWidget {
         child: const Icon(Icons.payments_outlined, size: 20),
       ),
       title: Text(
-        _fmtCurrency(distribution.amount),
+        moneyFmt(distribution.amount),
         style: theme.textTheme.titleSmall?.copyWith(
           fontWeight: FontWeight.w700,
         ),

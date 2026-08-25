@@ -10,6 +10,7 @@ import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'tenants_list_screen.dart';
 import 'tenants_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 const _monthNames = [
   '',
@@ -28,19 +29,6 @@ const _monthNames = [
 ];
 
 String _fmt(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
-
-String _formatCurrency(double amount) {
-  final rounded = amount.round();
-  final s = rounded.toString();
-  final buf = StringBuffer(r'$');
-  final start = s.length % 3;
-  if (start > 0) buf.write(s.substring(0, start));
-  for (var i = start; i < s.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(s.substring(i, i + 3));
-  }
-  return buf.toString();
-}
 
 /// Loads a tenant by id, then shows [TenantDetailScreen]. Use this when the
 /// caller only has a tenant id (e.g. a relationship's party link, or an approved
@@ -482,7 +470,7 @@ class _LeaseSummaryTile extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    _formatCurrency(lease.baseRentAmount ?? 0),
+                    moneyFmt(lease.baseRentAmount ?? 0, whole: true),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: colorScheme.primary,

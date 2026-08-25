@@ -12,6 +12,7 @@ import 'application_detail_screen.dart';
 import 'applications_models.dart';
 import 'applications_repository.dart';
 import 'applications_shared.dart';
+import '../../core/presentation/formatting.dart';
 
 /// Landlord-facing list of rental applications, filterable by status, with a
 /// "Share application link" action that mints and copies the apply URL.
@@ -284,7 +285,7 @@ class _ApplicationCard extends StatelessWidget {
         ? 'Submitted ${formatApplicationDate(app.submittedAtUtc!.toLocal())}'
         : 'Not yet submitted';
     final incomeLabel = app.monthlyIncome != null
-        ? ' · ${formatMonthlyIncome(app.monthlyIncome!)}/mo'
+        ? ' · ${moneyFmt(app.monthlyIncome!, whole: true)}/mo'
         : '';
 
     return MobileM3ListItem(

@@ -7,8 +7,7 @@ import '../owner_portal/owner_portal_repository.dart';
 import '../owner_reports/owner_reports_repository.dart';
 import 'mobile_role_shell.dart';
 import 'mobile_shell_actions.dart';
-
-String _ownerMoney(double amount) => '\$${amount.toStringAsFixed(2)}';
+import '../../core/presentation/formatting.dart';
 
 String _ownerDate(DateTime value) {
   final local = value.toLocal();
@@ -138,7 +137,7 @@ class _OwnerOverviewTabState extends ConsumerState<_OwnerOverviewTab> {
               _OwnerMetricCard(
                 icon: Symbols.payments_rounded,
                 label: 'Distributed in ${overview.currentYear}',
-                value: _ownerMoney(overview.distributedThisYear),
+                value: moneyFmt(overview.distributedThisYear),
               ),
               const SizedBox(height: 12),
               _OwnerMetricCard(
@@ -521,7 +520,7 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
                     child: ListTile(
                       title: Text(owner.ownerName),
                       subtitle: Text(
-                        'Net ${_ownerMoney(owner.netToOwner)} · Distributed ${_ownerMoney(owner.totalDistributed)}',
+                        'Net ${moneyFmt(owner.netToOwner)} · Distributed ${moneyFmt(owner.totalDistributed)}',
                       ),
                       trailing: const Icon(Icons.chevron_right),
                       onTap: () => _showStatement(owner),
@@ -570,7 +569,7 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
                       '${_ownerDate(distribution.date)} · ${distribution.method.label}',
                     ),
                     trailing: Text(
-                      _ownerMoney(distribution.amount),
+                      moneyFmt(distribution.amount),
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -812,9 +811,9 @@ class _OwnerStatementSheet extends StatelessWidget {
             _OwnerMetricCard(
               icon: Symbols.payments_rounded,
               label: 'Net to owner',
-              value: _ownerMoney(statement.totalNetToOwner),
+              value: moneyFmt(statement.totalNetToOwner),
               supporting:
-                  'Distributed ${_ownerMoney(statement.totalDistributed)} · Undistributed ${_ownerMoney(statement.undistributed)}',
+                  'Distributed ${moneyFmt(statement.totalDistributed)} · Undistributed ${moneyFmt(statement.undistributed)}',
             ),
             const SizedBox(height: 16),
             ...statement.properties.map(
@@ -822,9 +821,9 @@ class _OwnerStatementSheet extends StatelessWidget {
                 contentPadding: EdgeInsets.zero,
                 title: Text(property.propertyName),
                 subtitle: Text(
-                  'Income ${_ownerMoney(property.rentalIncome)} · Expenses and fee ${_ownerMoney(property.expenses + property.managementFee)}',
+                  'Income ${moneyFmt(property.rentalIncome)} · Expenses and fee ${moneyFmt(property.expenses + property.managementFee)}',
                 ),
-                trailing: Text(_ownerMoney(property.netToOwner)),
+                trailing: Text(moneyFmt(property.netToOwner)),
               ),
             ),
           ],

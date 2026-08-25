@@ -5,6 +5,7 @@ import 'package:material_symbols_icons/symbols.dart';
 import '../../core/api/api_exception.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import 'leasing_workspace_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 class LeasingApplicationDetailScreen extends ConsumerStatefulWidget {
   const LeasingApplicationDetailScreen({
@@ -94,7 +95,7 @@ class _LeasingApplicationDetailScreenState
                   if (application.monthlyIncome != null)
                     _LeasingDetailRow(
                       label: 'Monthly income',
-                      value: _money(application.monthlyIncome!),
+                      value: moneyFmt(application.monthlyIncome!),
                     ),
                   if (application.desiredMoveInDate != null)
                     _LeasingDetailRow(
@@ -216,12 +217,12 @@ class _LeasingRentalDetailScreenState
                   if (rental.askingRent != null)
                     _LeasingDetailRow(
                       label: 'Asking rent',
-                      value: _money(rental.askingRent!),
+                      value: moneyFmt(rental.askingRent!),
                     ),
                   if (rental.securityDeposit != null)
                     _LeasingDetailRow(
                       label: 'Security deposit',
-                      value: _money(rental.securityDeposit!),
+                      value: moneyFmt(rental.securityDeposit!),
                     ),
                   if (rental.availableOn != null)
                     _LeasingDetailRow(
@@ -763,8 +764,6 @@ class _LeasingDetailError extends StatelessWidget {
 String _leasingError(Object? error) => error is ApiException
     ? error.message
     : 'Unable to load this leasing record.';
-
-String _money(double amount) => '\$${amount.toStringAsFixed(2)}';
 
 String _date(DateTime value) {
   final local = value.toLocal();

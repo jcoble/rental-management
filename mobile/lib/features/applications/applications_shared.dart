@@ -33,19 +33,6 @@ String formatApplicationDateTime(DateTime d) {
       '$hour:${_padTwo(local.minute)} $period';
 }
 
-String formatMonthlyIncome(double amount) {
-  final rounded = amount.round();
-  final s = rounded.toString();
-  final buf = StringBuffer(r'$');
-  final start = s.length % 3;
-  if (start > 0) buf.write(s.substring(0, start));
-  for (var i = start; i < s.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(s.substring(i, i + 3));
-  }
-  return buf.toString();
-}
-
 /// Builds the full applicant-facing apply URL from the server-relative
 /// [applyPath] (e.g. `/apply/{token}`).
 ///

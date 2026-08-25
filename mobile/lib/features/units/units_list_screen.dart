@@ -10,6 +10,7 @@ import '../home/mobile_domain_chrome.dart';
 import 'unit_navigation.dart';
 import 'unit_command_center_tabs.dart';
 import 'units_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 class UnitsListScreen extends ConsumerStatefulWidget {
   const UnitsListScreen({super.key});
@@ -348,7 +349,7 @@ class _UnitHealthRow extends StatelessWidget {
         children: [
           _MetaChip(
             icon: Symbols.payments_rounded,
-            label: '${_formatCurrency(unit.marketRent)}/mo',
+            label: '${moneyFmt(unit.marketRent, whole: true)}/mo',
           ),
           _MetaChip(
             icon: Symbols.build_rounded,
@@ -519,15 +520,3 @@ String _leaseEndsLabel(int days) {
   return 'Lease ends in ${days}d';
 }
 
-String _formatCurrency(double amount) {
-  final rounded = amount.round();
-  final s = rounded.toString();
-  final buf = StringBuffer(r'$');
-  final start = s.length % 3;
-  if (start > 0) buf.write(s.substring(0, start));
-  for (var i = start; i < s.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(s.substring(i, i + 3));
-  }
-  return buf.toString();
-}

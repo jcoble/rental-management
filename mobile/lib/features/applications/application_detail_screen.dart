@@ -13,6 +13,7 @@ import '../units/unit_navigation.dart';
 import 'applications_models.dart';
 import 'applications_repository.dart';
 import 'applications_shared.dart';
+import '../../core/presentation/formatting.dart';
 
 /// Landlord-facing detail / review screen for a single rental application.
 ///
@@ -799,7 +800,7 @@ class _DetailBody extends StatelessWidget {
               if (app.monthlyIncome != null)
                 _DetailRow(
                   label: 'Monthly income',
-                  value: formatMonthlyIncome(app.monthlyIncome!),
+                  value: moneyFmt(app.monthlyIncome!, whole: true),
                 ),
               if (app.desiredMoveInDate != null)
                 _DetailRow(

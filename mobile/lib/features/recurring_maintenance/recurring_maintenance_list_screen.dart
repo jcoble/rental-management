@@ -8,6 +8,7 @@ import '../home/mobile_quick_action_helpers.dart';
 import 'recurring_maintenance_form_screen.dart';
 import 'recurring_maintenance_models.dart';
 import 'recurring_maintenance_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 const _monthNames = [
   '',
@@ -27,10 +28,7 @@ const _monthNames = [
 
 String fmtDueDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
 
-String _fmtMoney(double? value) {
-  if (value == null) return '—';
-  return '\$${value.toStringAsFixed(2)}';
-}
+String _fmtMoney(double? value) => value == null ? '—' : moneyFmt(value);
 
 String _fmtApiTime(String? raw) {
   if (raw == null || raw.isEmpty) return 'No time set';

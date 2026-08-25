@@ -43,6 +43,7 @@ import '../tenants/tenant_detail_screen.dart';
 import 'unit_command_center_tabs.dart';
 import 'unit_form_sheet.dart';
 import 'units_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 export 'unit_command_center_tabs.dart';
 
@@ -822,7 +823,7 @@ class _UnitOverviewTab extends ConsumerWidget {
             _MetricRow(
               icon: Symbols.payments_rounded,
               label: 'Market rent',
-              value: '${_formatCurrency(unit.marketRent)}/mo',
+              value: '${moneyFmt(unit.marketRent, whole: true)}/mo',
             ),
             if (unit.bedrooms > 0 || unit.bathrooms > 0)
               _MetricRow(
@@ -855,7 +856,7 @@ class _UnitOverviewTab extends ConsumerWidget {
             if (header.outstandingRentBalance > 0)
               _InfoChip(
                 icon: Symbols.attach_money_rounded,
-                label: '${_formatCurrency(header.outstandingRentBalance)} due',
+                label: '${moneyFmt(header.outstandingRentBalance, whole: true)} due',
               ),
             _InfoChip(
               icon: Symbols.build_rounded,
@@ -2641,8 +2642,8 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
                     icon: Symbols.account_balance_rounded,
                     title: loan.lender,
                     subtitle:
-                        '${_formatCurrency(loan.currentBalance)} balance · '
-                        '${_formatCurrency(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/month',
+                        '${moneyFmt(loan.currentBalance, whole: true)} balance · '
+                        '${moneyFmt(loan.monthlyPrincipalInterest + loan.monthlyEscrow, whole: true)}/month',
                   ),
                 _MoneyPager(
                   page: _financingPage,
@@ -2684,7 +2685,7 @@ class _UnitExpensesSection extends StatelessWidget {
                 ? 'Expense #${item.id}'
                 : item.description,
             subtitle:
-                '${item.status.label} · ${item.category.label} · ${_formatDate(item.incurredAt)} · ${_formatCurrency(item.amount)}',
+                '${item.status.label} · ${item.category.label} · ${_formatDate(item.incurredAt)} · ${moneyFmt(item.amount, whole: true)}',
             onTap: () => Navigator.of(context).push<void>(
               MaterialPageRoute<void>(
                 builder: (_) => ExpenseDetailScreen(expenseId: item.id),
@@ -3062,7 +3063,7 @@ class _UnitTurnoverTab extends StatelessWidget {
                 icon: Symbols.receipt_long_rounded,
                 label: 'Budget / actual',
                 value:
-                    '${_formatCurrency(turnover.estimatedCost)} / ${_formatCurrency(turnover.actualCost)}',
+                    '${moneyFmt(turnover.estimatedCost, whole: true)} / ${moneyFmt(turnover.actualCost, whole: true)}',
               ),
               _MetricRow(
                 icon: Symbols.folder_open_rounded,
@@ -3183,7 +3184,7 @@ class _PaymentsSection extends StatelessWidget {
           _CompactRow(
             icon: Symbols.receipt_long_rounded,
             title:
-                '${plainEnglishLabel(item.type)} · ${_formatCurrency(item.amount)}',
+                '${plainEnglishLabel(item.type)} · ${moneyFmt(item.amount, whole: true)}',
             subtitle:
                 '${plainEnglishLabel(item.status)} · Due ${_formatDate(item.dueDate)}',
             onTap: () => Navigator.of(context).push<void>(
@@ -3758,15 +3759,3 @@ String _formatDate(DateTime date) {
   return '${date.month}/${date.day}/${date.year}';
 }
 
-String _formatCurrency(double amount) {
-  final rounded = amount.round();
-  final s = rounded.toString();
-  final buf = StringBuffer(r'$');
-  final start = s.length % 3;
-  if (start > 0) buf.write(s.substring(0, start));
-  for (var i = start; i < s.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(s.substring(i, i + 3));
-  }
-  return buf.toString();
-}
