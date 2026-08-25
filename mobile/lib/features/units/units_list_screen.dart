@@ -519,4 +519,3 @@ String _leaseEndsLabel(int days) {
   if (days == 1) return 'Lease ends tomorrow';
   return 'Lease ends in ${days}d';
 }
-

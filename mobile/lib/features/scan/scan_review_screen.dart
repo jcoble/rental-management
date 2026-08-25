@@ -5430,7 +5430,7 @@ class _LineItemsSection extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.all(8),
                       child: Text(
-                        _fmtMoney(item.unitPrice),
+                        (item.unitPrice == null ? '' : moneyFmt(item.unitPrice!)),
                         textAlign: TextAlign.right,
                         style: theme.textTheme.bodySmall,
                       ),
@@ -5438,7 +5438,7 @@ class _LineItemsSection extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.all(8),
                       child: Text(
-                        _fmtMoney(item.amount),
+                        (item.amount == null ? '' : moneyFmt(item.amount!)),
                         textAlign: TextAlign.right,
                         style: theme.textTheme.bodySmall,
                       ),
@@ -5454,7 +5454,6 @@ class _LineItemsSection extends StatelessWidget {
   }
 
   String _fmtNum(double? v) => v == null ? '' : v.toStringAsFixed(0);
-  String _fmtMoney(double? v) => v == null ? '' : moneyFmt(v);
 }
 
 class _TableHeaderCell extends StatelessWidget {

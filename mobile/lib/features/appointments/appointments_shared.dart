@@ -31,7 +31,7 @@ String formatAppointmentTime(DateTime d) {
 }
 
 String formatAppointmentDateTime(DateTime d) =>
-    '${monthAbbrs[d.month]} ${d.day}, ${d.year}  ${formatAppointmentTime(d)}';
+    '${dateFmt(d)}  ${formatAppointmentTime(d)}';
 
 String friendlyAppointmentType(String type) {
   switch (type) {

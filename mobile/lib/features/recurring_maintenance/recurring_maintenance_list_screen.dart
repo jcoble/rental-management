@@ -10,8 +10,6 @@ import 'recurring_maintenance_models.dart';
 import 'recurring_maintenance_repository.dart';
 import '../../core/presentation/formatting.dart';
 
-String _fmtMoney(double? value) => value == null ? '—' : moneyFmt(value);
-
 String _fmtApiTime(String? raw) {
   if (raw == null || raw.isEmpty) return 'No time set';
   final parts = raw.split(':');
@@ -361,7 +359,7 @@ class _TaskCard extends StatelessWidget {
               Text(
                 [
                   if (task.estimatedCost != null)
-                    '${_fmtMoney(task.estimatedCost)} expected · ${_fmtMoney(task.monthlyEstimatedCost)}/mo',
+                    '${task.estimatedCost == null ? '—' : moneyFmt(task.estimatedCost!)} expected · ${task.monthlyEstimatedCost == null ? '—' : moneyFmt(task.monthlyEstimatedCost!)}/mo',
                   '${task.generatedWorkOrderCount} linked work order${task.generatedWorkOrderCount == 1 ? '' : 's'}',
                 ].join(' · '),
                 style: theme.textTheme.bodySmall?.copyWith(

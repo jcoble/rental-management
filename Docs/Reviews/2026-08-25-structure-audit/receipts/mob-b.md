@@ -78,3 +78,9 @@ The full-month-name tables (`January`…`December`) in owner_reports `_fmtMonth`
 ## Rework (controller, after SOL review)
 - `moneyFmt` now decides the sign after whole-dollar rounding, so `moneyFmt(-0.4, whole: true)` is `$0` as the deleted helpers produced (pinned by a test); negatives render `-$1,234.56`.
 - `formatAppointmentDateTime` formats unguarded again (`Jan 1, 0  12:00 AM` for the `DateTime(0)` sentinel, as before) instead of going through `dateFmt`, which blanks years ≤ 1.
+
+## Rework round 2 (controller, after the second SOL review)
+- Deliberate normalisation, accepted by the controller: `dateFmt` renders a blank for sentinel years (≤ 1) where the deleted screen-local copies printed `Jan 1, 0`. That is the canonical helper's existing behaviour on main for its 20 importers; a blank beats a bogus date for a `DateTime(0)` fallback, and keeping unguarded copies only for the sentinel case would mean two formatters again. `formatAppointmentDateTime` goes back to `dateFmt` for the same reason.
+- `_fmtMoney` null-guard wrappers removed from `scan_review_screen.dart` and `recurring_maintenance_list_screen.dart`; the four call sites inline the null check.
+- `accounting_impact_card_test.dart` updated from `$-225.00` to `-$225.00` (the sign-placement change from round 1).
+- Trailing blank line at the end of `units_list_screen.dart` removed.

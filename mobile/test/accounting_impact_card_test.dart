@@ -24,7 +24,7 @@ void main() {
     expect(find.text('Repairs expense increased'), findsOneWidget);
     expect(find.text('Operating cash decreased'), findsOneWidget);
     expect(find.text(r'$225.00'), findsOneWidget);
-    expect(find.text(r'$-225.00'), findsOneWidget);
+    expect(find.text(r'-$225.00'), findsOneWidget);
     expect(find.text('View accounting record →'), findsOneWidget);
     expect(repository.requestedSourceIds, [13]);
     expect(repository.requestedSourceTypes, [JournalSourceType.expensePayment]);
