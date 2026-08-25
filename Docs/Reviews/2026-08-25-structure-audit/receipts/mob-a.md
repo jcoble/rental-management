@@ -21,3 +21,5 @@
 - `flutter pub get` exit 0; `flutter test` 520 passed; `flutter analyze` reports 23 issues, all in files this lane did not touch (pre-existing).
 - Correction 1: `mobile/lib/core/models/lease.dart` restored to main. `LeaseAgreementEffectiveAddendumSeriesItem` is not dead — it is the element type of `series` — and the lane had rewritten it into a 16-field anonymous record, which is not simpler. The audit's zero-reference claim was wrong.
 - Correction 2: `mobile/test/scan_lease_overrides_test.dart` restored; only the two tests that depended on the deleted `guided_rental_flow.dart` were removed (the source-text test and the `buildGuidedRentalTargetOverrides` group). The other 443 lines are behavioural tests of scan review and stay.
+- Review fix 1: `PropertyOwnership` restored — it is the element type of `Property.ownerships` and was live; the lane had rewritten it into an anonymous record (same mistake as the lease series item).
+- Review fix 2: `core/models/portfolio.dart` deleted with its barrel export — it had no importer and no live consumer through the barrel; the receipt's earlier claim that it was retained for live consumers was wrong.

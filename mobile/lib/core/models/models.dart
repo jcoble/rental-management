@@ -2,7 +2,6 @@ export 'appointment.dart';
 export 'document.dart';
 export 'inspection.dart';
 export 'lease.dart';
-export 'portfolio.dart';
 export 'property.dart';
 export 'tenant.dart';
 export 'unit.dart';
