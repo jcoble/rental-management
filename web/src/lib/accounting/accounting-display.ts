@@ -3,7 +3,7 @@ import type {
 	JournalSourceType,
 	NormalBalance
 } from '$lib/api/endpoints/accounting-books';
-import { sentenceCaseIdentifier } from './money-display';
+import { sentenceCaseIdentifier } from './money-display.ts';
 
 export type AccountingEntrySide = 'debit' | 'credit';
 export type AccountingChangeKind = 'increase' | 'decrease';
