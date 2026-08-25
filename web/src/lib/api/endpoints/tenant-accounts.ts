@@ -1,5 +1,5 @@
 import { api } from '../client';
-import { buildListQuery } from '../list-params';
+import { buildListQuery } from '../list-params.ts';
 
 export interface TenantAccountListItem {
 	tenantAccountId: number;
