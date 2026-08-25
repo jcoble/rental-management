@@ -51,7 +51,7 @@ public sealed class SignController : ControllerBase
         var result = await _signing.GetDocumentAsync(token, ct);
         if (result.Outcome != SignTokenOutcome.Ok)
         {
-            return Map(result);
+            return Map(result).Result!;
         }
 
         var (stream, fileName, contentType) = result.Value;
