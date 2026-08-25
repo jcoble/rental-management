@@ -2,7 +2,6 @@ import type {
 	AccountingReports,
 	AccountingSummary,
 	AccountingTransaction,
-	CashFlowSummary,
 	MoneySnapshotResponse,
 	OwnerStatementReport,
 	OwnerStatementSummary,
@@ -10,9 +9,7 @@ import type {
 	ScheduleEReport,
 	YearEndView
 } from '$lib/types';
-import { api, refreshToken } from '../client';
-import { CLIENT_API_BASE_URL } from '$lib/config';
-import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
+import { api, downloadFile } from '../client';
 import { browser } from '$app/environment';
 import { buildListQuery, type ListParams } from '../list-params';
 
@@ -107,11 +104,6 @@ export const accounting = {
 	// GET /api/v1/accounting/schedule-e?year=YYYY
 	scheduleE: (year: number) => api.get<ScheduleEReport>(`/accounting/schedule-e?year=${year}`),
 
-	// GET /api/v1/accounting/cash-flow?from=&to= — true cash flow (rent − opex − debt service),
-	// escrow-aware, per property + portfolio. Omitting the range defaults to the current year-to-date.
-	cashFlow: (params?: { from?: string; to?: string }) =>
-		api.get<CashFlowSummary>(`/accounting/cash-flow${buildListQuery(undefined, { from: params?.from, to: params?.to })}`),
-
 	// GET /api/v1/accounting/year-end?year=YYYY — the three-block view (cash flow vs taxable income +
 	// rent roll). Omitting the year defaults to the previous calendar year (the year you file for).
 	yearEnd: (year?: number, propertyId?: number) =>
@@ -136,28 +128,7 @@ export const accounting = {
 export async function downloadScheduleECsv(year: number): Promise<void> {
 	if (!browser) return;
 
-	// Proactively refresh if near expiry, mirroring the main client logic.
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/accounting/schedule-e/export?year=${year}`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-	});
-
-	if (!response.ok) {
-		throw new Error(`CSV download failed (${response.status})`);
-	}
-
-	const blob = await response.blob();
+	const blob = await downloadFile(`/accounting/schedule-e/export?year=${year}`);
 	const objectUrl = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = objectUrl;
@@ -176,28 +147,7 @@ export async function downloadScheduleECsv(year: number): Promise<void> {
 export async function downloadYearEndPacket(year: number): Promise<void> {
 	if (!browser) return;
 
-	// Proactively refresh if near expiry, mirroring the main client logic.
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/accounting/year-end-packet?year=${year}`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-	});
-
-	if (!response.ok) {
-		throw new Error(`Packet download failed (${response.status})`);
-	}
-
-	const blob = await response.blob();
+	const blob = await downloadFile(`/accounting/year-end-packet?year=${year}`);
 	const objectUrl = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = objectUrl;
@@ -218,33 +168,15 @@ export async function downloadOwnerStatementCsv(
 ): Promise<void> {
 	if (!browser) return;
 
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
 	const normalized = typeof params === 'number' ? { year: params } : params;
-	const query = new URLSearchParams({ ownerId: String(ownerId) });
-	if (normalized.period) query.set('period', normalized.period);
-	if (normalized.asOf) query.set('asOf', normalized.asOf);
-	if (normalized.year != null) query.set('year', String(normalized.year));
-	const periodLabel = normalized.period ?? normalized.year?.toString() ?? 'statement';
-	const url = `${CLIENT_API_BASE_URL}/accounting/owner-statement/export?${query.toString()}`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+	const query = buildListQuery(undefined, {
+		ownerId,
+		period: normalized.period,
+		asOf: normalized.asOf,
+		year: normalized.year
 	});
-
-	if (!response.ok) {
-		throw new Error(`CSV download failed (${response.status})`);
-	}
-
-	const blob = await response.blob();
+	const periodLabel = normalized.period ?? normalized.year?.toString() ?? 'statement';
+	const blob = await downloadFile(`/accounting/owner-statement/export${query}`);
 	const objectUrl = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = objectUrl;

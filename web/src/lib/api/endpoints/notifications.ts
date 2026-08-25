@@ -22,6 +22,7 @@ import type {
   TenantNoticeRecipientPreviewResponse,
   NoticeDeliveryStatusResponse,
 } from "$lib/api/types/notification";
+import { buildListQuery } from "../list-params";
 
 export type NoticePreviewRequest = {
   systemKey: string;
@@ -50,13 +51,13 @@ export type NoticeTestSendResponse = {
 
 export const notifications = {
   list: (params: NotificationListParams = {}) => {
-    const search = new URLSearchParams();
-    if (params.unreadOnly) search.set("unreadOnly", "true");
-    if (params.take) search.set("take", String(params.take));
-    if (params.skip) search.set("skip", String(params.skip));
-    const query = search.toString();
+    const query = buildListQuery(undefined, {
+      unreadOnly: params.unreadOnly ? "true" : undefined,
+      take: params.take || undefined,
+      skip: params.skip || undefined
+    });
     return api.get<NotificationItem[]>(
-      `/notifications${query ? `?${query}` : ""}`
+      `/notifications${query}`
     );
   },
 

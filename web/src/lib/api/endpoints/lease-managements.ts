@@ -8,6 +8,7 @@ import type {
   LeaseQuestionResponse,
 } from "$lib/types";
 import { api, downloadFile, fetchApi } from "../client";
+import { buildListQuery } from "../list-params";
 
 export type LeaseManagementPartyRole =
   | "PrimaryTenant"
@@ -600,16 +601,6 @@ export interface LeaseAgreementHistoryPage {
   take: number;
 }
 
-function queryString<T extends object>(params: T): string {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "")
-      query.set(key, String(value));
-  }
-  const text = query.toString();
-  return text ? `?${text}` : "";
-}
-
 function idempotentJson<T>(
   path: string,
   method: "POST" | "PATCH",
@@ -654,7 +645,20 @@ export const leaseManagements = {
     }),
   listPage: (params: LeaseManagementPageParams = {}) =>
     api.get<LeaseManagementPage>(
-      `/lease-managements/page${queryString(params)}`
+      `/lease-managements/page${buildListQuery(undefined, {
+        skip: params.skip,
+        take: params.take,
+        search: params.search,
+        sort: params.sort,
+        propertyId: params.propertyId,
+        unitId: params.unitId,
+        tenantId: params.tenantId,
+        lifecycle: params.lifecycle,
+        hasReconciliationException:
+          params.hasReconciliationException == null
+            ? undefined
+            : String(params.hasReconciliationException),
+      })}`
     ),
   get: (leaseManagementId: number) =>
     api.get<LeaseManagementDetail>(`/lease-managements/${leaseManagementId}`),
@@ -795,7 +799,10 @@ export const leaseManagements = {
     params: { skip?: number; take?: number } = {}
   ) =>
     api.get<LeaseManagementLedger>(
-      `/lease-managements/${leaseManagementId}/ledger${queryString(params)}`
+      `/lease-managements/${leaseManagementId}/ledger${buildListQuery(undefined, {
+        skip: params.skip,
+        take: params.take,
+      })}`
     ),
   ask: (leaseManagementId: number, question: string) =>
     api.post<LeaseQuestionResponse>(
@@ -812,9 +819,12 @@ export const leaseManagements = {
     } = {}
   ) =>
     api.get<LeaseAgreementHistoryPage>(
-      `/lease-managements/${leaseManagementId}/agreements/page${queryString(
-        params
-      )}`
+      `/lease-managements/${leaseManagementId}/agreements/page${buildListQuery(undefined, {
+        skip: params.skip,
+        take: params.take,
+        status: params.status,
+        sort: params.sort,
+      })}`
     ),
   getAgreementDraft: (leaseManagementId: number, leaseAgreementId: number) =>
     api.get<LeaseAgreementDraftDetail>(

@@ -22,7 +22,7 @@ export interface ListParams {
 
 export function buildListQuery(
 	params: ListParams = {},
-	extra: Record<string, string | number | null | undefined> = {}
+	extra: Record<string, string | number | readonly (string | number)[] | null | undefined> = {}
 ): string {
 	const query = new URLSearchParams();
 	if (params.skip != null && params.skip > 0) query.set('skip', String(params.skip));
@@ -32,6 +32,12 @@ export function buildListQuery(
 	if (params.from != null && params.from.length > 0) query.set('from', params.from);
 	if (params.to != null && params.to.length > 0) query.set('to', params.to);
 	for (const [key, value] of Object.entries(extra)) {
+		if (Array.isArray(value)) {
+			for (const item of value) {
+				if (String(item).length > 0) query.append(key, String(item));
+			}
+			continue;
+		}
 		if (value != null && String(value).length > 0) query.set(key, String(value));
 	}
 	const qs = query.toString();

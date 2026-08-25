@@ -19,13 +19,13 @@
 		type LoanPayment
 	} from '$lib/api/endpoints/loans';
 	import type { WorkOrder } from '$lib/types';
-	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
+	import { invalidateQueriesAfterScanConfirm } from '$lib/scan/scan-confirm-invalidation';
 	import {
 		activeScanDateFieldNames,
 		GENERIC_SCAN_DATE_FIELDS,
 		hasVisibleScanDateInvalid
-	} from '$lib/scans/scan-date-guard';
-	import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
+	} from '$lib/scan/scan-date-guard';
+	import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scan/lease-review-state';
 	import {
 		buildScanReviewInitialEditedFields,
 		buildScanReviewFieldGroups,
@@ -34,14 +34,14 @@
 		scanCategoryLabel,
 		scanCategoryOptionsForTarget,
 		scanCategoryValue
-	} from '$lib/scans/scan-review-fields';
+	} from '$lib/scan/scan-review-fields';
 	import {
 		createdRecordArticle,
 		createdRecordHref,
 		createdRecordLabel,
 		isTerminalScanReview,
 		shouldDisableScanReviewControls
-	} from '$lib/scans/scan-review-state';
+	} from '$lib/scan/scan-review-state';
 	import {
 		applyScanContextOverrides,
 		parseScanContext

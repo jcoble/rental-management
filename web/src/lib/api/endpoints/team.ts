@@ -1,4 +1,5 @@
 import { fetchApi, api } from '../client';
+import { buildListQuery } from '../list-params';
 
 export type WorkspaceExperience = 'Management' | 'Leasing' | 'Maintenance' | 'Owner' | 'Tenant';
 export type AssignmentScopeKind = 'AllProperties' | 'SelectedProperties' | 'AssignedWorkOrders';
@@ -95,18 +96,21 @@ function operation<T>(path: string, method: 'POST' | 'PATCH' | 'PUT', body: unkn
 
 export const team = {
 	members: (params: { skip: number; take: number; search?: string; sort?: string }) => {
-		const query = new URLSearchParams({ skip: String(params.skip), take: String(params.take) });
-		if (params.search?.trim()) query.set('search', params.search.trim());
-		if (params.sort) query.set('sort', params.sort);
-		return api.get<TeamMemberPage>(`/team/members?${query}`);
+		const query = buildListQuery(undefined, {
+			skip: params.skip,
+			take: params.take,
+			search: params.search?.trim(),
+			sort: params.sort
+		});
+		return api.get<TeamMemberPage>(`/team/members${query}`);
 	},
 	assignments: (accessContextId: number, params: { skip?: number; take?: number } = {}) => {
-		const query = new URLSearchParams({
-			skip: String(params.skip ?? 0),
-			take: String(params.take ?? 250),
+		const query = buildListQuery(undefined, {
+			skip: params.skip ?? 0,
+			take: params.take ?? 250,
 			sort: '-effectiveFrom'
 		});
-		return api.get<TeamAssignmentPage>(`/team/members/${accessContextId}/assignments?${query}`);
+		return api.get<TeamAssignmentPage>(`/team/members/${accessContextId}/assignments${query}`);
 	},
 	roleProfiles: () => api.get<TeamRoleProfile[]>('/team/role-profiles'),
 	createMembership: (body: CreateWorkspaceMembershipRequest) =>

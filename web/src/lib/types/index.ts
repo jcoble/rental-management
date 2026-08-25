@@ -1,3 +1,5 @@
+import type { CashFlowSummaryResponse } from '$lib/api/endpoints/cash-flow';
+
 export type PortfolioStatus = 'Onboarding' | 'Active' | 'Archived';
 export type PropertyType =
 	| 'SingleFamily'
@@ -771,29 +773,6 @@ export interface ScheduleEReport {
 	reconciledNetIncome: number;
 }
 
-/** One property's true cash flow for a period (rent − opex − debt service). */
-export interface PropertyCashFlow {
-	propertyId: number;
-	propertyName: string;
-	income: number;
-	operatingExpenses: number;
-	noi: number;
-	debtService: number;
-	cashFlow: number;
-}
-
-/** Per-property + portfolio true cash flow for a period. */
-export interface CashFlowSummary {
-	from: string;
-	to: string;
-	properties: PropertyCashFlow[];
-	totalIncome: number;
-	totalOperatingExpenses: number;
-	totalNoi: number;
-	totalDebtService: number;
-	totalCashFlow: number;
-}
-
 /** One rent-roll row in the year-end view. */
 export interface YearEndRentRollRow {
 	propertyName: string;
@@ -828,7 +807,7 @@ export interface YearEndPropertyDisposition {
 /** The year-end three-block view: cash flow vs taxable income + rent roll + accountant caveats. */
 export interface YearEndView {
 	year: number;
-	cashFlow: CashFlowSummary;
+	cashFlow: CashFlowSummaryResponse;
 	scheduleE: ScheduleEReport;
 	rentRoll: YearEndRentRollRow[];
 	propertyDispositions: YearEndPropertyDisposition[];

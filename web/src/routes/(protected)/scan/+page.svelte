@@ -13,8 +13,8 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { parseScanContext } from '$lib/scan/scan-context';
-	import { SCAN_HISTORY_FILTERS, formatScanHistoryEmptyMessage, resolveScanHistoryFilter, type ScanHistoryFilter } from '$lib/scans/scan-history-filters';
-	import { createdRecordHref } from '$lib/scans/scan-review-state';
+	import { SCAN_HISTORY_FILTERS, formatScanHistoryEmptyMessage, resolveScanHistoryFilter, type ScanHistoryFilter } from '$lib/scan/scan-history-filters';
+	import { createdRecordHref } from '$lib/scan/scan-review-state';
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { capabilityKeysForExperience } from '$lib/types/user';
 	import { technician } from '$lib/api/endpoints/technician';

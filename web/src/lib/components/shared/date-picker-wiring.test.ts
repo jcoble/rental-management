@@ -11,7 +11,7 @@ import { SERVICE_PERIOD_SECTION_CLASS } from '../accounting/one-time-charge-layo
 import {
 	activeScanDateFieldNames,
 	hasVisibleScanDateInvalid
-} from '../../scans/scan-date-guard.ts';
+} from '../../scan/scan-date-guard.ts';
 
 describe('DatePicker behavior', () => {
 	it('marks an invalid typed date and disables submit, then enables submit after correction', () => {

@@ -274,11 +274,10 @@ export function buildGeneralLedgerPath(params: GeneralLedgerParams = {}): string
 }
 
 export function buildSourceJournalsPath(params: SourceJournalParams): string {
-	const query = new URLSearchParams({
+	return `/accounting/source-journals${buildListQuery(undefined, {
 		sourceType: params.sourceType,
-		sourceId: String(params.sourceId)
-	});
-	return `/accounting/source-journals?${query.toString()}`;
+		sourceId: params.sourceId
+	})}`;
 }
 
 function buildStatementPath(path: string, params: StatementParams = {}, includeFrom = false): string {
