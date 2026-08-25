@@ -7,7 +7,7 @@ import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/core/auth/auth_repository.dart';
 import 'package:rental_command/core/auth/biometric_auth_service.dart';
 import 'package:rental_command/core/auth/token_store.dart';
-import 'package:rental_command/core/navigation/mobile_restoration_state.dart';
+import 'package:rental_command/core/router/mobile_restoration_state.dart';
 import 'package:rental_command/core/push/push_service.dart';
 import 'package:rental_command/features/onboarding/onboarding_models.dart';
 import 'package:rental_command/features/onboarding/onboarding_repository.dart';

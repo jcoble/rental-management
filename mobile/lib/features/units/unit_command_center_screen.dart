@@ -15,7 +15,7 @@ import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
 import '../../core/models/work_order.dart';
 import '../../core/models/property.dart';
-import '../../core/navigation/mobile_restoration_state.dart';
+import '../../core/router/mobile_restoration_state.dart';
 import '../../core/presentation/plain_english_labels.dart';
 import '../../core/widgets/mobile_pill_tab_bar.dart';
 import '../activity/activity_history_screen.dart';

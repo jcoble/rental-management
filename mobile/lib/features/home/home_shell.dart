@@ -55,7 +55,7 @@ import '../tenants/tenant_detail_screen.dart';
 import '../tenants/tenants_list_screen.dart';
 import '../tenants/tenant_lease_screen.dart';
 import '../units/unit_command_center_screen.dart';
-import '../../core/navigation/mobile_restoration_state.dart';
+import '../../core/router/mobile_restoration_state.dart';
 import 'mobile_destination.dart';
 import 'home_access_providers.dart';
 import 'mobile_domain_hub.dart';

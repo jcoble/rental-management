@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/navigation/mobile_restoration_state.dart';
+import '../../core/router/mobile_restoration_state.dart';
 import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
