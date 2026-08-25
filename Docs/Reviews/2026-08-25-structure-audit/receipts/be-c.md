@@ -2,10 +2,11 @@
 
 - Lane: be-c — collapse the write-executor wrappers into IWriteExecutor
 - Start time: 2026-08-25T17:01:00-04:00
+- Rework round 1 start time: 2026-08-25T19:52:03-04:00
 
 ## Item 2 audit — Verified before renaming
 
-Command run: `rg -n '\\.ExecuteExactAsync' RentalCommand.Api RentalCommand.Engine --glob '*.cs'` returned 50 call sites. Every key argument was read. No call site requires exact semantics: request-derived keys are trimmed and bounded at 128 characters by `AuthenticatedPortfolioControllerBase.TryValidateIdempotencyKey` (RentalCommand.Api/Controllers/AuthenticatedPortfolioControllerBase.cs:20-23), and the composed keys remain below 200; Team keys are SHA-256 digests (RentalCommand.Api/Controllers/TeamController.cs:328-329); Workspace Experience keys are SHA-256 digests after a 200-character input check (RentalCommand.Api/Controllers/WorkspaceExperienceController.cs:51-62); Sandbox keys are SHA-256 digests (RentalCommand.Api/Services/Domain/SandboxService.cs:107-114); the LLM mutation identity trims and bounds client operation IDs at 160 (RentalCommand.Api/Services/Domain/WorkspaceLlmCredentialService.cs:342-343), and usage identities are generated from a fixed scan prefix, GUID, bounded feature, and invocation number (RentalCommand.Engine/Workers/ScanProcessingWorker.cs:206-212).
+Command run: `rg -n '\\.ExecuteExactAsync' RentalCommand.Api RentalCommand.Engine --glob '*.cs'` returned 50 call sites. Every key argument was read. No call site requires exact whitespace semantics: request-derived keys are trimmed and bounded at 128 characters by `AuthenticatedPortfolioControllerBase.TryValidateIdempotencyKey` (RentalCommand.Api/Controllers/AuthenticatedPortfolioControllerBase.cs:20-23); Team keys are SHA-256 digests (RentalCommand.Api/Controllers/TeamController.cs:328-329); Workspace Experience keys are SHA-256 digests after a 200-character input check (RentalCommand.Api/Controllers/WorkspaceExperienceController.cs:51-62); Sandbox keys are SHA-256 digests (RentalCommand.Api/Services/Domain/SandboxService.cs:107-114); the LLM mutation identity trims and bounds client operation IDs at 160 (RentalCommand.Api/Services/Domain/WorkspaceLlmCredentialService.cs:342-343), and usage identities are generated from a fixed scan prefix, GUID, bounded feature, and invocation number (RentalCommand.Engine/Workers/ScanProcessingWorker.cs:206-212). The earlier claim that every theoretical composition stays below 200 was incorrect; the corrected measurements are recorded under rework round 1 below.
 
 The 50 reviewed arguments, grouped exactly by source location, were:
 
@@ -31,7 +32,13 @@ The 50 reviewed arguments, grouped exactly by source location, were:
 - ExpenseService:329 — money mutation identity from controller-bounded operation key (330).
 - InspectionService:318, :333, :347, :361, :376, :392, :413, :429, :444, :459, :476, :491, :525, and :838 — inspection mutation identities from controller-bounded operation keys (319; 334; 348; 362; 377; 393; 414; 430; 445; 460; 477; 492; 526; 839).
 
-Conclusion: no leading/trailing whitespace or over-200-character key is reachable at these 50 production call sites, so items 3-4 proceed for all call sites.
+Conclusion: no call site requires preservation of leading/trailing whitespace. Length handling is constrained by the persisted receipt schema and is corrected under rework round 1 below.
+
+## Rework round 1 — receipt key bound (Verified)
+
+- The durable key is `AtomicCommandReceipt.IdempotencyKey` (`RentalCommand.Core/Entities/AtomicCommandReceipt.cs:16`). EF configures it with `HasMaxLength(200)` (`RentalCommand.Data/IdentityAuditModelConfiguration.cs:16-27`), and the baseline migration creates it as `character varying(200)` (`RentalCommand.Data/Migrations/20260715060715_InitialCreate.cs:79-97`). The real storage bound is therefore exactly 200 characters.
+- `WriteExecutor` already enforces exactly that storage bound after trimming (`RentalCommand.Data/Atomic/WriteExecutor.cs:18-25`), so no production-code change is needed. The former exact adapter forwarded directly to the old shared executor (`git show ec104a02^:RentalCommand.Api/Writes/RequestWriteExecutor.cs`, lines 44-49), which constructed `AtomicCommandIdentity` (`git show ec104a02^:RentalCommand.Data/Atomic/WriteExecutor.cs`, lines 12-23); that identity already rejected keys over 200 (`RentalCommand.Core/Atomic/AtomicCommandIdentity.cs:15-22,49-57`). Thus the merge did not newly reject a key the former exact path could execute.
+- A theoretical `AtomicInspectionMutation.Identity` containing four maximum positive `int` values and a 128-character delivery key is 201 characters (`RentalCommand.Api/Services/Domain/AtomicInspectionMutationRule.cs:1336-1340`; measured with the receipt command `actual_generic_composed_length=201`). However, `RecoverChronologyAuthorizedAsync` always supplies `relatedEntityId: 0` (`RentalCommand.Api/Services/Domain/InspectionService.cs:519-523`), making its longest reachable composition 192 characters (`actual_recovery_composed_length=192`). The controller limits the delivery key to 128 (`RentalCommand.Api/Controllers/InspectionController.cs:297-307`). The cited recovery call site is therefore not affected, and the inspected production inspection call sites have no reachable over-200 key.
 
 ## Completion
 
