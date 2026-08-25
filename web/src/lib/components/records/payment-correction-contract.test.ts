@@ -13,7 +13,7 @@ import type {
 } from '../../api/endpoints/tenant-money.ts';
 
 const clientStub =
-	'data:text/javascript,export const api={get(){throw new Error("API calls are not expected in this pure contract test")}};export function fetchApi(){throw new Error("API calls are not expected in this pure contract test")}';
+	'data:text/javascript,export const calls=[];export const api={get(){throw new Error("Unexpected API call")},post(path,body,options){calls.push({path,body,options})}};export function fetchApi(){throw new Error("Unexpected API call")}';
 
 registerHooks({
 	resolve(specifier, context, nextResolve) {
@@ -27,11 +27,12 @@ registerHooks({
 	}
 });
 
-const {
-	buildTenantPaymentRefundRequest,
-	isTenantPaymentRefundConflict,
-	linkedTenantPaymentRefund
-} = await import('../../api/endpoints/tenant-money.ts');
+const { calls } = (await import(clientStub)) as {
+	calls: Array<{ path: string; body: RefundTenantPaymentRequest; options: RequestInit }>;
+};
+const { isTenantPaymentRefundConflict, linkedTenantPaymentRefund, tenantMoney } = await import(
+	'../../api/endpoints/tenant-money.ts'
+);
 
 const originalReceipt = {
 	tenantAccountId: 41,
@@ -66,7 +67,9 @@ describe('payment correction contract', () => {
 	it('keeps original payment immutable', () => {
 		const before = structuredClone(originalReceipt);
 		const capabilities = new Set(['money.payments.manage']);
-		const request = buildTenantPaymentRefundRequest(41, 'correction-812', refundBody());
+		tenantMoney.refundPayment(41, 'correction-812', refundBody());
+		const request = calls.at(-1);
+		assert.ok(request);
 
 		assert.equal(canCorrectPayment(capabilities, 'PaymentReceipt'), true);
 		assert.equal(canCorrectPayment(new Set(), 'PaymentReceipt'), false);
@@ -74,7 +77,7 @@ describe('payment correction contract', () => {
 		assert.equal(request.path, '/tenant-accounts/41/refunds');
 		assert.equal(request.path.includes('reversals'), false);
 		assert.deepEqual(originalReceipt, before);
-		assert.equal(JSON.parse(String(request.options.body)).paymentEntryId, 812);
+		assert.equal(request.body.paymentEntryId, 812);
 	});
 
 	it('prefills correction context and reason', () => {
@@ -104,8 +107,11 @@ describe('payment correction contract', () => {
 
 	it('appends linked correction', () => {
 		const body = refundBody();
-		const firstRequest = buildTenantPaymentRefundRequest(41, 'correction-812', body);
-		const replayRequest = buildTenantPaymentRefundRequest(41, 'correction-812', body);
+		tenantMoney.refundPayment(41, 'correction-812', body);
+		tenantMoney.refundPayment(41, 'correction-812', body);
+		const [firstRequest, replayRequest] = calls.slice(-2);
+		assert.ok(firstRequest);
+		assert.ok(replayRequest);
 		const linkedResult: TenantMoneyCommandResponse<TenantPaymentRefundResult> = {
 			value: {
 				found: true,

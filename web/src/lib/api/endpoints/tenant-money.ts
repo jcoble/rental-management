@@ -124,29 +124,9 @@ export interface TenantPaymentRefundResult {
 	error: string | null;
 }
 
-export interface TenantPaymentRefundRequestSpec {
-	path: string;
-	options: RequestInit;
-}
-
 export interface TenantPaymentRefundConflict {
 	outcome: 'AlreadyRefunded' | 'ExternalCorrectionUnavailable';
 	error?: string | null;
-}
-
-export function buildTenantPaymentRefundRequest(
-	tenantAccountId: number,
-	operationKey: string,
-	body: RefundTenantPaymentRequest
-): TenantPaymentRefundRequestSpec {
-	return {
-		path: `/tenant-accounts/${tenantAccountId}/refunds`,
-		options: {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
-			body: JSON.stringify(body)
-		}
-	};
 }
 
 export function linkedTenantPaymentRefund(
