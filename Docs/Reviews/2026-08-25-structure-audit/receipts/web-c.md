@@ -1,13 +1,14 @@
 # web-c receipt
 
 - Lane: `web-c`
+- Rework started: `2026-08-25T19:40:16-04:00`
 - Started: `2026-08-25T17:28:56-04:00`
 - Finished: `2026-08-25T17:48:02-04:00`
 
 ## Item 1 — duplicate payments client
 
 - Result: DONE
-- Commit: `a25f12f6f648eecf633a71c55df093836fb8e067`
+- Commit: `2bb61c402e234bb2e3c25b98fdfb3e92f4c4e922`
 - Diff: 7 files, +62/-168; `web/src/lib/api/endpoints/payments.ts` deleted.
 - Consumers: `PaymentDetail.svelte` and the accounting past-due page now call `tenantMoney`.
 - `TenantMoneyCommandResponse<T>` declarations after the merge: one (`web/src/lib/api/endpoints/tenant-money.ts`).
@@ -23,12 +24,12 @@ The old `payments` client and retained `tenantMoney` client use the same route t
 | reversal | `/tenant-accounts/${tenantAccountId}/charges/${chargeEntryId}/reversals` | `/tenant-accounts/${tenantAccountId}/charges/${chargeEntryId}/reversals` |
 | refund | `/tenant-accounts/${tenantAccountId}/refunds` | `/tenant-accounts/${tenantAccountId}/refunds` |
 
-The body argument remains the same object at each consumer and is serialized with `JSON.stringify` once in both clients. The retained `api.post` implementation adds the same JSON content type and passes `body` directly to `JSON.stringify`; the `Idempotency-Key` header remains the caller's operation key. Verified by `git show a25f12f6^:web/src/lib/api/endpoints/payments.ts`, `web/src/lib/api/endpoints/tenant-money.ts:176-251`, and `web/src/lib/api/client.ts:405-415`.
+The body argument remains the same object at each consumer and is serialized with `JSON.stringify` once in both clients. The retained `api.post` implementation adds the same JSON content type and passes `body` directly to `JSON.stringify`; the `Idempotency-Key` header remains the caller's operation key. Verified by `git show 2bb61c40^:web/src/lib/api/endpoints/payments.ts`, `web/src/lib/api/endpoints/tenant-money.ts:176-251`, and `web/src/lib/api/client.ts:405-415`.
 
 ## Item 2 — shared server fetch
 
 - Result: DONE
-- Commit: `46477b186764b256294e43da5d73a3eabeb8e52c`
+- Commit: `0b77a6e267f66bf149c013025478d4ee23014ada`
 - Diff: 14 files, +191/-132.
 - Converted raw fetch expressions: 12 across the ten named route files (the docs article loader had two).
 - `serverFetch` now supports an omitted access token, exposes response headers and parsed error metadata needed by login/form actions, and composes caller cancellation with its timeout.
@@ -46,7 +47,7 @@ The body argument remains the same object at each consumer and is serialized wit
 | logout | Cookie deletion and `303 /login` remain unconditional; revocation errors do not block logout, and caller cancellation remains 1.5 seconds. |
 | docs loaders | Index/layout remain fail-soft with empty categories; article 404/status/redirect behavior remains unchanged. |
 
-Verified by the diff for commit `46477b18`, the passing focused forgot-password/logout tests, and the live flow below.
+Verified by the diff for commit `0b77a6e2`, the passing focused forgot-password/logout tests, and the live flow below.
 
 ## Item 3 — live flow
 
@@ -89,6 +90,6 @@ The verbatim `rg` without a glob exclusion lists these allowed `+server.ts` site
 
 ## Out-of-scope observations
 
-- `web/src/routes/auth/google/callback/+server.ts` still uses a raw `${SERVER_API_BASE_URL}` fetch but was not among the named page/layout files and is not a file-streaming proxy; it was not changed.
+- `web/src/routes/auth/google/callback/+server.ts` still uses a raw `${SERVER_API_BASE_URL}` fetch but was not among the named page/layout files and is not a file-streaming proxy; it was left as-is by controller decision.
 - The full web unit suite's four inherited contract failures were not changed because their accounting/lease files are outside this lane.
 - The first dev-stack attempt failed because the shared EdiPlatform PostgreSQL service rejected the launcher's default credential. The retry used that existing container's configured development user without printing its password and created the requested `rentalcommand` development database.
