@@ -15,6 +15,7 @@ import 'lease_ledger_view.dart';
 import 'leases_repository.dart';
 import 'return_possession_sheet.dart';
 import 'successor_agreement_sheet.dart';
+import '../../core/presentation/formatting.dart';
 
 class LeaseManagementDetailLoaderScreen extends StatelessWidget {
   const LeaseManagementDetailLoaderScreen({
@@ -423,7 +424,7 @@ class _RelationshipHeader extends StatelessWidget {
               label: 'Base rent',
               value: summary.baseRentAmount == null
                   ? 'Not set'
-                  : _money(summary.baseRentAmount!),
+                  : moneyFmt(summary.baseRentAmount!),
             ),
             if (summary.upcomingAgreementId != null)
               _Fact(
@@ -1690,8 +1691,6 @@ Future<T?> _runWithStableRetry<T>(
 }
 
 String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';
-
-String _money(double value) => '\$${value.toStringAsFixed(2)}';
 
 String _endingDispositionLabel(String value) => switch (value) {
   'OfferRenewal' => 'Renew / continue',

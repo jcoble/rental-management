@@ -16,3 +16,14 @@ String formatPropertyType(String type) {
       return type.isEmpty ? 'Property' : type;
   }
 }
+
+String loanStatusLabel(String status) => switch (status) {
+  'PaidOff' => 'Paid off',
+  _ => status,
+};
+
+String loanPaymentStatusLabel(String status) => switch (status) {
+  'Paid' => 'Paid',
+  'Scheduled' => 'Scheduled',
+  _ => status,
+};

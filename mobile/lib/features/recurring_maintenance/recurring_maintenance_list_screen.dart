@@ -8,29 +8,7 @@ import '../home/mobile_quick_action_helpers.dart';
 import 'recurring_maintenance_form_screen.dart';
 import 'recurring_maintenance_models.dart';
 import 'recurring_maintenance_repository.dart';
-
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String fmtDueDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
-
-String _fmtMoney(double? value) {
-  if (value == null) return '—';
-  return '\$${value.toStringAsFixed(2)}';
-}
+import '../../core/presentation/formatting.dart';
 
 String _fmtApiTime(String? raw) {
   if (raw == null || raw.isEmpty) return 'No time set';
@@ -359,7 +337,7 @@ class _TaskCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    'Next: ${fmtDueDate(task.nextDueDate)}',
+                    'Next: ${dateFmt(task.nextDueDate)}',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: colorScheme.onSurfaceVariant,
                     ),
@@ -381,7 +359,7 @@ class _TaskCard extends StatelessWidget {
               Text(
                 [
                   if (task.estimatedCost != null)
-                    '${_fmtMoney(task.estimatedCost)} expected · ${_fmtMoney(task.monthlyEstimatedCost)}/mo',
+                    '${task.estimatedCost == null ? '—' : moneyFmt(task.estimatedCost!)} expected · ${task.monthlyEstimatedCost == null ? '—' : moneyFmt(task.monthlyEstimatedCost!)}/mo',
                   '${task.generatedWorkOrderCount} linked work order${task.generatedWorkOrderCount == 1 ? '' : 's'}',
                 ].join(' · '),
                 style: theme.textTheme.bodySmall?.copyWith(

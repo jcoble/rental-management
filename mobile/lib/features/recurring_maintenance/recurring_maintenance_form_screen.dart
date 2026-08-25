@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
-import 'recurring_maintenance_list_screen.dart' show fmtDueDate;
 import 'recurring_maintenance_models.dart';
 import 'recurring_maintenance_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 String _fmtIso(DateTime d) =>
     '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -535,7 +535,7 @@ class _DateField extends StatelessWidget {
           suffixIcon: const Icon(Icons.calendar_today_outlined, size: 18),
         ),
         child: Text(
-          date != null ? fmtDueDate(date!) : 'Select date',
+          date != null ? dateFmt(date!) : 'Select date',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: date != null
                 ? colorScheme.onSurface

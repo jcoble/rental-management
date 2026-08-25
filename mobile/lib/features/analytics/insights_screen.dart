@@ -2,26 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/presentation/date_labels.dart';
+import '../../core/presentation/formatting.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'analytics_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-String _fmtCurrency(double amount) {
-  final isNegative = amount < 0;
-  final abs = amount.abs();
-  final parts = abs.toStringAsFixed(2).split('.');
-  final intPart = parts[0];
-  final decPart = parts[1];
-  final buf = StringBuffer();
-  final len = intPart.length;
-  for (var i = 0; i < len; i++) {
-    if (i > 0 && (len - i) % 3 == 0) buf.write(',');
-    buf.write(intPart[i]);
-  }
-  return '\$${isNegative ? '-' : ''}$buf.$decPart';
-}
 
 String _fmtPct(double pct) => '${pct.toStringAsFixed(1)}%';
 
@@ -138,7 +123,7 @@ class _KpiGrid extends StatelessWidget {
                 label: 'Collection Rate',
                 value: _fmtPct(overview.collectionRate),
                 subtitle:
-                    '${_fmtCurrency(overview.monthRentCollected)} of ${_fmtCurrency(overview.monthRentScheduled)}',
+                    '${moneyFmt(overview.monthRentCollected)} of ${moneyFmt(overview.monthRentScheduled)}',
                 color: cs.secondaryContainer,
                 textColor: cs.onSecondaryContainer,
               ),
@@ -151,7 +136,7 @@ class _KpiGrid extends StatelessWidget {
             Expanded(
               child: _KpiCard(
                 label: 'Overdue',
-                value: _fmtCurrency(overview.overdueAmount),
+                value: moneyFmt(overview.overdueAmount),
                 subtitle:
                     '${overview.overdueCount} payment${overview.overdueCount == 1 ? '' : 's'}',
                 color: cs.errorContainer,
@@ -162,7 +147,7 @@ class _KpiGrid extends StatelessWidget {
             Expanded(
               child: _KpiCard(
                 label: 'Signed lease rent',
-                value: _fmtCurrency(overview.monthlyRecurringRent),
+                value: moneyFmt(overview.monthlyRecurringRent),
                 subtitle: 'currently governing',
                 color: cs.tertiaryContainer,
                 textColor: cs.onTertiaryContainer,

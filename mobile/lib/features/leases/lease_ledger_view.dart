@@ -3,42 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import 'leases_repository.dart';
-
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String _fmtDate(DateTime d) {
-  if (d.year <= 1) return '';
-  return '${_monthNames[d.month]} ${d.day}, ${d.year}';
-}
-
-String _money(double value) {
-  final negative = value < 0;
-  final rounded = value.abs().toStringAsFixed(2);
-  final parts = rounded.split('.');
-  final whole = parts[0];
-  final buf = StringBuffer();
-  final start = whole.length % 3;
-  if (start > 0) buf.write(whole.substring(0, start));
-  for (var i = start; i < whole.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(whole.substring(i, i + 3));
-  }
-  return '${negative ? '-' : ''}\$$buf.${parts[1]}';
-}
+import '../../core/presentation/formatting.dart';
 
 /// A self-contained, scrollable "account history" for one lease: the running
 /// totals card followed by every charge/payment with its plain-English "why".
@@ -180,7 +145,7 @@ class _BalanceCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              owes || credit ? _money(ledger.balance.abs()) : _money(0),
+              owes || credit ? moneyFmt(ledger.balance.abs()) : moneyFmt(0),
               style: theme.textTheme.headlineMedium?.copyWith(
                 fontFeatures: const [FontFeature.tabularFigures()],
                 fontWeight: FontWeight.w700,
@@ -195,11 +160,14 @@ class _BalanceCard extends StatelessWidget {
                 Expanded(
                   child: _Total(
                     label: 'Charged',
-                    value: _money(ledger.totalCharged),
+                    value: moneyFmt(ledger.totalCharged),
                   ),
                 ),
                 Expanded(
-                  child: _Total(label: 'Paid', value: _money(ledger.totalPaid)),
+                  child: _Total(
+                    label: 'Paid',
+                    value: moneyFmt(ledger.totalPaid),
+                  ),
                 ),
               ],
             ),
@@ -253,7 +221,8 @@ class _LedgerEntryCard extends StatelessWidget {
     // A payment reduces what's owed; show it green and signed.
     final isPayment = entry.type.toLowerCase() == 'payment';
     final amountColor = isPayment ? Colors.green.shade700 : cs.onSurface;
-    final signedAmount = '${isPayment ? '-' : ''}${_money(entry.amount.abs())}';
+    final signedAmount =
+        '${isPayment ? '-' : ''}${moneyFmt(entry.amount.abs())}';
 
     return Card(
       child: Padding(
@@ -316,11 +285,11 @@ class _LedgerEntryCard extends StatelessWidget {
                           ),
                         ),
                       ],
-                      if (_fmtDate(entry.date).isNotEmpty) ...[
+                      if (dateFmt(entry.date).isNotEmpty) ...[
                         const SizedBox(height: 2),
                         Text(
                           [
-                            _fmtDate(entry.date),
+                            dateFmt(entry.date),
                             if (entry.status.isNotEmpty) entry.status,
                           ].join(' · '),
                           style: theme.textTheme.bodySmall?.copyWith(

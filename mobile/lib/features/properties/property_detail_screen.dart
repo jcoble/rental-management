@@ -11,7 +11,7 @@ import '../../core/auth/mobile_access_policy.dart';
 import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_impact_card.dart';
 import '../activity/activity_history_screen.dart';
-import '../money/money_format.dart' as money;
+import '../../core/presentation/formatting.dart' as money;
 import '../scan/scan_capture.dart';
 import '../scan/scan_review_screen.dart';
 import '../units/unit_command_center_screen.dart';
@@ -30,38 +30,6 @@ import 'property_labels.dart';
 import 'property_loan_form_sheet.dart';
 import 'property_loans_repository.dart';
 import 'property_workspace_sections.dart';
-
-String _formatCurrency(double amount) {
-  final rounded = amount.round();
-  // Insert commas: e.g. 1200 -> $1,200
-  final s = rounded.toString();
-  final buf = StringBuffer(r'$');
-  final start = s.length % 3;
-  if (start > 0) buf.write(s.substring(0, start));
-  for (var i = start; i < s.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(s.substring(i, i + 3));
-  }
-  return buf.toString();
-}
-
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String _formatDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
 
 String _formatOwnerships(Property property) {
   if (property.ownerships.isEmpty) return 'No owner assigned';
@@ -1369,7 +1337,7 @@ class _WorkspaceUnitTile extends StatelessWidget {
           unit.unitNumber.isEmpty ? 'Unit' : 'Unit ${unit.unitNumber}',
         ),
         subtitle: Text(
-          '${_formatCurrency(unit.marketRent)}/mo · ${unit.openWorkOrderCount} open ${unit.openWorkOrderCount == 1 ? 'work order' : 'work orders'}',
+          '${money.moneyFmt(unit.marketRent, whole: true)}/mo · ${unit.openWorkOrderCount} open ${unit.openWorkOrderCount == 1 ? 'work order' : 'work orders'}',
         ),
         trailing: Text(unit.status),
         onTap: () => openUnitCommandCenter(context, unitId: unit.id),
@@ -1584,7 +1552,7 @@ class _LeaseTile extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    _formatCurrency(lease.baseRentAmount ?? 0),
+                    money.moneyFmt(lease.baseRentAmount ?? 0, whole: true),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: colorScheme.primary,
@@ -1601,7 +1569,7 @@ class _LeaseTile extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 'Unit ${lease.unitNumber}  ·  '
-                '${lease.termStartOn == null ? 'Agreement not issued' : '${_formatDate(lease.termStartOn!)} – ${lease.termEndOn == null ? 'Month-to-month' : _formatDate(lease.termEndOn!)}'}',
+                '${lease.termStartOn == null ? 'Agreement not issued' : '${money.dateFmt(lease.termStartOn!)} – ${lease.termEndOn == null ? 'Month-to-month' : money.dateFmt(lease.termEndOn!)}'}',
                 style: TextStyle(
                   fontSize: 12,
                   color: colorScheme.onSurfaceVariant,
@@ -1699,7 +1667,7 @@ class _CapitalAssetTile extends StatelessWidget {
                 children: [
                   _ScheduleMetric(
                     label: 'In service',
-                    value: _formatDate(asset.inServiceDate),
+                    value: money.dateFmt(asset.inServiceDate),
                   ),
                   _ScheduleMetric(
                     label: '${asset.depreciationYear} depreciation',
@@ -1717,7 +1685,7 @@ class _CapitalAssetTile extends StatelessWidget {
                   if (asset.disposedOnDate != null)
                     _ScheduleMetric(
                       label: 'Disposed',
-                      value: _formatDate(asset.disposedOnDate!),
+                      value: money.dateFmt(asset.disposedOnDate!),
                     ),
                 ],
               ),
@@ -1772,7 +1740,7 @@ class _DispositionTile extends StatelessWidget {
                 ),
               ),
               title: Text(
-                'Closed ${_formatDate(disposition.closedOnDate)}',
+                'Closed ${money.dateFmt(disposition.closedOnDate)}',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   fontWeight: FontWeight.w600,
                 ),
@@ -1917,9 +1885,9 @@ class _LoanTileState extends ConsumerState<_LoanTile> {
               ),
             ),
             subtitle: Text(
-              '${_formatCurrency(loan.currentBalance)} balance  ·  '
-              '${_formatCurrency(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/mo  ·  '
-              '${_loanStatusLabel(loan.status)}',
+              '${money.moneyFmt(loan.currentBalance, whole: true)} balance  ·  '
+              '${money.moneyFmt(loan.monthlyPrincipalInterest + loan.monthlyEscrow, whole: true)}/mo  ·  '
+              '${loanStatusLabel(loan.status)}',
               style: TextStyle(
                 fontSize: 12,
                 color: colorScheme.onSurfaceVariant,
@@ -2114,7 +2082,7 @@ class _LoanPaymentRow extends StatelessWidget {
                 ),
               ),
               Text(
-                _formatCurrency(payment.totalAmount),
+                money.moneyFmt(payment.totalAmount, whole: true),
                 style: theme.textTheme.bodyMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
@@ -2126,14 +2094,14 @@ class _LoanPaymentRow extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'Due ${_formatDate(payment.dueDate)}',
+                  'Due ${money.dateFmt(payment.dueDate)}',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),
                 ),
               ),
               Text(
-                _loanPaymentStatusLabel(payment.status),
+                loanPaymentStatusLabel(payment.status),
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: statusColor,
                   fontWeight: FontWeight.w600,
@@ -2148,19 +2116,19 @@ class _LoanPaymentRow extends StatelessWidget {
             children: [
               _ScheduleMetric(
                 label: 'Interest',
-                value: _formatCurrency(payment.interestAmount),
+                value: money.moneyFmt(payment.interestAmount, whole: true),
               ),
               _ScheduleMetric(
                 label: 'Principal',
-                value: _formatCurrency(payment.principalAmount),
+                value: money.moneyFmt(payment.principalAmount, whole: true),
               ),
               _ScheduleMetric(
                 label: 'Escrow',
-                value: _formatCurrency(payment.escrowAmount),
+                value: money.moneyFmt(payment.escrowAmount, whole: true),
               ),
               _ScheduleMetric(
                 label: 'Balance',
-                value: _formatCurrency(payment.balanceAfter),
+                value: money.moneyFmt(payment.balanceAfter, whole: true),
               ),
             ],
           ),
@@ -2236,17 +2204,6 @@ class _ScheduleMetric extends StatelessWidget {
     );
   }
 }
-
-String _loanStatusLabel(String status) => switch (status) {
-  'PaidOff' => 'Paid off',
-  _ => status,
-};
-
-String _loanPaymentStatusLabel(String status) => switch (status) {
-  'Paid' => 'Paid',
-  'Scheduled' => 'Scheduled',
-  _ => status,
-};
 
 String _decimalLabel(double value) => value == value.roundToDouble()
     ? value.toStringAsFixed(0)

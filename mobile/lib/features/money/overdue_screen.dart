@@ -6,7 +6,7 @@ import '../accounting/accounting_models.dart';
 import '../accounting/accounting_repository.dart';
 import '../payments/payments_screen.dart';
 import '../units/unit_command_center_screen.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 
 /// "Who's behind" — one row per canonical tenant account behind on rent, with
 /// receipt, account-ledger, and reminder actions.

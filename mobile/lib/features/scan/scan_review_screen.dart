@@ -20,6 +20,8 @@ import '../units/units_repository.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
 import 'scan_target_options.dart';
+import '../../core/presentation/formatting.dart';
+import '../properties/property_labels.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -4134,31 +4136,12 @@ class _ApplicantSection extends StatelessWidget {
 // _LoanFieldsSection — editable loan fields in web form order
 // ---------------------------------------------------------------------------
 
-String _formatMoney(double value) {
-  final fixed = value.abs().toStringAsFixed(2);
-  final parts = fixed.split('.');
-  final dollars = parts.first;
-  final buffer = StringBuffer();
-  for (var i = 0; i < dollars.length; i++) {
-    if (i > 0 && (dollars.length - i) % 3 == 0) buffer.write(',');
-    buffer.write(dollars[i]);
-  }
-  final sign = value < 0 ? '-' : '';
-  return '$sign\$$buffer.${parts.last}';
-}
-
 String _formatDate(DateTime value) {
   if (value.year <= 0) return 'Unknown date';
   final month = value.month.toString().padLeft(2, '0');
   final day = value.day.toString().padLeft(2, '0');
   return '${value.year}-$month-$day';
 }
-
-String _loanPaymentStatusLabel(String status) => switch (status) {
-  'Paid' => 'Paid',
-  'Scheduled' => 'Scheduled',
-  _ => status,
-};
 
 class _LoanReviewModeSection extends StatelessWidget {
   const _LoanReviewModeSection({
@@ -4366,7 +4349,7 @@ class _ExistingLoanPaymentPicker extends ConsumerWidget {
                             (loan) => DropdownMenuItem(
                               value: loan.id,
                               child: Text(
-                                '${loan.lender} - ${_formatMoney(loan.currentBalance)} balance',
+                                '${loan.lender} - ${moneyFmt(loan.currentBalance)} balance',
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -4425,7 +4408,7 @@ class _ExistingLoanPaymentPicker extends ConsumerWidget {
                             (payment) => DropdownMenuItem(
                               value: payment.id,
                               child: Text(
-                                '${_formatDate(payment.dueDate)} - ${_formatMoney(payment.totalAmount)} total - ${_loanPaymentStatusLabel(payment.status)}',
+                                '${_formatDate(payment.dueDate)} - ${moneyFmt(payment.totalAmount)} total - ${loanPaymentStatusLabel(payment.status)}',
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -4628,7 +4611,7 @@ class _AmountReviewRow extends StatelessWidget {
             ),
           ),
           Text(
-            amount == null ? 'Review needed' : _formatMoney(amount),
+            amount == null ? 'Review needed' : moneyFmt(amount),
             style: theme.textTheme.bodySmall?.copyWith(
               fontWeight: FontWeight.w600,
               color: amount == null ? colorScheme.error : null,
@@ -4695,7 +4678,7 @@ class _LoanSummary extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '${_formatMoney(loan.currentBalance)} balance',
+              '${moneyFmt(loan.currentBalance)} balance',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -4736,7 +4719,7 @@ class _LoanPaymentSummary extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Due ${_formatDate(payment.dueDate)} - ${_loanPaymentStatusLabel(payment.status)}',
+              'Due ${_formatDate(payment.dueDate)} - ${loanPaymentStatusLabel(payment.status)}',
               style: theme.textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.w600,
               ),
@@ -4756,7 +4739,7 @@ class _LoanPaymentSummary extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      _formatMoney(row.$2),
+                      moneyFmt(row.$2),
                       style: theme.textTheme.bodySmall?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
@@ -5447,7 +5430,7 @@ class _LineItemsSection extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.all(8),
                       child: Text(
-                        _fmtMoney(item.unitPrice),
+                        (item.unitPrice == null ? '' : moneyFmt(item.unitPrice!)),
                         textAlign: TextAlign.right,
                         style: theme.textTheme.bodySmall,
                       ),
@@ -5455,7 +5438,7 @@ class _LineItemsSection extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.all(8),
                       child: Text(
-                        _fmtMoney(item.amount),
+                        (item.amount == null ? '' : moneyFmt(item.amount!)),
                         textAlign: TextAlign.right,
                         style: theme.textTheme.bodySmall,
                       ),
@@ -5471,7 +5454,6 @@ class _LineItemsSection extends StatelessWidget {
   }
 
   String _fmtNum(double? v) => v == null ? '' : v.toStringAsFixed(0);
-  String _fmtMoney(double? v) => v == null ? '' : v.toStringAsFixed(2);
 }
 
 class _TableHeaderCell extends StatelessWidget {

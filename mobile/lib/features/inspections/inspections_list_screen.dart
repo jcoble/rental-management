@@ -12,25 +12,7 @@ import 'inspection_run_screen.dart';
 import 'inspections_models.dart';
 import 'inspections_repository.dart';
 import 'new_inspection_screen.dart';
-
-const _months = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String fmtInspectionDate(DateTime d) =>
-    '${_months[d.month]} ${d.day}, ${d.year}';
+import '../../core/presentation/formatting.dart';
 
 /// On-site inspections list: each row shows the property/unit, type, scheduled
 /// date and status. A "New inspection" flow picks a template + property/unit.
@@ -352,7 +334,7 @@ class _InspectionCard extends StatelessWidget {
                 const SizedBox(width: 4),
                 Flexible(
                   child: Text(
-                    fmtInspectionDate(i.scheduledFor.toLocal()),
+                    dateFmt(i.scheduledFor.toLocal()),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall?.copyWith(

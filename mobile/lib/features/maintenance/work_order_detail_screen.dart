@@ -21,38 +21,9 @@ import '../vendors/rate_vendor_sheet.dart';
 import '../vendors/vendors_repository.dart';
 import 'work_order_timeline.dart';
 import 'work_orders_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-const _months = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String _fmtDate(DateTime d) => '${_months[d.month]} ${d.day}, ${d.year}';
-
-String _fmtCost(double cost) {
-  final parts = cost.toStringAsFixed(2).split('.');
-  final intPart = parts[0];
-  final buf = StringBuffer();
-  final len = intPart.length;
-  for (var i = 0; i < len; i++) {
-    if (i > 0 && (len - i) % 3 == 0) buf.write(',');
-    buf.write(intPart[i]);
-  }
-  return '\$$buf.${parts[1]}';
-}
 
 /// Human-readable labels for status values (delegates to the shared helper).
 String _statusLabel(String s) => workOrderStatusLabel(s);
@@ -1537,35 +1508,35 @@ class _DetailGrid extends StatelessWidget {
             ),
           _DetailRow(
             label: 'Requested',
-            value: _fmtDate(workOrder.requestedAt),
+            value: dateFmt(workOrder.requestedAt),
             theme: theme,
             colorScheme: colorScheme,
           ),
           if (workOrder.scheduledFor != null)
             _DetailRow(
               label: 'Scheduled for',
-              value: _fmtDate(workOrder.scheduledFor!),
+              value: dateFmt(workOrder.scheduledFor!),
               theme: theme,
               colorScheme: colorScheme,
             ),
           if (workOrder.completedAt != null)
             _DetailRow(
               label: 'Completed',
-              value: _fmtDate(workOrder.completedAt!),
+              value: dateFmt(workOrder.completedAt!),
               theme: theme,
               colorScheme: colorScheme,
             ),
           if (capabilities.canViewCosts && workOrder.estimatedCost != null)
             _DetailRow(
               label: 'Est. cost',
-              value: _fmtCost(workOrder.estimatedCost!),
+              value: moneyFmt(workOrder.estimatedCost!),
               theme: theme,
               colorScheme: colorScheme,
             ),
           if (capabilities.canViewCosts && workOrder.actualCost != null)
             _DetailRow(
               label: 'Actual cost',
-              value: _fmtCost(workOrder.actualCost!),
+              value: moneyFmt(workOrder.actualCost!),
               theme: theme,
               colorScheme: colorScheme,
               isLast: true,
@@ -1573,7 +1544,7 @@ class _DetailGrid extends StatelessWidget {
           else
             _DetailRow(
               label: 'Last updated',
-              value: _fmtDate(workOrder.updatedAt),
+              value: dateFmt(workOrder.updatedAt),
               theme: theme,
               colorScheme: colorScheme,
               isLast: true,
@@ -1844,10 +1815,6 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   DateTime? _scheduledStart(DateTime? date, TimeOfDay? time) {
     if (date == null) return null;
     return _combine(date, time) ?? DateTime(date.year, date.month, date.day);
-  }
-
-  static String _fmtEditDate(DateTime d) {
-    return '${_months[d.month]} ${d.day}, ${d.year}';
   }
 
   Future<void> _pickScheduledDate() async {
@@ -2261,7 +2228,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
                     child: Text(
                       _scheduledDate == null
                           ? 'Not scheduled'
-                          : _fmtEditDate(_scheduledDate!),
+                          : dateFmt(_scheduledDate!),
                       style: TextStyle(
                         color: _scheduledDate == null
                             ? colorScheme.onSurfaceVariant

@@ -12,7 +12,7 @@ void main() {
     expect(source, contains("subtitle: 'currently governing'"));
     expect(
       source,
-      contains('value: _fmtCurrency(overview.monthlyRecurringRent)'),
+      contains('value: moneyFmt(overview.monthlyRecurringRent)'),
     );
     expect(source, isNot(contains("label: 'Monthly Rent'")));
     expect(source, isNot(contains("subtitle: 'recurring'")));

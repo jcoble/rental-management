@@ -14,7 +14,7 @@ import '../properties/properties_repository.dart';
 import '../vendors/vendors_models.dart';
 import '../vendors/vendors_repository.dart';
 import 'expense_models.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'money_repository.dart';
 
 final _expenseFormWorkOrdersProvider =
