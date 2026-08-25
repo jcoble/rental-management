@@ -13,7 +13,7 @@ describe('tenant account history contract', () => {
 		assert.match(page, /portal\.tenantAccountHistory/);
 		assert.match(page, /portal\.leases\(\)/);
 		assert.match(api, /\/portal\/tenant-accounts\/page/);
-		assert.match(api, /\/history\$\{queryString\(params\)\}/);
+		assert.match(api, /\/history\$\{buildListQuery\(/);
 		assert.doesNotMatch(page, /tenantAccounts\.|tenantLedgers\.|accountNumber/);
 	});
 

@@ -11,7 +11,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import { getUnitsEmptyStateCopy } from '$lib/units/unit-list-state';
+	import { getUnitsEmptyStateCopy } from '$lib/unit/unit-list-state';
 	import { Home, Plus } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';

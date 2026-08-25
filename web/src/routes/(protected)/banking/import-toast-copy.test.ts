@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 const bankingPage = readFileSync(
-	new URL('../../routes/(protected)/banking/+page.svelte', import.meta.url),
+	new URL('./+page.svelte', import.meta.url),
 	'utf8',
 );
 

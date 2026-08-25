@@ -15,6 +15,7 @@
  */
 
 import { fetchApi } from '../client';
+import { buildListQuery } from '../list-params';
 
 // ── Catalog ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -469,23 +470,18 @@ export function reportEndpointPath(endpoint: string): string {
  */
 export function buildReportQuery(params: ReportRequestParams, accepts: ReportParamKey[]): string {
 	const set = new Set(accepts);
-	const qs = new URLSearchParams();
-
-	if (set.has('from') && params.from) qs.set('from', params.from);
-	if (set.has('to') && params.to) qs.set('to', params.to);
-	if (set.has('asOf') && params.asOf) qs.set('asOf', params.asOf);
-	if (set.has('propertyId') && params.propertyId != null) qs.set('propertyId', String(params.propertyId));
-	if (set.has('propertyIds') && params.propertyIds?.length) {
-		for (const id of params.propertyIds) qs.append('propertyIds', String(id));
-	}
-	if (set.has('year') && params.year != null) qs.set('year', String(params.year));
-	if (set.has('days') && params.days != null) qs.set('days', String(params.days));
-	if (set.has('skip') && params.skip != null) qs.set('skip', String(params.skip));
-	if (set.has('take') && params.take != null) qs.set('take', String(params.take));
-	if (set.has('sort') && params.sort) qs.set('sort', params.sort);
-
-	const s = qs.toString();
-	return s ? `?${s}` : '';
+	return buildListQuery(undefined, {
+		from: set.has('from') ? params.from : undefined,
+		to: set.has('to') ? params.to : undefined,
+		asOf: set.has('asOf') ? params.asOf : undefined,
+		propertyId: set.has('propertyId') ? params.propertyId : undefined,
+		propertyIds: set.has('propertyIds') ? params.propertyIds : undefined,
+		year: set.has('year') ? params.year : undefined,
+		days: set.has('days') ? params.days : undefined,
+		skip: set.has('skip') ? params.skip : undefined,
+		take: set.has('take') ? params.take : undefined,
+		sort: set.has('sort') ? params.sort : undefined
+	});
 }
 
 // ── Client ──────────────────────────────────────────────────────────────────────────────────────

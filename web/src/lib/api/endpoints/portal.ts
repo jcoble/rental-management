@@ -1,5 +1,6 @@
 import { api, downloadFile } from '../client';
 import { idempotentMutation } from '../idempotency';
+import { buildListQuery } from '../list-params';
 import type {
 	Appointment,
 	LeaseQuestionResponse,
@@ -277,16 +278,6 @@ export interface PortalLeaseRelationship {
 	agreement?: PortalLeaseAgreement | null;
 }
 
-function queryString(params: object): string {
-	const query = new URLSearchParams();
-	for (const [key, value] of Object.entries(params)) {
-		if (value !== undefined && value !== null && value !== '')
-			query.set(key, String(value));
-	}
-	const text = query.toString();
-	return text ? `?${text}` : '';
-}
-
 function saveBlob(blob: Blob, fileName: string): void {
 	const objectUrl = URL.createObjectURL(blob);
 	const anchor = document.createElement('a');
@@ -333,7 +324,16 @@ export const portal = {
 		),
 	tenantAccountsPage: (params: PortalTenantAccountListParams = {}) =>
 		api.get<PortalPage<PortalTenantAccount>>(
-			`/portal/tenant-accounts/page${queryString(params)}`
+			`/portal/tenant-accounts/page${buildListQuery(undefined, {
+				skip: params.skip,
+				take: params.take,
+				search: params.search,
+				sort: params.sort,
+				from: params.from,
+				to: params.to,
+				lifecycle: params.lifecycle,
+				closed: params.closed == null ? undefined : String(params.closed)
+			})}`
 		),
 	tenantAccount: (tenantAccountId: number) =>
 		api.get<PortalTenantAccount>(`/portal/tenant-accounts/${tenantAccountId}`),
@@ -342,25 +342,46 @@ export const portal = {
 		params: PortalTenantLedgerEntryListParams = {}
 	) =>
 		api.get<PortalAccountChildPage<PortalTenantLedgerEntry>>(
-			`/portal/tenant-accounts/${tenantAccountId}/entries/page${queryString(
-				params
-			)}`
+			`/portal/tenant-accounts/${tenantAccountId}/entries/page${buildListQuery(undefined, {
+				skip: params.skip,
+				take: params.take,
+				search: params.search,
+				sort: params.sort,
+				from: params.from,
+				to: params.to,
+				entryType: params.entryType,
+				direction: params.direction
+			})}`
 		),
 	tenantAccountHistory: (
 		tenantAccountId: number,
 		params: PortalTenantAccountHistoryParams = {}
 	) =>
 		api.get<PortalTenantAccountHistory>(
-			`/portal/tenant-accounts/${tenantAccountId}/history${queryString(params)}`
+			`/portal/tenant-accounts/${tenantAccountId}/history${buildListQuery(undefined, {
+				period: params.period,
+				from: params.from,
+				to: params.to,
+				skip: params.skip,
+				take: params.take,
+				entry: params.entry
+			})}`
 		),
 	tenantAccountChargesPage: (
 		tenantAccountId: number,
 		params: PortalTenantChargeListParams = {}
 	) =>
 		api.get<PortalAccountChildPage<PortalTenantCharge>>(
-			`/portal/tenant-accounts/${tenantAccountId}/charges/page${queryString(
-				params
-			)}`
+			`/portal/tenant-accounts/${tenantAccountId}/charges/page${buildListQuery(undefined, {
+				skip: params.skip,
+				take: params.take,
+				search: params.search,
+				sort: params.sort,
+				from: params.from,
+				to: params.to,
+				entryType: params.entryType,
+				isPastDue: params.isPastDue == null ? undefined : String(params.isPastDue)
+			})}`
 		),
 	tenantAccountDeposit: (tenantAccountId: number) =>
 		api.get<PortalTenantAccountDeposit>(
@@ -368,7 +389,16 @@ export const portal = {
 		),
 	appointments: () => api.get<Appointment[]>('/portal/appointments'),
 	workOrders: (params: PortalTenantWorkOrderListParams = {}) =>
-		api.get<PortalPage<WorkOrder>>(`/portal/work-orders${queryString(params)}`),
+		api.get<PortalPage<WorkOrder>>(`/portal/work-orders${buildListQuery(undefined, {
+			skip: params.skip,
+			take: params.take,
+			search: params.search,
+			sort: params.sort,
+			from: params.from,
+			to: params.to,
+			status: params.status,
+			openOnly: params.openOnly == null ? undefined : String(params.openOnly)
+		})}`),
 	/** One of the tenant's own work orders plus its status timeline (404 if not theirs). */
 	workOrder: (id: number) =>
 		api.get<WorkOrderDetail>(`/portal/work-orders/${id}`),
