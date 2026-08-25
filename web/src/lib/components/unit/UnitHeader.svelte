@@ -1,11 +1,11 @@
 <script lang="ts">
 	import type { UnitDashboard } from '$lib/types';
-	import { money } from './money';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { Pencil, ScanLine } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		dashboard,
@@ -25,7 +25,7 @@
 		header.rentState === 'NoLease'
 			? 'No current lease'
 			: header.outstandingRentBalance > 0
-				? `${money(header.outstandingRentBalance)} still owed`
+				? `${formatAccountingCurrency(header.outstandingRentBalance)} still owed`
 				: 'Paid up to date'
 	);
 </script>
@@ -43,7 +43,7 @@
 				<StatusBadge status={unit.status} />
 			</h1>
 			<p class="mt-0.5 text-sm text-muted-foreground">
-				{unit.bedrooms} bd · {unit.bathrooms} ba{unit.squareFeet ? ` · ${unit.squareFeet} sqft` : ''} · Market {money(unit.marketRent)}
+				{unit.bedrooms} bd · {unit.bathrooms} ba{unit.squareFeet ? ` · ${unit.squareFeet} sqft` : ''} · Market {formatAccountingCurrency(unit.marketRent)}
 			</p>
 		</div>
 

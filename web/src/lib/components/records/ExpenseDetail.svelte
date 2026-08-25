@@ -22,7 +22,7 @@
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
 	} from '$lib/accounting/expense-categories';
-	import { formatExpenseMoney, receiptGrandTotal } from '$lib/accounting/expense-receipt-display';
+	import { receiptGrandTotal } from '$lib/accounting/expense-receipt-display';
 	import {
 		confirmExpenseDelete,
 		expenseDeleteConfirmMessage,
@@ -36,6 +36,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		expenseId,
@@ -229,10 +230,9 @@
 		)
 	);
 
-	const currencyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 	const numberFmt = new Intl.NumberFormat('en-US');
 	const usd = (n: number | null | undefined) =>
-		typeof n === 'number' && !Number.isNaN(n) ? currencyFmt.format(n) : '';
+		typeof n === 'number' && !Number.isNaN(n) ? formatAccountingCurrency(n) : '';
 	const qty = (n: number | null | undefined) =>
 		typeof n === 'number' && !Number.isNaN(n) ? numberFmt.format(n) : '';
 	function formatMoney(val: number): string {
@@ -437,7 +437,7 @@
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
 			<h1 class="truncate text-2xl font-bold">{expense?.description ?? 'Expense'}</h1>
-			<p class="text-sm text-muted-foreground">{expense ? `${formatExpenseCategory(expense.category)} · ${formatExpenseMoney(expense.amount)} · ${formatStatusLabel(expense.status)}` : ''}</p>
+			<p class="text-sm text-muted-foreground">{expense ? `${formatExpenseCategory(expense.category)} · ${formatAccountingCurrency(expense.amount)} · ${formatStatusLabel(expense.status)}` : ''}</p>
 		</div>
 		{#if expense}
 			<div class="flex flex-wrap justify-end gap-2">
@@ -494,7 +494,7 @@
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Expense" icon={ReceiptText} accent="primary" testid="expense-card-main" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Description" bind:value={form.description} display={expense.description} {editing} error={formErrors.description} testid="expense-detail-description" class="sm:col-span-2" />
-				<InlineField label="Amount" bind:value={form.amount} display={formatExpenseMoney(expense.amount)} {editing} type="number" error={formErrors.amount} testid="expense-detail-amount" />
+				<InlineField label="Amount" bind:value={form.amount} display={formatAccountingCurrency(expense.amount)} {editing} type="number" error={formErrors.amount} testid="expense-detail-amount" />
 				<InlineField label="Status" bind:value={form.status} display={formatStatusLabel(expense.status)} {editing} type="select" options={statusOptions} testid="expense-detail-status" />
 				{@render dateField({ label: 'Incurred date', value: form.incurredAt, setValue: (v) => (form.incurredAt = v), display: formatDateOnly(expense.incurredAt), error: formErrors.incurredAt, testid: 'expense-detail-incurred' })}
 				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: expense.dueDate ? formatDateOnly(expense.dueDate) : '', testid: 'expense-detail-due-date' })}
@@ -610,15 +610,15 @@
 			{/if}
 
 			<DetailCard title="Receipt details" icon={FileText} accent="muted" testid="expense-card-receipt" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-3">
-				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal != null ? formatExpenseMoney(expense.subtotal) : ''} {editing} type="number" error={formErrors.subtotal} testid="expense-detail-subtotal" />
-				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount != null ? formatExpenseMoney(expense.taxAmount) : ''} {editing} type="number" error={formErrors.taxAmount} testid="expense-detail-tax" />
+				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal != null ? formatAccountingCurrency(expense.subtotal) : ''} {editing} type="number" error={formErrors.subtotal} testid="expense-detail-subtotal" />
+				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount != null ? formatAccountingCurrency(expense.taxAmount) : ''} {editing} type="number" error={formErrors.taxAmount} testid="expense-detail-tax" />
 				<div data-testid="expense-detail-receipt-amount-field">
 					<p class="mb-1 block text-xs font-medium text-muted-foreground">Amount</p>
 					<p
 						class="min-h-10 rounded-md bg-primary/10 px-3 py-2 font-mono text-sm font-semibold tabular-nums text-foreground"
 						data-testid="expense-detail-receipt-amount"
 					>
-						{formatExpenseMoney(receiptGrandTotalValue)}
+						{formatAccountingCurrency(receiptGrandTotalValue)}
 					</p>
 				</div>
 				<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} type="textarea" testid="expense-detail-notes" class="sm:col-span-3" />
@@ -761,7 +761,7 @@
 												Grand total
 											</td>
 											<td class="px-3 py-2 text-right font-mono tabular-nums font-bold text-foreground" data-testid="expense-detail-line-items-grand-total">
-												{formatExpenseMoney(receiptGrandTotalValue)}
+												{formatAccountingCurrency(receiptGrandTotalValue)}
 											</td>
 										</tr>
 									</tfoot>

@@ -13,7 +13,7 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { businessDateOrToday } from '$lib/utils/business-date';
-	import { money, unitMoneySectionGates } from '../money';
+	import { unitMoneySectionGates } from '../money';
 	import {
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
@@ -28,6 +28,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { Plus, X, ScanLine, ArrowLeft } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		dashboard,
@@ -385,7 +386,7 @@
 							<span class="truncate font-medium">{e.description}</span>
 							<span class="shrink-0 text-muted-foreground">· {formatExpenseCategory(e.category)}</span>
 						</span>
-						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={e.status} /><span class="font-semibold">{money(e.amount)}</span></span>
+						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={e.status} /><span class="font-semibold">{formatAccountingCurrency(e.amount)}</span></span>
 					</button>
 				</li>
 			{/each}
@@ -433,7 +434,7 @@
 						<li class="rounded-xl border bg-card p-3">
 							<div class="flex items-center justify-between gap-3">
 								<span class="truncate text-sm font-medium">{e.description}</span>
-								<span class="font-semibold">{money(e.amount)}</span>
+								<span class="font-semibold">{formatAccountingCurrency(e.amount)}</span>
 							</div>
 						</li>
 					{/each}
@@ -470,9 +471,9 @@
 						<li class="rounded-xl border bg-card p-3">
 							<div class="flex items-center justify-between gap-3">
 								<span class="truncate text-sm font-medium">{loan.lender}</span>
-								<span class="font-semibold">{money(loan.currentBalance)}</span>
+								<span class="font-semibold">{formatAccountingCurrency(loan.currentBalance)}</span>
 							</div>
-							<p class="text-xs text-muted-foreground">{money(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/month · {formatStatusLabel(loan.status)}</p>
+							<p class="text-xs text-muted-foreground">{formatAccountingCurrency(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/month · {formatStatusLabel(loan.status)}</p>
 						</li>
 					{/each}
 				</ul>

@@ -6,6 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
 	import { Download, Wallet, Receipt, Home, AlertCircle, Info } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	// Default to the current operating year; completed prior-year packets stay one select away.
 	const currentYear = new Date().getFullYear();
@@ -24,10 +25,6 @@
 	}));
 	const view = $derived(query.data);
 	const optionsView = $derived(optionsQuery.data);
-
-	function fmt(value: number): string {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
-	}
 
 	// Property options come from whichever properties appear in either block.
 	const propertyOptions = $derived(() => {
@@ -140,20 +137,20 @@
 		{#if view.scheduleE.unallocatedActivity.requiresAllocation}
 			<div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100" data-testid="year-end-unallocated-warning">
 				<p class="font-semibold">Tax activity needs a property before filing</p>
-				<p class="mt-1">{view.scheduleE.unallocatedActivity.incomeEntryCount} income entries ({fmt(view.scheduleE.unallocatedActivity.rentalIncome)}) and {view.scheduleE.unallocatedActivity.expenseCount} expenses ({fmt(view.scheduleE.unallocatedActivity.totalExpenses)}) are excluded from the per-property Schedule E lines until allocated.</p>
-				<p class="mt-2 font-medium">Reconciled tax activity: {fmt(view.scheduleE.reconciledTotalRentalIncome)} income − {fmt(view.scheduleE.reconciledTotalExpenses)} expenses = {fmt(view.scheduleE.reconciledNetIncome)} net.</p>
+				<p class="mt-1">{view.scheduleE.unallocatedActivity.incomeEntryCount} income entries ({formatAccountingCurrency(view.scheduleE.unallocatedActivity.rentalIncome)}) and {view.scheduleE.unallocatedActivity.expenseCount} expenses ({formatAccountingCurrency(view.scheduleE.unallocatedActivity.totalExpenses)}) are excluded from the per-property Schedule E lines until allocated.</p>
+				<p class="mt-2 font-medium">Reconciled tax activity: {formatAccountingCurrency(view.scheduleE.reconciledTotalRentalIncome)} income − {formatAccountingCurrency(view.scheduleE.reconciledTotalExpenses)} expenses = {formatAccountingCurrency(view.scheduleE.reconciledNetIncome)} net.</p>
 			</div>
 		{/if}
 		<!-- The two headline numbers, side by side -->
 		<div class="mb-6 grid gap-4 sm:grid-cols-2" data-testid="year-end-headline">
 			<div class="rounded-xl border border-border bg-card p-5" data-testid="year-end-cash-flow-headline">
 				<div class="flex items-center gap-2 text-sm font-medium text-muted-foreground"><Wallet class="h-4 w-4" /> Cash flow (what hit your pocket)</div>
-				<p class="mt-2 font-mono text-3xl font-bold tabular-nums {totalCashFlow < 0 ? 'text-destructive' : 'text-foreground'}" data-testid="year-end-cash-flow-total">{fmt(totalCashFlow)}</p>
+				<p class="mt-2 font-mono text-3xl font-bold tabular-nums {totalCashFlow < 0 ? 'text-destructive' : 'text-foreground'}" data-testid="year-end-cash-flow-total">{formatAccountingCurrency(totalCashFlow)}</p>
 				<p class="mt-1 text-xs text-muted-foreground">Rent in − operating expenses − debt service. Excludes non-cash depreciation.</p>
 			</div>
 			<div class="rounded-xl border border-border bg-card p-5" data-testid="year-end-taxable-headline">
 				<div class="flex items-center gap-2 text-sm font-medium text-muted-foreground"><Receipt class="h-4 w-4" /> Taxable income (Schedule E)</div>
-				<p class="mt-2 font-mono text-3xl font-bold tabular-nums {totalTaxable < 0 ? 'text-destructive' : 'text-foreground'}" data-testid="year-end-taxable-total">{fmt(totalTaxable)}</p>
+				<p class="mt-2 font-mono text-3xl font-bold tabular-nums {totalTaxable < 0 ? 'text-destructive' : 'text-foreground'}" data-testid="year-end-taxable-total">{formatAccountingCurrency(totalTaxable)}</p>
 				<p class="mt-1 text-xs text-muted-foreground">Rent − deductible expenses − mortgage interest − depreciation. Principal is not deductible.</p>
 			</div>
 		</div>
@@ -177,11 +174,11 @@
 						{#each cashRows as p (p.propertyId)}
 							<tr class="border-t border-border/60">
 								<td class="px-3 py-2 font-medium">{p.propertyName}</td>
-								<td class="px-3 py-2 text-right">{fmt(p.income)}</td>
-								<td class="px-3 py-2 text-right">{fmt(p.operatingExpenses)}</td>
-								<td class="px-3 py-2 text-right">{fmt(p.noi)}</td>
-								<td class="px-3 py-2 text-right">{fmt(p.debtService)}</td>
-								<td class="px-3 py-2 text-right font-semibold {p.cashFlow < 0 ? 'text-destructive' : ''}">{fmt(p.cashFlow)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(p.income)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(p.operatingExpenses)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(p.noi)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(p.debtService)}</td>
+								<td class="px-3 py-2 text-right font-semibold {p.cashFlow < 0 ? 'text-destructive' : ''}">{formatAccountingCurrency(p.cashFlow)}</td>
 							</tr>
 						{:else}
 							<tr><td colspan="6" class="px-3 py-6 text-center text-muted-foreground">No cash-flow activity for {year}.</td></tr>
@@ -210,14 +207,14 @@
 						{#each taxRows as p (p.propertyId)}
 							<tr class="border-t border-border/60">
 								<td class="px-3 py-2 font-medium">{p.propertyName}</td>
-								<td class="px-3 py-2 text-right">{fmt(p.rentalIncome)}</td>
-								<td class="px-3 py-2 text-right">{fmt(p.totalExpenses - p.mortgageInterest - p.depreciation)}</td>
-								<td class="px-3 py-2 text-right">{fmt(p.mortgageInterest)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(p.rentalIncome)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(p.totalExpenses - p.mortgageInterest - p.depreciation)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(p.mortgageInterest)}</td>
 								<td class="px-3 py-2 text-right">
-									{fmt(p.depreciation)}
+									{formatAccountingCurrency(p.depreciation)}
 									{#if p.depreciationIsFirstYearEstimate}<span class="ml-1 text-xs text-amber-600" title="IRS mid-month estimate — confirm with accountant">(est.)</span>{/if}
 								</td>
-								<td class="px-3 py-2 text-right font-semibold {p.netIncome < 0 ? 'text-destructive' : ''}">{fmt(p.netIncome)}</td>
+								<td class="px-3 py-2 text-right font-semibold {p.netIncome < 0 ? 'text-destructive' : ''}">{formatAccountingCurrency(p.netIncome)}</td>
 							</tr>
 						{:else}
 							<tr><td colspan="6" class="px-3 py-6 text-center text-muted-foreground">No Schedule-E activity for {year}.</td></tr>
@@ -249,12 +246,12 @@
 							<tr class="border-t border-border/60">
 								<td class="px-3 py-2 font-medium">{d.propertyName ?? `Property ${d.propertyId}`}</td>
 								<td class="px-3 py-2">{new Date(d.closedOnDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}</td>
-								<td class="px-3 py-2 text-right">{fmt(d.salePrice)}</td>
-								<td class="px-3 py-2 text-right">{fmt(d.sellingCosts)}</td>
-								<td class="px-3 py-2 text-right">{fmt(d.saleYearDepreciation)}</td>
-								<td class="px-3 py-2 text-right">{fmt(d.adjustedBasis)}</td>
-								<td class="px-3 py-2 text-right font-semibold {d.gainLoss < 0 ? 'text-destructive' : ''}">{fmt(d.gainLoss)}</td>
-								<td class="px-3 py-2 text-right">{fmt(d.unrecapturedSection1250Gain)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(d.salePrice)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(d.sellingCosts)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(d.saleYearDepreciation)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(d.adjustedBasis)}</td>
+								<td class="px-3 py-2 text-right font-semibold {d.gainLoss < 0 ? 'text-destructive' : ''}">{formatAccountingCurrency(d.gainLoss)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(d.unrecapturedSection1250Gain)}</td>
 							</tr>
 						{:else}
 							<tr><td colspan="8" class="px-3 py-6 text-center text-muted-foreground">No property sale or disposition recorded for {year}.</td></tr>
@@ -285,9 +282,9 @@
 								<td class="px-3 py-2 font-medium">{r.propertyName}</td>
 								<td class="px-3 py-2">{r.unitNumber}</td>
 								<td class="px-3 py-2">{r.tenantName}</td>
-								<td class="px-3 py-2 text-right">{fmt(r.monthlyRent)}</td>
+								<td class="px-3 py-2 text-right">{formatAccountingCurrency(r.monthlyRent)}</td>
 								<td class="px-3 py-2">{r.leaseStatus}</td>
-								<td class="px-3 py-2 text-right {r.pastDueBalance > 0 ? 'text-destructive' : ''}">{fmt(r.pastDueBalance)}</td>
+								<td class="px-3 py-2 text-right {r.pastDueBalance > 0 ? 'text-destructive' : ''}">{formatAccountingCurrency(r.pastDueBalance)}</td>
 							</tr>
 						{:else}
 							<tr><td colspan="6" class="px-3 py-6 text-center text-muted-foreground">No current leases.</td></tr>

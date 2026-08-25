@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
-import { formatExpenseMoney, receiptGrandTotal } from './expense-receipt-display.ts';
+import { receiptGrandTotal } from './expense-receipt-display.ts';
 
 describe('expense receipt display totals', () => {
 	it('formats the expense amount as the receipt grand total', () => {
@@ -9,7 +9,6 @@ describe('expense receipt display totals', () => {
 			receiptGrandTotal({ amount: 325.05, subtotal: 304.5, taxAmount: 20.55 }),
 			325.05
 		);
-		assert.equal(formatExpenseMoney(325.05), '$325.05');
 	});
 
 	it('falls back to subtotal plus tax if a legacy payload has no valid amount', () => {

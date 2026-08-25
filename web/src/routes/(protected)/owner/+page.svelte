@@ -5,16 +5,13 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const overviewQuery = createQuery(() => ({
 		queryKey: ['owner-portal', 'overview'],
 		queryFn: () => ownerPortal.overview()
 	}));
 	const overview = $derived(overviewQuery.data);
-
-	function money(value: number) {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
-	}
 
 	const destinations = [
 		{ href: '/owner/properties', label: 'Properties', detail: 'The rentals connected to your ownership relationship.', icon: Building2 },
@@ -46,7 +43,7 @@
 		<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5" data-testid="owner-overview-metrics">
 			<Card.Root class="gap-0 py-0" data-testid="owner-overview-properties"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Properties</p><p class="mt-1 text-2xl font-semibold">{overview.propertyCount}</p></Card.Content></Card.Root>
 			<Card.Root class="gap-0 py-0" data-testid="owner-overview-units"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Rental units</p><p class="mt-1 text-2xl font-semibold">{overview.unitCount}</p></Card.Content></Card.Root>
-			<Card.Root class="gap-0 py-0" data-testid="owner-overview-distributed"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Distributed in {overview.currentYear}</p><p class="mt-1 font-mono text-2xl font-semibold tabular-nums">{money(overview.distributedThisYear)}</p></Card.Content></Card.Root>
+			<Card.Root class="gap-0 py-0" data-testid="owner-overview-distributed"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Distributed in {overview.currentYear}</p><p class="mt-1 font-mono text-2xl font-semibold tabular-nums">{formatAccountingCurrency(overview.distributedThisYear)}</p></Card.Content></Card.Root>
 			<Card.Root class="gap-0 py-0" data-testid="owner-overview-approvals"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Pending approvals</p><p class="mt-1 text-2xl font-semibold">{overview.pendingApprovalCount}</p></Card.Content></Card.Root>
 			<Card.Root class="gap-0 py-0" data-testid="owner-overview-messages"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Unread messages</p><p class="mt-1 text-2xl font-semibold">{overview.unreadMessageCount}</p></Card.Content></Card.Root>
 		</div>

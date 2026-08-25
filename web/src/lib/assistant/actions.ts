@@ -1,3 +1,5 @@
+import { formatAccountingCurrency } from '../accounting/accounting-display.ts';
+
 const ACTION_VERB = /\b(log|record|add|create|save|enter|book)\b/i;
 const EXPENSE_NOUN = /\b(expense|receipt|bill|invoice|paid)\b/i;
 
@@ -8,10 +10,7 @@ export function looksLikeAssistantActionCommand(input: string): boolean {
 
 export function formatAssistantMoney(amount?: number | null): string {
 	if (amount == null || Number.isNaN(amount)) return 'unknown amount';
-	return new Intl.NumberFormat('en-US', {
-		style: 'currency',
-		currency: 'USD'
-	}).format(amount);
+	return formatAccountingCurrency(amount);
 }
 
 export function assistantActionFieldLabel(field: string): string {

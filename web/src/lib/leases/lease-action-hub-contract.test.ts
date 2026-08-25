@@ -93,7 +93,7 @@ describe('canonical lease lifecycle action hub', () => {
 		]) {
 			assert.match(detailPageSource, new RegExp(`>${label}<`));
 		}
-		assert.match(detailPageSource, /money\(summary\.baseRentAmount\)/);
+		assert.match(detailPageSource, /formatAccountingCurrency\(summary\.baseRentAmount\)/);
 		assert.match(detailPageSource, /summary\.upcomingAgreementNumber/);
 		assert.match(detailPageSource, /summary\.endingDispositionDecidedAtUtc/);
 		assert.match(detailPageSource, /summary\.plannedMoveOutAtUtc/);

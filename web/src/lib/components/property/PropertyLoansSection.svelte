@@ -16,6 +16,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight, ScanLine } from '@lucide/svelte';
 	import { scanHref } from '$lib/scan/scan-context';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
@@ -55,12 +57,10 @@
 	const loansList = $derived(loansQuery.data?.items ?? []);
 	const loansTotalCount = $derived(loansQuery.data?.totalCount ?? 0);
 
-	function fmtCurrency(value: number): string {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
-	}
+
+	/** Loan dates come from free-form rows; show nothing when the value is not a real date. */
 	function fmtDate(value: string): string {
-		const d = new Date(value);
-		return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+		return isNaN(new Date(value).getTime()) ? '' : formatDateOnly(value);
 	}
 
 	const statusOptions = [
@@ -367,11 +367,11 @@
 								<tr class="border-t border-border/60">
 									<td class="py-1 pr-3">{row.periodKey}</td>
 									<td class="py-1 pr-3">{fmtDate(row.dueDate)}</td>
-									<td class="py-1 pr-3 text-right">{fmtCurrency(row.interestAmount)}</td>
-									<td class="py-1 pr-3 text-right">{fmtCurrency(row.principalAmount)}</td>
-									<td class="py-1 pr-3 text-right">{fmtCurrency(row.escrowAmount)}</td>
-									<td class="py-1 pr-3 text-right font-medium">{fmtCurrency(row.totalAmount)}</td>
-									<td class="py-1 pr-3 text-right">{fmtCurrency(row.balanceAfter)}</td>
+									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.interestAmount)}</td>
+									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.principalAmount)}</td>
+									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.escrowAmount)}</td>
+									<td class="py-1 pr-3 text-right font-medium">{formatAccountingCurrency(row.totalAmount)}</td>
+									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.balanceAfter)}</td>
 									<td class="py-1 text-right">
 										{#if row.status === 'Paid'}
 											<span class="font-medium text-success">Paid {row.paidDate ? fmtDate(row.paidDate) : ''}</span>
