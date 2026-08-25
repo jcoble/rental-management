@@ -68,9 +68,9 @@ public class AuthControllerResendVerificationTests
     private static string? MessageOf(IActionResult result)
     {
         var ok = result.Should().BeOfType<OkObjectResult>().Subject;
-        // The controller returns an anonymous object { message = ... }; read it reflectively.
+        // The controller returns an anonymous object { error = ... }; read it reflectively.
         var value = ok.Value!;
-        return value.GetType().GetProperty("message")?.GetValue(value) as string;
+        return value.GetType().GetProperty("error")?.GetValue(value) as string;
     }
 
     private static AuthController CreateController(IAuthService authService)

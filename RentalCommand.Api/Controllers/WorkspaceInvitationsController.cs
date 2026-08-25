@@ -78,16 +78,10 @@ public sealed class WorkspaceInvitationsController : ControllerBase
         }
         if (passwordErrors.Count > 0)
         {
-            return ValidationProblem(new ValidationProblemDetails(
-                new Dictionary<string, string[]>
-                {
-                    [nameof(request.Password)] = passwordErrors
-                        .Select(error => error.Description)
-                        .ToArray(),
-                })
+            return BadRequest(new
             {
-                Title = "Choose a stronger password.",
-                Status = StatusCodes.Status400BadRequest,
+                error = "Choose a stronger password.",
+                details = passwordErrors.Select(passwordError => passwordError.Description).ToArray(),
             });
         }
 

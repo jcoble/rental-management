@@ -51,7 +51,7 @@ public sealed class SignController : ControllerBase
         var result = await _signing.GetDocumentAsync(token, ct);
         if (result.Outcome != SignTokenOutcome.Ok)
         {
-            return Problem(result);
+            return Map(result);
         }
 
         var (stream, fileName, contentType) = result.Value;
@@ -112,11 +112,4 @@ public sealed class SignController : ControllerBase
         _ => StatusCode(StatusCodes.Status500InternalServerError, new { error = "Unexpected error." }),
     };
 
-    private IActionResult Problem<T>(SignTokenResult<T> result) => result.Outcome switch
-    {
-        SignTokenOutcome.NotFound => NotFound(new { error = result.Error }),
-        SignTokenOutcome.Expired => StatusCode(StatusCodes.Status410Gone, new { error = result.Error }),
-        SignTokenOutcome.Invalid => BadRequest(new { error = result.Error }),
-        _ => StatusCode(StatusCodes.Status500InternalServerError, new { error = "Unexpected error." }),
-    };
 }

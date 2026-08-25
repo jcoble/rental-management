@@ -314,7 +314,7 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = result.Error ?? "Email confirmation failed" });
         }
 
-        return Ok(new { message = "Email confirmed successfully. You can now log in." });
+        return Ok(new { error = "Email confirmed successfully. You can now log in." });
     }
 
     [HttpPost("forgot-password")]
@@ -339,12 +339,12 @@ public class AuthController : ControllerBase
 
             return Ok(new
             {
-                message = genericMessage,
+                error = genericMessage,
                 resetToken = token
             });
         }
 
-        return Ok(new { message = genericMessage });
+        return Ok(new { error = genericMessage });
     }
 
     [HttpPost("reset-password")]
@@ -363,7 +363,7 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = result.Error ?? "Password reset failed" });
         }
 
-        return Ok(new { message = "Password has been reset successfully. You can now sign in." });
+        return Ok(new { error = "Password has been reset successfully. You can now sign in." });
     }
 
     [HttpPost("resend-verification")]
@@ -382,10 +382,10 @@ public class AuthController : ControllerBase
         // act on, and it helps a real user who simply forgot they had already confirmed.
         if (result.Error is not null && result.Error.Contains("already verified", StringComparison.OrdinalIgnoreCase))
         {
-            return Ok(new { message = "Email is already verified. You can log in." });
+            return Ok(new { error = "Email is already verified. You can log in." });
         }
 
-        return Ok(new { message = "If an account exists, a verification email has been sent." });
+        return Ok(new { error = "If an account exists, a verification email has been sent." });
     }
 
     [HttpPost("change-password")]
@@ -431,7 +431,7 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = result.Error ?? "Password change failed" });
         }
 
-        return Ok(new { message = "Password changed successfully." });
+        return Ok(new { error = "Password changed successfully." });
     }
 
     [HttpGet("me")]
@@ -477,7 +477,7 @@ public class AuthController : ControllerBase
         }
 
         ClearRefreshTokenCookies();
-        return Ok(new { message = "Logged out successfully" });
+        return Ok(new { error = "Logged out successfully" });
     }
 
     /// <summary>
