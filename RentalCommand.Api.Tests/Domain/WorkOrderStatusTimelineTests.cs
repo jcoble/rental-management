@@ -296,7 +296,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
         await UpdateAsync(created.Id,
             new UpdateWorkOrderRequest { Status = WorkOrderStatus.Completed });
 
-        var detail = await _service.GetAsync(PortfolioId, created.Id);
+        var detail = await _service.GetAuthorizedAsync(_scope, created.Id);
 
         detail.Should().NotBeNull();
         detail!.Timeline.Should().HaveCount(4);

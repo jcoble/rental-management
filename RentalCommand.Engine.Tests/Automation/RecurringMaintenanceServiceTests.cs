@@ -8,6 +8,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -261,8 +262,9 @@ public class RecurringMaintenanceServiceTests : IDisposable
         failed.WorkerClaimQuarantinedAtUtc.Should().BeNull();
 
         _ctx.Db.ChangeTracker.Clear();
+        var scope = new WorkspaceReadScope(PortfolioId, 1, Guid.Empty, 1, 1);
         var apiPayload = await new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System)
-            .ListAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery());
+            .ListAuthorizedAsync(scope, propertyId: null, activeOnly: null, new ListQuery());
         var failedPayload = apiPayload.Single(row => row.Id == poison.Id);
         failedPayload.AutomationFailureReason.Should().Be(failed.WorkerClaimLastFailureReason);
         failedPayload.AutomationFailureReason.Should().NotContain("InvalidOperationException");
@@ -348,8 +350,9 @@ public class RecurringMaintenanceServiceTests : IDisposable
         (await sut.GenerateAsync()).Should().Be(0);
 
         _ctx.Db.ChangeTracker.Clear();
+        var scope = new WorkspaceReadScope(PortfolioId, 1, Guid.Empty, 1, 1);
         var apiPayload = await new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System)
-            .ListAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery());
+            .ListAuthorizedAsync(scope, propertyId: null, activeOnly: null, new ListQuery());
         var reason = apiPayload.Single(row => row.Id == task.Id).AutomationFailureReason;
         reason.Should().NotBeNull();
         reason.Should().MatchRegex(

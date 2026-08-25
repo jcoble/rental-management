@@ -33,20 +33,6 @@ public class CapitalAssetService : ICapitalAssetService
         _writes = writes;
     }
 
-    public async Task<IReadOnlyList<CapitalAssetResponse>> ListAsync(
-        int portfolioId, CapitalAssetListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, query, ct);
-        return page.Items;
-    }
-
-    public async Task<CapitalAssetListResponse> ListPageAsync(
-        int portfolioId, CapitalAssetListQuery query, CancellationToken ct = default)
-        => await ListPageFromQueryAsync(
-            _db.CapitalAssets.AsNoTracking().Where(asset => asset.PortfolioId == portfolioId),
-            query,
-            ct);
-
     public async Task<IReadOnlyList<CapitalAssetResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope, CapitalAssetListQuery query, CancellationToken ct = default)
         => (await ListPageAuthorizedAsync(scope, query, ct)).Items;

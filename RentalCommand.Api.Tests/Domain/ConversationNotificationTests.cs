@@ -301,9 +301,18 @@ public class ConversationNotificationTests : IAsyncLifetime
         var sut = new NotificationService(
             _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
 
-        var tenantItems = await sut.ListAsync(1, userId: 20);
+        var tenantContext = _db.WorkspaceAccessContexts.Single(context =>
+            context.PortfolioId == 1 && context.UserId == 20);
+        var staffContext = _db.WorkspaceAccessContexts.Single(context =>
+            context.PortfolioId == 1 && context.UserId == 10);
+        var tenantScope = new WorkspaceReadScope(
+            1, 20, Guid.Empty, tenantContext.Id, tenantContext.AccessRevision);
+        var staffScope = new WorkspaceReadScope(
+            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
+
+        var tenantItems = await sut.ListAsync(tenantScope, NavigationExperience.Tenant);
         tenantItems.Select(n => n.Title).Should().Equal("Pool closed");
-        var staffItems = await sut.ListAsync(1, userId: 10);
+        var staffItems = await sut.ListAsync(staffScope, NavigationExperience.Management);
         staffItems.Select(n => n.Title).Should().Contain("New message from Emily Chen");
     }
 
@@ -446,7 +455,7 @@ public class ConversationNotificationTests : IAsyncLifetime
 
         items.Select(item => item.Title).Should().Equal("Rent due soon", "Current charge posted");
         (await sut.GetAsync(scope, NavigationExperience.Tenant, futureNotification.Id)).Should().BeNull();
-        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(2);
+        (await sut.GetUnreadCountAsync(scope, NavigationExperience.Tenant)).Should().Be(2);
         _commands.Should().Contain(command =>
             command.Contains("rc_business_date", StringComparison.OrdinalIgnoreCase) &&
             command.Contains("\"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase));
@@ -707,10 +716,10 @@ public class ConversationNotificationTests : IAsyncLifetime
         created.Severity.Should().Be("Critical");
         created.IsRead.Should().BeFalse();
 
-        var items = await sut.ListAsync(1, userId: 10);
+        var items = await sut.ListAsync(scope, NavigationExperience.Management);
         items.Should().ContainSingle(n => n.Id == created.Id && n.Severity == "Critical");
 
-        var unreadCount = await sut.GetUnreadCountAsync(1, userId: 10);
+        var unreadCount = await sut.GetUnreadCountAsync(scope, NavigationExperience.Management);
         unreadCount.Should().Be(1);
     }
 
@@ -748,23 +757,26 @@ public class ConversationNotificationTests : IAsyncLifetime
         var staffContext = contexts[10];
         var staffScope = new WorkspaceReadScope(
             1, 10, sessions[10].Id, staffContext.Id, staffContext.AccessRevision);
-        (await sut.MarkAsReadAsync(staffScope, notificationId, "read-water-interruption"))
-            .Should().BeTrue();
-
-        (await sut.ListAsync(1, 10)).Should().ContainSingle().Which.IsRead.Should().BeTrue();
-        (await sut.ListAsync(1, 30)).Should().ContainSingle().Which.IsRead.Should().BeFalse();
-        (await sut.ListAsync(1, 20)).Should().BeEmpty();
-        (await sut.GetUnreadCountAsync(1, 10)).Should().Be(0);
-        (await sut.GetUnreadCountAsync(1, 30)).Should().Be(1);
-        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(0);
-
+        var tenantContext = contexts[20];
+        var tenantScope = new WorkspaceReadScope(
+            1, 20, sessions[20].Id, tenantContext.Id, tenantContext.AccessRevision);
         var secondStaffContext = contexts[30];
         var secondStaffScope = new WorkspaceReadScope(
             1, 30, sessions[30].Id, secondStaffContext.Id, secondStaffContext.AccessRevision);
+        (await sut.MarkAsReadAsync(staffScope, notificationId, "read-water-interruption"))
+            .Should().BeTrue();
+
+        (await sut.ListAsync(staffScope, NavigationExperience.Management)).Should().ContainSingle().Which.IsRead.Should().BeTrue();
+        (await sut.ListAsync(secondStaffScope, NavigationExperience.Management)).Should().ContainSingle().Which.IsRead.Should().BeFalse();
+        (await sut.ListAsync(tenantScope, NavigationExperience.Tenant)).Should().BeEmpty();
+        (await sut.GetUnreadCountAsync(staffScope, NavigationExperience.Management)).Should().Be(0);
+        (await sut.GetUnreadCountAsync(secondStaffScope, NavigationExperience.Management)).Should().Be(1);
+        (await sut.GetUnreadCountAsync(tenantScope, NavigationExperience.Tenant)).Should().Be(0);
+
         await sut.MarkAllAsReadAsync(secondStaffScope, "read-all-water-interruption");
 
-        (await sut.GetUnreadCountAsync(1, 30)).Should().Be(0);
-        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(0);
+        (await sut.GetUnreadCountAsync(secondStaffScope, NavigationExperience.Management)).Should().Be(0);
+        (await sut.GetUnreadCountAsync(tenantScope, NavigationExperience.Tenant)).Should().Be(0);
         (await _db.NotificationReadStates.AsNoTracking()
             .OrderBy(readState => readState.UserId)
             .Select(readState => readState.UserId)
@@ -809,13 +821,17 @@ public class ConversationNotificationTests : IAsyncLifetime
         _db.ChangeTracker.Clear();
 
         var sut = CreateSut();
+        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 10);
+        var staffScope = new WorkspaceReadScope(
+            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
 
-        var list = await sut.ListAsync(1);
+        var list = await sut.ListAuthorizedAsync(staffScope);
         var summary = list.Should().ContainSingle(c => c.Id == conversation.Id).Subject;
         summary.MessageCount.Should().Be(2);
         summary.UnreadCount.Should().Be(2);
 
-        var detail = await sut.GetAsync(1, conversation.Id);
+        var detail = await sut.GetAuthorizedAsync(staffScope, conversation.Id);
         detail.Should().NotBeNull();
         detail!.MessageCount.Should().Be(2);
         detail.UnreadCount.Should().Be(2);
@@ -837,7 +853,11 @@ public class ConversationNotificationTests : IAsyncLifetime
         var sut = CreateSut();
 
         _commands.Clear();
-        var page = await sut.ListPageAsync(1, new ConversationListQuery
+        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 10);
+        var staffScope = new WorkspaceReadScope(
+            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
+        var page = await sut.ListPageAuthorizedAsync(staffScope, new ConversationListQuery
         {
             Sort = "subject",
             Skip = 1,
@@ -871,7 +891,11 @@ public class ConversationNotificationTests : IAsyncLifetime
             landlordUnreadCount: 2);
 
         _commands.Clear();
-        var page = await CreateSut().ListPageAsync(1, new ConversationListQuery
+        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 10);
+        var staffScope = new WorkspaceReadScope(
+            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
+        var page = await CreateSut().ListPageAuthorizedAsync(staffScope, new ConversationListQuery
         {
             Search = "sink",
             UnreadOnly = true,
@@ -935,6 +959,10 @@ public class ConversationNotificationTests : IAsyncLifetime
             .SingleAsync();
 
         var sut = CreateSut();
+        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 10);
+        var staffScope = new WorkspaceReadScope(
+            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
 
         _commands.Clear();
         var tenantPage = await sut.ListPageForTenantAsync(
@@ -950,11 +978,11 @@ public class ConversationNotificationTests : IAsyncLifetime
             sql.Contains("ManagementCompanyName", StringComparison.Ordinal) &&
             sql.Contains("FROM \"Conversations\"", StringComparison.OrdinalIgnoreCase));
 
-        var staffPage = await sut.ListPageAsync(1, new ConversationListQuery { Take = 20 });
+        var staffPage = await sut.ListPageAuthorizedAsync(staffScope, new ConversationListQuery { Take = 20 });
         var staffSummary = staffPage.Items.Should().ContainSingle().Which;
         staffSummary.TenantName.Should().Be("Emily Chen");
         staffSummary.CounterpartyName.Should().Be("Emily Chen");
-        var staffDetail = await sut.GetAsync(1, conversationId);
+        var staffDetail = await sut.GetAuthorizedAsync(staffScope, conversationId);
         staffDetail.Should().NotBeNull();
         staffDetail!.CounterpartyName.Should().Be("Emily Chen");
     }
@@ -997,7 +1025,11 @@ public class ConversationNotificationTests : IAsyncLifetime
         var sut = CreateSut();
 
         _commands.Clear();
-        var unreadCount = await sut.GetUnreadCountAsync(1);
+        var staffContext = await _db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 10);
+        var staffScope = new WorkspaceReadScope(
+            1, 10, Guid.Empty, staffContext.Id, staffContext.AccessRevision);
+        var unreadCount = await sut.GetUnreadCountAuthorizedAsync(staffScope);
 
         unreadCount.Should().Be(7);
         _commands.Should().Contain(sql =>

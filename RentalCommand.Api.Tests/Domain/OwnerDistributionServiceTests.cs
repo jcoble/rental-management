@@ -7,6 +7,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.TestCommon;
@@ -25,10 +26,12 @@ public sealed class OwnerDistributionServiceTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly OwnerDistributionService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public OwnerDistributionServiceTests()
     {
         _ctx = new SqliteTestContext([new OwnerDistributionRecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(OwnerDistributionServiceTests));
         _sut = new OwnerDistributionService(
             _ctx.Db, TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
     }
@@ -61,7 +64,7 @@ public sealed class OwnerDistributionServiceTests : IDisposable
 
         _commands.Clear();
 
-        var page = await _sut.ListPageAsync(PortfolioId, new OwnerDistributionListQuery
+        var page = await _sut.ListPageAsync(_scope, new OwnerDistributionListQuery
         {
             OwnerEntityId = owner.Id,
             Year = Year,

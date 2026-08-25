@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -18,10 +19,12 @@ public class AppointmentServiceListTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly AppointmentService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public AppointmentServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(AppointmentServiceListTests));
         _sut = new AppointmentService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
@@ -37,7 +40,7 @@ public class AppointmentServiceListTests : IDisposable
         SeedAppointment("E-500", "York House", AppointmentType.Showing, AppointmentStatus.Cancelled);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new AppointmentListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new AppointmentListQuery
         {
             Type = AppointmentType.Showing,
             Status = AppointmentStatus.Scheduled,

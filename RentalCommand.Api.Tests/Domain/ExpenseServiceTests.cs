@@ -25,6 +25,7 @@ public class ExpenseServiceTests : IDisposable
     private readonly RentalCommandDbContext _db;
     private readonly ExpenseService _sut;
     private readonly List<string> _commands = [];
+    private readonly WorkspaceReadScope _scope;
 
     public ExpenseServiceTests()
     {
@@ -49,6 +50,7 @@ public class ExpenseServiceTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(ExpenseServiceTests));
 
         _sut = new ExpenseService(
             _db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
@@ -72,7 +74,7 @@ public class ExpenseServiceTests : IDisposable
 
         _commands.Clear();
         var page = await _sut.ListPageAsync(
-            PortfolioId,
+            _scope,
             propertyId: null,
             unitId,
             workOrderId: null,
@@ -113,7 +115,7 @@ public class ExpenseServiceTests : IDisposable
 
         _commands.Clear();
         var page = await _sut.ListPageAsync(
-            PortfolioId,
+            _scope,
             propertyId: null,
             unitId: null,
             workOrderId: null,
@@ -149,7 +151,7 @@ public class ExpenseServiceTests : IDisposable
 
         _commands.Clear();
         var paidPage = await _sut.ListPageAsync(
-            PortfolioId,
+            _scope,
             propertyId: null,
             unitId: null,
             workOrderId: null,
@@ -168,7 +170,7 @@ public class ExpenseServiceTests : IDisposable
 
         _commands.Clear();
         var duePage = await _sut.ListPageAsync(
-            PortfolioId,
+            _scope,
             propertyId: null,
             unitId: null,
             workOrderId: null,
@@ -208,7 +210,7 @@ public class ExpenseServiceTests : IDisposable
 
         _commands.Clear();
 
-        var result = await _sut.GetAsync(PortfolioId, expense.Id);
+        var result = await _sut.GetAsync(_scope, expense.Id);
 
         result.Should().NotBeNull();
         result!.LineItems.Select(li => li.Description).Should().Equal("First", "Second");
@@ -254,7 +256,7 @@ public class ExpenseServiceTests : IDisposable
 
         _commands.Clear();
         var page = await _sut.ListPageAsync(
-            PortfolioId,
+            _scope,
             propertyId: null,
             unitId: null,
             workOrderId: null,
@@ -301,7 +303,7 @@ public class ExpenseServiceTests : IDisposable
         await _db.SaveChangesAsync();
 
         _commands.Clear();
-        var result = await _sut.GetAsync(PortfolioId, expense.Id);
+        var result = await _sut.GetAsync(_scope, expense.Id);
 
         result.Should().NotBeNull();
         result!.OperationalScope.Should().Be(ExpenseOperationalScope.Unit);

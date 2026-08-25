@@ -16,20 +16,10 @@ public interface IExpenseService
     /// result is the unit's own expenses (<c>Expense.UnitId == unitId</c>) plus expenses linked to that
     /// unit's work orders — computed DB-side via a single correlated query (no per-row follow-ups).
     /// </summary>
-    Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default);
     Task<IReadOnlyList<ExpenseResponse>> ListAsync(WorkspaceReadScope scope, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default);
-    Task<ExpenseListResponse> ListPageAsync(
-        int portfolioId,
-        int? propertyId,
-        int? unitId,
-        int? workOrderId,
-        bool workOrderLinkedOnly,
-        ListQuery query,
-        CancellationToken ct = default);
     Task<ExpenseListResponse> ListPageAsync(
         WorkspaceReadScope scope, int? propertyId, int? unitId, int? workOrderId,
         bool workOrderLinkedOnly, ListQuery query, CancellationToken ct = default);
-    Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<ExpenseResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
     Task<ExpenseResponse?> CreateAsync(WorkspaceReadScope scope, CreateExpenseRequest request, string idempotencyKey, CancellationToken ct = default);
     Task<ExpenseResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateExpenseRequest request, string idempotencyKey, CancellationToken ct = default);

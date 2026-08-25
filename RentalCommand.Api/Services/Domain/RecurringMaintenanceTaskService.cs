@@ -29,12 +29,6 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         _writes = writes;
     }
 
-    public async Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, propertyId, activeOnly, query, ct);
-        return page.Items;
-    }
-
     public async Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope,
         int? propertyId,
@@ -44,15 +38,6 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
     {
         var page = await ListPageAuthorizedAsync(scope, propertyId, activeOnly, query, ct);
         return page.Items;
-    }
-
-    public async Task<RecurringMaintenanceTaskListResponse> ListPageAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default)
-    {
-        var q = _db.RecurringMaintenanceTasks
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId);
-
-        return await ListPageFromQueryAsync(q, propertyId, activeOnly, query, ct);
     }
 
     public Task<RecurringMaintenanceTaskListResponse> ListPageAuthorizedAsync(
@@ -129,14 +114,6 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
-    }
-
-    public async Task<RecurringMaintenanceTaskResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        return await ProjectResponse(_db.RecurringMaintenanceTasks
-            .AsNoTracking()
-            .Where(t => t.Id == id && t.PortfolioId == portfolioId))
-            .FirstOrDefaultAsync(ct);
     }
 
     public Task<RecurringMaintenanceTaskResponse?> GetAuthorizedAsync(

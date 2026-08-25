@@ -171,7 +171,7 @@ public class TenantServiceTests : IDisposable
         SeedTenant("Devon", "Nash", activeRelationshipCount: 2);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             Sort = "-activeLeaseCount",
             Skip = 1,
@@ -201,7 +201,7 @@ public class TenantServiceTests : IDisposable
         var tenant = SeedTenant("Harper", "Resident", activeRelationshipCount: 2);
         SeedRelationshipMembership(tenant, occupying: false);
 
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             Sort = "name",
             Skip = 0,
@@ -236,7 +236,7 @@ public class TenantServiceTests : IDisposable
         var tenant = SeedTenant("Jordan", "Occupant", activeRelationshipCount: 0);
         SeedRelationshipOnUnit(tenant, currentProperty, targetUnit, occupying: true);
 
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             UnitId = targetUnit.Id,
             PropertyId = otherProperty.Id,
@@ -257,7 +257,7 @@ public class TenantServiceTests : IDisposable
         SeedTenant("Blair", "Ellis", activeRelationshipCount: 0);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             Search = "Avery-Ellis",
             Sort = "name",
@@ -290,7 +290,7 @@ public class TenantServiceTests : IDisposable
         SeedRelationshipMembership(pendingTenant, occupying: false);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             AvailableForLease = true,
             Sort = "name",
@@ -328,7 +328,7 @@ public class TenantServiceTests : IDisposable
         SeedRelationshipMembership(conflictTenant, occupying: true);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             AvailableForLease = true,
             IncludeLeaseManagementId = currentRelationship.Id,
@@ -376,7 +376,7 @@ public class TenantServiceTests : IDisposable
         SeedRelationshipOnUnit(expiredTenant, property, targetUnit, occupying: false);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             UnitId = targetUnit.Id,
             Sort = "name",
@@ -431,7 +431,7 @@ public class TenantServiceTests : IDisposable
         SeedRelationshipOnUnit(franklinTenant, franklinProperty, franklinUnit, occupying: true);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             PropertyId = unionProperty.Id,
             Sort = "name",
@@ -553,7 +553,7 @@ public class TenantServiceTests : IDisposable
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("current resident");
-        (await _sut.GetAsync(PortfolioId, tenant.Id))
+        (await _sut.GetAuthorizedAsync(_scope, tenant.Id))
             .Should().NotBeNull("a tenant who still occupies a unit must not be deleted");
     }
 
@@ -568,7 +568,7 @@ public class TenantServiceTests : IDisposable
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
         ex.Which.Message.Should().Contain("rental relationship history");
-        (await _sut.GetAsync(PortfolioId, tenant.Id))
+        (await _sut.GetAuthorizedAsync(_scope, tenant.Id))
             .Should().NotBeNull("a tenant with relationship history is preserved for agreements and account history");
     }
 
@@ -581,7 +581,7 @@ public class TenantServiceTests : IDisposable
             _scope, tenant.Id, Guid.NewGuid().ToString("N"));
 
         deleted.Should().BeTrue();
-        (await _sut.GetAsync(PortfolioId, tenant.Id)).Should().BeNull();
+        (await _sut.GetAuthorizedAsync(_scope, tenant.Id)).Should().BeNull();
     }
 
     [Fact]
@@ -589,7 +589,7 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenantWithRelationship(occupying: false);
 
-        var response = await _sut.GetAsync(PortfolioId, tenant.Id);
+        var response = await _sut.GetAuthorizedAsync(_scope, tenant.Id);
 
         response!.ActiveLeaseCount.Should().Be(0);
         response.LeaseHistoryCount.Should().Be(1);
@@ -602,7 +602,7 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenantWithRelationship(occupying: true, noticeGiven: true);
 
-        var response = await _sut.GetAsync(PortfolioId, tenant.Id);
+        var response = await _sut.GetAuthorizedAsync(_scope, tenant.Id);
 
         // ActiveLeaseCount is the existing DTO name for occupied rental relationships. The web delete-state helper
         // disables delete while it is > 0, so a notice-given-only tenant is also blocked in the UI.

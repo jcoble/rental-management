@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -19,10 +20,12 @@ public class WorkOrderServiceListTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly WorkOrderService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public WorkOrderServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(WorkOrderServiceListTests));
         _sut = new WorkOrderService(
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
@@ -44,7 +47,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("E-500", "York House", WorkOrderStatus.Completed, WorkOrderPriority.Normal);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new WorkOrderListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
             Status = WorkOrderStatus.New,
             Priority = WorkOrderPriority.Normal,
@@ -80,7 +83,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("Closed archived", "York House", WorkOrderStatus.Archived, WorkOrderPriority.Normal);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new WorkOrderListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
             OpenOnly = true,
             Sort = "title",
@@ -109,7 +112,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("High oldest", "West Market Lofts", WorkOrderStatus.New, WorkOrderPriority.High, day1.AddDays(1));
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new WorkOrderListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
             OpenOnly = true,
             Sort = "fieldQueue",
@@ -139,7 +142,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("April 4", "West Market Lofts", WorkOrderStatus.New, WorkOrderPriority.Normal, day1.AddDays(3));
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new WorkOrderListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
             RequestedFrom = new DateTime(2026, 4, 2, 0, 0, 0, DateTimeKind.Utc),
             RequestedTo = new DateTime(2026, 4, 3, 0, 0, 0, DateTimeKind.Utc),
@@ -168,7 +171,7 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("Completed second", "Harbor View Apartments", WorkOrderStatus.Completed, WorkOrderPriority.Normal, day1, day1.AddDays(1));
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new WorkOrderListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
             Sort = "-completedAt",
             Take = 10,

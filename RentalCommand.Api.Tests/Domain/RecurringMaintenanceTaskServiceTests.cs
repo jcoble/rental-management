@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.TestCommon;
@@ -23,10 +24,12 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly RecurringMaintenanceTaskService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public RecurringMaintenanceTaskServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(RecurringMaintenanceTaskServiceTests));
         _sut = new RecurringMaintenanceTaskService(_ctx.Db, TimeProvider.System);
     }
 
@@ -56,10 +59,10 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         SeedTask(property.Id, isActive: true, title: "Active one");
         SeedTask(property.Id, isActive: false, title: "Inactive one");
 
-        var all = await _sut.ListAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery());
+        var all = await _sut.ListAuthorizedAsync(_scope, propertyId: null, activeOnly: null, new ListQuery());
         all.Should().HaveCount(2);
 
-        var active = await _sut.ListAsync(PortfolioId, propertyId: null, activeOnly: true, new ListQuery());
+        var active = await _sut.ListAuthorizedAsync(_scope, propertyId: null, activeOnly: true, new ListQuery());
         active.Should().HaveCount(1);
         active[0].Title.Should().Be("Active one");
     }
@@ -81,7 +84,7 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         SeedTask(property.Id, title: "Delta filters");
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, propertyId: null, activeOnly: null, new ListQuery
         {
             Sort = "title",
             Skip = 1,
@@ -124,8 +127,8 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         SeedTask(property.Id, title: "Aardvark Second Unit", unitId: secondUnit.Id);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(
-            PortfolioId,
+        var result = await _sut.ListPageAuthorizedAsync(
+            _scope,
             propertyId: null,
             activeOnly: null,
             new RecurringMaintenanceTaskListQuery
@@ -161,7 +164,6 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         task.WorkerClaimQuarantinedAtUtc = DateTime.UtcNow.AddMinutes(-1);
         _ctx.Db.SaveChanges();
 
-        var scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(RecurringMaintenanceTaskServiceTests));
         using var services = AtomicDomainTestKernel.CreateForRecurringMaintenance(_ctx.ConnectionString);
         using var serviceScope = services.CreateScope();
         var service = serviceScope.ServiceProvider.GetRequiredService<RecurringMaintenanceTaskService>();
@@ -169,7 +171,7 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         var response = operation switch
         {
             "update" => await service.UpdateAuthorizedAsync(
-                scope,
+                _scope,
                 task.Id,
                 new UpdateRecurringMaintenanceTaskRequest
                 {
@@ -178,7 +180,7 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
                 },
                 "h5-quarantine-clear-update"),
             "active-toggle" => await service.SetActiveAuthorizedAsync(
-                scope,
+                _scope,
                 task.Id,
                 true,
                 "h5-quarantine-clear-active"),

@@ -30,12 +30,6 @@ public class ExpenseService : IExpenseService
         _writes = writes;
     }
 
-    public async Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly: false, query, ct);
-        return page.Items;
-    }
-
     public async Task<IReadOnlyList<ExpenseResponse>> ListAsync(
         WorkspaceReadScope scope, int? propertyId, int? unitId, int? workOrderId,
         ListQuery query, CancellationToken ct = default)
@@ -43,19 +37,6 @@ public class ExpenseService : IExpenseService
         var page = await ListPageAsync(
             scope, propertyId, unitId, workOrderId, workOrderLinkedOnly: false, query, ct);
         return page.Items;
-    }
-
-    public async Task<ExpenseListResponse> ListPageAsync(
-        int portfolioId,
-        int? propertyId,
-        int? unitId,
-        int? workOrderId,
-        bool workOrderLinkedOnly,
-        ListQuery query,
-        CancellationToken ct = default)
-    {
-        var filtered = BuildListQuery(portfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly, query);
-        return await BuildPageAsync(filtered, query, ct);
     }
 
     public Task<ExpenseListResponse> ListPageAsync(
@@ -94,16 +75,6 @@ public class ExpenseService : IExpenseService
             Take = query.NormalizedTake,
         };
     }
-
-    private IQueryable<Expense> BuildListQuery(
-        int portfolioId,
-        int? propertyId,
-        int? unitId,
-        int? workOrderId,
-        bool workOrderLinkedOnly,
-        ListQuery query)
-        => BuildListQuery(_db.Expenses.AsNoTracking(), portfolioId, propertyId, unitId,
-            workOrderId, workOrderLinkedOnly, query);
 
     private IQueryable<Expense> BuildListQuery(
         IQueryable<Expense> q,
@@ -259,9 +230,6 @@ public class ExpenseService : IExpenseService
         };
         return ordered.ThenBy(e => e.Id);
     }
-
-    public Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
-        GetAsync(_db.Expenses.AsNoTracking(), portfolioId, id, ct);
 
     public Task<ExpenseResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
         GetAsync(

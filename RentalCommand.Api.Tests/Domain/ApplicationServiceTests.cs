@@ -96,7 +96,7 @@ public class ApplicationServiceTests : IDisposable
         SeedApplication("Dee", "Delta", ApplicationStatus.Approved);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, "Submitted", new ListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, "Submitted", new ListQuery
         {
             Sort = "lastName",
             Skip = 1,
@@ -159,7 +159,7 @@ public class ApplicationServiceTests : IDisposable
         SeedApplicationForUnit("Dee", "Delta", unitId: null, propertyId: property.Id);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, status: null, new ListQuery(), unitId: unitA.Id);
+        var result = await _sut.ListPageAuthorizedAsync(_scope, status: null, new ListQuery(), unitId: unitA.Id);
 
         result.TotalCount.Should().Be(2, "only the two applications tied to unit A are in scope");
         result.Items.Select(a => a.LastName).Should().BeEquivalentTo(["Alpha", "Bravo"]);
@@ -528,7 +528,7 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var list = await _sut.ListAsync(PortfolioId, status: null, new ListQuery());
+        var list = await _sut.ListAuthorizedAsync(_scope, status: null, new ListQuery());
         var detail = await _sut.GetAsync(PortfolioId, app.Id);
 
         list.Should().ContainSingle();

@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.TestCommon;
@@ -23,10 +24,12 @@ public class LoanServiceTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly LoanService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public LoanServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(LoanServiceTests));
         _sut = new LoanService(_ctx.Db, TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
     }
 
@@ -39,8 +42,9 @@ public class LoanServiceTests : IDisposable
         var loan = SeedLoan(property.Id);
 
         // A different portfolio cannot read or mutate this loan.
-        (await _sut.GetAsync(portfolioId: 2, loan.Id)).Should().BeNull();
-        (await _sut.GetPaymentsAsync(portfolioId: 2, loan.Id)).Should().BeNull();
+        var otherScope = new WorkspaceReadScope(2, 2, Guid.NewGuid(), 2, 1);
+        (await _sut.GetAsync(otherScope, loan.Id)).Should().BeNull();
+        (await _sut.GetPaymentsAsync(otherScope, loan.Id)).Should().BeNull();
     }
 
     [Fact]
@@ -64,7 +68,7 @@ public class LoanServiceTests : IDisposable
         SeedLoan(property.Id, lender: "February Bank", startDate: new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc));
         SeedLoan(property.Id, lender: "March Bank", startDate: new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc));
 
-        var page = await _sut.ListPageAsync(PortfolioId, property.Id, new ListQuery
+        var page = await _sut.ListPageAsync(_scope, property.Id, new ListQuery
         {
             From = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
             To = new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc),
@@ -92,7 +96,7 @@ public class LoanServiceTests : IDisposable
             MakePayment(loan, "2024-01", 199_800.90m));
         _ctx.Db.SaveChanges();
 
-        var schedule = await _sut.GetPaymentsAsync(PortfolioId, loan.Id);
+        var schedule = await _sut.GetPaymentsAsync(_scope, loan.Id);
 
         schedule.Should().NotBeNull();
         schedule!.Should().HaveCount(2);
@@ -120,7 +124,7 @@ public class LoanServiceTests : IDisposable
 
         _commands.Clear();
 
-        var schedule = await _sut.GetPaymentsAsync(PortfolioId, loan.Id, new LoanPaymentQuery
+        var schedule = await _sut.GetPaymentsAsync(_scope, loan.Id, new LoanPaymentQuery
         {
             Status = LoanPaymentStatus.Scheduled,
             Sort = "dueDate",

@@ -35,20 +35,6 @@ public class PropertyDispositionService : IPropertyDispositionService
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<PropertyDispositionResponse>> ListAsync(
-        int portfolioId, PropertyDispositionListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, query, ct);
-        return page.Items;
-    }
-
-    public async Task<PropertyDispositionListResponse> ListPageAsync(
-        int portfolioId, PropertyDispositionListQuery query, CancellationToken ct = default)
-        => await ListPageFromQueryAsync(
-            _db.PropertyDispositions.AsNoTracking().Where(item => item.PortfolioId == portfolioId),
-            query,
-            ct);
-
     public async Task<IReadOnlyList<PropertyDispositionResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope, PropertyDispositionListQuery query, CancellationToken ct = default)
         => (await ListPageAuthorizedAsync(scope, query, ct)).Items;

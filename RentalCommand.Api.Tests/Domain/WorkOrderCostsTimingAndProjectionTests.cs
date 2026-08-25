@@ -324,7 +324,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             Status = WorkOrderStatus.New,
         });
 
-        var detail = await _workOrders.GetAsync(PortfolioId, created!.Id);
+        var detail = await _workOrders.GetAuthorizedAsync(_scope, created!.Id);
 
         detail.Should().NotBeNull();
         detail!.PropertyName.Should().Be("Oak Terrace");
@@ -372,11 +372,11 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         });
         SeedDispatch(closed!.Id, vendor.Id, VendorDispatchStatus.Completed);
 
-        (await _workOrders.GetAsync(PortfolioId, assignedOnly!.Id))!.HasActiveDispatch
+        (await _workOrders.GetAuthorizedAsync(_scope, assignedOnly!.Id))!.HasActiveDispatch
             .Should().BeFalse("assigning a vendor without dispatching must not claim the job was sent");
-        (await _workOrders.GetAsync(PortfolioId, dispatched.Id))!.HasActiveDispatch
+        (await _workOrders.GetAuthorizedAsync(_scope, dispatched.Id))!.HasActiveDispatch
             .Should().BeTrue("an open dispatch means the job really is out with the vendor");
-        (await _workOrders.GetAsync(PortfolioId, closed.Id))!.HasActiveDispatch
+        (await _workOrders.GetAuthorizedAsync(_scope, closed.Id))!.HasActiveDispatch
             .Should().BeFalse("a completed dispatch is no longer awaiting a DONE reply");
     }
 
@@ -392,7 +392,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             Status = WorkOrderStatus.New,
         });
 
-        var list = await _workOrders.ListAsync(PortfolioId, propertyId: null, unitId: null, vendorId: null, new ListQuery());
+        var list = await _workOrders.ListAuthorizedAsync(_scope, propertyId: null, unitId: null, vendorId: null, new ListQuery());
 
         list.Should().ContainSingle();
         list[0].PropertyName.Should().Be("Pine Hollow");
