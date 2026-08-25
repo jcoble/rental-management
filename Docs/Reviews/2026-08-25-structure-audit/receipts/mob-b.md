@@ -49,3 +49,28 @@ and every ISO serializer (`_dateOnly`, `_fmtIso`, `_dateInput`, `_dateOnlyQuery`
   `properties/property_labels.dart` as `loanPaymentStatusLabel` and `loanStatusLabel`;
   property_detail_screen, property_loan_form_sheet and scan_review_screen import them.
 - Left alone as out of scope: the wider `plainEnglishLabel` sweep.
+
+### Item 5 — looking at it in the running app: NOT POSSIBLE
+The dev API is up (`POST /api/v1/auth/login` with the seeded admin returns HTTP 200), and
+`flutter build web --release --dart-define=API_BASE_URL=https://localhost:5666/api/v1`
+succeeds, but the built app never leaves its splash spinner in a browser: startup throws
+before `restoreSession()` resolves, so `AuthStateUnknown` is never replaced
+(`mobile/lib/main.dart` `_AppStartupState`, `mobile/lib/core/auth/auth_controller.dart`
+`restoreSession` — no try/catch around the secure-token read). None of those files are in this
+lane's diff, so this is the app's existing Android/iOS-only startup path, not a regression here.
+Evidence: `receipts/mob-b/00-web-build-stalls-at-splash.png` (headless Chromium, viewport
+verified 1710x990).
+
+Falling back to the widget tests, as the spec allows:
+- `flutter test` — 522 passing, including the screens that assert on rendered money and date
+  text (unit/tenant money contracts, tenant portal account history, property detail).
+- `test/formatting_test.dart` gained two cases pinning the visible output:
+  `moneyFmt(1234.5)` = `$1,234.50`, `moneyFmt(1200, whole: true)` = `$1,200`,
+  `dateFmt(DateTime(2026, 8, 25))` = `Aug 25, 2026`.
+
+Processes: local static server on 5770 stopped (port free); the headless Chromium this lane
+started exited with the script. Other agents' chromium processes were left alone.
+
+### Left in place, out of scope
+The full-month-name tables (`January`…`December`) in owner_reports `_fmtMonth`, home_shell
+`_formattedDate` and ai/briefing_screen `_format` — a different table from the abbreviations.

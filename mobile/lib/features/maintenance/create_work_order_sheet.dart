@@ -14,6 +14,7 @@ import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../vendors/vendors_repository.dart';
 import 'work_orders_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 Future<void> showCreateWorkOrderSheet({
   required BuildContext context,
@@ -130,25 +131,6 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   DateTime? _scheduledStart(DateTime? date, TimeOfDay? time) {
     if (date == null) return null;
     return _combine(date, time) ?? DateTime(date.year, date.month, date.day);
-  }
-
-  static String _fmtDate(DateTime d) {
-    const months = [
-      '',
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return '${months[d.month]} ${d.day}, ${d.year}';
   }
 
   Property? _findProperty(List<Property> properties) {
@@ -626,7 +608,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
                     child: Text(
                       _scheduledDate == null
                           ? 'Not scheduled'
-                          : _fmtDate(_scheduledDate!),
+                          : dateFmt(_scheduledDate!),
                       style: TextStyle(
                         color: _scheduledDate == null
                             ? colorScheme.onSurfaceVariant
