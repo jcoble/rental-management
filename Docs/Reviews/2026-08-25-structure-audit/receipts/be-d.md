@@ -11,6 +11,7 @@ The selected orientation skills reference the sister EdiPlatform paths, which ar
 
 ## Completion log
 
+- Review fix — started 2026-08-25T19:40:25-04:00; commit `f2cf96e1` restored successful auth responses to their pre-branch `message` payload shape. Solution build exited 0; the Auth-filtered tests exited 1 with 330 passed and only the two documented pre-existing InspectionChecklist failures; the required `Ok(new { error =` sweep returned no matches; build-server shutdown exited 0.
 - Item 1 — accounting provider resolver removal: commit `f467aab6`; static verification `git diff --cached --check` exited 0 and the scoped `rg` sweep found no `AccountingProviderResolver` references before commit.
 - Item 2 — listing adapter resolver removal: commit `f0ed98cb`; static verification `git diff --cached --check` exited 0 and the scoped `rg` sweep found no listing resolver references before commit.
 - Item 3 — controller error-shape normalization: commits `74b0bd4c`, `4e868b37`; the scoped controller `rg` sweep produced no `new { message =`, bare `BadRequest("`, `Problem(`, or `ValidationProblem(` matches before commit. The follow-up commit fixes the mapper return-type conversion found by the first solution build.
