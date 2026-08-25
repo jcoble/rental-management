@@ -8,7 +8,7 @@ import type {
   LeaseQuestionResponse,
 } from "$lib/types";
 import { api, downloadFile, fetchApi } from "../client";
-import { buildListQuery } from "../list-params";
+import { buildListQuery } from "../list-params.ts";
 
 export type LeaseManagementPartyRole =
   | "PrimaryTenant"
