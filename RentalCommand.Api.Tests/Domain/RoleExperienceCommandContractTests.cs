@@ -45,7 +45,7 @@ public sealed class RoleExperienceCommandContractTests
         moveIn.Should().Contain("trackedApplication.PropertyId = target.PropertyId");
         moveIn.Should().Contain("trackedApplication.UnitId = target.UnitId");
         var agreements = Source(
-            "RentalCommand.Data", "Leasing", "LeaseAgreementDraftCommandHandlers.cs");
+            "RentalCommand.Data", "Leasing", "LeaseAgreementDraftRules.cs");
         agreements.Should().Contain("CapabilityKeys.LeasingAgreementsPrepare");
         agreements.Should().Contain("CreateLeaseAgreementSuccessorDraftCommand");
 
@@ -71,7 +71,7 @@ public sealed class RoleExperienceCommandContractTests
         Route(nameof(OwnerPortalController.ReplyToMessage), typeof(HttpPostAttribute))
             .Should().Be("messages/{notificationId:int}/replies");
 
-        var handler = Source("RentalCommand.Data", "Owners", "OwnerPortalCommandHandlers.cs");
+        var handler = Source("RentalCommand.Data", "Owners", "OwnerPortalRules.cs");
         handler.Should().Contain("AuthorizeReplayAsync(");
         handler.Should().Contain("AuthorizeReplayAsync(");
         handler.Should().Contain("db.Set<OwnerUserAccess>().Any(access =>");

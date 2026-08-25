@@ -120,7 +120,7 @@ public sealed class LeaseManagementHistoryProjectionTests : IAsyncLifetime
         await _context.Db.SaveChangesAsync();
         await _context.ActivateApiScopeAsync(_scope);
 
-        var access = new LeaseManagementReadContext(
+        var access = new WorkspaceReadScope(
             _scope.PortfolioId,
             _scope.UserId,
             _scope.SessionId,

@@ -70,7 +70,7 @@ public sealed class TenantMoneyWriteExecutorTests
             paymentSource.IndexOf("new RecordTenantReceiptRule(_db).ExecuteAsync", StringComparison.Ordinal));
 
         var handlerSource = File.ReadAllText(Path.Combine(root, "RentalCommand.Data", "Payments",
-            "TenantMoneyCommandHandlers.cs"));
+            "TenantMoneyRules.cs"));
         var executeStart = handlerSource.IndexOf("public async Task<RecordTenantReceiptResult> ExecuteAsync", StringComparison.Ordinal);
         var executeEnd = handlerSource.IndexOf("public Task AuthorizeAsync", executeStart, StringComparison.Ordinal);
         handlerSource[executeStart..executeEnd].Should().NotContain("AcquireLockAsync");

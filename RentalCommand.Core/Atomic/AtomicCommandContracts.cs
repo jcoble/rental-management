@@ -19,26 +19,6 @@ public interface IWriteExecutor
         where TResult : notnull;
 }
 
-public enum WriteIdempotencyPolicy
-{
-    Required,
-}
-
-public enum WriteEntryPointKind
-{
-    Transactional,
-}
-
-/// <summary>
-/// Marks a write entry point as either still using the compatibility shell or using the shared
-/// executor. The single-use attribute makes the two states mutually exclusive.
-/// </summary>
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, Inherited = false)]
-public sealed class WriteEntryPointAttribute(WriteEntryPointKind kind) : Attribute
-{
-    public WriteEntryPointKind Kind { get; } = kind;
-}
-
 /// <summary>One operation and its complete metadata for the shared local write executor.</summary>
 public sealed record TransactionalWrite<TCommand, TResult>
     where TCommand : notnull, IAtomicCommandData
@@ -46,7 +26,6 @@ public sealed record TransactionalWrite<TCommand, TResult>
 {
     public TransactionalWrite(
         string operationName,
-        WriteIdempotencyPolicy idempotencyPolicy,
         TCommand request,
         string resultContract,
         WriteLockPlan lockPlan,
@@ -59,13 +38,8 @@ public sealed record TransactionalWrite<TCommand, TResult>
         ArgumentNullException.ThrowIfNull(lockPlan);
         ArgumentNullException.ThrowIfNull(executeAsync);
         ArgumentNullException.ThrowIfNull(authorizeReplayAsync);
-        if (idempotencyPolicy != WriteIdempotencyPolicy.Required)
-        {
-            throw new ArgumentOutOfRangeException(nameof(idempotencyPolicy));
-        }
 
         OperationName = operationName;
-        IdempotencyPolicy = idempotencyPolicy;
         Request = request;
         ResultContract = resultContract;
         LockPlan = lockPlan;
@@ -74,7 +48,6 @@ public sealed record TransactionalWrite<TCommand, TResult>
     }
 
     public string OperationName { get; }
-    public WriteIdempotencyPolicy IdempotencyPolicy { get; }
     public TCommand Request { get; }
     public string ResultContract { get; }
     public WriteLockPlan LockPlan { get; }

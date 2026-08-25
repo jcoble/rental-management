@@ -24,7 +24,6 @@ public class DeviceService : IDeviceService
     }
 
     /// <inheritdoc/>
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task RegisterAsync(
         WorkspaceReadScope scope,
         string token,
@@ -45,7 +44,6 @@ public class DeviceService : IDeviceService
     }
 
     /// <inheritdoc/>
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<bool> UnregisterAsync(
         WorkspaceReadScope scope,
         string token,

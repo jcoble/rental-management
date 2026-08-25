@@ -13,7 +13,6 @@ public interface IJobStepWriteExecutor
         where TResult : notnull;
 }
 
-[WriteEntryPoint(WriteEntryPointKind.Transactional)]
 internal sealed class JobStepWriteExecutor(IWriteExecutor executor) : IJobStepWriteExecutor
 {
     public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(

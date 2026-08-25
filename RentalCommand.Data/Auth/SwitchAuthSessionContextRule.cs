@@ -86,10 +86,6 @@ public sealed class SwitchAuthSessionContextRule
             selected.AccessRevision);
     }
 
-    public Task AuthorizeReplayAsync(
-        SwitchAuthSessionContextCommand command, IAtomicCommandContext context, CancellationToken ct) =>
-        throw AuthSessionWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         SwitchAuthSessionContextCommand command,
         IAtomicCommandContext context,

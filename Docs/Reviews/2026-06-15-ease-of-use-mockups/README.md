@@ -26,5 +26,5 @@ Source: `rc-mockups.html` (single self-contained file; re-render sections to reg
 
 ## Backend facts confirmed (for the reminder/automation design)
 
-- `RentalCommand.Engine/Workers/`: `LateFeeWorker` (every 6h, applies late fees), `NoticeDraftWorker` (every 12h, **drafts** late/expiry notices — never auto-sends, one-tap approval, gated by `EnableNoticeAutopilot`), `RentChargeWorker`, `AutopayChargeWorker`, `DailyBriefingDeliveryWorker`, `RecurringMaintenanceWorker`.
+- `RentalCommand.Engine/Workers/`: `LateFeeWorker` (every 6h, applies late fees), `NoticeDraftWorker` (every 12h, runs unconditionally, **drafts** late/expiry notices — never auto-sends, one-tap approval), `RentChargeWorker`, `AutopayChargeWorker`, `DailyBriefingDeliveryWorker`, `RecurringMaintenanceWorker`.
 - `NotificationSettings`: `EnableRentCharges`, `EnableLateFees`, `EnableLeaseExpiryReminders` (default true), `NotifyTenants` (global tenant-send, default **off**).

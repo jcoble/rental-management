@@ -48,7 +48,7 @@ public static class AtomicCoreCsvImport
             authorizeReplayAsync)
     {
         var identity = Identity(command);
-        return new(identity.CommandType, WriteIdempotencyPolicy.Required, command,
+        return new(identity.CommandType,  command,
             Codec.ContractName,
             new WriteLockPlan(WriteLockProtocol.AuthorizationScope,
                 command.AuthSessionId,

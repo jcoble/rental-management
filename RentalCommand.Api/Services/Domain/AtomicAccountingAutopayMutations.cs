@@ -88,11 +88,6 @@ public sealed class PrepareAccountingConnectRule
             stateToken, command.RedirectUri, expiresAtUtc);
     }
 
-    public Task AuthorizeReplayAsync(
-        PrepareAccountingConnectCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         PrepareAccountingConnectCommand command,
         IAtomicCommandContext context,
@@ -263,11 +258,6 @@ public sealed class CancelTenantAutopayRule
 
         return new CancelTenantAutopayResult(true, true, command.TenantAccountId);
     }
-
-    public Task AuthorizeReplayAsync(
-        CancelTenantAutopayCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw AccountingWriteSupport.RetiredPath();
 
     public async Task AuthorizeAsync(
         CancelTenantAutopayCommand command,

@@ -797,7 +797,7 @@ public class ReportsServiceTests : IAsyncLifetime
         _executedSql.Clear();
 
         var report = await _sut.GetRentLedgerAsync(
-            new LeaseManagementReadContext(
+            new WorkspaceReadScope(
                 _scope.PortfolioId,
                 _scope.UserId,
                 _scope.SessionId,

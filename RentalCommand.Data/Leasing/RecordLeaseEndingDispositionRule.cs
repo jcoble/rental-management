@@ -142,11 +142,9 @@ public static class LeasingWriteSupport
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
         Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeAsync)
         where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull => new(operationName, WriteIdempotencyPolicy.Required,
+        where TResult : notnull => new(operationName,
             command, resultContract, lockPlan, executeAsync, authorizeAsync);
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy atomic leasing writes are retired; use the shared write executor.");
 }
 
 public sealed class RecordLeaseEndingDispositionRule

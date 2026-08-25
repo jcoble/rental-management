@@ -227,7 +227,7 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
     {
         var scope = await SeedAdministratorScopeAsync();
         var service = new LeaseManagementQueryService(_context.Db, TimeProvider.System);
-        var access = new LeaseManagementReadContext(
+        var access = new WorkspaceReadScope(
             scope.PortfolioId,
             scope.UserId,
             scope.SessionId,

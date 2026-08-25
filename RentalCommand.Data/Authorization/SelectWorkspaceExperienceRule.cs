@@ -16,7 +16,7 @@ public sealed class SelectWorkspaceExperienceRule
     {
         var handler = new SelectWorkspaceExperienceRule(db);
         return new TransactionalWrite<SelectWorkspaceExperienceCommand, SelectWorkspaceExperienceResult>(
-            "workspace-experience.select", WriteIdempotencyPolicy.Required, command,
+            "workspace-experience.select",  command,
             "workspace-experience-select-result:v1", WriteLockPlan.None,
             handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }

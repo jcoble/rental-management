@@ -3,9 +3,6 @@ namespace RentalCommand.Core.Listings;
 public static class ListingProviderKeys
 {
     public const string Zillow = "Zillow";
-
-    /// <summary>Reserved for a later adapter; no ShowMojo integration is implemented in this slice.</summary>
-    public const string ShowMojo = "ShowMojo";
 }
 
 /// <summary>

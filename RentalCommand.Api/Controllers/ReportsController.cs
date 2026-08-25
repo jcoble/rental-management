@@ -66,7 +66,7 @@ public class ReportsController : ManagementControllerBase
     [ProducesResponseType(typeof(RentLedgerResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<RentLedgerResponse>> RentLedger([FromQuery] ReportRangeQuery query, CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         return Ok(await _service.GetRentLedgerAsync(access, query, ct));
     }
 

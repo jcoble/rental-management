@@ -4,11 +4,6 @@ public class NotificationsConfig
 {
     public const string SectionName = "Notifications";
 
-    // Lease Lifecycle Autopilot: proactively DRAFT renewal offers, escalating late-rent notices, and
-    // move-out reminders for one-tap approval. Defaults ON because drafts are never auto-sent — the
-    // landlord still approves each one (and picks channels) before anything leaves the building.
-    public bool EnableNoticeAutopilot { get; set; } = true;
-
     public TwilioOptions Twilio { get; set; } = new();
     public SignalWireOptions SignalWire { get; set; } = new();
     public TelnyxOptions Telnyx { get; set; } = new();

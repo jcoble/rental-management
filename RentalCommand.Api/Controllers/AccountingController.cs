@@ -83,7 +83,7 @@ public class AccountingController : ManagementControllerBase
             string.Empty, request.Name,
             string.Equals(request.CategoryKind, "expense", StringComparison.OrdinalIgnoreCase)
                 || request.ScheduleECategory.HasValue ? AccountType.Expense : AccountType.Income,
-            null, request.ParentAccountId, null, request.ScheduleECategory,
+            request.ParentAccountId, null, request.ScheduleECategory,
             request.IsActive, operationKey);
         try
         {

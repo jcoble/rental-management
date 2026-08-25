@@ -38,7 +38,6 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     public async Task<MyAlertsResponse> GetMyAlertsAsync(int portfolioId, int userId, CancellationToken ct) =>
         await MyAlertsQuery(portfolioId, userId).SingleAsync(ct);
 
-    [WriteEntryPoint(WriteEntryPointKind.Transactional)]
     public async Task<MyAlertsResponse> UpdateMyAlertsAsync(
         WorkspaceReadScope scope,
         UpdateMyAlertsRequest request,

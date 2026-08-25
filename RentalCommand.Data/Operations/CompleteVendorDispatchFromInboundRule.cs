@@ -34,7 +34,7 @@ public sealed class CompleteVendorDispatchFromInboundRule
                 PhoneLockKey(command.NormalizedFromPhone))
             : WriteLockPlan.None;
         return new TransactionalWrite<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult>(
-            "sms.vendor-done", WriteIdempotencyPolicy.Required, command, ResultContract, locks,
+            "sms.vendor-done",  command, ResultContract, locks,
             handler.ExecuteAsync, handler.AuthorizeAsync);
     }
 
@@ -233,11 +233,6 @@ public sealed class CompleteVendorDispatchFromInboundRule
             notifications.Select(notification => notification.Id).ToArray());
     }
 
-    public Task AuthorizeReplayAsync(
-        CompleteVendorDispatchFromInboundCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
-
     public Task AuthorizeAsync(
         CompleteVendorDispatchFromInboundCommand command,
         IAtomicCommandContext context,
@@ -254,9 +249,6 @@ public sealed class CompleteVendorDispatchFromInboundRule
         // exact stored receipt, including NoOpenDispatch, even if phone/dispatch rows later change.
         return Task.CompletedTask;
     }
-
-    private static InvalidOperationException RetiredPath() => new(
-        "Inbound vendor completions must use the shared write executor.");
 
     private async Task<List<Notification>> CreateNotificationsAsync(
         IAtomicCommandContext commandContext,

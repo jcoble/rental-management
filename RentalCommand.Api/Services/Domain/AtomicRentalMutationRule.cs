@@ -69,11 +69,6 @@ public sealed class AtomicRentalMutationRule
         };
     }
 
-    public Task AuthorizeReplayAsync(
-        AtomicRentalMutationCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw RetiredPath();
-
     public async Task AuthorizeAsync(
         AtomicRentalMutationCommand command,
         IAtomicCommandContext context,
@@ -726,8 +721,6 @@ public sealed class AtomicRentalMutationRule
             ? "the selected home"
             : $"unit #{application.UnitId}";
 
-    private static InvalidOperationException RetiredPath() => new(
-        "Atomic rental mutations must use the shared write executor.");
 }
 
 public static class AtomicRentalMutation
@@ -766,7 +759,7 @@ public static class AtomicRentalMutation
                 command.PortfolioId);
         return new(
             identity.CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             Codec.ContractName,
             lockPlan,

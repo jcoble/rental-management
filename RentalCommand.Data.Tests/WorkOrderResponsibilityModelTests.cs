@@ -120,11 +120,10 @@ public sealed class WorkOrderResponsibilityModelTests
     public void AssignedUpdate_HandlerFencesStaleWritesAndReauthorizesReplay()
     {
         var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "RentalCommand.Data",
-            "Operations", "WorkOrderResponsibilityMutationHandlers.cs"));
+            "Operations", "WorkOrderResponsibilityMutationRules.cs"));
 
         source.Should().Contain("workOrder.UpdatedAt != command.ExpectedUpdatedAtUtc");
         source.Should().Contain("UpdateAssignedWorkOrderOutcome.Stale");
-        source.Should().Contain("AuthorizeReplayAsync(");
         source.Should().Contain(
             "AuthorizeAndLoadAsync(command, _db, securityNowUtc, businessNowUtc, tracking: false");
         source.Should().Contain("resultingStatus != WorkOrderStatus.Completed");

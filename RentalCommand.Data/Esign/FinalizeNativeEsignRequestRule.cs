@@ -191,11 +191,6 @@ public sealed class FinalizeNativeEsignRequestRule
         return new(request.PublicId, request.Id, request.LeaseAgreementId, request.LeaseAddendumId, artifact.Id);
     }
 
-    public async Task AuthorizeReplayAsync(
-        FinalizeNativeEsignRequestCommand command,
-        IAtomicCommandContext context,
-        CancellationToken ct) => throw NativeEsignWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(
         FinalizeNativeEsignRequestCommand command,
         IAtomicCommandContext context,

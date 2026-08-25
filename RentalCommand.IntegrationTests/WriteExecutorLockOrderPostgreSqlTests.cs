@@ -210,7 +210,7 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
         var firstRule = new PossessionLockRule(coordinator);
         var firstWrite = new TransactionalWrite<LockCanaryCommand, LockCanaryResult>(
             "canary.possession.first-executor",
-            WriteIdempotencyPolicy.Required,
+
             command,
             LockCanaryResult.Codec.ContractName,
             WriteLockPlan.None,
@@ -222,7 +222,7 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
 
         var write = new TransactionalWrite<LockCanaryCommand, LockCanaryResult>(
             "canary.possession.new-executor",
-            WriteIdempotencyPolicy.Required,
+
             command,
             LockCanaryResult.Codec.ContractName,
             new WriteLockPlan(
@@ -261,7 +261,7 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
         var firstRule = new NoticeDeliveryLockRule(coordinator);
         var firstWrite = new TransactionalWrite<NoticeDeliveryLockCanaryCommand, LockCanaryResult>(
             "canary.notice-delivery.first-executor",
-            WriteIdempotencyPolicy.Required,
+
             command,
             LockCanaryResult.Codec.ContractName,
             WriteLockPlan.None,
@@ -273,7 +273,7 @@ public sealed class WriteExecutorLockOrderPostgreSqlTests(MigratedPostgreSqlFixt
 
         var write = new TransactionalWrite<NoticeDeliveryLockCanaryCommand, LockCanaryResult>(
             "canary.notice-delivery.new-executor",
-            WriteIdempotencyPolicy.Required,
+
             command,
             LockCanaryResult.Codec.ContractName,
             new WriteLockPlan(

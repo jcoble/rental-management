@@ -55,8 +55,7 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
             "coa-create-replay",
             code: " ",
             name: "Laundry Income",
-            accountType: AccountType.Income,
-            requestedNormalBalance: NormalBalance.Debit);
+            accountType: AccountType.Income);
 
         var first = await ExecuteCreateAsync(command);
         first.Value.Account.Should().NotBeNull();
@@ -453,7 +452,6 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         string code = "",
         string name = "Test Income",
         AccountType accountType = AccountType.Income,
-        NormalBalance? requestedNormalBalance = null,
         int? parentAccountId = null,
         string? systemKey = null,
         bool isActive = true,
@@ -464,7 +462,6 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
             code,
             name,
             accountType,
-            requestedNormalBalance,
             parentAccountId,
             systemKey,
             isActive);
@@ -475,7 +472,6 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         string code,
         string name,
         AccountType accountType,
-        NormalBalance? requestedNormalBalance,
         int? parentAccountId,
         string? systemKey,
         bool isActive) => new(
@@ -487,7 +483,6 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         code,
         name,
         accountType,
-        requestedNormalBalance,
         parentAccountId,
         systemKey,
         ScheduleECategory.Other,

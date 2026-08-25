@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -28,7 +29,7 @@ public class LeaseQaService : ILeaseQaService
     /// Agreement read.
     /// </summary>
     public async Task<LeaseQuestionResponse?> AskManagementAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         string question,
         CancellationToken ct = default)

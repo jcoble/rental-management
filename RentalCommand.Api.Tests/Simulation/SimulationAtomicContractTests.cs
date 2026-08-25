@@ -86,7 +86,7 @@ public sealed class SimulationAtomicContractTests
             && handler.GetMethod("AuthorizeReplayAsync") is not null)
             .Should().BeTrue();
 
-        var source = ReadSource("RentalCommand.Data", "Simulation", "SimulationAtomicCommandHandlers.cs");
+        var source = ReadSource("RentalCommand.Data", "Simulation", "SimulationAtomicRules.cs");
         source.Should().Contain("ReadDatabaseClockUtcAsync");
         source.Should().Contain("FOR UPDATE");
         source.Should().Contain("StageSemanticEvent");

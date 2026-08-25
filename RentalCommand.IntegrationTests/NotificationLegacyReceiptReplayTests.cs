@@ -285,7 +285,7 @@ public sealed class NotificationLegacyReceiptReplayTests : IAsyncLifetime
     private static TransactionalWrite<TCommand, TResult> ReplayOnly<TCommand, TResult>(
         TransactionalWrite<TCommand, TResult> write)
         where TCommand : notnull, IAtomicCommandData where TResult : notnull => new(
-            write.OperationName, write.IdempotencyPolicy, write.Request, write.ResultContract,
+            write.OperationName, write.Request, write.ResultContract,
             write.LockPlan,
             (_, _, _) => throw new InvalidOperationException("A frozen receipt must not execute."),
             write.AuthorizeReplayAsync);

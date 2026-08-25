@@ -26,12 +26,10 @@ public static class SandboxLifecycleWriteSupport
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         return new TransactionalWrite<SandboxLifecycleCommand, SandboxLifecycleResult>(
-            operationName, WriteIdempotencyPolicy.Required, command, "sandbox-lifecycle-result:v1",
+            operationName,  command, "sandbox-lifecycle-result:v1",
             WriteLockPlan.None, handler.ExecuteAsync, handler.AuthorizeReplayAsync);
     }
 
-    internal static InvalidOperationException RetiredPath() => new(
-        "Legacy sandbox lifecycle writes are retired; use the shared write executor.");
 }
 
 public sealed class SandboxLifecycleCommandRule

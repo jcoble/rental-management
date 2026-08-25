@@ -205,7 +205,6 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             [PhoneLockKey(command.NormalizedFromPhone!), _facts.WorkOrderId],
             "the executor must acquire the hashed phone lock before the work-order lock");
         typeof(CompleteVendorDispatchFromInboundRule).GetMethod("ExecuteAsync").Should().NotBeNull();
-        typeof(CompleteVendorDispatchFromInboundRule).GetMethod("AuthorizeReplayAsync").Should().NotBeNull();
     }
 
     [SkippableFact]

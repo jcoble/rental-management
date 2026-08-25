@@ -1722,7 +1722,7 @@ public static class AtomicMoneyMutation
         var handler = new AtomicMoneyMutationRule(db);
         return new(
             identity.CommandType,
-            WriteIdempotencyPolicy.Required,
+
             command,
             Codec.ContractName,
             new WriteLockPlan(

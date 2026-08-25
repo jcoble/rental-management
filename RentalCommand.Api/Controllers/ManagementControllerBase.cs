@@ -57,20 +57,6 @@ public abstract class ManagementControllerBase : AuthenticatedPortfolioControlle
         TryGetActiveAccessContext(out var active) &&
         active.LastAuthorizedExperience == WorkspaceExperience.Management;
 
-    protected bool TryReadAccessContext(out LeaseManagementReadContext access)
-    {
-        access = default;
-        if (!TryGetActiveAccessContext(out var active))
-        {
-            return false;
-        }
-
-        access = new LeaseManagementReadContext(
-            active.PortfolioId, active.UserId, active.SessionId,
-            active.AccessContextId, active.AccessRevision);
-        return true;
-    }
-
     /// <summary>
     /// Makes an exact typed resource decision. This helper deliberately resolves scoped services
     /// from the request because controller base classes do not participate in constructor injection;

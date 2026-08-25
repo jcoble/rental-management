@@ -221,9 +221,6 @@ public sealed class IssueLeaseAddendumRule
         return new(packet.PublicId, command.LeaseManagementId, addendum.Id, packet.Id, artifact.Id);
     }
 
-    public async Task AuthorizeReplayAsync(IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
-        => throw NativeEsignWriteSupport.RetiredPath();
-
     public async Task AuthorizeAsync(IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);

@@ -1,5 +1,6 @@
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.TestCommon;
 
@@ -10,7 +11,7 @@ namespace RentalCommand.TestCommon;
 public sealed class NoopLeaseQaService : ILeaseQaService
 {
     public Task<LeaseQuestionResponse?> AskManagementAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         string question,
         CancellationToken ct = default)

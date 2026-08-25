@@ -53,7 +53,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         [FromQuery] LeaseLegalHistoryQuery query,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var page = await _queryService.ListAddendumHistoryPageAsync(access, leaseManagementId, query, ct);
         return page is null
             ? NotFound(new { error = "Lease management relationship not found" })
@@ -68,7 +68,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var page = await _queryService.ListAddendumEligibleBaseAgreementsAsync(
             access, leaseManagementId, query, ct);
         return page is null
@@ -83,7 +83,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         int leaseManagementId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var candidates = await _queryService.GetAddendumSignerCandidatesAsync(
             access, leaseManagementId, ct);
         return candidates is null
@@ -100,7 +100,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         int leaseAddendumId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var draft = await _queryService.GetAddendumDraftAsync(
             access, leaseManagementId, leaseAddendumId, ct);
         return draft is null
@@ -117,7 +117,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         int artifactId,
         CancellationToken ct)
     {
-        if (!TryReadAccessContext(out var access)) return Forbid();
+        if (!TryReadWorkspaceScope(out var access)) return Forbid();
         var reference = await _queryService.GetAddendumArtifactAsync(
             access, leaseManagementId, leaseAddendumId, artifactId, ct);
         if (reference is null) return NotFound(new { error = "Addendum artifact not found" });
@@ -228,7 +228,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
     {
         if (!TryEnvelope(idempotencyKey, out var envelope, out var error)) return error!;
         var signerIds = await _queryService.ListAuthorizedAddendumIssueSignerIdsAsync(
-            new LeaseManagementReadContext(envelope.PortfolioId, envelope.UserId, envelope.SessionId,
+            new WorkspaceReadScope(envelope.PortfolioId, envelope.UserId, envelope.SessionId,
                 envelope.AccessContextId, envelope.AccessRevision),
             leaseManagementId,
             leaseAddendumId,

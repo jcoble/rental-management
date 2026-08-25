@@ -1,11 +1,13 @@
 using RentalCommand.Api.DTOs;
 
+using RentalCommand.Core.Authorization;
+
 namespace RentalCommand.Api.Services.Domain;
 
 public interface ILeaseQaService
 {
     Task<LeaseQuestionResponse?> AskManagementAsync(
-        LeaseManagementReadContext access,
+        WorkspaceReadScope access,
         int leaseManagementId,
         string question,
         CancellationToken ct = default);
