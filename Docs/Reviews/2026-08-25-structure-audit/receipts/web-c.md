@@ -93,3 +93,23 @@ The verbatim `rg` without a glob exclusion lists these allowed `+server.ts` site
 - `web/src/routes/auth/google/callback/+server.ts` still uses a raw `${SERVER_API_BASE_URL}` fetch but was not among the named page/layout files and is not a file-streaming proxy; it was left as-is by controller decision.
 - The full web unit suite's four inherited contract failures were not changed because their accounting/lease files are outside this lane.
 - The first dev-stack attempt failed because the shared EdiPlatform PostgreSQL service rejected the launcher's default credential. The retry used that existing container's configured development user without printing its password and created the requested `rentalcommand` development database.
+
+## Review round 1 rework
+
+- Finished: `2026-08-25T19:43:36-04:00`
+- Finding 2: DONE in `226e170c817fc8d2ce3e98f4c3da5e94d2c164cd`; restored the four route-specific non-JSON API error fallbacks.
+- Finding 4: DONE in `bc4a3a06bc5108292d2ed76874b344747951543a`; removed `TenantPaymentRefundRequestSpec` and `buildTenantPaymentRefundRequest`, then changed the payment correction contract test to capture `tenantMoney.refundPayment` through the API stub.
+- Finding 5: DONE in `b5199451`; replaced pre-rebase hashes with the current `git log main..HEAD` hashes and recorded that the Google callback remains unchanged by controller decision.
+
+### Rework verification
+
+| Command | Exit | Result |
+| --- | ---: | --- |
+| `pnpm --dir web check` | 0 | 5,622 files; 0 errors and 18 inherited warnings. |
+| `pnpm --dir web check:native` | 0 | Native TypeScript check passed with no diagnostics. |
+| `pnpm --dir web test` | 1 | 893 tests: 892 passed; only the pre-existing `lease-action-hub-contract.test.ts` source-text assertion failed. |
+| `rg -n 'buildTenantPaymentRefundRequest|TenantPaymentRefundRequestSpec' web/src` | 1 | Zero matches; `rg` returns 1 when no matches are found. |
+
+### Rework tests changed
+
+- `web/src/lib/components/records/payment-correction-contract.test.ts`: replaced assertions against the deleted request-builder helper with assertions against the real `tenantMoney.refundPayment` API call.
