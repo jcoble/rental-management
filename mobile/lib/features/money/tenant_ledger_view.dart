@@ -683,7 +683,6 @@ class _TenantLedgerSummaryStrip extends StatelessWidget {
     return null;
   }
 
-  String _money(double? value) => value == null ? '—' : moneyFmt(value);
 
   @override
   Widget build(BuildContext context) {
@@ -695,16 +694,16 @@ class _TenantLedgerSummaryStrip extends StatelessWidget {
         children: [
           _SummaryChip(
             label: 'Balance due',
-            value: _money(summary?.endingBalance ?? fallbackBalance),
+            value: moneyFmt(summary?.endingBalance ?? fallbackBalance),
           ),
-          _SummaryChip(label: 'Past due', value: _money(pastDue)),
+          _SummaryChip(label: 'Past due', value: moneyFmt(pastDue)),
           _SummaryChip(
             label: 'Next',
             value: next?.dueOn == null
                 ? '—'
-                : '${dateFmt(next!.dueOn!)} · ${_money(next.openAmount)}',
+                : '${dateFmt(next!.dueOn!)} · ${moneyFmt(next.openAmount)}',
           ),
-          _SummaryChip(label: 'Credit', value: _money(summary?.creditAmount)),
+          _SummaryChip(label: 'Credit', value: summary == null ? '—' : moneyFmt(summary!.creditAmount)),
           _SummaryChip(
             label: 'Deposit',
             value: deposit == null ? '—' : moneyFmt(deposit!.heldBalance),

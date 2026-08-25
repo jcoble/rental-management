@@ -84,3 +84,4 @@ The full-month-name tables (`January`…`December`) in owner_reports `_fmtMonth`
 - `_fmtMoney` null-guard wrappers removed from `scan_review_screen.dart` and `recurring_maintenance_list_screen.dart`; the four call sites inline the null check.
 - `accounting_impact_card_test.dart` updated from `$-225.00` to `-$225.00` (the sign-placement change from round 1).
 - Trailing blank line at the end of `units_list_screen.dart` removed.
+- Round 3: the `_money` wrapper in `tenant_ledger_view.dart` was removed; its four call sites inline the null fallback.
