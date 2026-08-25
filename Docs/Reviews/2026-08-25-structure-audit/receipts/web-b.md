@@ -89,3 +89,59 @@ header formatter (`lib/components/accounting/PortalAccountHistoryRows.svelte:31`
 `lib/accounting/tenant-ledger-display.ts:18`) plus the private `formatAccountingMonthYear` in
 `lib/accounting/accounting-display.ts:220`. Merging them needs a new exported function, which
 this lane was not asked for.
+
+## Item 3 — run the app and look
+
+`playwright-cli` is not installed on this machine (`which playwright-cli` → nothing), so the
+verification used a raw headless Chromium script through the repo's own Playwright 1.60, with
+`headless: true` and an explicit `viewport: { width: 1710, height: 990 }`. The script printed
+`viewport eval: 1710x990` from `window.innerWidth + 'x' + window.innerHeight` on every run.
+
+The dev stack needed a task-local database. The only Postgres on :5432 is `ediplatform-postgres`
+(different credentials), and no `rentalcommand` database exists anywhere on this machine, so the
+run used a throwaway container `rc-web-b-db` on :5434 with `PG_PORT=5434 PG_PASSWORD=postgres
+./scripts/start-dev.sh`. `scripts/start-dev.sh` was not edited; it builds its own connection
+strings from those variables. The container was removed afterwards. Logged in as
+admin@rentalcommand.local and chose "Explore with sample data" to get a populated portfolio.
+
+Screenshots in `receipts/web-b/`:
+- `dashboard.png` — the two pulse tiles read `$5,175` and `$15,046`: whole dollars, as before.
+- `past-due.png` — "5 rentals behind, owing $5,175", then `$1,050`, `$1,100`, `$975`: whole
+  dollars, as before.
+- `accounting.png` — `$0.00`, `-$20,175.00`, `($20,175.00)`: cents, as before. Header date reads
+  "Aug 25, 2026", the correct day.
+- `owners-report.png` / `owners-report-detail.png` — `$13,975.00`, `$970.00`, `$1,118.00`,
+  `$11,887.00`: cents, as before.
+- `properties.png`, `property-detail.png`, `property-finances.png` — the expense grid shows
+  `$195.00` with dates `8/5/2026`, `3/3/2026`: the compact numeric grid date left unchanged on
+  purpose, and the money still carries cents. No page errors in the console on any page.
+
+Browser cleanup: stopped web-b-verify (headless Chromium closed by the script; `pgrep -fa chrom`
+afterwards matched only the grep itself). Dev stack stopped (API, Engine, Vite; nothing listening
+on 5665/5666/5667) and the `rc-web-b-db` container removed.
+
+## Verification
+
+| Command | Exit |
+|---|---|
+| `pnpm --dir web install --frozen-lockfile` | 0 |
+| `pnpm --dir web check` | 0 (5611 files, 0 errors, 18 pre-existing warnings) |
+| `pnpm --dir web check:native` | 0 |
+| `pnpm --dir web test` | 1 — 881 pass, 5 fail, all 5 pre-existing on this branch |
+| `rg -c "style: 'currency'" web/src` | one file: `accounting-display.ts` |
+
+The five test failures are inherited from the wave-1 commit 62208cc6, not from this lane. Four of
+them (`lifecycle-actions-contract`, `unit-payment-contract`, `accounting books API contract`,
+`cash flow API contract`) fail with `ERR_MODULE_NOT_FOUND` because that commit added relative
+imports without a `.ts` extension — e.g. `src/lib/api/endpoints/lease-managements.ts` imports
+`'../list-params'` while `src/lib/api/list-params.ts` exists — which the node test runner cannot
+resolve; the fifth (`edits and issues the exact canonical draft revision`) is a source-text
+assertion in `lease-action-hub-contract.test.ts`. Running the same suite on the branch's base
+commit gives the same five plus `accounting-display.test.ts`, which this lane's extension fix
+repaired.
+
+Tests changed in this lane:
+- `src/lib/accounting/expense-receipt-display.test.ts` — dropped the `formatExpenseMoney` import
+  and its one assertion, because that helper is deleted (rule a).
+- `src/lib/leases/lease-action-hub-contract.test.ts:96` — the source-text assertion now looks for
+  `formatAccountingCurrency(summary.baseRentAmount)` instead of the deleted `money(...)` (rule a).
