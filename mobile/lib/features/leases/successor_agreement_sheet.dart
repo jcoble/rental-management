@@ -92,12 +92,23 @@ LeaseSuccessorDates initialLeaseSuccessorDates(
   }
 
   final sourceEnd = source.termEndOn;
+  final sourceTermDays = sourceEnd == null
+      ? null
+      : DateTime.utc(sourceEnd.year, sourceEnd.month, sourceEnd.day)
+            .difference(
+              DateTime.utc(
+                source.termStartOn.year,
+                source.termStartOn.month,
+                source.termStartOn.day,
+              ),
+            )
+            .inDays;
   final termEnd = sourceEnd == null
       ? DateUtils.addDaysToDate(
           DateTime(nextStart.year + 1, nextStart.month, nextStart.day),
           -1,
         )
-      : nextStart.add(sourceEnd.difference(source.termStartOn));
+      : DateUtils.addDaysToDate(nextStart, sourceTermDays!);
   return LeaseSuccessorDates(
     termStart: nextStart,
     termEnd: termEnd,

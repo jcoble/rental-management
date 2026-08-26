@@ -136,6 +136,31 @@ void main() {
     expect(renewal.termStart, DateTime(2026, 11, 2));
   });
 
+  test('lease renewal preserves calendar-day term length across DST', () {
+    final source = LeaseAgreementHistory.fromJson({
+      'leaseAgreementId': 1,
+      'versionNumber': 1,
+      'agreementNumber': 'L-1',
+      'changeType': 'New',
+      'termType': 'FixedTerm',
+      'termStartOn': '2025-01-01',
+      'termEndOn': '2025-06-30',
+      'governingFromOn': '2025-01-01',
+      'baseRentAmount': 1000,
+      'agreementStatus': 'Active',
+      'isGoverning': true,
+      'hasLiveReissue': false,
+    });
+
+    final renewal = initialLeaseSuccessorDates(
+      source,
+      LeaseSuccessorOperation.renewal,
+      businessDate: DateTime(2025, 5, 1),
+    );
+
+    expect(renewal.termEnd, DateTime(2025, 12, 28));
+  });
+
   testWidgets('money periods use the UTC business calendar', (tester) async {
     final books = _MoneyBooksRepository();
     await _pumpMoneyScreen(tester, books);
