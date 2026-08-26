@@ -108,7 +108,7 @@ async function openTenantMoney(page: Page, request: Parameters<typeof findLeased
 	// by SvelteKit before the money tab is selected. A direct first-load deep link races that
 	// initialization and leaves the page on its loading shell.
 	await page.goto('/', { waitUntil: 'networkidle' });
-	await expect(page.getByTestId('dashboard-hero')).toBeVisible();
+	await expect(page.getByTestId('dashboard-summary')).toBeVisible();
 	await page.getByTestId('nav-units-picker').click();
 	await page.getByTestId('command-center-all').click();
 	await expect(page.getByTestId('units-page')).toBeVisible();

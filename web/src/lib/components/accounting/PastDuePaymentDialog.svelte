@@ -19,6 +19,7 @@
 		amount: number;
 		paidDate: string;
 		method: string;
+		payerName?: string;
 		externalReference?: string;
 		notes?: string;
 		allocateOldestCharges: true;
@@ -68,7 +69,7 @@
 		}
 	};
 
-	let form = $state({ amount: '', paidDate: '', method: '', externalReference: '', notes: '' });
+	let form = $state({ amount: '', paidDate: '', method: '', payerName: '', externalReference: '', notes: '' });
 	let errors = $state<{ amount?: string; method?: string }>({});
 	let initializedKey = $state('');
 
@@ -80,6 +81,7 @@
 				amount: totalOpenAmount.toFixed(2),
 				paidDate: moneyDate,
 				method: loadLastMethod(),
+				payerName: '',
 				externalReference: '',
 				notes: ''
 			};
@@ -124,6 +126,7 @@
 			amount,
 			paidDate: form.paidDate || moneyDate,
 			method: form.method,
+			payerName: form.payerName.trim() || undefined,
 			externalReference: form.externalReference.trim() || undefined,
 			notes: form.notes.trim() || undefined,
 			allocateOldestCharges: true
@@ -144,70 +147,84 @@
 		</Dialog.Header>
 
 		<div class="space-y-3" data-testid="past-due-mark-paid-form">
-			<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-amount-input" data-testid="past-due-mark-paid-amount-field">
-				<span data-testid="past-due-mark-paid-amount-label">Amount received</span>
-				<Input
-					id="past-due-mark-paid-amount-input"
-					data-testid="past-due-mark-paid-amount-input"
-					type="text"
-					inputmode="decimal"
-					bind:value={form.amount}
-					aria-invalid={Boolean(errors.amount)}
-					aria-describedby="past-due-mark-paid-amount-error"
-				/>
-				{#if errors.amount}<span class="block text-xs font-normal text-destructive" id="past-due-mark-paid-amount-error" data-testid="past-due-mark-paid-amount-error">{errors.amount}</span>{/if}
-			</label>
+			<!-- Three things up front: how much, when it arrived, and how it was paid. Everything a
+			     landlord only sometimes needs sits under "More details" so the common case is one glance. -->
+			<div class="space-y-3" data-testid="payment-essentials">
+				<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-amount-input" data-testid="past-due-mark-paid-amount-field">
+					<span data-testid="past-due-mark-paid-amount-label">Amount received</span>
+					<Input
+						id="past-due-mark-paid-amount-input"
+						data-testid="past-due-mark-paid-amount-input"
+						type="text"
+						inputmode="decimal"
+						bind:value={form.amount}
+						aria-invalid={Boolean(errors.amount)}
+						aria-describedby="past-due-mark-paid-amount-error"
+					/>
+					{#if errors.amount}<span class="block text-xs font-normal text-destructive" id="past-due-mark-paid-amount-error" data-testid="past-due-mark-paid-amount-error">{errors.amount}</span>{/if}
+				</label>
 
-			<div data-testid="past-due-allocation-preview">
-				<div class="flex items-center justify-between gap-3">
-					<p class="text-sm font-medium" data-testid="past-due-allocation-preview-label">Allocation preview</p>
-					<span class="text-xs text-muted-foreground" data-testid="past-due-allocation-preview-order">Oldest unpaid charges first</span>
-				</div>
-				{#if openChargesLoading}
-					<p class="mt-2 text-xs text-muted-foreground" data-testid="past-due-allocation-preview-loading">Loading unpaid charges…</p>
-				{:else if openChargesError}
-					<p class="mt-2 text-xs text-destructive" data-testid="past-due-allocation-preview-error">Couldn't load every unpaid charge. Try again before recording this payment.</p>
-				{:else if allocationPreview.length === 0}
-					<p class="mt-2 text-xs text-muted-foreground" data-testid="past-due-allocation-preview-empty">Enter a positive amount to preview the charges it will cover.</p>
-				{:else}
-					<ul class="mt-2 space-y-1 rounded-md border border-border/70 bg-muted/20 px-3 py-2" data-testid="past-due-allocation-preview-list">
-						{#each allocationPreview as allocation (allocation.charge.tenantLedgerEntryId)}
-							<li class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs" data-testid={`past-due-allocation-preview-row-${allocation.charge.tenantLedgerEntryId}`}>
-								<span class="min-w-0 truncate" data-testid={`past-due-allocation-preview-charge-${allocation.charge.tenantLedgerEntryId}`}>
-									{normalizeTenantLedgerDescription(allocation.charge.description) || 'Charge'} · {formatAccountingDate(allocation.charge.dueOn || allocation.charge.effectiveOn)}
-								</span>
-								<span class="shrink-0 font-mono tabular-nums" data-testid={`past-due-allocation-preview-amount-${allocation.charge.tenantLedgerEntryId}`}>
-									{formatAccountingCurrency(allocation.amount, allocation.charge.currency)}
-								</span>
-							</li>
-						{/each}
-					</ul>
-				{/if}
+				<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-date-input" data-testid="past-due-mark-paid-date-field">
+					<span data-testid="past-due-mark-paid-date-label">Date received</span>
+					<DatePicker id="past-due-mark-paid-date-input" testid="past-due-mark-paid-date-input" bind:value={form.paidDate} placeholder="Date received" todayValue={moneyDate} />
+				</label>
+
+				<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-method-input" data-testid="past-due-mark-paid-method-field">
+					<span data-testid="past-due-mark-paid-method-label">How it was paid</span>
+					<select id="past-due-mark-paid-method-input" data-testid="past-due-mark-paid-method-input" bind:value={form.method} class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
+						<option value="">Select method</option>
+						{#each PAYMENT_METHODS as method}<option value={method}>{method}</option>{/each}
+					</select>
+					{#if errors.method}<span class="block text-xs font-normal text-destructive" data-testid="past-due-mark-paid-method-error">{errors.method}</span>{/if}
+				</label>
 			</div>
 
-			<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-date-input" data-testid="past-due-mark-paid-date-field">
-				<span data-testid="past-due-mark-paid-date-label">Date received</span>
-				<DatePicker id="past-due-mark-paid-date-input" testid="past-due-mark-paid-date-input" bind:value={form.paidDate} placeholder="Date received" todayValue={moneyDate} />
-			</label>
+			<details class="rounded-md border border-border/70 bg-muted/10 px-3 py-2" data-testid="payment-more-details">
+				<summary class="cursor-pointer text-sm font-medium text-foreground" data-testid="payment-more-details-summary">More details</summary>
+				<div class="mt-3 space-y-3">
+					<div data-testid="past-due-allocation-preview">
+						<div class="flex items-center justify-between gap-3">
+							<p class="text-sm font-medium" data-testid="past-due-allocation-preview-label">What this payment covers</p>
+							<span class="text-xs text-muted-foreground" data-testid="past-due-allocation-preview-order">Oldest unpaid charges first</span>
+						</div>
+						{#if openChargesLoading}
+							<p class="mt-2 text-xs text-muted-foreground" data-testid="past-due-allocation-preview-loading">Loading unpaid charges…</p>
+						{:else if openChargesError}
+							<p class="mt-2 text-xs text-destructive" data-testid="past-due-allocation-preview-error">Couldn't load every unpaid charge. Try again before recording this payment.</p>
+						{:else if allocationPreview.length === 0}
+							<p class="mt-2 text-xs text-muted-foreground" data-testid="past-due-allocation-preview-empty">Enter a positive amount to preview the charges it will cover.</p>
+						{:else}
+							<ul class="mt-2 space-y-1 rounded-md border border-border/70 bg-muted/20 px-3 py-2" data-testid="past-due-allocation-preview-list">
+								{#each allocationPreview as allocation (allocation.charge.tenantLedgerEntryId)}
+									<li class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs" data-testid={`past-due-allocation-preview-row-${allocation.charge.tenantLedgerEntryId}`}>
+										<span class="min-w-0 truncate" data-testid={`past-due-allocation-preview-charge-${allocation.charge.tenantLedgerEntryId}`}>
+											{normalizeTenantLedgerDescription(allocation.charge.description) || 'Charge'} · {formatAccountingDate(allocation.charge.dueOn || allocation.charge.effectiveOn)}
+										</span>
+										<span class="shrink-0 font-mono tabular-nums" data-testid={`past-due-allocation-preview-amount-${allocation.charge.tenantLedgerEntryId}`}>
+											{formatAccountingCurrency(allocation.amount, allocation.charge.currency)}
+										</span>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
 
-			<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-method-input" data-testid="past-due-mark-paid-method-field">
-				<span data-testid="past-due-mark-paid-method-label">Method</span>
-				<select id="past-due-mark-paid-method-input" data-testid="past-due-mark-paid-method-input" bind:value={form.method} class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
-					<option value="">Select method</option>
-					{#each PAYMENT_METHODS as method}<option value={method}>{method}</option>{/each}
-				</select>
-				{#if errors.method}<span class="block text-xs font-normal text-destructive" data-testid="past-due-mark-paid-method-error">{errors.method}</span>{/if}
-			</label>
+					<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-payer-input" data-testid="past-due-mark-paid-payer-field">
+						<span data-testid="past-due-mark-paid-payer-label">Who paid</span>
+						<Input id="past-due-mark-paid-payer-input" data-testid="past-due-mark-paid-payer-input" bind:value={form.payerName} placeholder={target?.tenantName || 'The tenant on this rental'} />
+					</label>
 
-			<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-reference-input" data-testid="past-due-mark-paid-reference-field">
-				<span data-testid="past-due-mark-paid-reference-label">Reference</span>
-				<Input id="past-due-mark-paid-reference-input" data-testid="past-due-mark-paid-reference-input" bind:value={form.externalReference} placeholder="Check #, confirmation #, etc. (optional)" />
-			</label>
+					<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-reference-input" data-testid="past-due-mark-paid-reference-field">
+						<span data-testid="past-due-mark-paid-reference-label">Reference</span>
+						<Input id="past-due-mark-paid-reference-input" data-testid="past-due-mark-paid-reference-input" bind:value={form.externalReference} placeholder="Check #, confirmation #, etc. (optional)" />
+					</label>
 
-			<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-notes-input" data-testid="past-due-mark-paid-notes-field">
-				<span data-testid="past-due-mark-paid-notes-label">Notes</span>
-				<textarea id="past-due-mark-paid-notes-input" data-testid="past-due-mark-paid-notes-input" bind:value={form.notes} rows={2} maxlength={2000} placeholder="Anything to remember about this payment (optional)" class="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm"></textarea>
-			</label>
+					<label class="block space-y-1 text-sm font-medium" for="past-due-mark-paid-notes-input" data-testid="past-due-mark-paid-notes-field">
+						<span data-testid="past-due-mark-paid-notes-label">Notes</span>
+						<textarea id="past-due-mark-paid-notes-input" data-testid="past-due-mark-paid-notes-input" bind:value={form.notes} rows={2} maxlength={2000} placeholder="Anything to remember about this payment (optional)" class="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm"></textarea>
+					</label>
+				</div>
+			</details>
 		</div>
 
 		<Dialog.Footer data-testid="past-due-mark-paid-footer">
