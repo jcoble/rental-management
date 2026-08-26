@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/features/settings/notification_foundation_repository.dart';
 
@@ -36,6 +38,41 @@ void main() {
       'enableSms': false,
     });
     expect(saved.enableEmail, isTrue);
+  });
+
+  test('My alerts save completing after disposal does not throw', () async {
+    final saveResult = Completer<MyAlerts>();
+    final container = ProviderContainer(
+      overrides: [
+        notificationFoundationRepositoryProvider.overrideWithValue(
+          _BlockingAlertsRepository(saveResult),
+        ),
+      ],
+    );
+    final subscription = container.listen<AsyncValue<MyAlerts>>(
+      myAlertsProvider,
+      (_, _) {},
+    );
+    var disposed = false;
+    void disposeContainer() {
+      if (disposed) return;
+      disposed = true;
+      subscription.close();
+      container.dispose();
+    }
+    addTearDown(disposeContainer);
+
+    final notifier = container.read(myAlertsProvider.notifier);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(container.read(myAlertsProvider).value, isNotNull);
+
+    final save = notifier.save();
+    await Future<void>.delayed(Duration.zero);
+    disposeContainer();
+    saveResult.complete(_testAlerts);
+
+    await expectLater(save, completes);
   });
 
   test(
@@ -405,6 +442,29 @@ class _RecordingAdapter implements HttpClientAdapter {
   @override
   void close({bool force = false}) {}
 }
+
+class _BlockingAlertsRepository extends NotificationFoundationRepository {
+  _BlockingAlertsRepository(this.saveResult) : super(Dio());
+
+  final Completer<MyAlerts> saveResult;
+
+  @override
+  Future<MyAlerts> getMyAlerts() async => _testAlerts;
+
+  @override
+  Future<MyAlerts> updateMyAlerts(MyAlerts alerts) => saveResult.future;
+}
+
+const _testAlerts = MyAlerts(
+  userId: 7,
+  displayName: 'Pat Manager',
+  email: 'pat@example.test',
+  phoneNumber: null,
+  enableInApp: true,
+  enableMobilePush: true,
+  enableEmail: false,
+  enableSms: false,
+);
 
 const _routingRuleJson = <String, dynamic>{
   'id': 31,
