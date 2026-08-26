@@ -150,7 +150,7 @@ public class UnitServiceListTests : IAsyncLifetime
         result.TotalCount.Should().Be(4);
         result.Items.Select(row => row.UnitNumber).Should().Equal("B", "C");
         result.Items.Select(row => row.OpenWorkOrderCount).Should().Equal(3, 0);
-        _commands.Should().HaveCount(3);
+        _commands.Should().HaveCount(4);
 
         var countSql = _commands.Should().ContainSingle(sql =>
             sql.TrimStart().StartsWith("SELECT count(*)::int", StringComparison.OrdinalIgnoreCase)).Subject;
@@ -175,19 +175,38 @@ public class UnitServiceListTests : IAsyncLifetime
         hydrationSql.Should().Contain("unit.\"Id\" = ANY", "hydration must be keyed by page Unit ids");
         hydrationSql.Should().Contain("current_possession AS MATERIALIZED");
         hydrationSql.Should().Contain("open_work_order_counts AS MATERIALIZED");
-        hydrationSql.Should().Contain("document_associations AS MATERIALIZED");
+        hydrationSql.Should().NotContain("StoredFiles");
         hydrationSql.Should().Contain("unit.\"DeletedAt\" IS NULL",
             "raw Unit reads must preserve the DbContext soft-delete filter");
         hydrationSql.Should().Contain("property_row.\"DeletedAt\" IS NULL",
             "raw Property joins must preserve the DbContext soft-delete filter");
         hydrationSql.Should().Contain("work_order.\"DeletedAt\" IS NULL",
             "raw WorkOrder joins must preserve the DbContext soft-delete filter");
-        hydrationSql.Should().Contain("expense.\"DeletedAt\" IS NULL",
-            "raw Expense joins must preserve the DbContext soft-delete filter");
-        hydrationSql.Should().Contain("stored_file.\"DeletedAt\" IS NULL",
-            "raw StoredFile joins must preserve the DbContext soft-delete filter");
         hydrationSql.Should().Contain("portfolio.\"DeletedAt\" IS NULL",
             "portfolio-owned raw joins must preserve portfolio visibility");
+        _commands.Should().ContainSingle(sql =>
+            sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListWithHealthPageAsync_DefaultWindowUsesBoundedStatements()
+    {
+        SeedUnit("A", "Cedar Point Flats", openWorkOrders: 1);
+        SeedUnit("B", "Harbor View Apartments", openWorkOrders: 2);
+
+        await ActivateApiScopeAsync();
+        _commands.Clear();
+        await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery { Take = 50 });
+
+        _commands.Should().HaveCountLessThanOrEqualTo(4);
+        _commands.Should().OnlyContain(sql => sql.Length < 20 * 1024);
+        _commands.Should().ContainSingle(sql =>
+            sql.Contains("page_units AS MATERIALIZED", StringComparison.OrdinalIgnoreCase)
+            && !sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().ContainSingle(sql =>
+            sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -499,7 +518,7 @@ public class UnitServiceListTests : IAsyncLifetime
         dashboard.Should().NotBeNull();
         row.DocsNeedingReviewCount.Should().Be(7);
         row.DocsNeedingReviewCount.Should().Be(dashboard!.Header.DocsNeedingReviewCount);
-        listSql.Should().HaveCount(3);
+        listSql.Should().HaveCount(4);
         listSql.Should().Contain(sql =>
             sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LeaseAgreements", StringComparison.OrdinalIgnoreCase) &&

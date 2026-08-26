@@ -395,6 +395,8 @@ public class UnitService : IUnitService
         var pageUnitIds = page.Select(row => row.Id).ToArray();
         var healthRows = await LoadUnitHealthPageAsync(scope, pageUnitIds, ct);
         var healthByUnitId = healthRows.ToDictionary(row => row.Id);
+        var documentCounts = await BuildUnitDocumentCountsQuery(portfolioId, pageUnitIds)
+            .ToDictionaryAsync(row => row.UnitId, row => row.Count, ct);
         var items = new List<UnitHealthResponse>(page.Count);
         foreach (var seed in page)
         {
@@ -420,7 +422,7 @@ public class UnitService : IUnitService
                     && health.BusinessDate is { } businessDate
                         ? Math.Max(0, end.DayNumber - businessDate.DayNumber)
                         : null,
-                DocsNeedingReviewCount = health.DocsNeedingReviewCount,
+                DocsNeedingReviewCount = documentCounts.GetValueOrDefault(seed.Id),
                 SimpleStage = ComputeSimpleStage(health),
             });
         }
@@ -644,121 +646,6 @@ public class UnitService : IUnitService
                       @cancelledWorkOrderStatus,
                       @archivedWorkOrderStatus)
                 GROUP BY work_order."UnitId"
-            ),
-            document_associations AS MATERIALIZED (
-                SELECT page_unit."UnitId", stored_file."Id" AS "FileId"
-                FROM page_units AS page_unit
-                INNER JOIN "StoredFiles" AS stored_file
-                    ON stored_file."PortfolioId" = page_unit."PortfolioId"
-                   AND stored_file."EntityId" = page_unit."UnitId"::bigint
-                WHERE stored_file."DeletedAt" IS NULL
-                  AND stored_file."EntityType" = 'Unit'
-
-                UNION
-
-                SELECT page_unit."UnitId", stored_file."Id"
-                FROM page_units AS page_unit
-                INNER JOIN "Expenses" AS expense
-                    ON expense."PortfolioId" = page_unit."PortfolioId"
-                   AND expense."UnitId" = page_unit."UnitId"
-                   AND expense."DeletedAt" IS NULL
-                INNER JOIN "StoredFiles" AS stored_file
-                    ON stored_file."PortfolioId" = expense."PortfolioId"
-                   AND stored_file."EntityId" = expense."Id"::bigint
-                WHERE stored_file."DeletedAt" IS NULL
-                  AND stored_file."EntityType" = 'Expense'
-
-                UNION
-
-                SELECT page_unit."UnitId", stored_file."Id"
-                FROM page_units AS page_unit
-                INNER JOIN "WorkOrders" AS work_order
-                    ON work_order."PortfolioId" = page_unit."PortfolioId"
-                   AND work_order."UnitId" = page_unit."UnitId"
-                   AND work_order."DeletedAt" IS NULL
-                INNER JOIN "Expenses" AS expense
-                    ON expense."PortfolioId" = work_order."PortfolioId"
-                   AND expense."WorkOrderId" = work_order."Id"
-                   AND expense."DeletedAt" IS NULL
-                INNER JOIN "StoredFiles" AS stored_file
-                    ON stored_file."PortfolioId" = expense."PortfolioId"
-                   AND stored_file."EntityId" = expense."Id"::bigint
-                WHERE stored_file."DeletedAt" IS NULL
-                  AND stored_file."EntityType" = 'Expense'
-
-                UNION
-
-                SELECT page_unit."UnitId", stored_file."Id"
-                FROM page_units AS page_unit
-                INNER JOIN "WorkOrders" AS work_order
-                    ON work_order."PortfolioId" = page_unit."PortfolioId"
-                   AND work_order."UnitId" = page_unit."UnitId"
-                   AND work_order."DeletedAt" IS NULL
-                INNER JOIN "StoredFiles" AS stored_file
-                    ON stored_file."PortfolioId" = work_order."PortfolioId"
-                   AND stored_file."EntityId" = work_order."Id"::bigint
-                WHERE stored_file."DeletedAt" IS NULL
-                  AND stored_file."EntityType" = 'WorkOrder'
-
-                UNION
-
-                SELECT page_unit."UnitId", stored_file."Id"
-                FROM page_units AS page_unit
-                INNER JOIN "Inspections" AS inspection
-                    ON inspection."PortfolioId" = page_unit."PortfolioId"
-                   AND inspection."UnitId" = page_unit."UnitId"
-                INNER JOIN active_portfolio
-                    ON active_portfolio."PortfolioId" = inspection."PortfolioId"
-                INNER JOIN "StoredFiles" AS stored_file
-                    ON stored_file."PortfolioId" = inspection."PortfolioId"
-                   AND stored_file."EntityId" = inspection."Id"::bigint
-                WHERE stored_file."DeletedAt" IS NULL
-                  AND stored_file."EntityType" = 'Inspection'
-
-                UNION
-
-                SELECT page_unit."UnitId", stored_file."Id"
-                FROM page_units AS page_unit
-                INNER JOIN "LeaseManagements" AS management
-                    ON management."PortfolioId" = page_unit."PortfolioId"
-                   AND management."UnitId" = page_unit."UnitId"
-                INNER JOIN active_portfolio
-                    ON active_portfolio."PortfolioId" = management."PortfolioId"
-                INNER JOIN "LeaseAgreements" AS agreement
-                    ON agreement."PortfolioId" = management."PortfolioId"
-                   AND agreement."LeaseManagementId" = management."Id"
-                INNER JOIN "LegalDocumentArtifacts" AS artifact
-                    ON artifact."PortfolioId" = agreement."PortfolioId"
-                   AND artifact."Id" = agreement."IssuedArtifactId"
-                INNER JOIN "StoredFiles" AS stored_file
-                    ON stored_file."PortfolioId" = artifact."PortfolioId"
-                   AND stored_file."Id" = artifact."StoredFileId"
-                   AND stored_file."DeletedAt" IS NULL
-
-                UNION
-
-                SELECT page_unit."UnitId", stored_file."Id"
-                FROM page_units AS page_unit
-                INNER JOIN "LeaseManagements" AS management
-                    ON management."PortfolioId" = page_unit."PortfolioId"
-                   AND management."UnitId" = page_unit."UnitId"
-                INNER JOIN active_portfolio
-                    ON active_portfolio."PortfolioId" = management."PortfolioId"
-                INNER JOIN "LeaseAgreements" AS agreement
-                    ON agreement."PortfolioId" = management."PortfolioId"
-                   AND agreement."LeaseManagementId" = management."Id"
-                INNER JOIN "LegalDocumentArtifacts" AS artifact
-                    ON artifact."PortfolioId" = agreement."PortfolioId"
-                   AND artifact."Id" = agreement."ExecutedArtifactId"
-                INNER JOIN "StoredFiles" AS stored_file
-                    ON stored_file."PortfolioId" = artifact."PortfolioId"
-                   AND stored_file."Id" = artifact."StoredFileId"
-                   AND stored_file."DeletedAt" IS NULL
-            ),
-            document_counts AS MATERIALIZED (
-                SELECT document_association."UnitId", count(*)::integer AS "Count"
-                FROM document_associations AS document_association
-                GROUP BY document_association."UnitId"
             )
             SELECT
                 page_unit."UnitId" AS "Id",
@@ -774,8 +661,7 @@ public class UnitService : IUnitService
                 CASE WHEN current_possession."LeaseManagementId" IS NULL
                     THEN NULL::date ELSE active_portfolio."BusinessDate" END AS "BusinessDate",
                 current_agreement."CurrentAgreementEndOn" AS "CurrentAgreementEndOn",
-                COALESCE(open_work_order_count."Count", 0) AS "OpenWorkOrderCount",
-                COALESCE(document_count."Count", 0) AS "DocsNeedingReviewCount"
+                COALESCE(open_work_order_count."Count", 0) AS "OpenWorkOrderCount"
             FROM page_units AS page_unit
             CROSS JOIN active_portfolio
             INNER JOIN current_possession
@@ -790,8 +676,6 @@ public class UnitService : IUnitService
                 ON current_account."UnitId" = page_unit."UnitId"
             LEFT JOIN open_work_order_counts AS open_work_order_count
                 ON open_work_order_count."UnitId" = page_unit."UnitId"
-            LEFT JOIN document_counts AS document_count
-                ON document_count."UnitId" = page_unit."UnitId"
             """;
 
         return _db.Database.SqlQueryRaw<UnitHealthHydrationReadRow>(
@@ -1150,7 +1034,6 @@ public class UnitService : IUnitService
         public DateOnly? BusinessDate { get; init; }
         public DateOnly? CurrentAgreementEndOn { get; init; }
         public int OpenWorkOrderCount { get; init; }
-        public int DocsNeedingReviewCount { get; init; }
     }
 
     internal sealed class UnitDocumentAssociationRow
