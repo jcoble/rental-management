@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -11,21 +12,30 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class AppointmentServiceListTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public class AppointmentServiceListTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly AppointmentService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private AppointmentService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public AppointmentServiceListTests()
+    public AppointmentServiceListTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(AppointmentServiceListTests));
         _sut = new AppointmentService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ListPageAsync_FiltersSortsAndPagesInSql()
@@ -36,8 +46,9 @@ public class AppointmentServiceListTests : IDisposable
         SeedAppointment("D-400", "West Market Lofts", AppointmentType.Inspection, AppointmentStatus.Scheduled);
         SeedAppointment("E-500", "York House", AppointmentType.Showing, AppointmentStatus.Cancelled);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new AppointmentListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new AppointmentListQuery
         {
             Type = AppointmentType.Showing,
             Status = AppointmentStatus.Scheduled,

@@ -26,23 +26,11 @@ public class RecurringExpenseService : IRecurringExpenseService
         _writes = writes;
     }
 
-    public async Task<IReadOnlyList<RecurringExpenseResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, propertyId, query, ct);
-        return page.Items;
-    }
-
     public async Task<IReadOnlyList<RecurringExpenseResponse>> ListAsync(
         WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var page = await ListPageAsync(scope, propertyId, query, ct);
         return page.Items;
-    }
-
-    public async Task<RecurringExpenseListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-    {
-        var filtered = BuildListQuery(portfolioId, propertyId, query);
-        return await BuildPageAsync(filtered, query, ct);
     }
 
     public Task<RecurringExpenseListResponse> ListPageAsync(
@@ -73,9 +61,6 @@ public class RecurringExpenseService : IRecurringExpenseService
             Take = query.NormalizedTake,
         };
     }
-
-    private IQueryable<RecurringExpense> BuildListQuery(int portfolioId, int? propertyId, ListQuery query)
-        => BuildListQuery(_db.RecurringExpenses.AsNoTracking(), portfolioId, propertyId, query);
 
     private static IQueryable<RecurringExpense> BuildListQuery(
         IQueryable<RecurringExpense> q, int portfolioId, int? propertyId, ListQuery query)
@@ -117,9 +102,6 @@ public class RecurringExpenseService : IRecurringExpenseService
 
         return ordered.ThenBy(t => t.Id);
     }
-
-    public Task<RecurringExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
-        GetAsync(_db.RecurringExpenses.AsNoTracking(), portfolioId, id, ct);
 
     public Task<RecurringExpenseResponse?> GetAsync(
         WorkspaceReadScope scope, int id, CancellationToken ct = default) =>

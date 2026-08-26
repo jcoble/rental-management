@@ -111,12 +111,6 @@ public class TenantService : ITenantService
             ? JsonSerializer.Deserialize<TResponse>(result.ResponseJson)
             : null;
 
-    public async Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, ToTenantListQuery(query), ct);
-        return page.Items;
-    }
-
     public async Task<IReadOnlyList<TenantResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope,
         TenantListQuery query,
@@ -139,15 +133,6 @@ public class TenantService : ITenantService
                 [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingOnboardingManage],
                 _timeProvider.UtcNow());
         return ListPageFromQueryAsync(tenants, scope.PortfolioId, query, ct);
-    }
-
-    public Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default)
-    {
-        var q = _db.Tenants
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId);
-
-        return ListPageFromQueryAsync(q, portfolioId, query, ct);
     }
 
     private Task<TenantListResponse> ListPageFromQueryAsync(
@@ -1035,14 +1020,6 @@ public class TenantService : ITenantService
         }
 
         return tokens;
-    }
-
-    public async Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var tenants = _db.Tenants
-            .AsNoTracking()
-            .Where(t => t.Id == id && t.PortfolioId == portfolioId);
-        return await GetFromQueryAsync(tenants, portfolioId, ct);
     }
 
     public Task<TenantResponse?> GetAuthorizedAsync(

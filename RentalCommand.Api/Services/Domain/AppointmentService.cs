@@ -35,21 +35,6 @@ public class AppointmentService : IAppointmentService
         _writes = writes;
     }
 
-    public async Task<IReadOnlyList<AppointmentResponse>> ListAsync(int portfolioId, int? propertyId, int? tenantId, ListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, ToAppointmentListQuery(query, propertyId, tenantId), ct);
-        return page.Items;
-    }
-
-    public async Task<AppointmentListResponse> ListPageAsync(int portfolioId, AppointmentListQuery query, CancellationToken ct = default)
-    {
-        var q = _db.Appointments
-            .AsNoTracking()
-            .Where(a => a.PortfolioId == portfolioId);
-
-        return await ListPageFromQueryAsync(q, query, ct);
-    }
-
     public async Task<IReadOnlyList<AppointmentResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope,
         int? propertyId,
@@ -236,13 +221,6 @@ public class AppointmentService : IAppointmentService
         PropertyId = propertyId,
         TenantId = tenantId,
     };
-
-    public async Task<AppointmentResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        return await ProjectResponses(_db.Appointments.AsNoTracking()
-                .Where(a => a.Id == id && a.PortfolioId == portfolioId))
-            .FirstOrDefaultAsync(ct);
-    }
 
     public async Task<AppointmentResponse?> GetAuthorizedAsync(
         WorkspaceReadScope scope,

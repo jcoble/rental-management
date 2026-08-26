@@ -23,13 +23,4 @@ public interface IEvictionCaseService
     Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default);
 
-    Task<IReadOnlyList<EvictionCaseResponse>> ListAsync(
-        int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default);
-
-    Task<EvictionCaseListResponse> ListPageAsync(
-        int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default);
-
-    Task<EvictionCaseResponse?> GetAsync(
-        int portfolioId, int id, CancellationToken ct = default);
-
 }

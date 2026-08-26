@@ -30,12 +30,6 @@ public class EvictionCaseService : IEvictionCaseService
         _writes = writes;
     }
 
-    public async Task<IReadOnlyList<EvictionCaseResponse>> ListAsync(int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default)
-        => (await ListPageAsync(portfolioId, query, ct)).Items;
-
-    public async Task<EvictionCaseListResponse> ListPageAsync(int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default)
-        => await ListPageFromQueryAsync(BaseQuery(portfolioId), query, ct);
-
     public async Task<IReadOnlyList<EvictionCaseResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope, EvictionCaseListQuery query, CancellationToken ct = default)
         => (await ListPageAuthorizedAsync(scope, query, ct)).Items;
@@ -70,12 +64,6 @@ public class EvictionCaseService : IEvictionCaseService
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
-    }
-
-    public async Task<EvictionCaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        return await ProjectResponses(BaseQuery(portfolioId).Where(e => e.Id == id), includeEvents: true)
-            .FirstOrDefaultAsync(ct);
     }
 
     public async Task<EvictionCaseResponse?> GetAuthorizedAsync(
@@ -182,9 +170,6 @@ public class EvictionCaseService : IEvictionCaseService
         result.Outcome == OperationMutationOutcome.NotFound || result.ResponseJson is null
             ? null
             : JsonSerializer.Deserialize<EvictionCaseResponse>(result.ResponseJson);
-
-    private IQueryable<EvictionCase> BaseQuery(int portfolioId) => _db.EvictionCases.AsNoTracking()
-        .Where(e => e.PortfolioId == portfolioId);
 
     private IQueryable<EvictionCase> AuthorizedBaseQuery(
         WorkspaceReadScope scope,

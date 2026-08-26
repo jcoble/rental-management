@@ -63,20 +63,6 @@ public class NotificationService : INotificationService
             .ToListAsync(ct);
     }
 
-    // Direct service tests predate canonical request scopes. Production callers use the
-    // access-bound overload above; this overload preserves their read-state coverage only.
-    public Task<IReadOnlyList<NotificationResponse>> ListAsync(
-        int portfolioId,
-        int userId,
-        bool unreadOnly = false,
-        int skip = 0,
-        int take = 20,
-        CancellationToken ct = default) =>
-        ListAsync(
-            new WorkspaceReadScope(portfolioId, userId, Guid.Empty, 1, 1),
-            NavigationExperience.Management,
-            unreadOnly, skip, take, ct);
-
     public async Task<NotificationResponse?> GetAsync(
         WorkspaceReadScope scope,
         NavigationExperience experience,
@@ -101,17 +87,6 @@ public class NotificationService : INotificationService
                 readState.PortfolioId == scope.PortfolioId &&
                 readState.NotificationId == n.Id &&
                 readState.UserId == scope.UserId));
-
-        return await query.CountAsync(ct);
-    }
-
-    public async Task<int> GetUnreadCountAsync(int portfolioId, int userId, CancellationToken ct = default)
-    {
-        var query = AuthorizedNotifications(portfolioId, userId, experience: null)
-            .Where(n => !_db.NotificationReadStates.Any(readState =>
-                readState.PortfolioId == portfolioId &&
-                readState.NotificationId == n.Id &&
-                readState.UserId == userId));
 
         return await query.CountAsync(ct);
     }

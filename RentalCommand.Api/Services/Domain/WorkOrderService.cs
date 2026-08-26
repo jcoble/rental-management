@@ -41,12 +41,6 @@ public class WorkOrderService : IWorkOrderService
         _writes = writes;
     }
 
-    public async Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, ToWorkOrderListQuery(query, propertyId, unitId, vendorId), ct);
-        return page.Items;
-    }
-
     public async Task<IReadOnlyList<WorkOrderResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope,
         int? propertyId,
@@ -60,15 +54,6 @@ public class WorkOrderService : IWorkOrderService
             ToWorkOrderListQuery(query, propertyId, unitId, vendorId),
             ct);
         return page.Items;
-    }
-
-    public async Task<WorkOrderListResponse> ListPageAsync(int portfolioId, WorkOrderListQuery query, CancellationToken ct = default)
-    {
-        var q = _db.WorkOrders
-            .AsNoTracking()
-            .Where(w => w.PortfolioId == portfolioId);
-
-        return await ListPageFromQueryAsync(q, query, ct);
     }
 
     public Task<WorkOrderListResponse> ListPageAuthorizedAsync(
@@ -282,19 +267,6 @@ public class WorkOrderService : IWorkOrderService
             ApplyMaintenanceVisibility(response);
         }
         return response;
-    }
-
-    public async Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var q = _db.WorkOrders
-            .AsNoTracking()
-            .Include(w => w.Property)
-            .Include(w => w.Unit)
-            .Include(w => w.Vendor)
-            .Include(w => w.Tenant)
-            .Where(w => w.Id == id && w.PortfolioId == portfolioId);
-
-        return await GetFromQueryAsync(q, portfolioId, id, ct);
     }
 
     public Task<WorkOrderDetailResponse?> GetAuthorizedAsync(

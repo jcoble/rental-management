@@ -25,23 +25,11 @@ public class LoanService : ILoanService
         _writes = writes;
     }
 
-    public async Task<IReadOnlyList<LoanResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, propertyId, query, ct);
-        return page.Items;
-    }
-
     public async Task<IReadOnlyList<LoanResponse>> ListAsync(
         WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var page = await ListPageAsync(scope, propertyId, query, ct);
         return page.Items;
-    }
-
-    public async Task<LoanListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-    {
-        var filtered = BuildListQuery(portfolioId, propertyId, query);
-        return await BuildPageAsync(filtered, query, ct);
     }
 
     public Task<LoanListResponse> ListPageAsync(
@@ -72,9 +60,6 @@ public class LoanService : ILoanService
             Take = query.NormalizedTake,
         };
     }
-
-    private IQueryable<Loan> BuildListQuery(int portfolioId, int? propertyId, ListQuery query)
-        => BuildListQuery(_db.Loans.AsNoTracking(), portfolioId, propertyId, query);
 
     private static IQueryable<Loan> BuildListQuery(
         IQueryable<Loan> q, int portfolioId, int? propertyId, ListQuery query)
@@ -118,9 +103,6 @@ public class LoanService : ILoanService
 
         return ordered.ThenBy(l => l.Id);
     }
-
-    public Task<LoanResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
-        GetAsync(_db.Loans.AsNoTracking(), portfolioId, id, ct);
 
     public Task<LoanResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
         GetAsync(
@@ -194,23 +176,6 @@ public class LoanService : ILoanService
         _writes.ExecuteAsync(
             AtomicMoneyMutation.Identity(command).IdempotencyKey,
             AtomicMoneyMutation.Write(command, _db), ct);
-
-    public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
-        int portfolioId, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default)
-    {
-        // Confirm the loan is in-portfolio before returning its schedule (IDOR guard).
-        var loanInScope = await _db.Loans
-            .AsNoTracking()
-            .AnyAsync(l => l.Id == loanId && l.PortfolioId == portfolioId, ct);
-        if (!loanInScope)
-            return null;
-
-        return await BuildPaymentQuery(
-                LoanPaymentEffectiveQuery.From(_db)
-                    .Where(p => p.LoanId == loanId && p.PortfolioId == portfolioId),
-                query)
-            .ToListAsync(ct);
-    }
 
     public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
         WorkspaceReadScope scope, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default)

@@ -40,15 +40,9 @@ public interface IApplicationService
         string operationKey,
         CancellationToken ct = default);
 
-    Task<IReadOnlyList<ApplicationResponse>> ListAsync(
-        int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default);
-
     Task<IReadOnlyList<ApplicationResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope, string? status, ListQuery query, int? unitId = null,
         CancellationToken ct = default);
-
-    Task<ApplicationListResponse> ListPageAsync(
-        int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default);
 
     Task<ApplicationListResponse> ListPageAuthorizedAsync(
         WorkspaceReadScope scope, string? status, ListQuery query, int? unitId = null,

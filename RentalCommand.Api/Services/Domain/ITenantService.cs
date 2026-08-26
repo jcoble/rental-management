@@ -26,7 +26,4 @@ public interface ITenantService
     Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope, int id, string operationKey, CancellationToken ct = default);
 
-    Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
-    Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default);
-    Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 }

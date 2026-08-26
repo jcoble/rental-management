@@ -4,6 +4,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.TestCommon;
@@ -14,29 +15,30 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Portfolio-scoped recurring-expense reads, SQL-side paging, and the contract that all business
 /// mutations flow through scoped receipt-backed commands.
 /// </summary>
-public class RecurringExpenseServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public class RecurringExpenseServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
-    private readonly RecurringExpenseService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RecurringExpenseService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public RecurringExpenseServiceTests()
+    public RecurringExpenseServiceTests(MigratedPostgreSqlFixture fixture)
     {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(RecurringExpenseServiceTests));
         _sut = new RecurringExpenseService(
             _ctx.Db, TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
     }
 
-    public void Dispose() => _ctx.Dispose();
-
-    [Fact]
-    public async Task CrossPortfolio_CannotRead()
-    {
-        var property = SeedProperty();
-        var template = SeedTemplate(property.Id);
-
-        (await _sut.GetAsync(portfolioId: 2, template.Id)).Should().BeNull();
-    }
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public void MutationsExposeOnlyScopedReceiptBackedOverloads()
@@ -59,7 +61,8 @@ public class RecurringExpenseServiceTests : IDisposable
         SeedTemplate(property.Id, description: "February insurance", nextRunDate: new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc));
         SeedTemplate(property.Id, description: "March insurance", nextRunDate: new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc));
 
-        var page = await _sut.ListPageAsync(PortfolioId, property.Id, new ListQuery
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var page = await _sut.ListPageAsync(_scope, property.Id, new ListQuery
         {
             From = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
             To = new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc),

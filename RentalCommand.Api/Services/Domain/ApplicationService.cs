@@ -178,13 +178,6 @@ public sealed class ApplicationService : IApplicationService
             : throw new InvalidOperationException("The application receipt has no response snapshot.");
     }
 
-    public async Task<IReadOnlyList<ApplicationResponse>> ListAsync(
-        int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, status, query, unitId, ct);
-        return page.Items;
-    }
-
     public async Task<IReadOnlyList<ApplicationResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope,
         string? status,
@@ -211,16 +204,6 @@ public sealed class ApplicationService : IApplicationService
                 [CapabilityKeys.LeasingApplicationsManage],
                 _timeProvider.UtcNow());
         return ListPageFromQueryAsync(applications, scope.PortfolioId, status, query, unitId, ct);
-    }
-
-    public Task<ApplicationListResponse> ListPageAsync(
-        int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default)
-    {
-        var q = _db.RentalApplications
-            .AsNoTracking()
-            .Where(a => a.PortfolioId == portfolioId);
-
-        return ListPageFromQueryAsync(q, portfolioId, status, query, unitId, ct);
     }
 
     private async Task<ApplicationListResponse> ListPageFromQueryAsync(
