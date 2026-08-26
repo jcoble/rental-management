@@ -33,14 +33,12 @@ async function selectOption(page: Page, triggerTestId: string, optionName: strin
 	await page.getByRole('option', { name: optionName }).click();
 }
 
-async function nextExpenseStep(page: Page) {
-	await page.getByTestId('expense-step-next').click();
-	await page.waitForTimeout(350);
-}
-
-async function backExpenseStep(page: Page) {
-	await page.getByTestId('expense-step-back').click();
-	await page.waitForTimeout(50);
+async function openMoreDetails(page: Page) {
+	const moreDetails = page.getByTestId('expense-more-details');
+	if (await moreDetails.getAttribute('open') === null) {
+		await moreDetails.getByTestId('expense-more-details-summary').click();
+	}
+	await expect(moreDetails).toHaveAttribute('open', /.*/);
 }
 
 async function seedExpenseContext(request: APIRequestContext): Promise<SeededExpenseContext> {
@@ -129,37 +127,25 @@ test.describe('Accounting expense autofill', () => {
 		await page.waitForLoadState('networkidle');
 
 		await page.getByTestId('expense-create-button').click();
-		await expect(page.getByTestId('expense-stepper')).toBeVisible();
+		await expect(page.getByTestId('expense-form')).toBeVisible();
+		await openMoreDetails(page);
 
 		await selectOption(page, 'expense-workorder-input', seeded.workOrderTitle);
 		await expect(page.getByTestId('expense-property-input')).toContainText(seeded.propertyName);
 		await expect(page.getByTestId('expense-unit-input')).toContainText(seeded.unitNumber);
 		await expect(page.getByTestId('expense-vendor-input')).toContainText(seeded.vendorOneName);
 
-		await nextExpenseStep(page);
 		await expect(page.getByTestId('expense-description-input')).toHaveValue(seeded.workOrderTitle);
 		await expect(page.getByTestId('expense-amount-input')).toHaveValue('275.5');
-
-		await nextExpenseStep(page);
 		await expect(page.getByTestId('expense-incurred-input')).toHaveValue(seeded.workOrderDateUs);
 
-		await nextExpenseStep(page);
-		await nextExpenseStep(page);
 		await expect(page.getByTestId('expense-vendor-address-input')).toHaveValue(seeded.vendorOneAddress);
 		await expect(page.getByTestId('expense-vendor-phone-input')).toHaveValue(seeded.vendorOnePhone);
 		await expect(page.getByTestId('expense-vendor-website-input')).toHaveValue(seeded.vendorOneWebsite);
 		await expect(page.getByTestId('expense-vendor-taxid-input')).toHaveValue(seeded.vendorOneTaxId);
 
 		await page.getByTestId('expense-vendor-address-input').fill('Manual address stays');
-		await backExpenseStep(page);
-		await backExpenseStep(page);
-		await backExpenseStep(page);
-		await backExpenseStep(page);
 		await selectOption(page, 'expense-vendor-input', seeded.vendorTwoName);
-		await nextExpenseStep(page);
-		await nextExpenseStep(page);
-		await nextExpenseStep(page);
-		await nextExpenseStep(page);
 		await expect(page.getByTestId('expense-vendor-address-input')).toHaveValue('Manual address stays');
 	});
 });
