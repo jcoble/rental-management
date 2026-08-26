@@ -145,7 +145,6 @@
 				{ href: '/owners', label: 'Owners', icon: BadgeDollarSign },
 				{ href: '/tenants', label: 'Tenants', icon: Users },
 				{ href: '/leases', label: 'Leases', icon: FileText },
-				{ href: '/lease-templates', label: 'Lease Templates', icon: Upload },
 				{ href: '/applications', label: 'Applications', icon: ClipboardList }
 			]
 		},
@@ -190,6 +189,7 @@
 		icon: Settings,
 		items: [
 			{ href: '/settings/notifications', label: 'Notifications', icon: BellRing },
+			{ href: '/settings/lease-templates', label: 'Lease settings', icon: Upload },
 			{ href: '/settings', label: 'Settings', icon: Settings },
 			{ href: '/admin/users', label: 'Team', icon: Shield },
 			{ href: '/audit', label: 'Activity history', icon: History }
@@ -212,7 +212,6 @@
 		'/units': 'home',
 		'/tenants': 'group',
 		'/leases': 'description',
-		'/lease-templates': 'upload_file',
 		'/applications': 'assignment',
 		'/maintenance': 'build',
 		'/appointments': 'event',
@@ -223,6 +222,7 @@
 		'/docs': 'menu_book',
 		'/settings/notifications': 'notifications',
 		'/settings/notifications/my-alerts': 'notifications',
+		'/settings/lease-templates': 'upload_file',
 		'/settings': 'settings',
 		'/admin/users': 'shield',
 		'/owners': 'account_balance',
