@@ -67,6 +67,8 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
   }
 
   Future<void> _refresh() async {
+    ref.invalidate(tenantsPageProvider);
+    ref.invalidate(tenantsProvider);
     await Future.wait<void>([
       ref.read(tenantDetailProvider(_tenant.id).notifier).refresh(),
       Future<void>.sync(

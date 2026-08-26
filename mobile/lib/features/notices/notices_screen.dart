@@ -16,8 +16,15 @@ class NoticesScreen extends ConsumerWidget {
 
     Future<void> refresh() async => ref.invalidate(noticeDraftsProvider);
     Future<void> generateDrafts() async {
-      await ref.read(noticesRepositoryProvider).generate();
-      ref.invalidate(noticeDraftsProvider);
+      try {
+        await ref.read(noticesRepositoryProvider).generate();
+        ref.invalidate(noticeDraftsProvider);
+      } on ApiException catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
     }
 
     final generateButton = IconButton(
@@ -214,6 +221,12 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
     try {
       await ref.read(noticesRepositoryProvider).approve(draft.id, channels);
       ref.invalidate(noticeDraftsProvider);
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -224,6 +237,12 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
     try {
       await ref.read(noticesRepositoryProvider).dismiss(draft.id);
       ref.invalidate(noticeDraftsProvider);
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

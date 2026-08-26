@@ -51,6 +51,8 @@ class _ApplicationDetailScreenState
   Future<void> _refresh() async {
     ref.invalidate(applicationDetailProvider(_id));
     ref.invalidate(applicationScreeningProvider(_id));
+    ref.invalidate(applicationsPageProvider);
+    ref.invalidate(applicationsProvider);
   }
 
   void _snack(String message) {

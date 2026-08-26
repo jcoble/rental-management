@@ -11,6 +11,19 @@ import 'package:rental_command/features/owner_reports/owner_reports_repository.d
 import 'package:rental_command/features/owner_reports/owner_reports_screen.dart';
 
 void main() {
+  test('owner distributions parse the bare-array response', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = _BareDistributionAdapter();
+
+    final distributions = await OwnerReportsRepository(
+      dio,
+    ).listDistributions(ownerEntityId: 4, year: 2026);
+
+    expect(distributions, hasLength(1));
+    expect(distributions.single.id, 12);
+    expect(distributions.single.ownerName, 'Northstar LLC');
+  });
+
   test(
     'monthly reports run required catalog endpoints with monthly params',
     () async {
@@ -102,7 +115,9 @@ void main() {
     expect(ownerReportDisplayValue(45.5, key: 'totalNet'), r'$45.50');
   });
 
-  testWidgets('app clock failures remain visible and retryable', (tester) async {
+  testWidgets('app clock failures remain visible and retryable', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -289,6 +304,35 @@ class _RecordingReportsAdapter implements HttpClientAdapter {
         : <String, dynamic>{'generatedAt': '2027-02-28T00:00:00Z'};
     return ResponseBody.fromString(
       jsonEncode(body),
+      200,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _BareDistributionAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    return ResponseBody.fromString(
+      jsonEncode([
+        {
+          'id': 12,
+          'ownerEntityId': 4,
+          'ownerName': 'Northstar LLC',
+          'date': '2026-08-20',
+          'amount': 725,
+          'method': 'Ach',
+        },
+      ]),
       200,
       headers: {
         Headers.contentTypeHeader: [Headers.jsonContentType],
