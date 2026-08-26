@@ -12,20 +12,30 @@ const propertiesEndpoint = readFileSync(
 );
 
 describe('properties list create contract', () => {
-	it('opens canonical guided property setup from the management create action', () => {
+	it('opens the inline add-rental dialog from the management create action', () => {
 		const openCreateBody = propertiesPage.match(
 			/function openCreate\(\) \{([\s\S]*?)\n\t\}/
 		)?.[1] ?? '';
 		assert.match(propertiesPage, /import \{ hasAllPropertiesRentalsManageAuthority \} from '\$lib\/auth\/property-authority';/);
 		assert.match(propertiesPage, /const canCreateProperty = \$derived\(hasAllPropertiesRentalsManageAuthority\(currentAccess\)\);/);
 		assert.match(openCreateBody, /if \(!canCreateProperty\) return;/);
-		assert.match(openCreateBody, /goto\('\/onboarding\?step=property&from=properties'\);/);
+		// The list adds a rental in place instead of ejecting the landlord into the onboarding wizard.
+		assert.match(openCreateBody, /showCreate = true;/);
+		assert.doesNotMatch(openCreateBody, /goto\('\/onboarding/);
 		assert.doesNotMatch(openCreateBody, /showForm = true;/);
+		assert.match(propertiesPage, /data-testid="property-create-dialog"/);
+		assert.match(propertiesPage, /data-testid="property-more-details-toggle"/);
+		assert.match(propertiesPage, /data-testid="property-more-details"/);
+		// Six essentials on the face of the dialog; everything else waits under the disclosure.
+		assert.match(propertiesPage, /data-testid="property-create-essentials"/);
 		assert.match(propertiesPage, /<Dialog\.Title>Edit Property<\/Dialog\.Title>/);
 		assert.match(propertiesPage, /emptyOnAction=\{canCreateProperty \? openCreate : undefined\}/);
 		assert.doesNotMatch(propertiesPage, /emptyOnAction=\{canManageRentals \? openCreate : undefined\}/);
 		assert.match(propertiesPage, /\{#if canCreateProperty\}[\s\S]*data-testid="property-create-button"[\s\S]*onclick=\{openCreate\}/);
 		assert.match(propertiesPage, /<Button data-testid="property-create-button"[\s\S]*onclick=\{openCreate\}/);
+		// One idempotent setup command carries the property and its units.
+		assert.match(propertiesPage, /properties\.setup\(\{ property: vars\.property, units: vars\.units \}\)/);
+		assert.match(propertiesEndpoint, /setup: \(data: SetupPropertyRequest\) =>\s*idempotentMutation\(`properties:setup:\$\{JSON\.stringify\(data\)\}`/);
 	});
 
 	it('retires the invalid list create mutation and leaves edit on update', () => {
