@@ -2,9 +2,8 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import type { NoticeDeliveryStatus, TenantNoticeMode, TenantNoticePolicyResponse, UpsertTenantNoticePolicyRequest } from '$lib/api/types/notification';
+	import { beforeNavigate } from '$app/navigation';
 	import { hasCapability } from '$lib/stores/auth.svelte';
-	import { getAuthState } from '$lib/stores/auth.svelte';
-	import { canAccessPathForEnvelope, safeLandingForAccess } from '$lib/auth/experience-policy';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -12,19 +11,11 @@
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
 	import NotificationPolicyAccordion from '$lib/components/notifications/NotificationPolicyAccordion.svelte';
-	import NotificationSetupJourney from '$lib/components/notifications/NotificationSetupJourney.svelte';
+	import NotificationHelpAction from '$lib/components/notifications/NotificationHelpAction.svelte';
 	import NoticePreview from '$lib/components/notifications/NoticePreview.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 
 	const queryClient = useQueryClient();
-	const authState = getAuthState();
-	const returnHref = $derived.by(() => {
-		const access = authState.accessEnvelope;
-		if (!access) return '/';
-		return canAccessPathForEnvelope(access, '/settings')
-			? '/settings#notifications'
-			: (safeLandingForAccess(access) ?? '/');
-	});
 	const canManage = $derived(hasCapability('notifications.manage'));
 	const automationDetails: Record<string, { label: string; detail: string }> = {
 		'rent-reminder': { label: 'Rent is due soon', detail: 'Remind tenants before rent is due.' },
@@ -266,23 +257,37 @@
 			? 'Each saved tenant message is summarized below. Open one only when you need to change it.'
 			: 'An administrator manages tenant-message timing, recipients, and delivery.'
 	);
+
+	beforeNavigate(({ cancel }) => {
+		if (!hasUnsavedChanges) return;
+		if (!window.confirm('You have unsaved notification changes. Leave this page without saving them?')) {
+			cancel();
+		}
+	});
 </script>
 
-<svelte:head><title>Tenant messages · Rental Command</title></svelte:head>
+<section id="tenant-notices" class="scroll-mt-6 space-y-4" data-testid="notifications-tenant-notices">
+	<div class="flex flex-wrap items-start justify-between gap-4">
+		<div class="max-w-3xl">
+			<h2 class="text-lg font-semibold tracking-tight">Tenant notices</h2>
+			<p class="mt-1 text-sm leading-6 text-muted-foreground">
+				Choose which reminders Rental Command prepares, when they are due, and who reviews them before delivery.
+			</p>
+		</div>
+		<NotificationHelpAction
+			title="How tenant messages work"
+			description="Each reminder keeps its own timing, recipients, destinations, and message."
+			guidance="Keep legal notices set to Prepare for review until the message has been checked for the correct state or local rules. Rental Command keeps prior message versions for the audit history."
+			href="/docs/notices"
+			linkLabel="Open the tenant notices guide"
+		/>
+	</div>
 
-<NotificationSetupJourney
-	currentStep={3}
-	description="Choose which reminders Rental Command prepares, when they are due, and who reviews them before delivery."
-	{savedSummary}
-	{returnHref}
-	{canManage}
-	{hasUnsavedChanges}
-	helpTitle="How tenant messages work"
-	helpDescription="Each reminder keeps its own timing, recipients, destinations, and message."
-	helpGuidance="Keep legal notices set to Prepare for review until the message has been checked for the correct state or local rules. Rental Command keeps prior message versions for the audit history."
-	helpHref="/docs/notices"
-	helpLinkLabel="Open the tenant notices guide"
->
+	<div class="rounded-lg border border-border bg-muted/30 px-4 py-3" aria-live="polite">
+		<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Saved summary</p>
+		<p class="mt-1 text-sm text-foreground">{savedSummary}</p>
+	</div>
+
 	<div class="space-y-5" data-testid="tenant-notices-page">
 		<Card.Root class="gap-0 py-0">
 			<Card.Content class="grid gap-3 p-5 text-sm md:grid-cols-3">
@@ -624,4 +629,4 @@
 			</Card.Root>
 		{/if}
 	</div>
-</NotificationSetupJourney>
+</section>

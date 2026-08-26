@@ -2,33 +2,24 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
-const alertsSource = readFileSync(
-	new URL('../../../routes/(protected)/settings/notifications/my-alerts/+page.svelte', import.meta.url),
-	'utf8'
-);
-const teamSource = readFileSync(
-	new URL('../../../routes/(protected)/settings/notifications/team-routing/+page.svelte', import.meta.url),
-	'utf8'
-);
-const tenantSource = readFileSync(
-	new URL('../../../routes/(protected)/settings/notifications/tenant-notices/+page.svelte', import.meta.url),
-	'utf8'
-);
+const alertsSource = readFileSync(new URL('./MyAlertsSection.svelte', import.meta.url), 'utf8');
+const teamSource = readFileSync(new URL('./TeamRoutingSection.svelte', import.meta.url), 'utf8');
+const tenantSource = readFileSync(new URL('./TenantNoticesSection.svelte', import.meta.url), 'utf8');
 
-describe('notification setup journey pages', () => {
-	it('keeps each canonical route as one journey step', () => {
-		assert.match(alertsSource, /currentStep=\{1\}/);
-		assert.match(teamSource, /currentStep=\{2\}/);
-		assert.match(tenantSource, /currentStep=\{3\}/);
+describe('notification settings sections', () => {
+	it('keeps each area as one anchored section', () => {
+		assert.match(alertsSource, /id="my-alerts"/);
+		assert.match(teamSource, /id="team-routing"/);
+		assert.match(tenantSource, /id="tenant-notices"/);
 		for (const source of [alertsSource, teamSource, tenantSource]) {
-			assert.match(source, /NotificationSetupJourney/);
+			assert.match(source, /NotificationHelpAction/);
 			assert.match(source, /hasUnsavedChanges/);
 		}
 	});
 
 	it('uses published help destinations', () => {
-		assert.match(teamSource, /helpHref="\/docs\/daily-briefing"/);
-		assert.match(tenantSource, /helpHref="\/docs\/notices"/);
+		assert.match(teamSource, /href="\/docs\/daily-briefing"/);
+		assert.match(tenantSource, /href="\/docs\/notices"/);
 	});
 
 	it('keeps tenant policies closed until one key is selected', () => {

@@ -12,6 +12,7 @@
 		CONVERSATION_SUBJECT_MAX_LENGTH,
 		conversationSubjectError
 	} from '$lib/messages/conversation-compose';
+	import { defaultReplyChannels } from '$lib/notifications/notification-sections';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
 	import { ApiError, type FairHousingConcern } from '$lib/api/client';
@@ -169,6 +170,17 @@
 	// --- Reply compose (right pane, pinned bottom) -----------------------------
 	let replyBody = $state('');
 	let replyChannels = $state({ portal: true, email: false, sms: false });
+	let deliveryOpen = $state(false);
+
+	// How the last reply in this thread went out. The server records it on each landlord message
+	// as a comma-separated list (ConversationMessage.channels).
+	const lastLandlordChannels = $derived.by(() => {
+		const sent = (conversation?.messages ?? []).filter((m) => m.senderRole === 'Landlord');
+		return (sent.at(-1)?.channels ?? '')
+			.split(',')
+			.map((channel) => channel.trim())
+			.filter(Boolean);
+	});
 
 	// L-15: the reply box must be cleared ONLY on an actual thread switch — never when the
 	// portfolio query resolves/invalidates (e.g. a SignalR Portfolio event), which would
@@ -184,13 +196,25 @@
 		replyBody = '';
 		replyChannels = { portal: true, email: false, sms: false };
 		channelsSeededFor = null;
+		deliveryOpen = false;
 	});
 	$effect(() => {
 		const defaults = messagingDefaults; // re-run when defaults become available/change
-		if (selectedId !== null && channelsSeededFor !== selectedId) {
+		const lastChannels = lastLandlordChannels;
+		if (selectedId !== null && conversation?.id === selectedId && channelsSeededFor !== selectedId) {
 			channelsSeededFor = selectedId;
-			replyChannels = { portal: true, email: defaults.email, sms: defaults.sms };
+			replyChannels = defaultReplyChannels({ hasPhone: defaults.sms, lastChannels });
 		}
+	});
+
+	const deliveryLine = $derived.by(() => {
+		const places: string[] = [];
+		if (replyChannels.portal) places.push('in the tenant app');
+		if (replyChannels.email) places.push('by email');
+		if (replyChannels.sms) places.push('by text');
+		if (places.length === 0) return 'Choose where this reply should go.';
+		if (places.length === 1) return `Delivered ${places[0]}`;
+		return `Delivered ${places.slice(0, -1).join(', ')} and ${places.at(-1)}`;
 	});
 
 	const replyAnyChannel = $derived(replyChannels.portal || replyChannels.email || replyChannels.sms);
@@ -493,25 +517,40 @@
 						</Button>
 					</div>
 
-					<!-- Channel picker for this reply (pre-filled from settings; per-send only) -->
-					<div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-						<span class="text-muted-foreground">Send via:</span>
-						<label class="flex items-center gap-1.5">
-							<Checkbox bind:checked={replyChannels.portal} data-testid="reply-channel-portal" />
-							<span>Portal</span>
-						</label>
-						<label class="flex items-center gap-1.5">
-							<Checkbox bind:checked={replyChannels.email} data-testid="reply-channel-email" />
-							<span>Email</span>
-						</label>
-						<label class="flex items-center gap-1.5">
-							<Checkbox bind:checked={replyChannels.sms} data-testid="reply-channel-sms" />
-							<span>Text</span>
-						</label>
-						{#if !replyAnyChannel}
-							<span class="text-destructive" data-testid="reply-channel-error">Pick at least one.</span>
-						{/if}
+					<!-- How this reply is delivered. The picker stays out of the way until asked for. -->
+					<div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+						<span class="text-muted-foreground" data-testid="reply-delivery-line">{deliveryLine}</span>
+						<button
+							type="button"
+							class="inline-flex min-h-11 items-center font-medium text-primary hover:underline"
+							data-testid="reply-delivery-menu"
+							aria-expanded={deliveryOpen}
+							aria-controls="reply-delivery-options"
+							onclick={() => (deliveryOpen = !deliveryOpen)}
+						>
+							Delivery
+						</button>
 					</div>
+
+					{#if deliveryOpen}
+						<div id="reply-delivery-options" class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+							<label class="flex items-center gap-1.5">
+								<Checkbox bind:checked={replyChannels.portal} data-testid="reply-channel-portal" />
+								<span>Tenant app</span>
+							</label>
+							<label class="flex items-center gap-1.5">
+								<Checkbox bind:checked={replyChannels.email} data-testid="reply-channel-email" />
+								<span>Email</span>
+							</label>
+							<label class="flex items-center gap-1.5">
+								<Checkbox bind:checked={replyChannels.sms} data-testid="reply-channel-sms" />
+								<span>Text</span>
+							</label>
+							{#if !replyAnyChannel}
+								<span class="text-destructive" data-testid="reply-channel-error">Pick at least one.</span>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</section>

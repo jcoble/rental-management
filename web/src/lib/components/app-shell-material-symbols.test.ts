@@ -26,10 +26,7 @@ describe('AppShell Material Symbols subset', () => {
 	});
 
 	test('maps known role destinations to available glyphs', () => {
-		assert.match(
-			appShell,
-			/'\/settings\/notifications\/team-routing': 'group'/
-		);
+		assert.match(appShell, /'\/settings\/notifications': 'notifications'/);
 		assert.match(appShell, /'\/my-schedule': 'event'/);
 		assert.doesNotMatch(appShell, /'\/profile':\s*'person'/);
 	});

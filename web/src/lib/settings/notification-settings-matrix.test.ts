@@ -4,15 +4,15 @@ import assert from 'node:assert/strict';
 
 const settingsSource = readFileSync('src/routes/(protected)/settings/+page.svelte', 'utf8');
 const alertsSource = readFileSync(
-	'src/routes/(protected)/settings/notifications/my-alerts/+page.svelte',
+	'src/lib/components/notifications/MyAlertsSection.svelte',
 	'utf8',
 );
 const routingSource = readFileSync(
-	'src/routes/(protected)/settings/notifications/team-routing/+page.svelte',
+	'src/lib/components/notifications/TeamRoutingSection.svelte',
 	'utf8',
 );
 const tenantSource = readFileSync(
-	'src/routes/(protected)/settings/notifications/tenant-notices/+page.svelte',
+	'src/lib/components/notifications/TenantNoticesSection.svelte',
 	'utf8',
 );
 const endpointSource = readFileSync('src/lib/api/endpoints/notifications.ts', 'utf8');
@@ -36,7 +36,7 @@ test('My alerts is personal and exposes every canonical channel', () => {
 	for (const channel of ['In Rental Command', 'Phone app', 'Email', 'Text message'])
 		assert.match(alertsSource, new RegExp(channel));
 	assert.match(alertsSource, /notifications\.myAlerts\.update/);
-	assert.match(alertsSource, /NotificationSetupJourney/);
+	assert.match(alertsSource, /data-testid="notifications-my-alerts"/);
 });
 
 test('Team routing and Tenant notices use separate canonical persistence', () => {
