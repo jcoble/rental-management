@@ -240,6 +240,13 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 		experiences: ['Management', 'Leasing'],
 		anyCapabilities: [CAPABILITY.rentalsManage, CAPABILITY.leasingAgreementsPrepare]
 	},
+	// The lease form now lives under Settings (TSK-947 W12); /lease-templates still
+	// redirects here, so both addresses need the same access story.
+	{
+		prefix: '/settings/lease-templates',
+		experiences: ['Management', 'Leasing'],
+		anyCapabilities: [CAPABILITY.rentalsManage, CAPABILITY.leasingAgreementsPrepare]
+	},
 	{
 		prefix: '/applications',
 		experiences: ['Management'],

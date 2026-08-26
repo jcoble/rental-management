@@ -164,6 +164,16 @@
 				take: 50
 			})
 	}));
+	// The landlord already told us which lease form they use — don't make them pick it again.
+	let defaultTemplateApplied = false;
+	$effect(() => {
+		if (defaultTemplateApplied || form.documentTemplateId) return;
+		const preferred = (templatesQuery.data?.items ?? []).find((template) => template.defaultForPortfolio);
+		if (!preferred) return;
+		defaultTemplateApplied = true;
+		form.documentTemplateId = String(preferred.id);
+	});
+
 	const selectedTemplateId = $derived(Number(form.documentTemplateId) || 0);
 	const selectedTemplateQuery = createQuery(() => ({
 		queryKey: ['document-template', selectedTemplateId, 'prepare-move-in'],
