@@ -60,3 +60,33 @@ and dirty status explicitly rather than leaving it silently.
 
 Do **NOT** add a `Co-Authored-By: Claude …` trailer (or any AI-attribution line) to
 commit messages. Keep messages to a clear subject + body only.
+
+## Keep it simple — rules from the 2026-08-25 structure audit
+
+Four independent audits (`Docs/Reviews/2026-08-25-structure-audit/`) found the same recurring
+shapes of waste. These rules stop them coming back.
+
+- **Finish a migration in the PR that finishes it.** When a vocabulary or pattern changes, rename
+  the files, delete the compatibility shims, throw-only "retired path" methods and migration
+  markers in the same change. Thirty-five `*Handler.cs` files full of `*Rule` classes and 52
+  `throw RetiredPath()` methods came from not doing this.
+- **No enum, attribute, flag or config property with one legal value or zero readers.** If there is
+  one value it is not a choice; if nothing reads it, it is not configuration. `rg` the name before
+  adding it and before leaving it behind.
+- **No `IFoo? foo = null` constructor parameters for services that are always registered.** Make
+  the dependency required; tests pass a mock. Optional-for-tests dependencies produced 61
+  `RequireFoo()` guards.
+- **Never keep two overloads of a read that differ in authorization.** When a scope-authorized
+  overload lands, the unauthorized one is deleted in the same change — otherwise the next caller
+  can pick the unsafe one.
+- **One formatter per concern per app**, in `web/src/lib/utils` / `mobile/lib/core/presentation`.
+  Never define `_formatCurrency`, `_formatDate`, a month-name table or an `Intl.NumberFormat`
+  inside a screen, route or component. Thirty-two web and twenty-nine mobile copies disagreed
+  about cents and sign placement.
+- **No source-text assertion tests.** Do not `readFileSync`/`readAsStringSync` a source file and
+  regex it. Assert on rendered output, returned values or captured requests. 120 of 226 web test
+  files and 40 of 109 mobile test files did this, and every legitimate cleanup broke dozens of
+  them for reasons unrelated to behaviour. Existing ones are migrated when touched, not preserved.
+- **Node's test runner needs explicit `.ts` extensions** on relative imports in any module a
+  `*.test.ts` file imports directly (`import x from '../list-params.ts'`). Vite does not care;
+  `node --test` does.
