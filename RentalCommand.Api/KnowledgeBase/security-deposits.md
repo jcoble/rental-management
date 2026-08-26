@@ -46,7 +46,7 @@ Deductions reduce the amount still held. Keep receipts, photos, and notes that s
 
 When you return some or all of the deposit:
 
-1. Open the tenant's deposit details and select **Record refund**.
+1. Open the tenant's deposit details and select **Return the deposit**.
 2. Enter the refund date. Leave the amount blank to refund the full amount still held, or enter a smaller amount for a partial refund.
 3. Add a check or confirmation number if you have one, then select **Record refund**.
 
