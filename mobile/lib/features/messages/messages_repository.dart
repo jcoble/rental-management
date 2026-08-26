@@ -242,7 +242,10 @@ class ConversationNotifier extends Notifier<AsyncValue<Conversation>> {
   final int _id;
 
   @override
-  AsyncValue<Conversation> build() => const AsyncValue.loading();
+  AsyncValue<Conversation> build() {
+    Future.microtask(load);
+    return const AsyncValue.loading();
+  }
 
   MessagesRepository get _repo => ref.read(messagesRepositoryProvider);
 

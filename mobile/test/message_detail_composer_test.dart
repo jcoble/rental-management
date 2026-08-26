@@ -79,7 +79,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('opening message detail twice reloads the conversation', (
+  testWidgets('opening and invalidating message detail reloads conversation', (
     tester,
   ) async {
     final repository = _FakeMessagesRepository();
@@ -101,6 +101,14 @@ void main() {
     }
 
     await openDetail();
+    expect(repository.getConversationCalls, 2);
+
+    scope.invalidate(conversationProvider(42));
+    await tester.pumpAndSettle();
+
+    expect(repository.getConversationCalls, 3);
+    expect(find.text('Can I pay tomorrow?'), findsOneWidget);
+
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: scope,
@@ -109,7 +117,7 @@ void main() {
     );
     await openDetail();
 
-    expect(repository.getConversationCalls, 2);
+    expect(repository.getConversationCalls, 4);
   });
 
   testWidgets('message composer keeps the text box full width', (tester) async {
