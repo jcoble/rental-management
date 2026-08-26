@@ -1,0 +1,320 @@
+<title>Landlord-First Cut</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #eef1f4; --sheet: #ffffff; --rule: #d3d9e0; --rule-strong: #b3bcc7;
+    --ink: #1b2a3a; --ink-2: #4a5866; --ink-3: #7b8794;
+    --accent: #1f6f5b; --accent-ink: #ffffff; --accent-soft: #dcefe7;
+    --hold: #8a5a00; --hold-soft: #f6ead0; --reject: #9b2c2c; --reject-soft: #f7dedb;
+    --s: #1f6f5b; --m: #8a5a00; --l: #9b2c2c;
+    --flag: #7a3a00; --flag-soft: #fbe8d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #121820; --sheet: #1a2129; --rule: #2b3541; --rule-strong: #3d4956;
+      --ink: #e6ebf0; --ink-2: #b4bec9; --ink-3: #7f8b97;
+      --accent: #6fcfae; --accent-ink: #0f1a16; --accent-soft: #1d3a31;
+      --hold: #e0b25a; --hold-soft: #3a2f16; --reject: #f08c85; --reject-soft: #3d1f1d;
+      --s: #6fcfae; --m: #e0b25a; --l: #f08c85;
+      --flag: #f0b27a; --flag-soft: #3a2616;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #121820; --sheet: #1a2129; --rule: #2b3541; --rule-strong: #3d4956;
+    --ink: #e6ebf0; --ink-2: #b4bec9; --ink-3: #7f8b97;
+    --accent: #6fcfae; --accent-ink: #0f1a16; --accent-soft: #1d3a31;
+    --hold: #e0b25a; --hold-soft: #3a2f16; --reject: #f08c85; --reject-soft: #3d1f1d;
+    --s: #6fcfae; --m: #e0b25a; --l: #f08c85;
+    --flag: #f0b27a; --flag-soft: #3a2616;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15.5px/1.55 "IBM Plex Sans", "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 44px 24px 120px; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 40px; }
+  @media (max-width: 820px) { .wrap { grid-template-columns: 1fr; gap: 24px; } nav.idx { position: static !important; } }
+  h1, h2, h3 { font-family: "Bricolage Grotesque", "IBM Plex Sans", sans-serif; text-wrap: balance; margin: 0; }
+  h1 { font-size: 40px; line-height: 1.05; font-weight: 700; letter-spacing: -0.015em; }
+  h2 { font-size: 24px; font-weight: 700; margin-top: 8px; }
+  h3 { font-size: 17px; font-weight: 700; }
+  p { margin: 0; max-width: 68ch; }
+  .lede { color: var(--ink-2); font-size: 17px; margin-top: 14px; }
+  .eyebrow { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+  header { grid-column: 1 / -1; border-bottom: 1px solid var(--rule-strong); padding-bottom: 26px; }
+  header .meta { display: flex; flex-wrap: wrap; gap: 18px 28px; margin-top: 22px; font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--ink-2); }
+  header .meta b { color: var(--ink); font-weight: 500; }
+  nav.idx { position: sticky; top: 20px; align-self: start; font-size: 13.5px; display: flex; flex-direction: column; gap: 6px; }
+  nav.idx a { color: var(--ink-2); text-decoration: none; padding: 4px 0; border-left: 2px solid transparent; padding-left: 10px; }
+  nav.idx a:hover, nav.idx a:focus-visible { color: var(--ink); border-left-color: var(--accent); outline: none; }
+  nav.idx .tally { margin-top: 14px; padding: 12px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-2); display: grid; gap: 4px; }
+  nav.idx .tally b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+  main { min-width: 0; display: grid; gap: 44px; }
+  section { display: grid; gap: 14px; }
+  .flag { background: var(--flag-soft); border-left: 3px solid var(--flag); padding: 14px 16px; border-radius: 0 6px 6px 0; display: grid; gap: 6px; }
+  .flag h3 { color: var(--flag); }
+  .flag p { color: var(--ink); max-width: none; }
+  .worst { display: grid; gap: 10px; }
+  .worst li { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: start; }
+  .worst ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .worst .n { font-family: "Bricolage Grotesque", sans-serif; font-weight: 700; font-size: 22px; color: var(--accent); line-height: 1; padding-top: 2px; }
+  .worst b { font-weight: 600; }
+  .worst small { color: var(--ink-2); display: block; margin-top: 3px; }
+  .item { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px 12px; display: grid; gap: 9px; transition: opacity .15s; }
+  .item[data-decision="approve"] { border-color: var(--accent); }
+  .item[data-decision="reject"] { opacity: .55; }
+  .item[data-decision="hold"] { border-color: var(--hold); }
+  .item .top { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; }
+  .item .id { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-3); }
+  .item h3 { flex: 1 1 320px; }
+  .item .body { color: var(--ink-2); max-width: none; }
+  .item .body b { color: var(--ink); font-weight: 600; }
+  .delta { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 6px 9px; display: inline-block; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chip { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .04em; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--rule-strong); color: var(--ink-2); white-space: nowrap; }
+  .chip.e-S { color: var(--s); border-color: var(--s); } .chip.e-M { color: var(--m); border-color: var(--m); } .chip.e-L { color: var(--l); border-color: var(--l); }
+  .src { font-size: 11.5px; color: var(--ink-3); margin-left: auto; }
+  .src span { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rule-strong); margin-left: 3px; vertical-align: middle; }
+  .src span.on { background: var(--accent); }
+  .decide { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding-top: 6px; border-top: 1px dashed var(--rule); }
+  .decide button { font: 500 12.5px "IBM Plex Sans", sans-serif; padding: 5px 12px; border-radius: 4px; border: 1px solid var(--rule-strong); background: var(--sheet); color: var(--ink-2); cursor: pointer; }
+  .decide button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .decide button[aria-pressed="true"].ok { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .decide button[aria-pressed="true"].hold { background: var(--hold-soft); color: var(--hold); border-color: var(--hold); }
+  .decide button[aria-pressed="true"].no { background: var(--reject-soft); color: var(--reject); border-color: var(--reject); }
+  .decide input { flex: 1 1 200px; font: 13px "IBM Plex Sans", sans-serif; padding: 5px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); color: var(--ink); min-width: 120px; }
+  .decide input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .tablewrap { overflow-x: auto; background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; }
+  tr:last-child td { border-bottom: 0; }
+  td code, .body code { font-family: "IBM Plex Mono", monospace; font-size: .9em; color: var(--ink); }
+  .keep { display: grid; gap: 8px; }
+  .keep li { color: var(--ink-2); }
+  .keep b { color: var(--ink); font-weight: 600; }
+  ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+  footer { grid-column: 1 / -1; border-top: 1px solid var(--rule); padding-top: 18px; color: var(--ink-3); font-size: 13px; display: grid; gap: 6px; }
+  @media (prefers-reduced-motion: reduce) { .item { transition: none; } }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">Rental Command · UX simplification proposal · 25 August 2026</div>
+  <h1 style="margin-top:10px">Landlord-First Cut</h1>
+  <p class="lede">What to remove, default, hide or rename so a landlord with twenty units isn't asked to think like a property-management company. Four independent reviews (two per app: one on what the landlord sees, one on flow and plumbing) converged on the same handful of offenders. Each row below is one decision for you — approve, hold, or reject — and nothing here is built until you do.</p>
+  <div class="meta">
+    <div><b>29</b> proposals · <b>2</b> decide-first flags</div>
+    <div>agreement dots: <span class="src"><span class="on"></span><span class="on"></span></span> = both reviewers for that app proposed it</div>
+    <div>effort: <span class="chip e-S">S</span> hours · <span class="chip e-M">M</span> a day or two · <span class="chip e-L">L</span> a week+</div>
+    <div>decisions save in this browser</div>
+  </div>
+</header>
+
+<nav class="idx" aria-label="Sections">
+  <a href="#first">Decide first</a>
+  <a href="#worst">The worst offenders</a>
+  <a href="#web">Web</a>
+  <a href="#mobile">Mobile</a>
+  <a href="#words">Words to change</a>
+  <a href="#keep">What stays hard</a>
+  <a href="#bugs">Defects found</a>
+  <div class="tally" id="tally"><span>Approved <b id="t-ok">0</b></span><span>On hold <b id="t-hold">0</b></span><span>Rejected <b id="t-no">0</b></span><span>Undecided <b id="t-none">29</b></span></div>
+</nav>
+
+<main>
+
+<section id="first">
+  <div class="eyebrow">Decide first</div>
+  <h2>Two things that aren't simplification</h2>
+  <div class="flag">
+    <h3>The numbers disagree with each other</h3>
+    <p>With the same sample data and date range, the web dashboard says <b>Who's behind $5,175 · Kept this month $15,046</b> while the Money overview says <b>$0.00 · $0.00 · Cash available $0.00</b>, and the Money header strip says <b>Past due $0.00 (0)</b>. Three surfaces, three answers. No amount of layout work survives a landlord deciding the app can't add. This is almost certainly a query-scoping bug and should be found and fixed before any of the items below.</p>
+  </div>
+  <div class="flag">
+    <h3>A solo landlord can't reach listings on the web</h3>
+    <p>Listings live only in the Leasing-role shell (<code>/leasing/rentals</code>), gated to <code>experiences: ['Leasing']</code> (<code>experience-policy.ts:74-80</code>). A one-person portfolio — who <em>is</em> their own leasing agent — has no path to advertise a vacancy from the management shell. Product call needed: show the Leasing screens to a single-person workspace, or fold them into <code>/applications</code>.</p>
+  </div>
+</section>
+
+<section id="worst" class="worst">
+  <div class="eyebrow">Where every reviewer landed</div>
+  <h2>The worst offenders</h2>
+  <ol>
+    <li><span class="n">1</span><div><b>Recording an expense is a 7-step, 26-field wizard on the web and a 4-step form on the phone</b> — for a task with three required values, when scan-a-receipt already exists one route away.<small>Named worst by three of four reviewers.</small></div></li>
+    <li><span class="n">2</span><div><b>Logging "the sink leaks" is a 6-step wizard (Issue → Triage → Location → Schedule → People → Budget) on the web and a 5-step sheet on the phone.</b><small>All four reviewers; the tenant portal already proves a one-screen version works.</small></div></li>
+    <li><span class="n">3</span><div><b>Adding a property asks for owner entity, management fee, purchase price, land value, in-service date and depreciation before the first rental exists</b> — and on the web, "New Property" ejects you into first-run onboarding at "Step 4 of 6".<small>All four reviewers.</small></div></li>
+    <li><span class="n">4</span><div><b>Bookkeeping is on the landlord's daily screens:</b> accounting-impact cards, Dr/Cr, journals, "Financial position", Section 1250, a "Simple" mode that hides nothing.<small>Both landlord's-eye reviewers.</small></div></li>
+    <li><span class="n">5</span><div><b>The database is talking:</b> "atomic move-in", "Household relationship begins", "Return possession", "disposition", "the server will recheck the executed governing agreement…". <small>Every reviewer; the rename table below has 40 rows.</small></div></li>
+  </ol>
+</section>
+
+<section id="web">
+  <div class="eyebrow">Web · SvelteKit</div>
+  <h2>Web proposals</h2>
+  <div id="web-items"></div>
+</section>
+
+<section id="mobile">
+  <div class="eyebrow">Mobile · Flutter</div>
+  <h2>Mobile proposals</h2>
+  <div id="mobile-items"></div>
+</section>
+
+<section id="words">
+  <div class="eyebrow">Copy</div>
+  <h2>Words to change</h2>
+  <p class="lede" style="font-size:15px">Each of these describes the database transaction or an internal component rather than the landlord's act. All effort S; all zero risk. Approve as one item (W14 / M16) or strike individual rows.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Today</th><th>Plain English</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td>atomic move-in</td><td>move-in</td><td><code>PrepareMoveInDialog.svelte:511</code></td></tr>
+      <tr><td>Household relationship begins</td><td>Move-in date</td><td><code>PrepareMoveInDialog.svelte:648</code></td></tr>
+      <tr><td>Planned possession</td><td>Keys handed over</td><td><code>PrepareMoveInDialog.svelte:662</code>; leasing detail</td></tr>
+      <tr><td>Exact rental</td><td>Which unit</td><td><code>PrepareMoveInDialog.svelte:436-480</code></td></tr>
+      <tr><td>"This creates one planned tenant relationship, account, and agreement draft together"</td><td>(delete)</td><td>Create lease dialog subtitle</td></tr>
+      <tr><td>rent account / tenant ledger / open charges</td><td>rent ledger / charges and payments / unpaid charges</td><td>leases list; RecordPaymentSheet</td></tr>
+      <tr><td>Household (column)</td><td>Tenant</td><td><code>/leases</code></td></tr>
+      <tr><td>Triage</td><td>(delete the step)</td><td>New Work Order</td></tr>
+      <tr><td>Billable to owner</td><td>Charge this to the owner</td><td><code>accounting/+page.svelte:1381</code>; ExpenseDetail</td></tr>
+      <tr><td>Financial position</td><td>What you own and owe</td><td><code>/accounting</code></td></tr>
+      <tr><td>Command center / Portfolio pulse</td><td>Today / Today's summary</td><td>web dashboard; mobile unit screen</td></tr>
+      <tr><td>Portfolio · Default Portfolio</td><td>Your rentals</td><td>throughout</td></tr>
+      <tr><td>Work Order</td><td>Repair</td><td>web nav; maintenance</td></tr>
+      <tr><td>Zillow Guided / Zillow Connected</td><td>Post on Zillow yourself / Automatic posting (hide when unavailable)</td><td>ListingTab; unit command center</td></tr>
+      <tr><td>Dynamic Fields / Render mode</td><td>Information we fill in / (hide)</td><td><code>/lease-templates</code></td></tr>
+      <tr><td>Rental relationship # / Rental account # / Ledger entry #</td><td>tenant name / tenant balance / charge or payment</td><td>scan review linked references</td></tr>
+      <tr><td>Active portal grant</td><td>Tenant app access</td><td>PossessionActions; return_possession_sheet</td></tr>
+      <tr><td>Return possession</td><td>Move-out</td><td><code>lease_detail_screen.dart:1540</code></td></tr>
+      <tr><td>Disposition / access disposition</td><td>What happens to them / Their login</td><td><code>return_possession_sheet.dart:177,227</code></td></tr>
+      <tr><td>Give possession</td><td>Tenant has moved in</td><td><code>lease_detail_screen.dart:220-257</code></td></tr>
+      <tr><td>Lifecycle · Relationship number · Governing agreement · Successor treatment · Ordered signer snapshot</td><td>Status · Tenancy · Current lease · What to do with this add-on · Who signs, in order</td><td>leases list; agreement sheets</td></tr>
+      <tr><td>Stage (units filter) · Turnover / make-ready · Workspace state / Publication state</td><td>Where it's at · Getting it ready · Listing status</td><td><code>units_list_screen.dart:194</code>; unit command center</td></tr>
+      <tr><td><code>SingleRental</code> / <code>MultiRental</code> (raw enum)</td><td>One rental / Building with units</td><td><code>property_detail_screen.dart:1314</code></td></tr>
+      <tr><td>rental space / unit / rental (three words)</td><td>rental</td><td>checklist vs forms</td></tr>
+      <tr><td>Sandbox</td><td>Sample portfolio</td><td><code>onboarding_seeding_screen.dart:206</code></td></tr>
+      <tr><td>"the debt-service worker fills this in monthly" · "the server will stop the delete" · "Each server-shaped row contains its automation and currently bound immutable template"</td><td>"Payments appear here each month." · "You'll need to clear those first." · rewrite</td><td><code>property_detail_screen.dart:2020,216</code>; <code>tenant_notices_screen.dart:129</code></td></tr>
+      <tr><td>Save command (row) · <code>AutoTravel</code>, <code>CleaningMaintenance</code>, <code>MortgageInterest</code></td><td>(delete) · Auto &amp; travel, Cleaning &amp; maintenance, Mortgage interest</td><td><code>scan_review_screen.dart:2611,514-529</code></td></tr>
+      <tr><td>Property #12 · Unit #34 · Property ID (typed number)</td><td>property name · unit number · pickers</td><td><code>applications_list_screen.dart:282</code>; <code>general_ledger_view.dart:676</code></td></tr>
+      <tr><td>Team routing</td><td>Who gets told what (hidden until a second member)</td><td>settings</td></tr>
+      <tr><td>Convention · Section 1250 est. · General ledger · Journal · Dr / Cr · Accounting impact</td><td>(Advanced only)</td><td>capital-asset sheet; property detail; ledger views</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="keep" class="keep">
+  <div class="eyebrow">Intrinsic complexity</div>
+  <h2>What stays hard, on purpose</h2>
+  <ul class="plain">
+    <li><b>Screening, FCRA consent, adverse action.</b> Federal law; reveal at the decision, not during listing work.</li>
+    <li><b>E-signature outside the landlord's app, and the immutable signed PDF.</b> A landlord signing for a tenant voids the lease.</li>
+    <li><b>Security deposits as separately held, non-income money</b>, including the deposits-exceed-cash warning — trust-accounting law in most states. Keep the rule; move the warning out of "Simple".</li>
+    <li><b>Double-entry accounting underneath.</b> Keep the ledger, keep it off the daily screens. This is exactly "simple on the surface, full system underneath".</li>
+    <li><b>Depreciation, tax basis, 1099/W-9.</b> Real Schedule E and IRS obligations. Off the create path, never deleted.</li>
+    <li><b>Payment allocation "oldest open charges first"</b> shown as a preview, not a decision — the model the rest of the app should copy.</li>
+    <li><b>The typed GO LIVE confirmation</b> before wiping sample data, and the all-or-nothing transactions behind move-in, move-out and deposits.</li>
+    <li><b>The capability system.</b> Extend it (one owner + no team ⇒ hide the machinery); don't replace it with a "simple mode" toggle — the web already has one that hides nothing.</li>
+  </ul>
+</section>
+
+<section id="bugs">
+  <div class="eyebrow">Incidental</div>
+  <h2>Defects the reviewers tripped over</h2>
+  <ul class="plain">
+    <li><code>mobile/lib/features/leases/leases_list_screen.dart:311-315</code> — the empty-state button reads "Open applications" but calls <code>onPrepareMoveIn</code>.</li>
+    <li><code>mobile/lib/features/applications/application_detail_screen.dart:108-123</code> — <code>_prepareMoveIn</code> dereferences <code>application.unitId!</code> with no guard; an approved application with no unit crashes on tap.</li>
+    <li><code>mobile/lib/features/accounting/record_payment_sheet.dart:288</code> — the "document" control only changes a local label; it never selects or uploads a file.</li>
+    <li>Web dashboard briefing failed on first load with sample data ("took too long to load / Action items unavailable").</li>
+    <li>The web rail lists "Tenant notices" twice (Inbox and Settings), pointing at different pages.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  <div>Sources: four reports under <code>Docs/Reviews/2026-08-25-ux-simplification/</code> — web and mobile, each reviewed by Opus 5 (what the landlord sees; the web pass drove the live app at 1710×990 with 33 screenshots) and SOL medium (flow and plumbing, static). Tap counts are minimum happy-path counts; mobile was not run.</div>
+  <div>Not covered by any reviewer: move-out end to end on the web, e-signature and template field placement, the tenant portal, deposits/banking/owner-report screens on mobile, narrow viewports.</div>
+</footer>
+</div>
+
+<script type="application/json" id="data">
+[
+{"id":"W1","app":"web","wf":"Record an expense","title":"Replace the 7-step expense wizard with one screen","body":"<b>What did you spend on? · How much? · When? · Which property?</b> — date defaults to today, property to the last one used — with everything else (source links, vendor tax details, receipt proof, tax/tip/discount/shipping) under a <b>More details</b> disclosure, and <b>Scan the receipt instead</b> as the first thing on the screen. Only 3 of the 26 fields are required today and none of them is on step 1 (<code>accounting/+page.svelte:318-359</code>).","delta":"7 steps · 26 fields · required fields on step 2  →  1 screen · 4 fields · 1 Save","effort":"M","risk":"low — every field survives under the disclosure","src":[1,1]},
+{"id":"W2","app":"web","wf":"Handle maintenance","title":"One \"Report a repair\" form; schedule and assign afterwards","body":"Rental, <b>What's wrong?</b>, details, optional photo. Priority and category already default to Normal/General (<code>maintenance/+page.svelte:159-173</code>). Save immediately, then offer \"Schedule or assign someone\" on the created repair; arrival window, access, vendor, tenant and estimate live on its detail page. The tenant portal's own form (<code>portal/maintenance/+page.svelte:303-353</code>) is the proof it works.","delta":"6 steps · 12 controls · 5 Next clicks  →  1 sheet · 3 values + photo","effort":"M","risk":"low — triage becomes post-capture work for companies","src":[1,1]},
+{"id":"W3","app":"web","wf":"Add a property","title":"Stop ejecting \"New Property\" into first-run onboarding","body":"<code>properties/+page.svelte:230-233</code> sends the landlord to <code>/onboarding?step=property</code> — \"Let's set up your portfolio, Step 4 of 6\" — while <code>openEdit</code> two lines later opens a plain inline form. Point create at the same form. Longer term, present a house as one \"Rental\" (address, beds, baths, rent) and create the unit silently; the API already accepts both in one command (<code>PropertyController.cs:52-73</code>).","delta":"leave the page → 6-step wizard chrome → navigate back  →  a dialog on the list","effort":"S","risk":"none — the wizard route stays for first run","src":[1,1]},
+{"id":"W4","app":"web","wf":"Collect rent","title":"Put \"Who's behind\" in the nav and on the dashboard","body":"<code>/accounting/past-due</code> is the best screen in the app — one line, one card per tenant, <b>Record payment</b> and <b>Text</b> — and it isn't in the rail; Money → Overview shows the same landlord <b>$0.00</b>. Make it the Money group's first item, make the dashboard's overdue section a ranked tenant list with Record payment on each row, and trim the payment dialog to amount / date / method with allocation, payer, reference and attachment under More (oldest-first is already the default).","delta":"dashboard → report → dialog  →  dashboard row → compact dialog","effort":"S","risk":"none","src":[1,1]},
+{"id":"W5","app":"web","wf":"What needs attention","title":"Make the dashboard start with one ranked list","body":"The \"6 things need attention\" list is well made and sits ~600px down, below a branding band and beside an AI panel that restates it in one sentence. Cut the hero to one line, give the attention list the full width at the top (overdue rent, tenant messages, urgent repairs, applications awaiting a decision, leases needing signature, move-ins/outs due), keep one compact business summary below, collapse setup once the first rental exists, send recent activity to Activity history.","delta":"many equal-weight cards  →  one priority list + one summary","effort":"M","risk":"low","src":[1,1]},
+{"id":"W6","app":"web","wf":"Money surface","title":"Make \"Simple\" money actually simple","body":"The Simple/Advanced toggle exists and hides nothing: in Simple the landlord still sees the General ledger tab, \"Financial position\", \"Loan balance\", \"Cash after tenant deposits −$20,175.00\" and the deposits-vs-cash alert. In Simple: hide the ledger tab, the position card and the alert; land on <b>Rent &amp; payments</b>. On <code>/reports</code>, lead with Rent roll / Who is behind / Income and expenses and group the five \"opens another page\" reports under \"For your accountant\".","delta":"Simple = 6 tabs + accountant vocabulary  →  Simple = 4 tabs, money in and out","effort":"M","risk":"none — Advanced unchanged","src":[1,0]},
+{"id":"W7","app":"web","wf":"Lease and move-in","title":"One \"Review move-in\" screen in the landlord's words","body":"Collapse the three-panel Prepare move-in dialog to one review: tenant, rental, lease dates, rent, due day, deposit — with <b>Deposit received</b> on it so <code>/deposits</code> stops warning against a mistake the UI allows. Default the start date to today; put Backfill / custom cutoff / opening balance under \"Moving an existing lease into Rental Command?\". Keep \"Keys handed over\" as a later one-tap event. Delete the subtitle about \"one planned tenant relationship, account, and agreement draft\".","delta":"3 panels · 6 system concepts · 2 date pickers  →  1 review · 0 unfamiliar terms · 1 date pre-filled","effort":"M","risk":"medium — migration controls stay under the explicit exception","src":[1,1]},
+{"id":"W8","app":"web","wf":"Onboard","title":"Default the owner to you; lead with \"scan a signed lease\"","body":"The Owner step asks a solo landlord for an owner name and tax ID before the first property; <code>wizard-steps.ts:64-73</code> admits \"that's just you as a person\". Create the current user as the default owner server-side, move legal owner type, tax ID, management-company name and alert channels to settings, and make the existing lease scanner (which creates property, unit, tenant and lease together) the dominant first path.","delta":"9 states · 7 concepts · 6 write round-trips  →  3 review states · 3 concepts","effort":"M","risk":"medium — keep explicit owner/entity setup under \"More ownership details\"","src":[1,1]},
+{"id":"W9","app":"web","wf":"Messages and alerts","title":"One notifications page; replies just send","body":"Settings splits notifications across three pages (My alerts, Team routing, Tenant notices) and \"Tenant notices\" appears twice in the rail. Merge into one page with sections; hide <b>Team routing</b> until a second team member exists. In Messages, drop the three channel checkboxes from every reply: show the box and Send, a quiet \"Delivered in the tenant app and by text\" line, and channel overrides under a Delivery menu.","delta":"3 settings pages + a per-message channel decision  →  1 page; message + Send","effort":"M","risk":"none — sections appear when a team member is added","src":[1,1]},
+{"id":"W10","app":"web","wf":"Find a tenant","title":"Stop mirroring Zillow's workflow; share applications from the unit","body":"The listing tab makes the landlord reproduce Zillow's state inside Rental Command (five publication statuses, three confirmation checkboxes, external IDs/URLs, a full card for an unavailable Connected integration — <code>ListingTab.svelte:239-297</code>). Replace with one review sheet (headline, description, rent, deposit, photos) and <b>Copy listing and open Zillow</b>; hide posting bookkeeping under \"Posting details\". Put <b>Share application</b> on each vacant unit with that unit preselected; on the public form show the five required values first.","delta":"17 controls · 2 provider models  →  5 fields · 1 posting action","effort":"M","risk":"medium — companies keep provider tracking under Posting details","src":[0,1]},
+{"id":"W11","app":"web","wf":"Screening","title":"One \"Request screening\" action instead of an integration choice","body":"Today the routine decision is framed as Integrated vs External, with service, reference, link, reporting-agency name, phone and address on the applicant's main workflow (<code>ApplicationDetail.svelte:769-925</code>). Use the provider if one is connected, else \"Record a screening completed elsewhere\"; keep agency details in a collapsed Report details section that opens automatically when adverse action makes them legally required.","delta":"choose infrastructure, then screen  →  choose the screening result","effort":"M","risk":"medium — compliance details stay available and become mandatory when required","src":[0,1]},
+{"id":"W12","app":"web","wf":"Lease templates","title":"Move Lease Templates out of primary navigation","body":"First-time lease creation exposes the whole template system as a Rentals destination: upload, name, place fields, render mode, activate a default, then signer role and order for an ordinary tenant signature. Make it lease settings; first use is \"Upload the lease form you already use\" with suggested field placement confirmed once; \"Create and send lease\" shows dates, rent, deposit, names/emails and a preview, with signer role/order defaulted and revealed only for multiple signers.","delta":"template administration + draft administration  →  one review, one send","effort":"L","risk":"medium — full designer and revision controls remain in settings","src":[0,1]},
+{"id":"W13","app":"web","wf":"Move-out","title":"Two real-world moments: Plan move-out, Keys returned","body":"Today: plan the ending, return possession, decide every household and portal-access outcome individually, manage turnover, then close the account in yet another dialog — the API enforces every choice (<code>LeaseManagementController.cs:817-875</code>). On key return, preselect \"End tenancy and portal access for everyone\", show a one-line summary, reveal per-person exceptions only for guarantors or transfers; put the account-close checklist on the turnover screen after deposit settlement. The deposit-return step — the one with legal deadlines — gets a first-class screen.","delta":"4 administrative surfaces  →  2 event-driven surfaces","effort":"L","risk":"medium — transfers and retained guarantors stay expandable","src":[1,1]},
+{"id":"W14","app":"web","wf":"Copy","title":"Apply the web rows of the rename table","body":"Every rename in the table below that cites a web file. No structural change; strings only.","delta":"12 jargon terms on the lease, payment, dashboard and template screens  →  plain English","effort":"S","risk":"none","src":[1,1]},
+{"id":"M1","app":"mobile","wf":"Navigation","title":"Collapse the Money hub from six pills to two","body":"Bottom nav (5) → hub pill bar (up to 6, horizontally scrolling) → screen chip row (Money: 4) → segmented button (2). \"Ledger\" and \"Reports\" each mean two different things at two levels; Portfolio and Insights share an icon. Make the Money hub <b>Money</b> and <b>Deposits</b>, folding Banking, Reports and Portfolio into the Money screen's Reports chip — an edit to <code>moneyHubDestinations</code> (<code>mobile_destination.dart:326-365</code>).","delta":"4 navigation layers, 21 destinations  →  3 layers; Money hub 6 → 2","effort":"S","risk":"low — every destination stays reachable","src":[1,1]},
+{"id":"M2","app":"mobile","wf":"Navigation","title":"Fire the + button directly; let sheets skip empty steps","body":"The floating button is a closed speed dial, so every \"Add X\" costs two taps (<code>mobile_quick_action_fab.dart:400-495</code>), and <code>TabbedFormSheet</code> clamps forward jumps to one step even when nothing below is required (<code>tabbed_form_sheet.dart:104-116</code>). When a screen registers exactly one primary action, fire it on tap; let a sheet jump to Save when no remaining step has a required field.","delta":"−1 tap on every create flow; −4 \"Next\" on add-property","effort":"S","risk":"none","src":[1,0]},
+{"id":"M3","app":"mobile","wf":"Money","title":"Hide bookkeeping behind the Advanced preference that already exists","body":"Accounting-impact cards (Dr/Cr, Balanced ✓, Posted, Reversal, Audit link) sit on the payment, expense, deposit, property and owner-report screens. <code>AccountingDetailMode.advanced</code> exists (<code>journal_detail_sheet.dart:19-78</code>) but only softens lines <em>inside</em> the card. Gate the card and its \"View accounting record →\" link on it: one conditional at six call sites. Same gate for Section 1250, depreciation Convention and the ledger's typed Property ID filter.","delta":"double-entry vocabulary on 5 daily screens  →  visible only to whoever flips one switch","effort":"S","risk":"none","src":[1,0]},
+{"id":"M4","app":"mobile","wf":"Role machinery","title":"Hide management-company features when there is one owner and no team","body":"Ten concrete instances on the landlord's default screens: ownership splits, Owners as a top-level pill with a 10-field form, Management fee % on every property, owner statements, a 1,449-line Team system, the technician-responsibility sheet, Zillow Connected state machine, the notice-compliance engine, vendor 1099/W-9, three notification screens. Owners/Team/Banking/Deposits already hide by capability and dropdowns already hide with one option (<code>mobile_shell_actions.dart:170-172</code>) — extend that rule to Management fee %, the ownership card, the technician sheet and the Connected card. A condition, not a mode toggle.","delta":"company machinery on every default screen  →  appears when a second owner or member exists","effort":"M","risk":"none to companies","src":[1,1]},
+{"id":"M5","app":"mobile","wf":"Add a property","title":"One sheet: name, address, rent, beds, baths","body":"Today 8 taps, 20 fields, 5 steps ending in Tax Basis (purchase price, land value, in-service date, manual depreciation), with two sentences explaining that a rental is \"one underlying Unit\" (<code>property_form_sheet.dart:490-892</code>) and the raw enum <code>SingleRental</code> shown as a value. Create the unit silently; ask \"Does this address have more than one rental?\" only for buildings; owner, fee, operations and tax basis under More on the saved property; delete the model-leak sentences; label the enum. Merge the 3-step unit sheet into one.","delta":"8 taps · 20 fields · 5 steps  →  ~4 taps · 5 fields · 1 sheet","effort":"M","risk":"medium — owner splits must not interrupt the common path but stay reachable","src":[1,1]},
+{"id":"M6","app":"mobile","wf":"Handle maintenance","title":"One screen for a repair, with the vendor promoted","body":"12 taps across 5 steps and 13 fields; the vendor sits behind two Next presses labelled optional; the empty state says \"Tap + to create one\" beside a scanner glyph that needs two taps (<code>create_work_order_sheet.dart:90-751</code>, <code>work_orders_screen.dart:556-560</code>). One screen: rental, <b>What happened?</b>, photo, <b>Who's fixing it</b>; scheduling, cost and access under More; fix the empty-state copy.","delta":"12 taps · 5 steps · 13 fields  →  ~5 taps · 1 screen · 5 fields","effort":"M","risk":"none","src":[1,1]},
+{"id":"M7","app":"mobile","wf":"Record an expense","title":"Receipt first, then confirm three things","body":"The phone-and-paper use case is inverted: a 4-step, 24-field accounting form (Document kind \"ManualBill\", owner billing, vendor tax ID) before the receipt is captured, though the uploader supports camera and gallery (<code>receipt_upload_sheet.dart:150</code>). Make <b>Take receipt photo</b> the primary action, extract merchant/date/total/category, confirm only Rental, Amount, Category; keep \"Enter without receipt\" as a 5-field sheet. On the scan review: delete the \"Save command\" row, map the raw enum categories through the label table in <code>expense_models.dart:8-21</code>, title-case the headers.","delta":"4 steps · 24 fields · a dozen concepts  →  capture + 3 decisions","effort":"L","risk":"medium — detailed allocation stays under More","src":[1,1]},
+{"id":"M8","app":"mobile","wf":"Collect rent","title":"Reach \"Who's behind\" every day, with one payment sheet","body":"\"Who's behind\" is good (<code>overdue_screen.dart</code>) but only appears when someone is past due, and the \"Rent still owed\" tile is not tappable (<code>money_screen.dart:666-683</code>). Recording a payment for a current tenant is 7 taps through two competing sheets. Make the tile tappable, add <b>Rent came in</b> to the Today button, delete <code>money/record_payment_sheet.dart</code> (keep the tenant-receipt sheet), show amount / method / date with allocation, payer, reference and notes under More, and remove the document control that doesn't do anything.","delta":"7 taps · 2 divergent forms · 6 visible concepts  →  3 taps · 1 form · 3","effort":"M","risk":"low — same API behind both","src":[1,1]},
+{"id":"M9","app":"mobile","wf":"Move-in","title":"\"Tenant has moved in\" — one sheet, one real-world question","body":"Today's confirmation reads \"The server will recheck the executed governing agreement, open account, resident household, unit availability, and your current access before changing lifecycle state\" (<code>lease_detail_screen.dart:220-257</code>). Replace with one sheet — move-in date, optional deposit received, optional inspection — prefilled from the lease; prerequisite failures become plain corrective messages. The API's richer <code>confirm-move-in</code> endpoint has no mobile caller today.","delta":"server invariants explained to the landlord  →  \"Did the tenant get the keys?\"","effort":"M","risk":"low — the server keeps every check","src":[1,1]},
+{"id":"M10","app":"mobile","wf":"Move-out","title":"Rename \"Return possession\" and default the dispositions","body":"A 3-step sheet requiring a disposition per household member and per portal grant and a mandatory turnover reason, with two sentences about the server's business date (<code>return_possession_sheet.dart:124-261</code>). Call it <b>Move-out</b>; default every member to ended and every login to revoked under \"Change what happens to their access\"; make the reason optional; delete the server sentences. Then, a one-screen move-out checklist (keys, deductions, refund, next availability) — the API's close-account endpoint has no mobile caller.","delta":"3 steps · N+M+1 decisions  →  1 screen · 1 confirm (then: 5 destinations → 1 checklist)","effort":"M","risk":"low now; L/medium for the checklist","src":[1,1]},
+{"id":"M11","app":"mobile","wf":"Lease","title":"Three lease actions, one review page, errors that explain themselves","body":"Lease detail offers ten agreement verbs (Void and replace, Create correction, Create restatement, Create renewal, Create month-to-month, addenda with Successor treatment…). \"Prepare move-in\" is 4 steps and up to 21 fields where Next greys out with no reason, and the household role dropdown has one legal choice. Show <b>Renew · Change the lease · End the lease</b> with the rest under More; make preparation one review page (tenant, dates, rent, deposit, default template) whose button is <b>Send lease to sign</b>; remove the one-choice role; surface step validation as field errors.","delta":"10 verbs · 4 + 3 steps · silent gating  →  3 + More · 1 review · visible errors","effort":"L","risk":"medium — advanced agreement actions remain under More","src":[1,1]},
+{"id":"M12","app":"mobile","wf":"Find a tenant","title":"Make a vacancy one place with one next action","body":"One vacancy is spread across Units, a 6-tab unit command center, Applications, application detail and third-party publication state; listings aren't reachable from the Leasing landing; the list shows <code>Property #12 · Unit #34</code>. Now: \"List this rental\" on the Leasing tile and unit summary, real names, one Zillow card with Connected hidden until an adapter ships. Later: a unit-level vacancy timeline — <b>Advertise → Share application → Review applicants → Choose tenant</b> — showing only the next action.","delta":"~6 scattered screens · a dozen concepts  →  1 workspace · 4 plain stages","effort":"M","risk":"medium-high for the timeline — keep the leasing-role shell for staff","src":[1,1]},
+{"id":"M13","app":"mobile","wf":"Onboard","title":"Straight to \"Add your first rental\"","body":"The first decision is Sandbox vs Live; the checklist then uses three words for one object (unit, rental space, rental) and starts with \"Confirm who owns the properties\" — always you. After verification go directly to Add your first rental; sample data becomes a secondary action on the welcome screen; drop the owner task when the one owner is the signed-in user; one word, <b>rental</b>; \"Setting up your sample portfolio…\" instead of \"sandbox\".","delta":"8 screens · Sandbox/Live/portfolio/property/unit  →  ~4 screens · account + rental","effort":"M","risk":"low — sandbox stays available","src":[1,1]},
+{"id":"M14","app":"mobile","wf":"What needs attention","title":"Today: one ranked attention list first — or leave it (reviewers split)","body":"The flow reviewer wants the first section to be a single ranked list of at most five actionable items with money and activity below a collapsed snapshot, because the same concern can appear as a briefing bullet and again in a domain section. The landlord's-eye reviewer rated Today the best-built screen on the phone and said keep it. Recommendation: hold until the web dashboard change (W5) has been seen; apply the same shape only if it earns it there.","delta":"five feeds  →  one queue + reference (contested)","effort":"M","risk":"low","src":[0,1]},
+{"id":"M15","app":"mobile","wf":"Messages","title":"Reply with the conversation's channel; drop Subject from replies","body":"Three channel chips above every reply; a new conversation asks To / Subject / Message / Channels (<code>message_detail_screen.dart:466-490</code>). Remember the channel per conversation (\"Sending by text — change\"), default new conversations to the tenant's verified preferred channel, keep the override one tap away.","delta":"1 decision per message  →  0","effort":"S","risk":"none","src":[1,1]},
+{"id":"M16","app":"mobile","wf":"Copy","title":"Apply the mobile rows of the rename table","body":"Every rename in the table below that cites a Dart file, including the raw enum values shown to users and the four sentences about what \"the server\" will do.","delta":"~28 jargon terms  →  plain English","effort":"S","risk":"none","src":[1,1]}
+]
+</script>
+<script>
+(function () {
+  var KEY = 'rc-landlord-first-cut-2026-08-25';
+  var items = JSON.parse(document.getElementById('data').textContent);
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { state = {}; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+  function esc(s) { return String(s).replace(/&(?!(amp|lt|gt|quot|#\d+);)/g, '&amp;'); }
+  function render(app, mount) {
+    var host = document.getElementById(mount); host.innerHTML = '';
+    var box = document.createElement('div'); box.style.display = 'grid'; box.style.gap = '10px';
+    items.filter(function (i) { return i.app === app; }).forEach(function (it) {
+      var d = state[it.id] || {};
+      var el = document.createElement('article'); el.className = 'item'; el.id = it.id;
+      el.setAttribute('data-decision', d.d || '');
+      el.innerHTML =
+        '<div class="top"><span class="id">' + it.id + ' · ' + esc(it.wf) + '</span><h3>' + esc(it.title) + '</h3>' +
+        '<span class="src" title="which of the two reviewers for this app proposed it">' + it.src.map(function (s) { return '<span class="' + (s ? 'on' : '') + '"></span>'; }).join('') + '</span></div>' +
+        '<p class="body">' + it.body + '</p>' +
+        '<div class="chips"><span class="delta">' + esc(it.delta) + '</span></div>' +
+        '<div class="chips"><span class="chip e-' + it.effort + '">effort ' + it.effort + '</span><span class="chip">risk: ' + esc(it.risk) + '</span></div>' +
+        '<div class="decide">' +
+          '<button class="ok" data-d="approve" aria-pressed="' + (d.d === 'approve') + '">Approve</button>' +
+          '<button class="hold" data-d="hold" aria-pressed="' + (d.d === 'hold') + '">Hold</button>' +
+          '<button class="no" data-d="reject" aria-pressed="' + (d.d === 'reject') + '">Reject</button>' +
+          '<input type="text" placeholder="note (optional)" value="' + esc(d.n || '').replace(/"/g, '&quot;') + '" aria-label="Note for ' + it.id + '">' +
+        '</div>';
+      el.querySelectorAll('button').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var cur = state[it.id] || {};
+          cur.d = (cur.d === b.dataset.d) ? '' : b.dataset.d; state[it.id] = cur; save();
+          el.setAttribute('data-decision', cur.d);
+          el.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', String(x.dataset.d === cur.d)); });
+          tally();
+        });
+      });
+      el.querySelector('input').addEventListener('input', function (ev) { var cur = state[it.id] || {}; cur.n = ev.target.value; state[it.id] = cur; save(); });
+      box.appendChild(el);
+    });
+    host.appendChild(box);
+  }
+  function tally() {
+    var c = { approve: 0, hold: 0, reject: 0, none: 0 };
+    items.forEach(function (i) { var d = (state[i.id] || {}).d; c[d && c.hasOwnProperty(d) ? d : 'none']++; });
+    document.getElementById('t-ok').textContent = c.approve; document.getElementById('t-hold').textContent = c.hold;
+    document.getElementById('t-no').textContent = c.reject; document.getElementById('t-none').textContent = c.none;
+  }
+  render('web', 'web-items'); render('mobile', 'mobile-items'); tally();
+})();
+</script>
