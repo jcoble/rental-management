@@ -3,6 +3,7 @@
 - Lane: be-c — collapse the write-executor wrappers into IWriteExecutor
 - Start time: 2026-08-25T17:01:00-04:00
 - Rework round 1 start time: 2026-08-25T19:52:03-04:00
+- Rebase start time: 2026-08-25T20:14:06-04:00
 
 ## Item 2 audit — Verified before renaming
 
@@ -97,3 +98,19 @@ The complete changed-test-file set is the 140 paths produced by:
 All 140 changes are mechanical interface/method renames or removal of deleted wrapper registrations. The direct-construction files additionally pass the required mock/shared executor: `AppointmentScheduleSummarySqlTests.cs`, `AppointmentServiceListTests.cs`, `CanonicalLeaseReaderSqlTests.cs`, `FinancialReportPostgreSqlTests.cs`, `OwnerCutoverPostgreSqlTests.cs`, `OwnerEntityServiceListTests.cs`, `PortalServiceAppointmentTests.cs`, `PortalServiceBalanceTests.cs`, `PortalServiceLeaseTests.cs`, `PortalServiceWorkOrderPostgreSqlTests.cs`, `PropertyServiceTests.cs`, `PropertyWorkspacePostgreSqlTests.cs`, `RecurringMaintenanceServiceTests.cs`, `RecurringMaintenanceTaskServiceTests.cs`, `ReportsServicePostgreSqlTests.cs`, `ReportsServiceTests.cs`, `RemoteSelectorPagingPostgreSqlTests.cs`, `UnitConditionPostgreSqlTests.cs`, `WorkOrderServiceListTests.cs`, and `WorkOrderStatusTimelineTests.cs`. `AtomicDomainTestKernel.cs` removes wrapper registration plumbing; the forwarding-double files and the obsolete recurring-maintenance guard test are described under items 4-5.
 
 No web or mobile files were changed (Verified: `git diff --name-only | rg '^(web|mobile)/'` returned no output). Existing warnings and the nine timing failures above were not changed.
+
+## Rebase (Verified)
+
+- `git rebase main` completed through all five logical commits. The six content conflicts were `RentalCommand.Api.Tests/Domain/AppointmentServiceListTests.cs`, `RentalCommand.Api.Tests/Domain/LoanServiceTests.cs`, `RentalCommand.Api.Tests/Domain/RecurringMaintenanceTaskServiceTests.cs`, `RentalCommand.Api/Services/Domain/InspectionService.cs`, `RentalCommand.Api/Services/Domain/ListingWorkspaceService.cs`, and `RentalCommand.Engine.Tests/Automation/RecurringMaintenanceServiceTests.cs` (`git rebase` output; resolved in rebased commit `90187f40`).
+- Resolution started from main's PostgreSQL fixture/scope changes and removal of the legacy portfolio-id overloads, then reapplied the `IWriteExecutor` constructor/test-double changes. Inspection and listing services keep main's resolver/adapter names and required `IWriteExecutor`; recurring-maintenance engine assertions keep main's direct database reads because the removed service overload is not present (`git diff main..HEAD` and resolved file contents).
+- Rebased logical commits are `56624699`, `90187f40`, `eac27ade`, `4d75dd30`, and `87714a6b` (`git log --oneline main..HEAD`).
+
+## Rebase verification follow-up (Verified)
+
+- Item 5 follow-up — DONE in commit `290a6cd6`: `ApplicationServiceTests.cs` and `RecurringMaintenanceTaskServiceTests.cs` now register and resolve `IWriteExecutor`/`WriteExecutor`; this removed the last two stale request-executor references exposed by the post-rebase symbol scan.
+- `rg -n 'IRequestWriteExecutor|IJobStepWriteExecutor|ExecuteExactAsync|RequireWrites|<<<<<<<|>>>>>>>' --glob '*.cs' --glob '!**/obj/**' .` — exit `1` with empty output, which is ripgrep's no-match status.
+- `MSBUILDDISABLENODEREUSE=1 dotnet build RentalCommand.sln -c Debug --nologo -v q` — exit `0`; final output ended with `82 Warning(s)`, `0 Error(s)`, a blank line, and `Time Elapsed: 00:00:18.58`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests --no-build --nologo` — exit `1`; 11 failures, all in the allowed pre-existing set (`SeedPortfolio_*`, `VendorDone_ClosingSiblingDispatch*`, `InspectionChecklist Complete_*/RecoverChronology*/UpdateItemAuthorizedAsync_*`, `RecurringTenantCharge Create_DerivesTenantDimensions*`, and `Banking ConfirmMatch_WithInternalTransfer*/MatchAndClearMatch*`). Final summary: `Failed!  - Failed:    11, Passed:  1422, Skipped:     0, Total:  1433, Duration: 3 m 12 s - RentalCommand.Api.Tests.dll (net10.0)`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Data.Tests --no-build --nologo` — exit `0`; `Passed!  - Failed:     0, Passed:   125, Skipped:     0, Total:   125, Duration: 5 s - RentalCommand.Data.Tests.dll (net10.0)`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Engine.Tests --no-build --nologo` — exit `0`; `Passed!  - Failed:     0, Passed:   109, Skipped:     0, Total:   109, Duration: 12 s - RentalCommand.Engine.Tests.dll (net10.0)`.
+- `dotnet build-server shutdown` — exit `0`; `Shutting down MSBuild server...`, `Shutting down VB/C# compiler server...`, `VB/C# compiler server shut down successfully.`, and `MSBuild server shut down successfully.`
