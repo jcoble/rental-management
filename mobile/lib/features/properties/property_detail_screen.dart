@@ -213,7 +213,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     final isSingleRental =
         property.rentalStructure == RentalStructure.singleRental;
     final message = isSingleRental && unitCount == 1
-        ? 'This also removes the rental’s underlying Unit if it is still empty. If it has leases, work orders, expenses, inspections, applications, appointments, or documents, the server will stop the delete.'
+        ? "This also removes the rental if it is still empty. If it has leases, repairs, expenses, inspections, applications, appointments, or documents, you'll need to clear those first."
         : unitCount > 0
         ? 'This property still has $unitCount ${unitCount == 1 ? 'unit' : 'units'}. Remove the units before deleting the property.'
         : 'This cannot be undone.';
@@ -481,9 +481,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Remove property sale?'),
-        content: const Text(
-          'This removes the disposition record from this property.',
-        ),
+        content: const Text('This removes the sale record from this property.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -561,7 +559,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 16),
               child: Text(
-                'No property-wide or Unit work orders.',
+                'No property-wide or rental repairs.',
                 style: TextStyle(color: colorScheme.onSurfaceVariant),
               ),
             );
@@ -588,7 +586,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                 ),
               ),
               _PropertyPagingBar(
-                label: 'work orders',
+                label: 'repairs',
                 pageStart: page.skip,
                 itemCount: page.items.length,
                 totalCount: page.totalCount,
@@ -1043,7 +1041,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                 children: [
                   Expanded(
                     child: Text(
-                      'Property Sale / Disposition',
+                      'Property sale',
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -1070,7 +1068,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       child: Text(
-                        'No sale or disposition recorded for this property.',
+                        'No sale recorded for this property.',
                         style: TextStyle(color: colorScheme.onSurfaceVariant),
                       ),
                     );
@@ -1149,7 +1147,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
             // ── Leases section ─────────────────────────────────────────────
             if (_section == PropertyWorkspaceSection.rentals) ...[
               Text(
-                'Rental relationships',
+                'Tenancies',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
@@ -1166,7 +1164,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       child: Text(
-                        'No rental relationships on this property.',
+                        'No tenancies on this property.',
                         style: TextStyle(color: colorScheme.onSurfaceVariant),
                       ),
                     );
@@ -1176,7 +1174,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     children: [
                       ...page.items.map((l) => _LeaseTile(lease: l)),
                       _PropertyPagingBar(
-                        label: 'rental relationships',
+                        label: 'tenancies',
                         pageStart: page.skip,
                         itemCount: page.items.length,
                         totalCount: page.totalCount,
@@ -1312,7 +1310,7 @@ class _PropertyOwnershipCard extends StatelessWidget {
                 ),
                 _KeyValue(
                   label: 'Rental setup',
-                  value: property.rentalStructure.wireValue,
+                  value: property.rentalStructure.label,
                 ),
               ],
             ),
@@ -1337,7 +1335,7 @@ class _WorkspaceUnitTile extends StatelessWidget {
           unit.unitNumber.isEmpty ? 'Unit' : 'Unit ${unit.unitNumber}',
         ),
         subtitle: Text(
-          '${money.moneyFmt(unit.marketRent, whole: true)}/mo · ${unit.openWorkOrderCount} open ${unit.openWorkOrderCount == 1 ? 'work order' : 'work orders'}',
+          '${money.moneyFmt(unit.marketRent, whole: true)}/mo · ${unit.openWorkOrderCount} open ${unit.openWorkOrderCount == 1 ? 'repair' : 'repairs'}',
         ),
         trailing: Text(unit.status),
         onTap: () => openUnitCommandCenter(context, unitId: unit.id),
@@ -1545,7 +1543,8 @@ class _LeaseTile extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      lease.primaryTenantName ?? lease.relationshipNumber,
+                      lease.primaryTenantName ??
+                          'Tenancy #${lease.relationshipNumber}',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
@@ -2017,7 +2016,7 @@ class _LoanPaymentScheduleState extends ConsumerState<_LoanPaymentSchedule> {
             data: (payments) {
               if (payments.isEmpty) {
                 return Text(
-                  'No payments generated yet. The debt-service worker fills this in monthly.',
+                  'Payments appear here each month.',
                   style: TextStyle(color: colorScheme.onSurfaceVariant),
                 );
               }

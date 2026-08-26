@@ -80,7 +80,7 @@ void main() {
         selectedTenantAccountId: 29,
         selectedTenantAccount: selectedAccount,
       ),
-      contains('different rental account'),
+      contains('different tenant balance'),
     );
     expect(
       paymentContextConflictMessage(
@@ -138,7 +138,7 @@ void main() {
         selectedTenantAccountId: 83,
         selectedTenantAccount: selectedAccount,
       ),
-      contains('different rental account'),
+      contains('different tenant balance'),
       reason: 'The original extracted Unit still blocks a genuine mismatch.',
     );
     expect(
@@ -178,12 +178,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Which rental account is this payment for?'),
+      find.text('Which tenant balance is this payment for?'),
       findsOneWidget,
     );
-    expect(find.text('Select a rental account'), findsNothing);
+    expect(find.text('Select a tenant balance'), findsNothing);
     expect(
-      find.text('Select a rental account above to enable payment creation.'),
+      find.text('Select a tenant balance above to enable payment creation.'),
       findsNothing,
     );
     expect(find.textContaining('Dana Garcia'), findsOneWidget);
@@ -241,7 +241,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.text('Which rental account is this payment for?'),
+        find.text('Which tenant balance is this payment for?'),
         findsNothing,
       );
       await tester.scrollUntilVisible(
@@ -270,7 +270,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('different rental account'), findsWidgets);
+    expect(find.textContaining('different tenant balance'), findsWidgets);
     expect(find.textContaining('Nolan'), findsWidgets);
 
     final createPayment = tester.widget<FilledButton>(
@@ -297,7 +297,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('different rental account'), findsNothing);
+    expect(find.textContaining('different tenant balance'), findsNothing);
 
       final createPayment = tester.widget<FilledButton>(
         find.widgetWithText(FilledButton, 'Create Payment'),

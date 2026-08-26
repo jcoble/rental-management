@@ -95,7 +95,7 @@ class _EndingDispositionSheetState extends State<_EndingDispositionSheet> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'This controls relationship notice automation. It does not edit or replace the governing agreement.',
+            'This controls tenancy notices. It does not edit or replace the current lease.',
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<String>(
@@ -116,7 +116,7 @@ class _EndingDispositionSheetState extends State<_EndingDispositionSheet> {
               ),
               DropdownMenuItem(
                 value: 'NonRenewalMoveOut',
-                child: Text('Move out / end the relationship'),
+                child: Text('Move out / end the tenancy'),
               ),
             ],
             onChanged: (value) => setState(() {
@@ -130,7 +130,7 @@ class _EndingDispositionSheetState extends State<_EndingDispositionSheet> {
           if (_isMoveOut) ...[
             const SizedBox(height: 12),
             const Text(
-              'Use this for non-renewal, notice to move out, or an early termination. Return possession separately when keys are handed back.',
+              'Use this for non-renewal, notice to move out, or an early termination. Record the move-out separately when keys are handed back.',
             ),
             const SizedBox(height: 12),
             _DateButton(

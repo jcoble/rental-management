@@ -329,7 +329,7 @@ class _EmptyBody extends StatelessWidget {
             hasSearch
                 ? 'Try another name, service type or email.'
                 : 'Add service providers here, then assign or text them from '
-                      'work orders.',
+                      'repairs.',
             textAlign: TextAlign.center,
             style: Theme.of(
               context,

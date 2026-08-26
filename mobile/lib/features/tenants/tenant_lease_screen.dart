@@ -80,10 +80,10 @@ class _LeaseBody extends ConsumerWidget {
         ),
         Text('Unit ${lease.unitNumber}', style: theme.textTheme.bodyMedium),
         const SizedBox(height: 20),
-        _Row(label: 'Relationship', value: lease.lifecycle),
+        _Row(label: 'Lease status', value: lease.lifecycle),
         if (lease.agreement case final agreement?) ...[
           _Row(label: 'Status', value: agreement.status),
-          _Row(label: 'Agreement #', value: agreement.agreementNumber),
+          _Row(label: 'Lease #', value: agreement.agreementNumber),
           _Row(
             label: 'Term',
             value:

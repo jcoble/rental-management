@@ -278,10 +278,10 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
         _UnitAreaSurface(
           area: UnitCommandCenterTab.maintenance,
           labels: const [
-            'Work orders',
+            'Repairs',
             'Inspections',
             'Recurring maintenance',
-            'Turnover/make-ready',
+            'Getting it ready',
           ],
           views: const [
             UnitCommandCenterView.workOrders,
@@ -658,7 +658,7 @@ class _UnitWorkOrderQuickActionFabState
         widget.selectedWorkOrder == null &&
         canManageWork) {
       return MobileQuickAction(
-        label: 'New work order',
+        label: 'New repair',
         icon: Icons.add,
         onPressed: _showWorkOrderSheet,
       );
@@ -668,7 +668,7 @@ class _UnitWorkOrderQuickActionFabState
         widget.activeView.value == UnitCommandCenterView.turnover &&
         canManageWork) {
       return MobileQuickAction(
-        label: 'New turnover task',
+        label: 'New preparation task',
         icon: Icons.add,
         onPressed: _showWorkOrderSheet,
       );
@@ -726,7 +726,7 @@ class _UnitWorkOrderQuickActionFabState
       leaseManagementId: widget.dashboard.leaseManagementId,
       leaseAgreementId: widget.dashboard.currentLease?.id,
       tenantAccountId: widget.dashboard.tenantAccountId,
-      sourceLabel: 'Unit command center',
+      sourceLabel: "Today's summary",
     );
   }
 
@@ -797,7 +797,7 @@ class _UnitOverviewTab extends ConsumerWidget {
             ),
             _MetricRow(
               icon: Symbols.build_rounded,
-              label: 'Maintenance / turnover',
+              label: 'Maintenance / getting it ready',
               value: plainEnglishLabel(dashboard.maintenanceTurnover.status),
             ),
           ],
@@ -814,10 +814,10 @@ class _UnitOverviewTab extends ConsumerWidget {
             ),
             _MetricRow(
               icon: Symbols.route_rounded,
-              label: 'Stage',
+              label: "Where it's at",
               value: plainEnglishLabel(
                 dashboard.lifecycleStage,
-                fallback: 'Unit',
+                fallback: 'Rental',
               ),
             ),
             _MetricRow(
@@ -861,7 +861,7 @@ class _UnitOverviewTab extends ConsumerWidget {
               ),
             _InfoChip(
               icon: Symbols.build_rounded,
-              label: '${header.openWorkOrderCount} open work',
+              label: '${header.openWorkOrderCount} open repairs',
             ),
             if (header.leaseEndsInDays != null)
               _InfoChip(
@@ -1065,7 +1065,7 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
               empty: 'No listing fields',
               children: [
                 _ListingStatusRow(
-                  label: 'Workspace state',
+                  label: 'Listing status',
                   value: _status,
                   options: _workspaceStatusOptions,
                   onChanged: (value) => setState(() => _status = value),
@@ -1129,8 +1129,8 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
             ),
             const SizedBox(height: 14),
             _Section(
-              title: 'Zillow Guided',
-              empty: 'No guided publication fields',
+              title: 'Post on Zillow yourself',
+              empty: 'No posting details',
               children: [
                 _CompactRow(
                   icon: Symbols.open_in_new_rounded,
@@ -1147,7 +1147,7 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
                   ),
                 ),
                 _ListingStatusRow(
-                  label: 'Publication state',
+                  label: 'Listing status',
                   value: _publicationStatus,
                   options: _publicationStatusOptions,
                   onChanged: (value) =>
@@ -1954,8 +1954,8 @@ class _ListingConnectedCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _Section(
-      title: 'Zillow Connected',
-      empty: 'No connection status',
+      title: 'Automatic posting',
+      empty: 'No automatic posting status',
       children: [
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
@@ -2188,14 +2188,14 @@ class _UnitAgreementSection extends ConsumerWidget {
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: Text(
-                'No tenant relationship',
+                'No tenancy',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Text(
-                'Approve an application and prepare move-in, or scan an existing signed agreement.',
+                'Approve an application and prepare move-in, or scan an existing signed lease.',
               ),
             ),
             if (canPrepareAgreement)
@@ -3031,7 +3031,7 @@ class _UnitTurnoverTab extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Turnover', style: Theme.of(context).textTheme.titleLarge),
+          Text('Getting it ready', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 12),
           _SurfacePanel(
             children: [
@@ -3075,7 +3075,7 @@ class _UnitTurnoverTab extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           _Section(
-            title: 'Make-ready plan',
+            title: 'Getting it ready plan',
             empty: '',
             children: const [
               _CompactRow(
@@ -3211,13 +3211,13 @@ class _WorkOrdersSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _Section(
-      title: 'Work orders',
-      empty: 'No open work orders',
+      title: 'Repairs',
+      empty: 'No open repairs',
       children: [
         for (final item in items)
           _CompactRow(
             icon: Symbols.build_rounded,
-            title: item.title.isEmpty ? 'Work order #${item.id}' : item.title,
+            title: item.title.isEmpty ? 'Repair #${item.id}' : item.title,
             subtitle:
                 '${plainEnglishLabel(item.priority, fallback: 'Priority')} · '
                 '${plainEnglishLabel(item.status, fallback: 'Open')}',

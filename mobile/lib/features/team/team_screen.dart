@@ -110,7 +110,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Owners and tenants are managed from their relationship records, not as Team roles.',
+                      'Owners and tenants are managed from their own records, not as Team roles.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
@@ -579,7 +579,7 @@ class _AssignmentsSheetState extends ConsumerState<_AssignmentsSheet> {
                         style: theme.textTheme.titleLarge,
                       ),
                       Text(
-                        'Property scope is broader access. Assigned-work scope shows only specifically assigned work orders.',
+                        'Property scope is broader access. Assigned-work scope shows only specifically assigned repairs.',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: colors.onSurfaceVariant,
                         ),
@@ -601,7 +601,7 @@ class _AssignmentsSheetState extends ConsumerState<_AssignmentsSheet> {
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: Text(
-                  'One person can hold several separately scoped assignments. Owners and tenants are relationship-based experiences, not Team jobs.',
+                  'One person can hold several separately scoped assignments. Owners and tenants use their own experiences, not Team jobs.',
                   style: theme.textTheme.bodySmall,
                 ),
               ),
@@ -1053,7 +1053,7 @@ String _assignmentScopeLabel(
   TeamAssignment assignment,
 ) => switch (assignment.scopeKind) {
   'AllProperties' => 'All properties',
-  'AssignedWorkOrders' => 'Only assigned work orders',
+  'AssignedWorkOrders' => 'Only assigned repairs',
   _ =>
     '${assignment.selectedPropertyCount} selected ${assignment.selectedPropertyCount == 1 ? 'property' : 'properties'}',
 };
@@ -1376,7 +1376,7 @@ class _CreateTeamMemberSheetState
 
 String _scopeLabel(String scope) => switch (scope) {
   'AllProperties' => 'All properties',
-  'AssignedWorkOrders' => 'Only assigned work orders',
+  'AssignedWorkOrders' => 'Only assigned repairs',
   _ => 'Selected properties',
 };
 

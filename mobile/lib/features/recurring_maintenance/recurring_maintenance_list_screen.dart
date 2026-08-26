@@ -110,7 +110,7 @@ class _RecurringMaintenanceListScreenState
       builder: (ctx) => AlertDialog(
         title: const Text('Delete task?'),
         content: Text(
-          'Remove "${task.title}"? It will stop creating new work orders.',
+          'Remove "${task.title}"? It will stop creating new repairs.',
         ),
         actions: [
           TextButton(
@@ -360,7 +360,7 @@ class _TaskCard extends StatelessWidget {
                 [
                   if (task.estimatedCost != null)
                     '${task.estimatedCost == null ? '—' : moneyFmt(task.estimatedCost!)} expected · ${task.monthlyEstimatedCost == null ? '—' : moneyFmt(task.monthlyEstimatedCost!)}/mo',
-                  '${task.generatedWorkOrderCount} linked work order${task.generatedWorkOrderCount == 1 ? '' : 's'}',
+                  '${task.generatedWorkOrderCount} linked repair${task.generatedWorkOrderCount == 1 ? '' : 's'}',
                 ].join(' · '),
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,

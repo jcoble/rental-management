@@ -81,7 +81,7 @@ class _OverviewContent extends StatelessWidget {
               const SizedBox(height: 8),
               _LeaseExpiryPipeline(overview: overview),
               const SizedBox(height: 20),
-              _SectionHeader(title: 'Open Work Orders'),
+              _SectionHeader(title: 'Open Repairs'),
               const SizedBox(height: 8),
               _WorkOrderPriorityList(workOrders: overview.openWorkOrders),
               const SizedBox(height: 24),
@@ -514,7 +514,7 @@ class _WorkOrderPriorityList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (workOrders.isEmpty) {
-      return _EmptyCard(message: 'No open work orders.');
+      return _EmptyCard(message: 'No open repairs.');
     }
     final cs = Theme.of(context).colorScheme;
     final theme = Theme.of(context);

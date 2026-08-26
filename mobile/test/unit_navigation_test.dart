@@ -456,10 +456,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(calls, isEmpty);
-    expect(find.text('No tenant relationship'), findsOneWidget);
+    expect(find.text('No tenancy'), findsOneWidget);
     expect(
       find.text(
-        'Approve an application and prepare move-in, or scan an existing signed agreement.',
+        'Approve an application and prepare move-in, or scan an existing signed lease.',
       ),
       findsOneWidget,
     );
@@ -561,7 +561,7 @@ void main() {
       expect(find.text('Agreement'), findsOneWidget);
       expect(find.text('Residents'), findsOneWidget);
       expect(find.text('This unit is currently vacant.'), findsOneWidget);
-      expect(find.text('No tenant relationship'), findsOneWidget);
+      expect(find.text('No tenancy'), findsOneWidget);
     },
   );
 
@@ -741,14 +741,14 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Residents').hitTestable(), findsOneWidget);
-      expect(find.text('No governing agreement').hitTestable(), findsOneWidget);
+      expect(find.text('No signed lease').hitTestable(), findsOneWidget);
 
       await _selectUnitSection(tester, 'money');
       await _selectUnitSection(tester, 'tenant-lease');
       await tester.pumpAndSettle();
 
       expect(find.text('Residents').hitTestable(), findsOneWidget);
-      expect(find.text('No governing agreement').hitTestable(), findsOneWidget);
+      expect(find.text('No signed lease').hitTestable(), findsOneWidget);
     },
   );
 
@@ -829,7 +829,7 @@ void main() {
                     id: MobileDestinationId.units,
                     icon: Symbols.home_work_rounded,
                     label: 'Units',
-                    subtitle: 'Command centers',
+                    subtitle: "Today's summary",
                     builder: (_) =>
                         const Scaffold(body: Center(child: Text('Units root'))),
                   ),
@@ -899,7 +899,7 @@ void main() {
 
         final agreementState = fixture.agreement
             ? find.text('Executed PDF')
-            : find.text('No governing agreement');
+            : find.text('No signed lease');
         Future<void> expectPaintedTenantLeaseSurface() async {
           final visibleSelector = find.byKey(const Key('unit-section-tabs'));
           expect(visibleSelector, findsOneWidget);
@@ -1012,7 +1012,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Turnover'), findsWidgets);
+    expect(find.text('Getting it ready'), findsWidgets);
     expect(find.text('In progress'), findsOneWidget);
     expect(find.text('1 open / 2 done'), findsOneWidget);
     expect(find.text(r'$300 / $220'), findsOneWidget);
@@ -1024,7 +1024,7 @@ void main() {
     await tester.tap(find.byTooltip('Scan / Add'));
     await tester.pumpAndSettle();
 
-    expect(find.text('New turnover task'), findsOneWidget);
+    expect(find.text('New preparation task'), findsOneWidget);
   });
 }
 

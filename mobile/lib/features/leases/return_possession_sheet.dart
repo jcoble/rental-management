@@ -70,7 +70,7 @@ class _ReturnPossessionSheetState
   Future<void> _save() async {
     if (!_reviewComplete) {
       setState(
-        () => _error = 'Complete every disposition and turnover reason.',
+        () => _error = 'Complete each choice and provide a reason.',
       );
       return;
     }
@@ -121,8 +121,8 @@ class _ReturnPossessionSheetState
 
   @override
   Widget build(BuildContext context) => TabbedFormSheet(
-    title: 'Return possession',
-    saveLabel: 'Return possession',
+    title: 'Move-out',
+    saveLabel: 'Move-out',
     saving: _saving,
     error: _error,
     onSave: _save,
@@ -152,8 +152,8 @@ class _ReturnPossessionSheetState
     children: [
       _unitContext(),
       const Text(
-        'Choose an explicit outcome for every current household member. '
-        'The server determines current membership using the portfolio business date.',
+        'Choose what happens to each current household member. '
+        'The current portfolio date determines who is listed.',
       ),
       const SizedBox(height: 16),
       for (final party in widget.returnContext.parties) ...[
@@ -174,7 +174,8 @@ class _ReturnPossessionSheetState
                 child: Text('Retain as guarantor'),
               ),
           ],
-          validator: (value) => value == null ? 'Choose a disposition' : null,
+          validator: (value) =>
+              value == null ? 'Choose what happens to them' : null,
           onChanged: (value) => setState(() {
             if (value == null) {
               _partyDispositions.remove(party.id);
@@ -195,13 +196,11 @@ class _ReturnPossessionSheetState
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _unitContext(),
-        const Text(
-          'Choose an explicit outcome for every active tenant portal grant returned by the server.',
-        ),
+        const Text('Choose an option for each tenant app access record.'),
         const SizedBox(height: 16),
         if (!hasAccess)
           const Text(
-            'There are no active tenant portal grants to disposition.',
+            'There is no tenant app access to update.',
           ),
         for (final access in widget.returnContext.activeTenantUserAccesses) ...[
           DropdownButtonFormField<String>(
@@ -224,7 +223,7 @@ class _ReturnPossessionSheetState
               ),
             ],
             validator: (value) =>
-                value == null ? 'Choose an access disposition' : null,
+                value == null ? 'Choose their login option' : null,
             onChanged: (value) => setState(() {
               if (value == null) {
                 _accessDispositions.remove(access.id);
@@ -244,7 +243,7 @@ class _ReturnPossessionSheetState
     children: [
       _unitContext(),
       const Text(
-        'This records possession returned now and opens turnover. The server uses the portfolio current business date; no phone date is submitted.',
+        'This records the move-out now and starts getting it ready. The current portfolio date is used; no phone date is submitted.',
       ),
       const SizedBox(height: 16),
       TextFormField(
@@ -254,11 +253,11 @@ class _ReturnPossessionSheetState
         maxLines: 5,
         maxLength: 1000,
         decoration: const InputDecoration(
-          labelText: 'Turnover reason',
+          labelText: 'Reason for getting it ready',
           hintText: 'Keys returned after final move-out inspection.',
         ),
         validator: (value) => value == null || value.trim().isEmpty
-            ? 'Turnover reason is required'
+            ? 'A reason is required'
             : null,
         onChanged: (_) => setState(() => _error = null),
       ),
@@ -270,7 +269,7 @@ class _ReturnPossessionSheetState
           title: Text(party.tenantName),
           subtitle: Text(_partyDispositionLabel(_partyDispositions[party.id])),
         ),
-      Text('Portal access', style: Theme.of(context).textTheme.titleSmall),
+      Text('Tenant app access', style: Theme.of(context).textTheme.titleSmall),
       for (final access in widget.returnContext.activeTenantUserAccesses)
         ListTile(
           contentPadding: EdgeInsets.zero,

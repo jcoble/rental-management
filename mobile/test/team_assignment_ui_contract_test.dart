@@ -38,7 +38,7 @@ void main() {
       expect(screenSource, contains('Assigned-work scope'));
       expect(
         screenSource,
-        contains('Owners and tenants are relationship-based experiences'),
+        contains('Owners and tenants use their own experiences'),
       );
       expect(screenSource, contains('widget.isCurrentUser || saving'));
     },

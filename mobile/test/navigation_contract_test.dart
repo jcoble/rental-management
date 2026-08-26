@@ -35,10 +35,10 @@ void main() {
       'lib/features/units/unit_command_center_screen.dart',
     ).readAsStringSync();
     for (final label in [
-      "'Work orders'",
+      "'Repairs'",
       "'Inspections'",
       "'Recurring maintenance'",
-      "'Turnover/make-ready'",
+      "'Getting it ready'",
     ]) {
       expect(source, contains(label));
     }
@@ -405,7 +405,7 @@ void main() {
     expect(repositorySource, isNot(contains("'/notification-settings/")));
     expect(settingsSource, contains("title: 'My alerts'"));
     expect(settingsSource, contains('icon: Icons.notifications_outlined'));
-    expect(settingsSource, contains("title: 'Team routing'"));
+    expect(settingsSource, contains("title: 'Who gets told what'"));
     expect(settingsSource, contains("title: 'Tenant notices'"));
     expect(settingsSource, contains('canManageMobileNotificationFoundation('));
     expect(settingsSource, contains('experience: auth.activeExperience'));

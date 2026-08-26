@@ -48,15 +48,15 @@ void main() {
       await tester.pump();
       await tester.pump();
 
-      expect(find.text('Work order'), findsOneWidget);
+      expect(find.text('Repair'), findsOneWidget);
       expect(find.text('Unit'), findsNothing);
       expect(
         find.byKey(const Key('work-order-unit-aware-loading')),
         findsOneWidget,
       );
-      expect(find.text('Loading work order'), findsOneWidget);
+      expect(find.text('Loading repair'), findsOneWidget);
       expect(find.text('Details, schedule, and activity'), findsOneWidget);
-      expect(find.text('Work order details'), findsOneWidget);
+      expect(find.text('Repair details'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
     },
   );

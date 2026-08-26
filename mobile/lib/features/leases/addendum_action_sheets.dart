@@ -519,7 +519,7 @@ class _CreateAddendumDraftSheetState
       _Fact(label: 'Financial effects', value: '${_financialEffects.length}'),
       const SizedBox(height: 12),
       const Text(
-        'Eligible agreements, current signer candidates, and property-scoped active templates are loaded from canonical server-filtered selectors.',
+        'Eligible agreements, current signer candidates, and active templates for this property are shown here.',
       ),
     ],
   );
@@ -1127,7 +1127,7 @@ class _CorrectAddendumSheetState extends ConsumerState<_CorrectAddendumSheet> {
               onChanged: (value) => setState(() => _effectiveOn = value),
             ),
             const Text(
-              'The executed source remains immutable. The server creates a new editable version in the same series.',
+              'The signed source stays unchanged. A new editable version is created in the same series.',
             ),
           ],
         ),

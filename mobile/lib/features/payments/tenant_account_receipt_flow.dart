@@ -143,7 +143,7 @@ class _TenantReceiptAccountPickerSheetState
             ),
             const SizedBox(height: 4),
             Text(
-              'Choose the rental account that received the payment.',
+              'Choose the tenant balance for this payment.',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -154,8 +154,8 @@ class _TenantReceiptAccountPickerSheetState
               onChanged: _searchChanged,
               textInputAction: TextInputAction.search,
               decoration: InputDecoration(
-                labelText: 'Search rental accounts',
-                hintText: 'Tenant, property, unit, or relationship',
+                labelText: 'Search tenant balances',
+                hintText: 'Tenant, property, unit, or tenancy',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _searchController.text.isEmpty
                     ? null
@@ -180,7 +180,7 @@ class _TenantReceiptAccountPickerSheetState
                 error: (error, _) => _AccountPickerError(
                   message: error is ApiException
                       ? error.message
-                      : 'Could not load rental accounts.',
+                      : 'Could not load tenant balances.',
                   onRetry: () => ref.invalidate(
                     _tenantReceiptAccountPageProvider((
                       search: _search,
@@ -395,7 +395,7 @@ class _TenantReceiptAccountResults extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (page.items.isEmpty) {
-      return const Center(child: Text('No open rental accounts found.'));
+      return const Center(child: Text('No open tenant balances found.'));
     }
 
     return Column(
@@ -416,7 +416,7 @@ class _TenantReceiptAccountResults extends StatelessWidget {
                 title: Text(
                   account.primaryTenantName?.trim().isNotEmpty ?? false
                       ? account.primaryTenantName!.trim()
-                      : account.relationshipNumber,
+                      : 'Tenant balance #${account.relationshipNumber}',
                 ),
                 subtitle: Text(rentalLabel),
                 trailing: const Icon(Icons.chevron_right),

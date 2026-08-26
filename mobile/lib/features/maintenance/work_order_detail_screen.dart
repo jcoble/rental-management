@@ -459,7 +459,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
     }
 
     if (query.isEmpty) {
-      _showError('No address available for this work order.');
+      _showError('No address available for this repair.');
       return;
     }
 
@@ -588,7 +588,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
         builder: (_) => ActivityHistoryScreen(
           entityType: 'WorkOrder',
           entityId: widget.workOrderId,
-          title: 'Work order activity',
+          title: 'Repair activity',
           subtitle: subtitle,
         ),
       ),
@@ -609,7 +609,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Work Order'),
+        title: const Text('Repair'),
         actions: [
           if (capabilities.canAssignTechnician)
             IconButton(
@@ -619,7 +619,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
             ),
           IconButton(
             icon: const Icon(Icons.history_outlined),
-            tooltip: 'View work order activity',
+            tooltip: 'View repair activity',
             onPressed: () =>
                 _showActivityHistory(subtitle: detail?.workOrder.title),
           ),
@@ -722,7 +722,7 @@ class _WorkOrderDetailLoading extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Loading work order',
+                        'Loading repair',
                         style: theme.textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w700,
                         ),
@@ -756,7 +756,7 @@ class _WorkOrderDetailLoading extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Work order details',
+                  'Repair details',
                   style: theme.textTheme.labelLarge?.copyWith(
                     color: colors.onSurfaceVariant,
                   ),
@@ -1094,7 +1094,7 @@ class _CommentComposerState extends ConsumerState<_CommentComposer> {
               textCapitalization: TextCapitalization.sentences,
               decoration: const InputDecoration(
                 labelText: 'Add comment',
-                hintText: 'Add a work-order update',
+                hintText: 'Add a repair update',
               ),
             ),
             if (widget.canPrivateComment)
@@ -2143,7 +2143,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
     return Form(
       key: _formKey,
       child: TabbedFormSheet(
-        title: 'Edit Work Order',
+        title: 'Edit repair',
         saveLabel: 'Save Changes',
         saving: _saving,
         error: _error,

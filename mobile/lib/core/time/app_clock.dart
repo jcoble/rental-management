@@ -17,7 +17,7 @@ final appNowProvider = FutureProvider.autoDispose<DateTime>((ref) async {
     final parsed = raw is String ? DateTime.tryParse(raw) : null;
     if (parsed == null) {
       throw const FormatException(
-        'The server returned an invalid simulation clock.',
+        'The app received an invalid simulated date.',
       );
     }
     // The simulation controller's date command and the server's business-date

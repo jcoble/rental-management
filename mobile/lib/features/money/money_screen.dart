@@ -974,13 +974,13 @@ class _ReportsTabState extends State<_ReportsTab> {
           (
             kind: _MobileReportKind.profitAndLoss,
             title: 'Profit & Loss',
-            subtitle: 'Income and expenses from the server statement.',
+            subtitle: 'Income and expenses from your statement.',
             icon: Icons.bar_chart_outlined,
           ),
           (
             kind: _MobileReportKind.balanceSheet,
             title: 'Balance sheet',
-            subtitle: 'Assets, liabilities, and equity as of the server date.',
+            subtitle: 'Assets, liabilities, and equity as of the statement date.',
             icon: Icons.account_balance_outlined,
           ),
           (
@@ -998,7 +998,7 @@ class _ReportsTabState extends State<_ReportsTab> {
           (
             kind: _MobileReportKind.scheduleE,
             title: 'Schedule E',
-            subtitle: 'Server-calculated rental income and tax categories.',
+            subtitle: 'Rental income and tax categories.',
             icon: Icons.receipt_long_outlined,
           ),
         ])
@@ -1025,7 +1025,7 @@ class _ReportsIntro extends StatelessWidget {
     child: Padding(
       padding: const EdgeInsets.all(16),
       child: Text(
-        'Reports are read-only. Open one to view the statement fields returned by the server.',
+        'Reports are read-only. Open one to view the statement details.',
         style: Theme.of(context).textTheme.bodyMedium,
       ),
     ),

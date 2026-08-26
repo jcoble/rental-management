@@ -100,7 +100,7 @@ void main() {
         isNot(contains('UnitCommandCenterLoaderScreen(unitId: unitId)')),
       );
       expect(list, contains('PropertyDetailScreen(property: property)'));
-      expect(list, contains("tooltip: 'Open unit command center'"));
+      expect(list, contains('tooltip: "Open today\'s summary"'));
       expect(documents, contains('uploadPropertyDocument'));
       expect(documents, contains('downloadPropertyDocument'));
       expect(repository, contains("'entityType': 'Property'"));

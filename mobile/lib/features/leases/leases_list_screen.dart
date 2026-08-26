@@ -170,7 +170,7 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
                   filters: [
                     MobileGridChoiceFilter(
                       id: 'lifecycle',
-                      label: 'Lifecycle',
+                      label: 'Status',
                       value: _lifecycle,
                       options: const [
                         MobileGridControlOption(
@@ -267,7 +267,7 @@ class _RelationshipTile extends StatelessWidget {
       title: Text(
         item.primaryTenantName?.trim().isNotEmpty == true
             ? item.primaryTenantName!
-            : item.relationshipNumber,
+            : 'Tenancy #${item.relationshipNumber}',
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
@@ -297,13 +297,13 @@ class _EmptyState extends StatelessWidget {
         const Icon(Icons.home_work_outlined, size: 48),
         const SizedBox(height: 12),
         Text(
-          'No tenant relationships found',
+          'No tenancies found',
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 8),
         const Text(
           'Approve an application, then prepare the move-in. The tenant '
-          'relationship, account, household, and first agreement draft are '
+          'tenancy, tenant balance, household, and first lease draft are '
           'created together.',
           textAlign: TextAlign.center,
         ),
