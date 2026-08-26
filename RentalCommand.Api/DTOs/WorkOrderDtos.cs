@@ -559,6 +559,10 @@ public class UpdateWorkOrderRequest
 
     public bool ClearLeaseManagement { get; set; }
 
+    public bool ClearEstimatedCost { get; set; }
+
+    public bool ClearActualCost { get; set; }
+
     [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
 

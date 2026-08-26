@@ -480,7 +480,8 @@ public class WorkOrderService : IWorkOrderService
             request.RequestedAt?.ToUtc(), request.ScheduledFor.ToUtcDateTime(),
             request.ScheduledWindowEnd.ToUtcDateTime(), request.CompletedAt.ToUtc(),
             request.EstimatedCost, request.ActualCost,
-            _timeProvider.UtcNow(), idempotencyKey);
+            _timeProvider.UtcNow(), idempotencyKey,
+            request.ClearEstimatedCost, request.ClearActualCost);
         var outcome = await _writes.ExecuteAsync(
             WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
             WorkOrderCrudWriteSupport.Write(command, UpdateWorkOrderAsync, AuthorizeReplayAsync), ct);

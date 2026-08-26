@@ -186,6 +186,55 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('work order edit sends a flag when an existing cost is cleared', (
+    tester,
+  ) async {
+    final repo = _FakeWorkOrdersRepository();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authControllerProvider.overrideWith(
+            () => _StaticAuthController(_managementAuthority(const {})),
+          ),
+          workOrdersRepositoryProvider.overrideWithValue(repo),
+          propertiesRepositoryProvider.overrideWithValue(
+            _FakePropertiesRepository(),
+          ),
+          tenantsRepositoryProvider.overrideWithValue(
+            _FakeTenantsRepository(),
+          ),
+          vendorsRepositoryProvider.overrideWithValue(
+            _FakeVendorsRepository(),
+          ),
+        ],
+        child: const MaterialApp(
+          home: WorkOrderDetailScreen(workOrderId: 17),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Edit'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Schedule'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Costs'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('work-order-estimated-cost-field')),
+      '',
+    );
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save Changes'));
+    await tester.pumpAndSettle();
+
+    expect(repo.updatedData?['estimatedCost'], isNull);
+    expect(repo.updatedData?['clearEstimatedCost'], isTrue);
+    expect(repo.updatedData?['clearActualCost'], isFalse);
+  });
 }
 
 AuthStateAuthenticated _managementAuthority(Set<String> capabilities) {
