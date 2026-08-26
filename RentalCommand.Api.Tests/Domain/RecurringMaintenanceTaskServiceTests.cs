@@ -195,7 +195,7 @@ public class RecurringMaintenanceTaskServiceTests : IAsyncLifetime
         var service = new RecurringMaintenanceTaskService(
             serviceScope.ServiceProvider.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
             TimeProvider.System,
-            serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+            serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
 
         var response = operation switch
         {

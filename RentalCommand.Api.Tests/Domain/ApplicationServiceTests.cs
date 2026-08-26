@@ -55,7 +55,7 @@ public class ApplicationServiceTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddScoped<IWriteExecutor, WriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_ctx.ConnectionString)
                 .AddInterceptors(new RecordingCommandInterceptor(_commands))
