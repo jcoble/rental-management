@@ -1203,6 +1203,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   // Polling timer — used while draft is Pending.
   Timer? _pollTimer;
   DateTime? _pollStartedAt;
+  bool _pollingTimedOut = false;
 
   // Action states
   bool _confirming = false;
@@ -1310,6 +1311,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   }
 
   void _ensurePolling(int id) {
+    if (_pollingTimedOut) return;
     if (_pollTimer != null && _pollTimer!.isActive) return;
     _pollStartedAt = DateTime.now();
     _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
@@ -1322,7 +1324,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         _pollTimer?.cancel();
         _pollTimer = null;
         _pollStartedAt = null;
-        _showError('Reading this document took too long. Pull to retry.');
+        setState(() => _pollingTimedOut = true);
         return;
       }
       // Invalidate the provider to trigger a re-fetch.
@@ -1655,7 +1657,10 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
 
   Future<void> _retry(ScanDraft draft) async {
     if (_retrying) return;
-    setState(() => _retrying = true);
+    setState(() {
+      _retrying = true;
+      _pollingTimedOut = false;
+    });
     try {
       final updated = await ref.read(scanRepositoryProvider).retry(draft.id);
       if (!mounted) return;
@@ -1817,6 +1822,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           confirming: _confirming,
           rejecting: _rejecting,
           retrying: _retrying,
+          pollingTimedOut: _pollingTimedOut,
           onConfirm: () => _confirm(draft),
           onReject: () => _reject(draft),
           onRetry: () => _retry(draft),
@@ -1871,6 +1877,7 @@ class _ReviewBody extends ConsumerWidget {
     required this.confirming,
     required this.rejecting,
     required this.retrying,
+    required this.pollingTimedOut,
     required this.onConfirm,
     required this.onReject,
     required this.onRetry,
@@ -1916,6 +1923,7 @@ class _ReviewBody extends ConsumerWidget {
   final bool confirming;
   final bool rejecting;
   final bool retrying;
+  final bool pollingTimedOut;
   final VoidCallback onConfirm;
   final VoidCallback onReject;
   final VoidCallback onRetry;
@@ -1932,10 +1940,10 @@ class _ReviewBody extends ConsumerWidget {
     // true while the server is still pulling fields out of the scan.
     // `actionsLocked` additionally covers the in-flight confirm state so Confirm
     // and Reject can't be tapped while the server is mid-confirm.
-    final extracting = draft.isProcessing;
-    final actionsLocked = draft.isProcessing || draft.isInFlight;
+    final extracting = draft.isProcessing && !pollingTimedOut;
+    final actionsLocked = draft.isInFlight && !pollingTimedOut;
     final isTerminal = draft.isTerminal;
-    final isFailed = draft.status == 'Failed';
+    final isFailed = draft.status == 'Failed' || pollingTimedOut;
     final busy = confirming || rejecting || retrying;
 
     // Confirm is only possible once the draft is ready for review and nothing
@@ -2008,6 +2016,7 @@ class _ReviewBody extends ConsumerWidget {
         !busy &&
         !savingTenantAccountSelection &&
         !isTerminal &&
+        !isFailed &&
         (!draft.isPayment || selectedTenantAccountId != null) &&
         paymentConflictMessage == null &&
         expenseReadinessMessage == null &&
@@ -2053,8 +2062,9 @@ class _ReviewBody extends ConsumerWidget {
     final rejectEnabled =
         (!actionsLocked || isFailed) && !busy && (!isTerminal || isFailed);
     final retryEnabled = isFailed && !busy;
-    final failedBannerText =
-        draft.scalarFields.isEmpty && draft.lineItems.isEmpty
+    final failedBannerText = pollingTimedOut
+        ? 'Reading this document took too long. Retry extraction or reject this scan.'
+        : draft.scalarFields.isEmpty && draft.lineItems.isEmpty
         ? 'Extraction failed before review fields could be recovered. Retry extraction or reject this scan.'
         : 'Extraction failed. Review any recovered fields, retry extraction, or reject this scan.';
 
@@ -2073,7 +2083,7 @@ class _ReviewBody extends ConsumerWidget {
               children: [
                 _ReviewCheckpointCard(draft: draft),
 
-                if (draft.status == 'Failed')
+                if (isFailed)
                   _Banner(
                     color: colorScheme.errorContainer,
                     borderColor: colorScheme.error.withValues(alpha: 0.4),
