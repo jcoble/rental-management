@@ -112,6 +112,38 @@ public class TenantServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UpdateAuthorizedAsync_ClearContactFlags_NullExistingContactFields()
+    {
+        var created = await _writeSut.CreateAuthorizedAsync(
+            _scope,
+            new CreateTenantRequest
+            {
+                FirstName = "Morgan",
+                LastName = "Resident",
+                Email = "morgan@example.test",
+                Phone = "614-555-0199",
+                EmergencyContact = "Jordan, 614-555-0123",
+            },
+            "tenant-clear-contacts-create");
+
+        await _writeSut.UpdateAuthorizedAsync(
+            _scope,
+            created!.Id,
+            new UpdateTenantRequest
+            {
+                ClearEmail = true,
+                ClearPhone = true,
+                ClearEmergencyContact = true,
+            },
+            "tenant-clear-contacts-update");
+
+        var persisted = await _ctx.Db.Tenants.SingleAsync(tenant => tenant.Id == created.Id);
+        persisted.Email.Should().BeNull();
+        persisted.Phone.Should().BeNull();
+        persisted.EmergencyContact.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
     {
         SeedTenant("Avery", "Ellis", activeRelationshipCount: 1);

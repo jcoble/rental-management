@@ -83,7 +83,9 @@ public sealed record UpdateWorkOrderCommand(
     decimal? EstimatedCost,
     decimal? ActualCost,
     [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
-    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey,
+    bool ClearEstimatedCost = false,
+    bool ClearActualCost = false) : IAtomicCommandData;
 
 public sealed record DeleteWorkOrderCommand(
     int PortfolioId,

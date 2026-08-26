@@ -232,6 +232,31 @@ public class WorkOrderCostsTimingAndProjectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UpdateAsync_ClearCostFlags_NullExistingCosts()
+    {
+        var property = SeedProperty("Willow Drive");
+        var created = await CreateAsync(new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            Title = "Replace disposal",
+            Description = "Disposal motor seized",
+            Status = WorkOrderStatus.New,
+            EstimatedCost = 275m,
+            ActualCost = 310m,
+        });
+
+        await UpdateAsync(created!.Id, new UpdateWorkOrderRequest
+        {
+            ClearEstimatedCost = true,
+            ClearActualCost = true,
+        });
+
+        var entity = await _db.WorkOrders.AsNoTracking().FirstAsync(w => w.Id == created.Id);
+        entity.EstimatedCost.Should().BeNull();
+        entity.ActualCost.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetAsync_ProjectsPropertyAndVendorAndTenantNames()
     {
         var property = SeedProperty("Oak Terrace");

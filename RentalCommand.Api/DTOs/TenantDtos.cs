@@ -132,11 +132,17 @@ public class UpdateTenantRequest
     [EmailAddress]
     public string? Email { get; set; }
 
+    public bool ClearEmail { get; set; }
+
     [MaxLength(50)]
     public string? Phone { get; set; }
 
+    public bool ClearPhone { get; set; }
+
     [MaxLength(200)]
     public string? EmergencyContact { get; set; }
+
+    public bool ClearEmergencyContact { get; set; }
 
     public DateTime? DateOfBirth { get; set; }
 

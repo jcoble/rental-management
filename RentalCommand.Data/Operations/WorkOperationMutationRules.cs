@@ -312,6 +312,8 @@ public sealed class UpdateWorkOrderRule
             (command.AccessWarnings is not null && command.AccessWarnings.Trim() != entity.AccessWarnings) ||
             (command.Category is not null && command.Category.Trim() != entity.Category) ||
             (command.Priority.HasValue && command.Priority.Value != entity.Priority) ||
+            (command.ClearEstimatedCost && entity.EstimatedCost.HasValue) ||
+            (command.ClearActualCost && entity.ActualCost.HasValue) ||
             (command.EstimatedCost.HasValue && command.EstimatedCost != entity.EstimatedCost) ||
             (command.ActualCost.HasValue && command.ActualCost != entity.ActualCost);
         if (command.ClearUnit) entity.UnitId = null; else if (command.UnitId.HasValue) entity.UnitId = command.UnitId;
@@ -341,8 +343,10 @@ public sealed class UpdateWorkOrderRule
         if (command.ScheduledWindowEndUtc.HasValue) entity.ScheduledWindowEnd = command.ScheduledWindowEndUtc;
         if (command.CompletedAtUtc.HasValue) entity.CompletedAt = command.CompletedAtUtc;
         if (entity.Status == WorkOrderStatus.Completed && priorStatus != entity.Status) entity.CompletedAt ??= businessNow;
-        if (command.EstimatedCost.HasValue) entity.EstimatedCost = command.EstimatedCost;
-        if (command.ActualCost.HasValue) entity.ActualCost = command.ActualCost;
+        if (command.ClearEstimatedCost) entity.EstimatedCost = null;
+        else if (command.EstimatedCost.HasValue) entity.EstimatedCost = command.EstimatedCost;
+        if (command.ClearActualCost) entity.ActualCost = null;
+        else if (command.ActualCost.HasValue) entity.ActualCost = command.ActualCost;
         WorkOperationValidation.EnsureSchedule(entity.ScheduledFor, entity.ScheduledWindowEnd);
         WorkOperationValidation.EnsureCompletedAtInRange(
             command.RequestedAtUtc.HasValue, entity.RequestedAt,
