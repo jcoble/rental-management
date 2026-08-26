@@ -247,6 +247,8 @@ void main() {
     final failedKey = repository.operationKeys.single;
 
     await dismissSendError(tester);
+    await tester.tap(find.text('Change'));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilterChip, 'Email'));
     await tester.pump();
     await tapSend(tester);
