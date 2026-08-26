@@ -384,7 +384,7 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
         dashboard!.Accounting.OverdueAmount.Should().Be(60m)
             .And.Be(summary.Payments.Overdue)
             .And.Be(snapshot.PastDueAmount);
-        dashboard.Accounting.NetThisMonth.Should().Be(25m)
+        dashboard.Accounting.NetThisMonth.Should().Be(-175m)
             .And.Be(snapshot.Net);
     }
 

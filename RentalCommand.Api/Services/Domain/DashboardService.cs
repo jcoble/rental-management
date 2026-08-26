@@ -480,20 +480,15 @@ public class DashboardService : IDashboardService
             monthStart,
             cashFlowTo,
             []);
+        var accountingExpenseQuery = FinancialReportProjections.BuildAuthorizedCashFlowExpenseProjection(
+            _db,
+            scope,
+            CapabilityKeys.MoneyBalancesRead,
+            utcNow,
+            monthStart,
+            cashFlowTo,
+            []);
         var authorizedMoneyProperties = AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead);
-        var accountingExpenseQuery = _db.Expenses
-            .AsNoTracking()
-            .Where(expense =>
-                expense.PortfolioId == scope.PortfolioId &&
-                expense.PropertyId != null &&
-                expense.Status == ExpenseStatus.Paid &&
-                (expense.PaidAt ?? expense.IncurredAt) >= monthStart &&
-                (expense.PaidAt ?? expense.IncurredAt) < nextBusinessDate)
-            .Join(
-                authorizedMoneyProperties,
-                expense => expense.PropertyId!.Value,
-                property => property.Id,
-                (expense, _) => expense.Amount);
         var accountingDebtServiceQuery =
             from payment in LoanPaymentEffectiveQuery.From(_db)
             join loan in _db.Loans.AsNoTracking()
@@ -531,7 +526,7 @@ public class DashboardService : IDashboardService
                 Overdue = receivables.Overdue ?? 0m,
                 DueThisMonth = receivables.DueThisMonth ?? 0m,
                 Income = accountingIncomeQuery.Sum(row => (decimal?)row.Amount) ?? 0m,
-                Expense = (accountingExpenseQuery.Sum(amount => (decimal?)amount) ?? 0m)
+                Expense = (accountingExpenseQuery.Sum(expense => (decimal?)expense.Amount) ?? 0m)
                     + (accountingDebtServiceQuery.Sum(amount => (decimal?)amount) ?? 0m),
             })
             .SingleOrDefaultAsync(ct);
