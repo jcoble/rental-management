@@ -636,7 +636,8 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             dashboard.Should().NotBeNull();
             dashboard!.Accounting.OverdueAmount.Should().Be(canonical.PastDueAmount);
             dashboard.Accounting.DueThisMonthAmount.Should().Be(expectedDueThisMonth);
-            commands.Count.Should().Be(3);
+            commands.Count.Should().Be(4,
+                "the dashboard read should execute four bounded SQL statements");
             commands.Sql.Should().ContainSingle(sql =>
                 sql.Contains("vw_tenant_charge_balances", StringComparison.Ordinal)
                 && sql.Contains("BusinessDate", StringComparison.Ordinal)

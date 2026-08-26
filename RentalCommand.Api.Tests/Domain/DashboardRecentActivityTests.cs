@@ -228,9 +228,18 @@ public class DashboardRecentActivityTests : IAsyncLifetime
         dashboard.Accounting.OverdueAmount.Should().Be(0m);
         dashboard.Accounting.ExpensesThisMonthAmount.Should().Be(0m);
         dashboard.Accounting.NetThisMonth.Should().Be(0m);
+    }
 
-        _executedSql.Should().HaveCount(3,
-            "the dashboard should use one initial read, one accounting read, and one recent-activity read");
+    [Fact]
+    public async Task Dashboard_ReadUsesFourBoundedDatabaseCommands()
+    {
+        SeedActivityGraph();
+
+        _executedSql.Clear();
+        await _sut.GetDashboardAsync(_scope);
+
+        _executedSql.Should().HaveCount(4,
+            "the dashboard should use one initial read, one accounting read, and two bounded recent-activity reads");
     }
 
     [Fact]
@@ -272,7 +281,7 @@ public class DashboardRecentActivityTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RecentActivity_Uses_One_PageJoined_Statement_With_No_Label_Followups()
+    public async Task RecentActivity_Uses_Two_Bounded_Statements_With_No_Label_Followups()
     {
         SeedActivityGraph();
 
@@ -284,18 +293,20 @@ public class DashboardRecentActivityTests : IAsyncLifetime
             .ToList();
 
         activityQueries.Should().ContainSingle(
-            "recent activity must resolve the authorized audit page and its facts in one statement");
+            "recent activity must resolve the authorized audit page in one statement");
         activityQueries[0].Should().Contain("public.rc_api_effective_capability_scopes");
         activityQueries[0].Should().Contain("ORDER BY");
         activityQueries[0].Should().Contain("LIMIT");
-        activityQueries[0].Should().Contain("UNION ALL");
-        activityQueries[0].Should().Contain("array_agg");
-        activityQueries[0].Should().Contain("\"EffectiveFrom\" DESC");
-        activityQueries[0].Should().Contain("\"Id\" DESC",
+
+        var entityFactQuery = _executedSql.Single(command =>
+            command.Contains("array_agg", StringComparison.OrdinalIgnoreCase));
+        entityFactQuery.Should().Contain("UNION ALL");
+        entityFactQuery.Should().Contain("\"EffectiveFrom\" DESC");
+        entityFactQuery.Should().Contain("\"Id\" DESC",
             "tenant Unit context must use the latest party by EffectiveFrom and then Id");
 
-        _executedSql.Should().HaveCount(3,
-            "recent activity must not perform a separate label lookup or per-row query");
+        _executedSql.Should().HaveCount(4,
+            "recent activity must use two bounded statements without per-row follow-up queries");
     }
 
     [Fact]
