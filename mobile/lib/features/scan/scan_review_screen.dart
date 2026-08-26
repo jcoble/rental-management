@@ -1202,6 +1202,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
 
   // Polling timer — used while draft is Pending.
   Timer? _pollTimer;
+  DateTime? _pollStartedAt;
 
   // Action states
   bool _confirming = false;
@@ -1304,14 +1305,24 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     } else {
       _pollTimer?.cancel();
       _pollTimer = null;
+      _pollStartedAt = null;
     }
   }
 
   void _ensurePolling(int id) {
     if (_pollTimer != null && _pollTimer!.isActive) return;
+    _pollStartedAt = DateTime.now();
     _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
       if (!mounted) {
         _pollTimer?.cancel();
+        return;
+      }
+      if (DateTime.now().difference(_pollStartedAt!) >=
+          const Duration(seconds: 180)) {
+        _pollTimer?.cancel();
+        _pollTimer = null;
+        _pollStartedAt = null;
+        _showError('Reading this document took too long. Pull to retry.');
         return;
       }
       // Invalidate the provider to trigger a re-fetch.
