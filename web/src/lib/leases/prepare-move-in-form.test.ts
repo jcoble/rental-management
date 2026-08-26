@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildPrepareMoveInRequest, createPrepareMoveInForm } from './prepare-move-in-form.ts';
+import {
+	buildPrepareMoveInRequest,
+	buildPrepareMoveInUnitOptions,
+	createPrepareMoveInForm
+} from './prepare-move-in-form.ts';
 
 function completeForm() {
 	return {
@@ -185,5 +189,25 @@ describe('Prepare move-in form contract', () => {
 		assert.equal(result.request, null);
 		assert.match(result.errors.termEndOn ?? '', /cannot be before/);
 		assert.match(result.errors.openingBalanceEffectiveOn ?? '', /together/);
+	});
+});
+
+describe('move-in unit picker choices', () => {
+	it('will not let the landlord choose a unit that already has a move-in prepared', () => {
+		const options = buildPrepareMoveInUnitOptions([
+			{ id: 4, propertyName: 'Maple Court', unitNumber: '1', status: 'Vacant' },
+			{ id: 7, propertyName: 'Maple Court', unitNumber: '2', status: 'Reserved' }
+		]);
+
+		assert.deepEqual(options[0], {
+			value: '4',
+			label: 'Maple Court · Unit 1 · Vacant',
+			disabled: false
+		});
+		assert.deepEqual(options[1], {
+			value: '7',
+			label: 'Maple Court · Unit 2 · Move-in already prepared',
+			disabled: true
+		});
 	});
 });
