@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
+import '../../core/auth/solo_landlord.dart';
 import '../../core/widgets/mobile_pill_tab_bar.dart';
 import 'mobile_destination.dart';
 import 'mobile_domain_chrome.dart';
@@ -30,9 +31,12 @@ class RentalsHubScreen extends ConsumerWidget {
     return MobileDomainHubScreen(
       title: 'Rentals',
       subtitle: 'Properties, people, agreements and applications.',
-      destinations: rentalHubDestinationsFor(
-        experience: auth.activeExperience,
-        capabilities: auth.capabilities,
+      destinations: _withoutSoloHidden(
+        rentalHubDestinationsFor(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+        ),
+        solo: isSoloLandlord(ref),
       ),
       onControllerReady: onControllerReady,
       onControllerDisposed: onControllerDisposed,
@@ -57,9 +61,9 @@ class MoneyHubScreen extends ConsumerWidget {
     return MobileDomainHubScreen(
       title: 'Money',
       subtitle: 'Snapshot, ledger, deposits, banking and reports.',
-      destinations: visibleMobileDestinations(
-        moneyHubDestinations,
-        auth.capabilities,
+      destinations: _withoutSoloHidden(
+        visibleMobileDestinations(moneyHubDestinations, auth.capabilities),
+        solo: isSoloLandlord(ref),
       ),
       onControllerReady: onControllerReady,
       onControllerDisposed: onControllerDisposed,
@@ -128,6 +132,22 @@ class InboxHubScreen extends ConsumerWidget {
       onControllerDisposed: onControllerDisposed,
     );
   }
+}
+
+/// A solo landlord has no co-owners to keep a directory or send statements to,
+/// so those two sections stay out of the hubs.
+List<MobileDestination> _withoutSoloHidden(
+  List<MobileDestination> destinations, {
+  required bool solo,
+}) {
+  if (!solo) return destinations;
+  return destinations
+      .where(
+        (destination) =>
+            destination.id != MobileDestinationId.owners &&
+            destination.id != MobileDestinationId.reports,
+      )
+      .toList(growable: false);
 }
 
 class MobileDomainHubScreen extends ConsumerStatefulWidget {

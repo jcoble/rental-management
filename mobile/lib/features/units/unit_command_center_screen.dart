@@ -13,6 +13,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
+import '../../core/auth/solo_landlord.dart';
 import '../../core/models/work_order.dart';
 import '../../core/models/property.dart';
 import '../../core/router/mobile_restoration_state.dart';
@@ -1200,12 +1201,15 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
                 ),
               ],
             ),
-            const SizedBox(height: 14),
-            _ListingConnectedCard(
-              publication: _connectedPublication(listing),
-              busy: _isSaving,
-              onAction: _runConnectedAction,
-            ),
+            if (!isSoloLandlord(ref) ||
+                _connectedPublication(listing) != null) ...[
+              const SizedBox(height: 14),
+              _ListingConnectedCard(
+                publication: _connectedPublication(listing),
+                busy: _isSaving,
+                onAction: _runConnectedAction,
+              ),
+            ],
             if (_guidedPublication(listing)?.unconfirmedSignals.isNotEmpty ==
                 true) ...[
               const SizedBox(height: 14),

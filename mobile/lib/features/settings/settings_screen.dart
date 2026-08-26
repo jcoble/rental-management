@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/biometric_auth_service.dart';
 import '../../core/auth/mobile_access_policy.dart';
+import '../../core/auth/solo_landlord.dart';
 import 'ai_provider_settings_screen.dart';
 import 'change_password_screen.dart';
 import 'my_alerts_screen.dart';
@@ -83,6 +84,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authControllerProvider);
+    final soloLandlord = isSoloLandlord(ref);
     final biometric = ref.watch(biometricAuthServiceProvider);
     final capabilities = auth is AuthStateAuthenticated
         ? auth.capabilities
@@ -118,15 +120,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onTap: () => _open(context, const MyAlertsScreen()),
           ),
           if (canManageNotifications) ...[
-            const SizedBox(height: 10),
-            _SettingsCard(
-              icon: Icons.alt_route_outlined,
-              title: 'Who gets told what',
-              subtitle:
-                  'Name who is responsible for money, leasing, work, owners, '
-                  'and account security.',
-              onTap: () => _open(context, const TeamRoutingScreen()),
-            ),
+            if (!soloLandlord) ...[
+              const SizedBox(height: 10),
+              _SettingsCard(
+                icon: Icons.alt_route_outlined,
+                title: 'Who gets told what',
+                subtitle:
+                    'Name who is responsible for money, leasing, work, owners, '
+                    'and account security.',
+                onTap: () => _open(context, const TeamRoutingScreen()),
+              ),
+            ],
             const SizedBox(height: 10),
             _SettingsCard(
               icon: Icons.campaign_outlined,

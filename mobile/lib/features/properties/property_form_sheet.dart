@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../../core/auth/solo_landlord.dart';
 import '../owners/owner_form_sheet.dart';
 import '../owners/owners_models.dart';
 import '../owners/owners_repository.dart';
@@ -841,6 +842,8 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
     ];
   }
 
+  bool get showManagementFee => !isSoloLandlord(ref);
+
   Widget _buildCreateSheet() {
     return TabbedFormSheet(
       title: 'Add a rental',
@@ -884,8 +887,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
                   _gap,
                   _yearBuiltField(),
                   _gap,
-                  _managementFeeRow(),
-                  _gap,
+                  if (showManagementFee) ...[_managementFeeRow(), _gap],
                   _notesField(),
                   _gap,
                   ..._taxBasisFields(),
@@ -976,8 +978,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
             children: [
               _yearBuiltField(),
               _gap,
-              _managementFeeRow(),
-              _gap,
+              if (showManagementFee) ...[_managementFeeRow(), _gap],
               _notesField(),
             ],
           ),
