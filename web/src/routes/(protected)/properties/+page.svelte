@@ -186,6 +186,8 @@
 		'status',
 		'addressLine2',
 		'ownerEntityId',
+		'bedrooms',
+		'bathrooms',
 		'yearBuilt',
 		'managementFeePercent',
 		'notes',
@@ -344,17 +346,18 @@
 	}
 
 	function createUnitPayload(): Record<string, unknown>[] {
+		// Beds and baths are optional here — a home always has a count on file, so anything the
+		// landlord leaves blank is saved as 0 and can be filled in on the rental's own page.
+		const beds = createBeds.trim() ? Number(createBeds) : 0;
+		const baths = createBaths.trim() ? Number(createBaths) : 0;
 		if (createMultiple) {
 			return createUnitNames
 				.map((name) => name.trim())
 				.filter(Boolean)
-				.map((unitNumber) => ({ unitNumber, marketRent: 0 }));
+				.map((unitNumber) => ({ unitNumber, marketRent: 0, bedrooms: 0, bathrooms: 0 }));
 		}
 		// One rental at this address: the single unit is created for the landlord, named "1".
-		const unit: Record<string, unknown> = { unitNumber: '1', marketRent: Number(createRent) };
-		if (createBeds.trim()) unit.bedrooms = Number(createBeds);
-		if (createBaths.trim()) unit.bathrooms = Number(createBaths);
-		return [unit];
+		return [{ unitNumber: '1', marketRent: Number(createRent), bedrooms: beds, bathrooms: baths }];
 	}
 
 	function submitCreate() {
@@ -874,18 +877,6 @@
 							<Input data-testid="property-create-rent-input" bind:value={createRent} type="number" inputmode="decimal" placeholder="1450" />
 							{#if createErrors.marketRent}<p class="mt-1 text-xs text-destructive" data-testid="property-create-rent-error">{createErrors.marketRent}</p>{/if}
 						</div>
-						<div class="grid grid-cols-2 gap-2">
-							<div>
-								<span class="mb-1 block text-xs font-medium text-muted-foreground">Beds</span>
-								<Input data-testid="property-create-beds-input" bind:value={createBeds} type="number" inputmode="numeric" placeholder="3" />
-								{#if createErrors.bedrooms}<p class="mt-1 text-xs text-destructive" data-testid="property-create-beds-error">{createErrors.bedrooms}</p>{/if}
-							</div>
-							<div>
-								<span class="mb-1 block text-xs font-medium text-muted-foreground">Baths</span>
-								<Input data-testid="property-create-baths-input" bind:value={createBaths} type="number" inputmode="decimal" placeholder="2" />
-								{#if createErrors.bathrooms}<p class="mt-1 text-xs text-destructive" data-testid="property-create-baths-error">{createErrors.bathrooms}</p>{/if}
-							</div>
-						</div>
 					</div>
 				{/if}
 			</div>
@@ -904,6 +895,20 @@
 				</button>
 				{#if createMoreOpen}
 					<div id="property-more-details" class="space-y-3 pt-2" data-testid="property-more-details">
+						{#if !createMultiple}
+							<div class="grid gap-3 sm:grid-cols-2">
+								<div>
+									<span class="mb-1 block text-xs font-medium text-muted-foreground">Beds</span>
+									<Input data-testid="property-create-beds-input" bind:value={createBeds} type="number" inputmode="numeric" placeholder="3" />
+									{#if createErrors.bedrooms}<p class="mt-1 text-xs text-destructive" data-testid="property-create-beds-error">{createErrors.bedrooms}</p>{/if}
+								</div>
+								<div>
+									<span class="mb-1 block text-xs font-medium text-muted-foreground">Baths</span>
+									<Input data-testid="property-create-baths-input" bind:value={createBaths} type="number" inputmode="decimal" placeholder="2" />
+									{#if createErrors.bathrooms}<p class="mt-1 text-xs text-destructive" data-testid="property-create-baths-error">{createErrors.bathrooms}</p>{/if}
+								</div>
+							</div>
+						{/if}
 						<div class="grid gap-3 sm:grid-cols-2">
 							<div>
 								<span class="mb-1 block text-xs font-medium text-muted-foreground">Type</span>

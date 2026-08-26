@@ -49,7 +49,8 @@
 			label: 'Properties',
 			recordLabel: 'property',
 			recordPluralLabel: 'properties',
-			columns: 'name, addressLine1, addressLine2, city, state, postalCode, type',
+			columns:
+				'name, addressLine1, addressLine2, city, state, postalCode, type, rentalStructure, unitNumber',
 			listHref: '/properties',
 			listLabel: 'properties'
 		},

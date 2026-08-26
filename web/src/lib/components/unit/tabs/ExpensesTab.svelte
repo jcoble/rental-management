@@ -231,7 +231,9 @@
 			return;
 		}
 		createErrors = {};
-		createMut.mutate({ portfolioId, unitId, propertyId, ...result.data });
+		// unitId goes last: the parsed form has no unit of its own, so spreading it first would
+		// blank out the rental this cost belongs to.
+		createMut.mutate({ portfolioId, propertyId, ...result.data, unitId });
 	}
 
 	function validateCreateStep() {
