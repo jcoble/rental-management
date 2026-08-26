@@ -55,7 +55,10 @@ describe('canonical lease lifecycle action hub', () => {
 
 	it('uses the mobile-approved prepare-and-issue wording without weakening revision confirmation', () => {
 		assert.match(draftDialogSource, /Send this exact lease revision for signature\?/);
-		assert.match(draftDialogSource, /> Prepare and send</);
+		// TSK-947 W12: the review's own action says what it does; the confirmation step
+		// keeps the mobile-approved prepare-and-send wording.
+		assert.match(draftDialogSource, /> Send lease to sign</);
+		assert.match(draftDialogSource, /Prepare and send\{\/if\}/);
 		assert.match(draftDialogSource, /Preparing and sending…/);
 		assert.doesNotMatch(draftDialogSource, /Prepare &amp; issue|> Issue for signature/);
 	});
