@@ -102,7 +102,7 @@ class BankingScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 8),
                       for (final item in queue.items) ...[
-                        _ReviewCard(
+                        BankReviewCard(
                           item: item,
                           canDismiss: canDestructivelyReconcile,
                         ),
@@ -125,13 +125,13 @@ class BankingScreen extends ConsumerWidget {
                 loading: () =>
                     const _LoadingCard(label: 'Loading transactions...'),
                 error: (e, _) => _ErrorCard(message: _message(e)),
-                data: (transactions) {
-                  if (transactions.isEmpty) {
+                data: (page) {
+                  if (page.items.isEmpty) {
                     return const _EmptyCard();
                   }
                   return Column(
                     children: [
-                      for (final transaction in transactions) ...[
+                      for (final transaction in page.items) ...[
                         _TransactionCard(
                           transaction: transaction,
                           routingProperties:
@@ -141,6 +141,10 @@ class BankingScreen extends ConsumerWidget {
                         ),
                         const SizedBox(height: 8),
                       ],
+                      if (page.totalCount > page.items.length)
+                        Text(
+                          'Showing ${page.items.length} of ${page.totalCount}',
+                        ),
                     ],
                   );
                 },
@@ -419,21 +423,35 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _ReviewCard extends ConsumerWidget {
-  const _ReviewCard({required this.item, required this.canDismiss});
+class BankReviewCard extends ConsumerStatefulWidget {
+  const BankReviewCard({
+    super.key,
+    required this.item,
+    required this.canDismiss,
+  });
 
   final BankReviewItem item;
   final bool canDismiss;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<BankReviewCard> createState() => _ReviewCardState();
+}
+
+class _ReviewCardState extends ConsumerState<BankReviewCard> {
+  bool _saving = false;
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final transaction = item.transaction;
-    final suggestion = item.suggestion;
+    final transaction = widget.item.transaction;
+    final suggestion = widget.item.suggestion;
+    final canDismiss = widget.canDismiss;
     final confidencePct = (suggestion.confidence * 100).round();
 
     Future<void> run(Future<void> Function() action, String done) async {
+      if (_saving) return;
+      setState(() => _saving = true);
       try {
         await action();
         ref.invalidate(bankingSummaryProvider);
@@ -450,6 +468,8 @@ class _ReviewCard extends ConsumerWidget {
             context,
           ).showSnackBar(SnackBar(content: Text(BankingScreen._message(e))));
         }
+      } finally {
+        if (mounted) setState(() => _saving = false);
       }
     }
 
@@ -533,15 +553,17 @@ class _ReviewCard extends ConsumerWidget {
               children: [
                 Expanded(
                   child: FilledButton(
-                    onPressed: () => run(
-                      () => ref
-                          .read(bankingRepositoryProvider)
-                          .confirmMatch(
-                            transaction.id,
-                            expectedUpdatedAt: transaction.updatedAt,
+                    onPressed: _saving
+                        ? null
+                        : () => run(
+                            () => ref
+                                .read(bankingRepositoryProvider)
+                                .confirmMatch(
+                                  transaction.id,
+                                  expectedUpdatedAt: transaction.updatedAt,
+                                ),
+                            'Confirmed. We won\'t count it twice.',
                           ),
-                      'Confirmed. We won\'t count it twice.',
-                    ),
                     child: const Text('Confirm'),
                   ),
                 ),
@@ -549,15 +571,17 @@ class _ReviewCard extends ConsumerWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: () => run(
-                        () => ref
-                            .read(bankingRepositoryProvider)
-                            .dismissMatch(
-                              transaction.id,
-                              transaction.updatedAt,
+                      onPressed: _saving
+                          ? null
+                          : () => run(
+                              () => ref
+                                  .read(bankingRepositoryProvider)
+                                  .dismissMatch(
+                                    transaction.id,
+                                    transaction.updatedAt,
+                                  ),
+                              'Kept as a separate bank line.',
                             ),
-                        'Kept as a separate bank line.',
-                      ),
                       child: const Text('Not a match'),
                     ),
                   ),
