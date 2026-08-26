@@ -16,6 +16,7 @@ import 'package:rental_command/features/leases/successor_agreement_sheet.dart';
 import 'package:rental_command/features/money/money_repository.dart';
 import 'package:rental_command/features/money/money_screen.dart';
 import 'package:rental_command/features/money/tenant_ledger_view.dart';
+import 'package:rental_command/features/scan/scan_models.dart';
 
 void main() {
   test('appointment response exposes scheduled instants in local time', () {
@@ -127,6 +128,20 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('This month'), findsOneWidget);
+  });
+
+  test('scan response exposes created time in the device timezone', () {
+    final draft = ScanDraft.fromJson({
+      'id': 1,
+      'portfolioId': 1,
+      'createdAt': '2026-08-25T23:30:00Z',
+    });
+    final instant = DateTime.utc(2026, 8, 25, 23, 30);
+    final fixedWest = instant.subtract(const Duration(hours: 4));
+
+    expect(draft.createdAt.isUtc, isFalse);
+    expect(draft.createdAt, instant.toLocal());
+    expect((fixedWest.month, fixedWest.day), (8, 25));
   });
 }
 
