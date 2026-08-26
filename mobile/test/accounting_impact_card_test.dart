@@ -5,9 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/features/accounting/accounting_book_models.dart';
 import 'package:rental_command/features/accounting/accounting_books_repository.dart';
 import 'package:rental_command/features/accounting/accounting_impact_card.dart';
+import 'package:rental_command/features/accounting/journal_detail_sheet.dart';
 
 void main() {
-  testWidgets('renders server-backed plain-language impact pairs', (
+  testWidgets('renders the server-backed posted lines for one source', (
     tester,
   ) async {
     final repository = _FakeAccountingBooksRepository(
@@ -21,10 +22,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('accounting-impact-card')), findsOneWidget);
-    expect(find.text('Repairs expense increased'), findsOneWidget);
-    expect(find.text('Operating cash decreased'), findsOneWidget);
-    expect(find.text(r'$225.00'), findsOneWidget);
-    expect(find.text(r'-$225.00'), findsOneWidget);
+    expect(find.textContaining('4100 · Repairs expense'), findsOneWidget);
+    expect(find.textContaining('1000 · Operating cash'), findsOneWidget);
+    expect(find.text(r'Debit $225.00'), findsOneWidget);
+    expect(find.text(r'Credit $225.00'), findsOneWidget);
     expect(find.text('View accounting record →'), findsOneWidget);
     expect(repository.requestedSourceIds, [13]);
     expect(repository.requestedSourceTypes, [JournalSourceType.expensePayment]);
@@ -75,7 +76,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('View accounting record →'), findsNWidgets(2));
-    expect(find.text(r'$225.00'), findsNWidgets(2));
+    expect(find.text(r'Debit $225.00'), findsNWidgets(2));
     expect(
       repository.requestedSourceTypes,
       containsAllInOrder([
@@ -95,9 +96,7 @@ void main() {
       details: {'journal-1': _expenseJournal()},
     );
 
-    await tester.pumpWidget(
-      _harness(repository, detailMode: AccountingDetailMode.advanced),
-    );
+    await tester.pumpWidget(_harness(repository));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('4100 · Repairs expense'), findsOneWidget);
@@ -167,21 +166,27 @@ Widget _harness(
   List<JournalSourceType> sourceTypes = const [
     JournalSourceType.expensePayment,
   ],
-  AccountingDetailMode detailMode = AccountingDetailMode.simple,
   bool? authorized = true,
 }) => ProviderScope(
-  overrides: [accountingBooksRepositoryProvider.overrideWithValue(repository)],
+  overrides: [
+    accountingBooksRepositoryProvider.overrideWithValue(repository),
+    accountingDetailModeProvider.overrideWith(_AdvancedDetailMode.new),
+  ],
   child: MaterialApp(
     home: Scaffold(
       body: AccountingImpactCard(
         sourceId: 13,
         sourceTypes: sourceTypes,
-        detailMode: detailMode,
         authorized: authorized,
       ),
     ),
   ),
 );
+
+class _AdvancedDetailMode extends AccountingDetailModeNotifier {
+  @override
+  AccountingDetailMode build() => AccountingDetailMode.advanced;
+}
 
 SourceJournalSummary _summary({
   String publicId = 'journal-1',
