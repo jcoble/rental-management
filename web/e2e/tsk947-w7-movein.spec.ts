@@ -12,6 +12,7 @@ test.describe('Prepare move-in review screen', () => {
 
 		await page.goto('/leases', { waitUntil: 'domcontentloaded' });
 		await expect(page.getByTestId('leases-page')).toBeVisible();
+		await page.waitForLoadState('networkidle');
 		await page.getByTestId('leases-create-lease').click();
 
 		// One review screen: no stepper, no Next/Back.

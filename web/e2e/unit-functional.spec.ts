@@ -33,6 +33,7 @@ async function openUnitTab(page: Page, unitId: number, tab: string, panelTestId:
 	await page.goto(`/units/${unitId}?tab=${tab}`);
 	await expect(page.getByTestId('unit-page')).toBeVisible({ timeout: 15_000 });
 	await expect(page.getByTestId(panelTestId)).toBeVisible({ timeout: 15_000 });
+	await page.waitForLoadState('networkidle');
 }
 
 /** Render a number the way the unit tabs do (USD currency), so display assertions match the UI. */
@@ -75,7 +76,7 @@ test.describe('Unit Command Center — functional', () => {
 			const { unit, currentLease } = await findLeasedUnit(request, token);
 			const tenantAccountId = currentLease!.tenantAccountId!;
 			await login(page);
-			await openUnitTab(page, unit.id, 'money&ledger=rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'money&view=tenant-account', 'unit-rent-tab');
 
 			// A distinctive sub-$1000 amount (no thousands comma) and description let us prove
 			// the exact append-only ledger entry through both the page and detail read surfaces.
@@ -83,22 +84,19 @@ test.describe('Unit Command Center — functional', () => {
 			const amountStr = amount.toFixed(2);
 			const marker = unique('CC receipt');
 
-			await page.getByTestId('rent-post-payment').click();
-			const form = page.getByTestId('rent-create-form');
+			await page.getByRole('button', { name: 'Record payment', exact: true }).click();
+			const form = page.getByTestId('record-payment-sheet');
 			await expect(form).toBeVisible();
 			await form.locator('label').filter({ hasText: 'Amount' }).locator('input').fill(amountStr);
-			await form.locator('label').filter({ hasText: 'Description' }).locator('input').fill(marker);
+			await form.locator('label').filter({ hasText: 'Note' }).locator('input').fill(marker);
 			await form.locator('label').filter({ hasText: 'Reference' }).locator('input').fill(marker);
-			await form.locator('label').filter({ hasText: 'Method' }).getByRole('button').click();
+			await form.locator('label').filter({ hasText: 'Payment method' }).getByRole('button').click();
 			await page.getByRole('option', { name: 'Check', exact: true }).click();
-			await form.getByRole('button', { name: 'Record receipt', exact: true }).click();
+			await form.getByTestId('record-payment-submit').click();
 
 			// Form closes on success; the immutable receipt row renders from the account ledger.
-			await expect(page.getByTestId('rent-create-form')).toBeHidden();
-			await expect(page.getByTestId('rent-payments')).toBeVisible({ timeout: 10_000 });
-			const receiptRow = page
-				.getByTestId('rent-payments')
-				.getByRole('button', { name: marker, exact: false });
+			await expect(page.getByTestId('record-payment-sheet')).toBeHidden();
+			const receiptRow = page.locator('[data-testid^="tenant-ledger-row-"]').filter({ hasText: marker });
 			await expect(receiptRow).toContainText(asMoney(amount), { timeout: 10_000 });
 
 			// PERSISTENCE: the canonical global page returns this account-scoped receipt.
@@ -149,34 +147,34 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'money&ledger=rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'money&view=tenant-account', 'unit-rent-tab');
 
-			await page.getByTestId('rent-post-payment').click();
-			await expect(page.getByTestId('rent-create-form')).toBeVisible();
+			await page.getByRole('button', { name: 'Record payment', exact: true }).click();
+			await expect(page.getByTestId('record-payment-sheet')).toBeVisible();
 			// Amount defaults to '' already; submit straight away.
 			await page
-				.getByTestId('rent-create-form')
-				.getByRole('button', { name: 'Record receipt', exact: true })
+				.getByTestId('record-payment-sheet')
+				.getByTestId('record-payment-submit')
 				.click();
 
 			await expect(page.getByText('Enter an amount greater than zero.', { exact: true })).toBeVisible();
 			// Form stays open (no accidental save).
-			await expect(page.getByTestId('rent-create-form')).toBeVisible();
+			await expect(page.getByTestId('record-payment-sheet')).toBeVisible();
 		});
 
 		test('rejects a zero amount with an inline error', async ({ page, request }) => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'money&ledger=rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'money&view=tenant-account', 'unit-rent-tab');
 
-			await page.getByTestId('rent-post-payment').click();
-			const form = page.getByTestId('rent-create-form');
+			await page.getByRole('button', { name: 'Record payment', exact: true }).click();
+			const form = page.getByTestId('record-payment-sheet');
 			await form.locator('label').filter({ hasText: 'Amount' }).locator('input').fill('0');
-			await form.getByRole('button', { name: 'Record receipt', exact: true }).click();
+			await form.getByTestId('record-payment-submit').click();
 
 			await expect(page.getByText('Enter an amount greater than zero.', { exact: true })).toBeVisible();
-			await expect(page.getByTestId('rent-create-form')).toBeVisible();
+			await expect(page.getByTestId('record-payment-sheet')).toBeVisible();
 		});
 
 		test('opens an immutable receipt through its exact account and entry ids', async ({ page, request }) => {
@@ -205,14 +203,14 @@ test.describe('Unit Command Center — functional', () => {
 			await openUnitTab(
 				page,
 				unit.id,
-				`money&ledger=rent&payment=${seeded.value.ledgerEntryId}`,
+				`money&view=tenant-account&payment=${seeded.value.ledgerEntryId}`,
 				'unit-rent-tab'
 			);
 			await expect(page.getByTestId('payment-detail-page')).toBeVisible({ timeout: 10_000 });
 			await expect(page.getByTestId('payment-hero-amount')).toHaveText(asMoney(seedAmount));
-			await expect(page.getByText(marker, { exact: true })).toBeVisible();
-			await expect(page.getByText('A posted receipt is permanent.', { exact: false })).toBeVisible();
-			await expect(page.getByRole('button', { name: /edit/i })).toHaveCount(0);
+			await expect(page.getByText(marker, { exact: true }).first()).toBeVisible();
+			await expect(page.getByTestId('payment-detail-help-link')).toBeVisible();
+			await expect(page.getByTestId('payment-detail-page').getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
 		});
 	});
 
@@ -231,6 +229,7 @@ test.describe('Unit Command Center — functional', () => {
 			await expect(page.getByTestId('maintenance-create-form')).toBeVisible();
 			await page.getByTestId('maintenance-title-input').fill(title);
 			await page.getByTestId('maintenance-description-input').fill('Kitchen sink drips overnight.');
+			await page.getByTestId('maintenance-create-next').click();
 			await selectOption(page, 'maintenance-priority-input', 'High');
 			await page.getByTestId('maintenance-category-input').fill('Plumbing');
 			await page.getByTestId('maintenance-create-submit').click();
@@ -272,7 +271,7 @@ test.describe('Unit Command Center — functional', () => {
 			await page.getByTestId('maintenance-create').click();
 			await expect(page.getByTestId('maintenance-create-form')).toBeVisible();
 			// Submit with both required text fields blank.
-			await page.getByTestId('maintenance-create-submit').click();
+			await page.getByTestId('maintenance-create-next').click();
 
 			await expect(page.getByTestId('maintenance-title-error')).toBeVisible();
 			await expect(page.getByTestId('maintenance-description-error')).toBeVisible();
@@ -293,7 +292,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'money&ledger=expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'money&view=operating-costs', 'unit-expenses-tab');
 
 			const desc = unique('CC Dishwasher repair');
 			const amount = (320 + (Date.now() % 80)).toFixed(2);
@@ -302,48 +301,54 @@ test.describe('Unit Command Center — functional', () => {
 			await expect(page.getByTestId('expenses-create-form')).toBeVisible();
 			await page.getByTestId('expenses-description-input').fill(desc);
 			await page.getByTestId('expenses-amount-input').fill(amount);
-			await page.getByTestId('expenses-date-input').fill('2026-01-20');
+			await page.getByTestId('expenses-create-next').click();
 			await selectOption(page, 'expenses-category-input', 'Repairs & maintenance');
 			await selectOption(page, 'expenses-status-input', 'Approved');
+			const createdExpense = page.waitForResponse(
+				(response) => response.url().endsWith('/api/v1/expenses') && response.request().method() === 'POST'
+			);
 			await page.getByTestId('expenses-create-submit').click();
+			const createResponse = await createdExpense;
+			expect(createResponse.ok()).toBeTruthy();
+			const created = (await createResponse.json()) as { id: number };
 
 			await expect(page.getByTestId('expenses-create-form')).toBeHidden();
-			await expect(
-				page.getByTestId('expenses-list').getByText(desc, { exact: false })
-			).toBeVisible({ timeout: 10_000 });
 
-			// PERSISTENCE + the critical UnitId assertion: query the unit's expenses and find it.
-			const res = await request.get(`/api/v1/expenses?unitId=${unit.id}&take=500`, {
+			// PERSISTENCE + the critical UnitId assertion: read the expense back by its returned id.
+			const res = await request.get(`/api/v1/expenses/${created.id}`, {
 				headers: bearer(token),
 			});
 			expect(res.ok()).toBeTruthy();
-			const expenses = (await res.json()) as Array<{
+			const match = (await res.json()) as {
+				id: number;
 				description: string;
 				amount: number;
 				category: string;
 				status: string;
 				unitId?: number;
 				propertyId?: number;
-			}>;
-			const match = expenses.find((e) => e.description === desc);
-			expect(match, `expense "${desc}" not found in DB`).toBeTruthy();
-			expect(match!.unitId, 'expense did not get UnitId set').toBe(unit.id);
-			expect(match!.propertyId).toBe(unit.propertyId);
-			expect(match!.category).toBe('Repairs');
-			expect(match!.status).toBe('Approved');
-			expect(Math.abs(match!.amount - Number(amount)) < 0.005).toBeTruthy();
+			};
+			expect(match.description).toBe(desc);
+			expect(match.unitId, 'expense did not get UnitId set').toBe(unit.id);
+			expect(match.propertyId).toBe(unit.propertyId);
+			expect(match.category).toBe('Repairs');
+			expect(match.status).toBe('Approved');
+			expect(Math.abs(match.amount - Number(amount)) < 0.005).toBeTruthy();
+
+			await page.goto(`/units/${unit.id}?tab=money&view=operating-costs&expense=${match.id}`);
+			await expect(page.getByTestId('expense-detail-description-value')).toContainText(desc);
 		});
 
 		test('rejects an expense with no description and a zero amount', async ({ page, request }) => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'money&ledger=expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'money&view=operating-costs', 'unit-expenses-tab');
 
 			await page.getByTestId('expenses-create').click();
 			await expect(page.getByTestId('expenses-create-form')).toBeVisible();
 			await page.getByTestId('expenses-amount-input').fill('0'); // > 0 required
-			await page.getByTestId('expenses-create-submit').click();
+			await page.getByTestId('expenses-create-next').click();
 
 			await expect(page.getByTestId('expenses-description-error')).toBeVisible();
 			await expect(page.getByTestId('expenses-amount-error')).toBeVisible();
@@ -359,18 +364,13 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'money&ledger=expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'money&view=operating-costs', 'unit-expenses-tab');
 
 			await page.getByTestId('expenses-scan').click();
-			await expect(page.getByTestId('scan-page')).toBeVisible({ timeout: 10_000 });
-			await expect(page.getByTestId('scan-doc-type-Expense')).toHaveAttribute('aria-pressed', 'true');
-
-			const url = new URL(page.url());
-			expect(url.pathname).toBe('/scan');
-			expect(url.searchParams.get('type')).toBe('Expense');
-			expect(url.searchParams.get('propertyId')).toBe(String(unit.propertyId));
-			expect(url.searchParams.get('unitId')).toBe(String(unit.id));
-			expect(url.searchParams.get('returnTo')).toBe(`/units/${unit.id}?tab=money&ledger=expenses`);
+			await expect(page.getByTestId('scan-launcher-dialog')).toBeVisible({ timeout: 10_000 });
+			await expect(page.getByRole('heading', { name: 'Scan an expense' })).toBeVisible();
+			await expect(page.getByTestId('scan-context-source')).toContainText(`Unit ${unit.unitNumber}`);
+			await expect(page).toHaveURL(`/units/${unit.id}?tab=money&view=operating-costs`);
 		});
 
 		test('edits an expense amount + category on the card', async ({ page, request }) => {
@@ -381,7 +381,7 @@ test.describe('Unit Command Center — functional', () => {
 			// Seed an expense on the unit to edit.
 			const seedDesc = unique('CC Seed expense');
 			const createRes = await request.post('/api/v1/expenses', {
-				headers: bearer(token),
+				headers: { ...bearer(token), 'Idempotency-Key': unique('e2e-expense') },
 				data: {
 					portfolioId: 1,
 					unitId: unit.id,
@@ -396,21 +396,23 @@ test.describe('Unit Command Center — functional', () => {
 			expect(createRes.ok(), `seed expense failed: ${createRes.status()}`).toBeTruthy();
 			const seeded = (await createRes.json()) as { id: number };
 
-			await openUnitTab(page, unit.id, 'money&ledger=expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'money&view=operating-costs', 'unit-expenses-tab');
 
 			const card = page.getByTestId(`expense-${seeded.id}`);
 			await expect(card).toBeVisible({ timeout: 10_000 });
-			await card.getByRole('button').first().click(); // expand
-			await card.getByTestId(`expenses-edit-${seeded.id}`).click();
+			await card.getByTestId(`expense-open-${seeded.id}`).click();
+			const detail = page.getByTestId('expense-detail-page');
+			await expect(detail).toBeVisible();
+			await detail.getByRole('button', { name: 'Edit', exact: true }).click();
 
 			// Change every editable field on the expense card.
 			const newDesc = unique('CC Edited expense');
-			await page.getByTestId('expenses-edit-description-input').fill(newDesc);
-			await page.getByTestId('expenses-edit-amount-input').fill('275.50');
-			await page.getByTestId('expenses-edit-date-input').fill('2026-03-03');
-			await selectOption(page, 'expenses-edit-category-input', 'Cleaning & maintenance');
-			await selectOption(page, 'expenses-edit-status-input', 'Approved');
-			await page.getByTestId('expenses-edit-save').click();
+			await page.getByTestId('expense-detail-description-input').fill(newDesc);
+			await page.getByTestId('expense-detail-amount-input').fill('275.50');
+			await page.getByTestId('expense-detail-incurred-input').fill('2026-03-03');
+			await selectOption(page, 'expense-detail-category-input', 'Cleaning & maintenance');
+			await selectOption(page, 'expense-detail-status-input', 'Approved');
+			await page.getByRole('button', { name: 'Save', exact: true }).click();
 
 			// PERSISTENCE: API reflects every edited field.
 			await expect(async () => {
@@ -431,7 +433,7 @@ test.describe('Unit Command Center — functional', () => {
 			}).toPass({ timeout: 10_000 });
 
 			// DISPLAY: the card's read view shows the new description + amount after refetch.
-			await expect(card.getByText(newDesc, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
+			await expect(page.getByTestId('expense-detail-description-value')).toContainText(newDesc, { timeout: 10_000 });
 		});
 	});
 
@@ -443,32 +445,22 @@ test.describe('Unit Command Center — functional', () => {
 		test('renders the current lease summary with real values', async ({ page, request }) => {
 			const token = await apiToken(request);
 			const dash = await findLeasedUnit(request, token);
-			// Pull the lease so we can assert the tab shows its real number + rent.
-			const leaseRes = await request.get(`/api/v1/leases/${dash.currentLease!.id}`, {
-				headers: bearer(token),
-			});
-			expect(leaseRes.ok()).toBeTruthy();
-			const lease = (await leaseRes.json()) as { leaseNumber: string; monthlyRent: number };
-
 			await login(page);
 			await openUnitTab(page, dash.unit.id, 'tenant-lease&view=agreements', 'unit-lease-tab');
 
-			const cur = page.getByTestId('lease-current');
-			await expect(cur).toBeVisible();
-			await expect(cur).toContainText(lease.leaseNumber);
+			await expect(page.getByTestId('unit-lease-tab').getByText(dash.currentLease!.leaseNumber)).toBeVisible();
 		});
 
-		test('opens the lease detail and edits the lease there', async ({ page, request }) => {
+		test('opens the lease detail from the unit', async ({ page, request }) => {
 			const token = await apiToken(request);
 			const dash = await findLeasedUnit(request, token);
-			const leaseId = dash.currentLease!.id;
+			const leaseManagementId = dash.currentLease!.leaseManagementId;
 			await login(page);
 			await openUnitTab(page, dash.unit.id, 'tenant-lease&view=agreements', 'unit-lease-tab');
 
-			// Follow the "Open lease" link into the lease detail page.
-			await page.getByTestId('lease-current').getByRole('link', { name: /open lease/i }).click();
-			await expect(page).toHaveURL(new RegExp(`/leases/${leaseId}`));
-			await expect(page.getByTestId('lease-detail-page')).toBeVisible({ timeout: 15_000 });
+			await page.getByTestId('unit-lease-tab').locator('a[href*="leaseManagement="]').first().click();
+			await expect(page).toHaveURL(new RegExp(`leaseManagement=${leaseManagementId}`));
+			await expect(page.getByText('Lease at a glance', { exact: true })).toBeVisible({ timeout: 15_000 });
 		});
 	});
 

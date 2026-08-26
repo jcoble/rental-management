@@ -32,30 +32,30 @@ test.describe('Properties', () => {
 
 	test('validates required fields before creating', async ({ page }) => {
 		await page.getByTestId('property-create-button').click();
-		await expect(page.getByTestId('property-form')).toBeVisible();
-		await expect(page.getByTestId('property-form-save')).toHaveCount(0);
-		// Next validates the current card; Save is not available until the final card.
-		await page.getByTestId('property-step-next').click();
-		await expect(page.getByTestId('property-name-error')).toBeVisible();
-		await expect(page.getByTestId('property-form')).toBeVisible();
+		await expect(page.getByTestId('property-create-form')).toBeVisible();
+		await page.getByTestId('property-create-save').click();
+		await expect(page.getByTestId('property-create-name-error')).toBeVisible();
+		await expect(page.getByTestId('property-create-form')).toBeVisible();
 	});
 
 	test('creates a property and sees it in the list', async ({ page }) => {
 		const name = unique('E2E Property');
 		await page.getByTestId('property-create-button').click();
-		await page.getByTestId('property-name-input').fill(name);
-		await page.getByTestId('property-step-next').click();
-		await expect(page.getByTestId('property-address-input')).toBeVisible();
+		await page.getByTestId('property-create-name-input').fill(name);
+		await expect(page.getByTestId('property-create-address-input')).toBeVisible();
 
-		await page.getByTestId('property-address-input').fill('123 Test Street');
-		await page.getByTestId('property-city-input').fill('Austin');
+		await page.getByTestId('property-create-address-input').fill('123 Test Street');
+		await page.getByTestId('property-create-city-input').fill('Austin');
+		await page.getByTestId('property-create-rent-input').fill('0');
+		await page.getByTestId('property-create-beds-input').fill('2');
+		await page.getByTestId('property-create-baths-input').fill('1');
 		// State is a searchable StateSelect combobox that live-filters its option list on every
 		// keystroke. Two races to avoid: (1) a programmatic .fill() doesn't drive the combobox's
 		// controlled input cleanly and the list churns; (2) keyboard commit (ArrowDown/Enter)
 		// does NOT select in this bits-ui combobox (verified: Enter leaves it open, value empty).
 		// Robust path: type real keystrokes (pressSequentially) so the list filters down to the
 		// single "Texas (TX)" match, wait for that option, then click it — which commits cleanly.
-		const stateInput = page.getByTestId('property-state-input');
+		const stateInput = page.getByTestId('property-create-state-input');
 		await expect(stateInput).toBeVisible();
 		await stateInput.click();
 		await stateInput.pressSequentially('TX');
@@ -67,17 +67,15 @@ test.describe('Properties', () => {
 		// The combobox's floating listbox unmounts after selection; wait for it to leave the DOM so
 		// the dialog footer has settled before submitting.
 		await expect(page.getByRole('listbox')).toHaveCount(0);
-		await page.getByTestId('property-postal-input').fill('78701');
-		await page.getByTestId('property-step-next').click();
-		await expect(page.getByTestId('property-status-input')).toBeVisible();
+		await page.getByTestId('property-create-postal-input').fill('78701');
 
-		const saveButton = page.getByTestId('property-form-save');
+		const saveButton = page.getByTestId('property-create-save');
 		await expect(saveButton).toBeEnabled();
 		await saveButton.click();
 
 		// Dialog closes on success. Search to surface the new row regardless of pagination,
 		// and scope to the desktop grid (the cell testid also renders in the hidden mobile card).
-		await expect(page.getByTestId('property-form')).toBeHidden();
+		await expect(page.getByTestId('property-create-form')).toBeHidden();
 		await page.getByTestId('property-search-input').fill(name);
 		await expect(
 			page.getByTestId('datagrid-desktop').getByTestId('property-name').filter({ hasText: name })

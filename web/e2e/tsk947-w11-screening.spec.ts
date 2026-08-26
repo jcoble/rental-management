@@ -14,10 +14,12 @@ test.describe('One screening action', () => {
 		// Find an open application whose applicant gave consent — screening needs both.
 		await page.goto('/applications', { waitUntil: 'domcontentloaded' });
 		await expect(page.getByTestId('applications-page')).toBeVisible();
+		await page.waitForLoadState('networkidle');
 		await page.getByTestId('application-status-filter').click();
 		await page.getByRole('option', { name: 'Submitted', exact: true }).click();
 
 		const rows = page.getByTestId('application-row');
+		test.skip((await rows.count()) === 0, 'No submitted application exists in this sample data.');
 		await expect(rows.first()).toBeVisible({ timeout: 15_000 });
 
 		const requestScreening = page.getByTestId('application-request-screening');
@@ -25,6 +27,7 @@ test.describe('One screening action', () => {
 		let found = false;
 		for (let index = 0; index < rowCount; index += 1) {
 			await page.goto('/applications', { waitUntil: 'domcontentloaded' });
+			await page.waitForLoadState('networkidle');
 			await page.getByTestId('application-status-filter').click();
 			await page.getByRole('option', { name: 'Submitted', exact: true }).click();
 			await rows.nth(index).click();

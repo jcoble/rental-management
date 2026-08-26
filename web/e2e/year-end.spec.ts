@@ -35,8 +35,9 @@ test.describe('Year-end view + mortgage feature', () => {
 
 	test('year-end is reachable from the accounting Reports tab', async ({ page }) => {
 		await page.goto('/accounting?tab=reports');
-		await expect(page.getByTestId('accounting-report-year-end-link')).toBeVisible();
-		await page.getByTestId('accounting-report-year-end-link').click();
+		const yearEnd = page.getByRole('link', { name: /Year-end packet/ });
+		await expect(yearEnd).toBeVisible();
+		await yearEnd.click();
 		await expect(page.getByTestId('year-end-page')).toBeVisible();
 	});
 
@@ -50,6 +51,7 @@ test.describe('Year-end view + mortgage feature', () => {
 		await firstRow.click();
 
 		await expect(page.getByTestId('property-detail-page')).toBeVisible();
+		await page.getByTestId('property-area-property-finances').click();
 		await expect(page.getByTestId('property-detail-loans')).toBeVisible();
 		await expect(page.getByTestId('loan-add-button')).toBeVisible();
 		await expect(page.getByTestId('property-detail-recurring-expenses')).toBeVisible();
