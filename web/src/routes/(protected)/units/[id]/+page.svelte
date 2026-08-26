@@ -515,7 +515,7 @@
 							<div class="min-w-0 overflow-x-auto">
 								<nav aria-label="Maintenance sections" data-testid="unit-maintenance-subnav">
 									<div class={UNIT_SUBNAV_LIST_CLASS}>
-										<button type="button" aria-current={activeView === 'work-orders' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('maintenance', 'work-orders')}>Work orders</button>
+										<button type="button" aria-current={activeView === 'work-orders' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('maintenance', 'work-orders')}>Repairs</button>
 										<button type="button" aria-current={activeView === 'inspections' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('maintenance', 'inspections')}>Inspections</button>
 										<button type="button" aria-current={activeView === 'recurring' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('maintenance', 'recurring')}>Recurring work</button>
 										<button type="button" aria-current={activeView === 'turnover' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('maintenance', 'turnover')}>Move-out &amp; turnover</button>

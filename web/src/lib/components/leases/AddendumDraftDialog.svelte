@@ -157,7 +157,7 @@
 			validationError = 'Effective-through date cannot be before the effective date.';
 		else if (form.signers.length === 0) validationError = 'At least one signer is required.';
 		else if (form.signers.some((signer) => !signer.nameSnapshot.trim() || !signer.emailSnapshot.trim()))
-			validationError = 'Every signer needs a name and email snapshot.';
+			validationError = 'Every signer needs a name and email.';
 		else if (!form.signers.some((signer) => signer.signerRole === 'PrimaryTenant' || signer.signerRole === 'CoTenant'))
 			validationError = 'At least one primary or co-tenant must be a required signer.';
 		else if (new Set(form.signers.map((signer) => signer.signingOrder)).size !== form.signers.length)

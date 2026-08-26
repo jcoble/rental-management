@@ -156,7 +156,7 @@
 		} catch (error) {
 			returnContextError = apiErrorMessage(
 				error,
-				'Could not load the current household and portal access from the server.'
+				'Could not load the current tenants and app access.'
 			);
 		} finally {
 			returnContextLoading = false;
@@ -173,7 +173,7 @@
 	function buildReturnRequest(): ReturnPossessionRequest | null {
 		returnValidationError = '';
 		if (!returnContext || returnContext.parties.length === 0) {
-			returnValidationError = 'The server did not return a current household to disposition.';
+			returnValidationError = 'Could not find the current tenants.';
 			return null;
 		}
 		if (!turnoverReason.trim()) {
@@ -269,7 +269,7 @@
 				<p class="font-medium">Tenant has possession</p>
 				<p class="text-muted-foreground">Given {formatBusinessDate(summary.possessionGivenAtUtc)}</p>
 			{:else if summary.canceledAtUtc}
-				<p class="font-medium">Relationship canceled</p>
+				<p class="font-medium">Lease canceled</p>
 				<p class="text-muted-foreground">Possession actions are no longer available.</p>
 			{:else}
 				<p class="font-medium">Possession not yet given</p>
@@ -393,11 +393,11 @@
 
 				<section class="space-y-3 border-t pt-5">
 					<div>
-						<h3 class="font-medium">Active portal access</h3>
-						<p class="text-sm text-muted-foreground">Choose an explicit outcome for every active grant.</p>
+						<h3 class="font-medium">Tenant app access</h3>
+						<p class="text-sm text-muted-foreground">Choose what happens to each tenant's app access.</p>
 					</div>
 					{#if returnContext.activeTenantUserAccesses.length === 0}
-						<p class="text-sm text-muted-foreground">There are no active tenant portal grants.</p>
+						<p class="text-sm text-muted-foreground">There is no tenant app access.</p>
 					{/if}
 					{#each returnContext.activeTenantUserAccesses as access (access.tenantUserAccessId)}
 						<label class="grid gap-1 sm:grid-cols-[1fr_15rem] sm:items-center">

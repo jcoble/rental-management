@@ -236,7 +236,7 @@
 			</div>
 
 			<div class="space-y-4">
-				<DetailCard title="Zillow Guided" icon={ExternalLink} accent="success">
+				<DetailCard title="Post on Zillow yourself" icon={ExternalLink} accent="success">
 					<div class="space-y-4">
 						<p class="text-sm text-muted-foreground">Rental Command prepares and tracks the work. You remain signed into Zillow and publish there.</p>
 						<Button class="w-full gap-2" onclick={openZillow}><ExternalLink class="h-4 w-4" /> Open Zillow Rental Manager</Button>
@@ -266,7 +266,7 @@
 					</div>
 				</DetailCard>
 
-				<DetailCard title="Zillow Connected" icon={WifiOff} accent={connected?.channelAvailable ? 'primary' : 'muted'}>
+				<DetailCard title="Automatic posting" icon={WifiOff} accent={connected?.channelAvailable ? 'primary' : 'muted'}>
 					<div class="space-y-3">
 						<p class="text-sm text-muted-foreground">The same listing is prepared, published, updated, or removed through an approved provider connection. Guided mode remains available on its own.</p>
 						<div class="rounded-md bg-muted p-3 text-xs">

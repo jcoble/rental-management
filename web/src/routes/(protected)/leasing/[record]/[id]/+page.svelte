@@ -143,7 +143,7 @@
 					</div>
 					<div class="rounded-xl border bg-card p-5">
 						<h2 class="font-semibold">Move-in readiness</h2>
-						<p class="mt-3 text-sm">Planned possession: {date(detail.plannedPossessionAtUtc)}</p>
+						<p class="mt-3 text-sm">Keys handed over: {date(detail.plannedPossessionAtUtc)}</p>
 						<p class="text-sm">Agreement: {detail.agreementFullyExecuted ? 'Fully executed' : 'Still needs execution'}</p>
 						<p class="text-sm">Possession: {detail.possessionGiven ? 'Given' : 'Not yet given'}</p>
 					</div>

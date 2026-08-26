@@ -36,7 +36,7 @@ describe('unit maintenance actions', () => {
 		assert.equal(unitMaintenanceReturnTo(7, 'turnover'), '/units/7?tab=maintenance&view=turnover');
 		assert.deepEqual(
 			UNIT_MAINTENANCE_SUBJECTS.map(({ label }) => label),
-			['Work orders', 'Inspections', 'Recurring maintenance', 'Turnover/make-ready'],
+			['Repairs', 'Inspections', 'Recurring maintenance', 'Turnover/make-ready'],
 		);
 	});
 });

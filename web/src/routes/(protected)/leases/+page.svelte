@@ -53,14 +53,14 @@
 	);
 	const leaseEmptyDescription = $derived(
 		hasLeaseFilters
-			? 'Try a different household, rental, lease number, or status.'
+			? 'Try a different tenant, rental, lease number, or status.'
 			: 'Approve an application and prepare a move-in, or import an existing signed lease.'
 	);
 
 	const columns: ColumnDef<LeaseManagementSummary>[] = [
 		{
 			key: 'tenantName',
-			title: 'Household',
+			title: 'Tenant',
 			accessor: (item) => item.primaryTenantName ?? 'No primary tenant',
 			sortable: true,
 			mobileRole: 'title'
@@ -120,7 +120,7 @@
 		density="compact"
 		eyebrow="Rentals"
 		title="Leases"
-		description="Find each household's lease, any next lease, and rent account."
+		description="Find each tenant's lease, any next lease, and rent ledger."
 		data-testid="leases-header"
 	>
 		{#snippet actions()}
@@ -162,7 +162,7 @@
 		{#snippet toolbar()}
 			<div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
 				<div class="w-full sm:max-w-md">
-					<SearchInput bind:value={search} placeholder="Search household, rental, or lease…" />
+					<SearchInput bind:value={search} placeholder="Search tenant, rental, or lease…" />
 				</div>
 				<Select.Root type="single" bind:value={statusFilter} onValueChange={() => (gridPage = 1)}>
 					<Select.Trigger class="w-full sm:w-52"

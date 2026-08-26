@@ -305,7 +305,7 @@
 			key: string;
 		}) => leaseManagements.prepareMoveIn(request, key),
 		onSuccess: (result) => {
-			showSuccess('Move-in prepared. The tenant relationship and agreement draft are ready.');
+			showSuccess('Move-in prepared. The tenant and lease draft are ready.');
 			queryClient.invalidateQueries({ queryKey: ['applications'] });
 			queryClient.invalidateQueries({ queryKey: ['lease-managements'] });
 			queryClient.invalidateQueries({ queryKey: ['units'] });
@@ -352,8 +352,8 @@
 			<Dialog.Title>{manualMode ? 'Create lease' : 'Prepare move-in'}</Dialog.Title>
 			<Dialog.Description>
 				{manualMode
-					? 'Choose the rental, tenant, agreement terms, and opening money. This creates one planned tenant relationship, account, and agreement draft together.'
-					: 'Confirm the approved application, exact rental, agreement terms, and opening money. This creates one planned tenant relationship, account, and agreement draft together.'}
+					? 'Choose the rental, tenant, agreement terms, and opening money.'
+					: 'Confirm the approved application, unit, agreement terms, and opening money.'}
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -374,7 +374,7 @@
 								</p>
 								<p class="mt-1 font-semibold">No application required</p>
 								<p class="text-sm text-muted-foreground">
-									The lease, tenant relationship, rent account, and rent tracking are created by the
+									The lease, tenant, rent ledger, and rent tracking are created by the
 									move-in setup.
 								</p>
 							</div>
@@ -433,11 +433,11 @@
 							</p>{/if}
 
 						<div class="space-y-2">
-							<p class="block text-sm font-medium">Exact rental</p>
+							<p class="block text-sm font-medium">Which unit</p>
 							{#if manualMode}
 								<RemoteRecordSelect
 									queryKey={['manual-lease-units', portfolioId]}
-									label="Exact rental"
+									label="Which unit"
 									hideLabel
 									bind:value={form.unitId}
 									selectedLabel={selectedUnitLabel}
@@ -476,8 +476,8 @@
 										value: String(unit.id),
 										label: `${unit.propertyName} · Unit ${unit.unitNumber} · ${formatStatusLabel(unit.status)}`
 									}))}
-									placeholder="Choose the exact rental"
-									ariaLabel="Exact rental"
+									placeholder="Choose a unit"
+									ariaLabel="Which unit"
 									testid="prepare-move-in-unit-input"
 								/>
 								{#if unitOptionsQuery.isLoading}<p class="text-xs text-muted-foreground">
@@ -508,7 +508,7 @@
 									<div>
 										<p class="text-sm font-medium">Primary tenant</p>
 										<p class="text-xs text-muted-foreground">
-											Pick an existing tenant or create the primary tenant during this atomic move-in.
+											Pick an existing tenant or create the primary tenant during this move-in.
 										</p>
 									</div>
 								</div>
@@ -645,7 +645,7 @@
 						{/if}
 						<div>
 							<label class="mb-1 block text-sm font-medium" for="prepare-party-effective"
-								>Household relationship begins</label
+								>Move-in date</label
 							>
 							<DatePicker
 								id="prepare-party-effective"
@@ -659,7 +659,7 @@
 						</div>
 						<div>
 							<label class="mb-1 block text-sm font-medium" for="prepare-possession"
-								>Planned possession <span class="text-muted-foreground">(optional)</span></label
+								>Keys handed over <span class="text-muted-foreground">(optional)</span></label
 							>
 							<DatePicker
 								id="prepare-possession"
@@ -777,7 +777,7 @@
 								testid="prepare-move-in-rent-tracking-mode"
 							/>
 							<p class="mt-1 text-xs text-muted-foreground">
-								This controls the first rent period Rental Command posts to the tenant ledger.
+								This controls the first rent period Rental Command posts to the rent ledger.
 							</p>
 						</div>
 						{#if form.rentTrackingStartMode === 'CustomCutoffDate'}
@@ -950,11 +950,10 @@
 					>
 						<CalendarClock class="mt-0.5 h-5 w-5 text-primary" />
 						<div>
-							<p class="font-medium">One atomic preparation</p>
+							<p class="font-medium">Move-in preparation</p>
 							<p class="text-sm text-muted-foreground">
-								Creates the planned Tenant & lease relationship, primary tenant party, tenant
-								account, {form.createSecurityDepositAccount ? 'security-deposit account, ' : ''}and
-								agreement draft from {selectedTemplateQuery.data?.name ?? 'the selected template'}.
+								Creates the tenant, rent ledger, {form.createSecurityDepositAccount ? 'deposit tracking, ' : ''}and
+								lease draft from {selectedTemplateQuery.data?.name ?? 'the selected template'}.
 							</p>
 						</div>
 					</div>

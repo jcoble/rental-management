@@ -257,7 +257,7 @@
 		mutationFn: ({ id, data }: { id: number | null; data: Record<string, unknown> }) =>
 			id == null ? workOrders.create(data) : workOrders.update(id, data),
 		onSuccess: (_r, vars) => {
-			showSuccess(vars.id == null ? 'Work order created.' : 'Work order updated.');
+			showSuccess(vars.id == null ? 'Repair created.' : 'Repair updated.');
 			closeWoForm();
 			invalidateWo();
 		},
@@ -267,7 +267,7 @@
 	const deleteWoMutation = createMutation(() => ({
 		mutationFn: (id: number) => workOrders.delete(id),
 		onSuccess: () => {
-			showSuccess('Work order deleted.');
+			showSuccess('Repair deleted.');
 			woDeleteTarget = null;
 			invalidateWo();
 		},
@@ -740,14 +740,14 @@
 
 {#snippet headerActions()}
 	<div class="flex flex-wrap gap-2">
-		<Button data-testid="work-order-create-button" onclick={openCreateWo}><Plus class="h-4 w-4" /> New Work Order</Button>
+		<Button data-testid="work-order-create-button" onclick={openCreateWo}><Plus class="h-4 w-4" /> New Repair</Button>
 		<Button data-testid="inspection-create-button" variant="outline" onclick={openInspectionForm}><ShieldCheck class="h-4 w-4" /> Inspection</Button>
 		<Button data-testid="recurring-maintenance-link" variant="outline" onclick={() => goto('/maintenance/recurring')}><RefreshCw class="h-4 w-4" /> Recurring</Button>
 	</div>
 {/snippet}
 
 <svelte:head>
-	<title>Work Orders - Rental Command</title>
+	<title>Repairs - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="maintenance-page">
@@ -757,7 +757,7 @@
 		art={7}
 		tone="coral"
 		eyebrow="Work"
-		title="Work Orders"
+		title="Repairs"
 		description="Manage repair requests, assignments, inspections, and recurring work."
 		actions={headerActions}
 		data-testid="maintenance-header"
@@ -768,7 +768,7 @@
 		data={woList}
 		columns={woColumns}
 		loading={workOrdersQuery.isLoading || workOrdersQuery.isFetching}
-		emptyMessage="No work orders found."
+		emptyMessage="No repairs found."
 		onRowClick={(wo) => goto(recordHref('workOrder', wo))}
 		getRowKey={(wo) => wo.id}
 		data-testid="work-orders-list"
@@ -782,7 +782,7 @@
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2 min-w-0">
-				<SearchInput bind:value={woSearch} placeholder="Search work orders…" testid="work-order-search" />
+				<SearchInput bind:value={woSearch} placeholder="Search repairs…" testid="work-order-search" />
 			</div>
 			<Select.Root type="single" bind:value={woStatusFilter}>
 				<Select.Trigger class="w-40 shrink-0" data-testid="work-order-status-filter">
@@ -934,7 +934,7 @@
 >
 	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
 		<Dialog.Header>
-			<Dialog.Title>{editingWoId == null ? 'New Work Order' : 'Edit Work Order'}</Dialog.Title>
+			<Dialog.Title>{editingWoId == null ? 'New Repair' : 'Edit Repair'}</Dialog.Title>
 		</Dialog.Header>
 		<FormStepper steps={woSteps} bind:currentStep={woStep} completedSteps={completedWoSteps} testid="work-order-stepper">
 			<div class="space-y-4" data-testid="work-order-form">
@@ -1075,7 +1075,7 @@
 						complete={completedWoSteps.includes(woStep)}
 					/>
 				{:else}
-				<Button data-testid="work-order-form-save" onclick={submitWo} disabled={saveWoMutation.isPending}>{saveWoMutation.isPending ? 'Saving…' : 'Save work order'}</Button>
+				<Button data-testid="work-order-form-save" onclick={submitWo} disabled={saveWoMutation.isPending}>{saveWoMutation.isPending ? 'Saving…' : 'Save repair'}</Button>
 			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>
@@ -1295,7 +1295,7 @@
 
 <ConfirmDialog
 	open={woDeleteTarget !== null}
-	title="Delete work order"
+	title="Delete repair"
 	message={woDeleteTarget ? `Delete "${woDeleteTarget.title}"?` : ''}
 	busy={deleteWoMutation.isPending}
 	testid="work-order-delete"

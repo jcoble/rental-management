@@ -554,7 +554,7 @@
 					<InlineField label="Vendor" bind:value={form.vendorId} display={expense.vendorName ?? 'No vendor'} editing={false} testid="expense-detail-vendor" />
 				{/if}
 				<div data-testid="expense-detail-billable-field">
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-detail-billable-input">Billable to owner</label>
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-detail-billable-input">Charge this to the owner</label>
 					{#if editing}
 						<label class="flex h-10 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm">
 							<input id="expense-detail-billable-input" data-testid="expense-detail-billable-input" type="checkbox" bind:checked={form.billableToOwner} />

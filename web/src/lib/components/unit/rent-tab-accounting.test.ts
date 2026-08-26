@@ -29,7 +29,7 @@ describe('W2 unit tenant ledger composition', () => {
 		assert.match(panel, /periodMonths = \$state[^\n]*12/);
 		assert.match(panel, /const PERIODS[^\n]*3, 6, 9, 12/);
 		assert.match(panel, /params\.openOnly = true/);
-		assert.match(panel, /Open charges/);
+		assert.match(panel, /Unpaid charges/);
 		assert.match(panel, /Payments/);
 		assert.match(panel, /Credits & corrections/);
 	});

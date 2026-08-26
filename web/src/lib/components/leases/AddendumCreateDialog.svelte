@@ -177,7 +177,7 @@
 		else if (!documentTemplateId) validationError = 'Choose an active addendum template.';
 		else if (signers.length === 0) validationError = 'At least one signer is required.';
 		else if (signers.some((signer) => !signer.nameSnapshot.trim() || !signer.emailSnapshot.trim()))
-			validationError = 'Every signer needs a name and email snapshot.';
+			validationError = 'Every signer needs a name and email.';
 		else if (!signers.some((signer) => signer.signerRole === 'PrimaryTenant' || signer.signerRole === 'CoTenant'))
 			validationError = 'At least one primary or co-tenant must be a required signer.';
 		else if (new Set(signers.map((signer) => signer.signingOrder)).size !== signers.length)
@@ -262,7 +262,7 @@
 					<a class="font-medium underline underline-offset-2" href="/lease-templates" target="_blank" rel="noreferrer">Open Lease Templates</a>
 				</p>
 			{/if}
-			{#if currentPartiesQuery.isError}<p class="text-sm text-destructive">Current relationship parties could not be loaded. Retry this dialog before creating a draft.</p>{/if}
+			{#if currentPartiesQuery.isError}<p class="text-sm text-destructive">Current tenants could not be loaded. Retry this dialog before creating a draft.</p>{/if}
 
 			<div class="space-y-3">
 				<div class="flex items-center justify-between gap-3"><div><h3 class="font-medium">People who must sign</h3><p class="text-xs text-muted-foreground">Primary and co-leaseholders are added automatically. Add anyone else who must sign this change.</p></div><Button variant="outline" size="sm" class="gap-2" onclick={addSigner}><Plus class="h-4 w-4" /> Add signer</Button></div>

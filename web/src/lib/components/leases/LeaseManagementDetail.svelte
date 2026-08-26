@@ -218,7 +218,7 @@
 	}
 
 	function loginStatus(access: ReturnPossessionActiveTenantUserAccess | undefined) {
-		if (!access) return 'not granted';
+		if (!access) return 'not set up';
 		if (access.hasPendingActivationInvitation) return `pending for ${access.userEmail}`;
 		if (access.isPortalLoginReady || !access.requiresAccountActivation) return `active for ${access.userEmail}`;
 		return `setup required for ${access.userEmail}`;
@@ -291,13 +291,13 @@
 
 {#if relationshipQuery.isLoading}
 	<LoadingState
-		label="Loading tenant and lease relationship"
+		label="Loading tenant and lease"
 		variant="page"
 		testid="lease-relationship-loading"
 	/>
 {:else if relationshipQuery.error || !relationshipQuery.data}
 	<div class="rounded-xl border border-destructive/30 bg-destructive/5 p-6">
-		<h1 class="text-xl font-semibold">Tenant and lease relationship unavailable</h1>
+		<h1 class="text-xl font-semibold">Tenant and lease unavailable</h1>
 		<p class="mt-2 text-sm text-muted-foreground">
 			It may no longer exist or you may not have access.
 		</p>
@@ -313,7 +313,7 @@
 	<div class="space-y-6">
 		<PageHeader
 			title={summary.primaryTenantName ?? 'Tenant & lease'}
-			description={`${summary.propertyName}${summary.unitNumber ? ` · ${summary.unitNumber}` : ''} · ${summary.relationshipNumber}`}
+			description={`${summary.propertyName}${summary.unitNumber ? ` · ${summary.unitNumber}` : ''} · Tenancy ${summary.relationshipNumber}`}
 		>
 			{#snippet actions()}
 				<Button href={activeExperience === 'Leasing' ? `/leasing/rentals/${summary.unitId}` : `/units/${summary.unitId}`} variant="outline" class="gap-2"
@@ -478,7 +478,7 @@
 									<p class="text-sm text-muted-foreground">{party.email ?? party.phone ?? 'No contact information'}</p>
 									<p class="text-xs text-muted-foreground">{party.isCurrent ? `Effective since ${party.effectiveFrom}` : `Scheduled for ${party.effectiveFrom}`} · Login {loginStatus(access)}</p>
 								</div>
-								<div class="flex flex-wrap items-center gap-2"><StatusBadge status={party.role} />{#if canManageHousehold}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'change', party })}>Change role</Button><Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'end', party })}>End membership</Button>{#if access}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'revoke', party, access })}>Revoke resident login</Button>{:else}<Button size="sm" variant="outline" disabled={!canGrantAccess(party)} title={party.email ? 'Create relationship-scoped resident login' : 'Add an email to this person first'} onclick={() => (householdAction = { mode: 'grant', party })}>Create resident login</Button>{/if}{/if}</div>
+								<div class="flex flex-wrap items-center gap-2"><StatusBadge status={party.role} />{#if canManageHousehold}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'change', party })}>Change role</Button><Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'end', party })}>End membership</Button>{#if access}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'revoke', party, access })}>Remove tenant app access</Button>{:else}<Button size="sm" variant="outline" disabled={!canGrantAccess(party)} title={party.email ? 'Create tenant app access' : 'Add an email to this person first'} onclick={() => (householdAction = { mode: 'grant', party })}>Create tenant app access</Button>{/if}{/if}</div>
 							</div>
 							{/if}
 						{/each}

@@ -65,7 +65,7 @@
 		<Dialog.Header>
 			<Dialog.Title>{alreadyVoided ? 'Create replacement draft' : 'Void and replace issued lease'}</Dialog.Title>
 			<Dialog.Description>
-				The issued PDF, content hash, signer snapshot, and audit history remain attached to {source.agreementNumber}. The new version keeps the same lease type and does not take effect until fully signed.
+				The issued PDF, content hash, signing order, and audit history remain attached to {source.agreementNumber}. The new version keeps the same lease type and does not take effect until fully signed.
 			</Dialog.Description>
 		</Dialog.Header>
 

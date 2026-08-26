@@ -55,7 +55,7 @@
 	const PERIODS: TenantLedgerSummaryMonths[] = [3, 6, 9, 12];
 	const FILTERS: Array<{ value: TenantLedgerFilter; label: string }> = [
 		{ value: 'all', label: 'All' },
-		{ value: 'open', label: 'Open charges' },
+		{ value: 'open', label: 'Unpaid charges' },
 		{ value: 'payments', label: 'Payments' },
 		{ value: 'credits', label: 'Credits & corrections' }
 	];
@@ -323,7 +323,7 @@
 
 <div class="space-y-4" data-testid="tenant-ledger-panel">
 	<div class="flex items-center justify-end gap-1.5 text-sm font-medium text-muted-foreground">
-		<span>About this ledger</span>
+		<span>About charges and payments</span>
 		<HelpPopover
 			title={ACCOUNTING_HELP.tenantLedger.title}
 			summary={ACCOUNTING_HELP.tenantLedger.summary}
@@ -338,12 +338,12 @@
 		</div>
 		{#if balancesMatch}
 			<div class="min-w-44 rounded-xl border border-border bg-card px-4 py-3" data-testid="tenant-ledger-oldest-charge">
-				<p class="text-xs text-muted-foreground">Oldest open charge</p>
+				<p class="text-xs text-muted-foreground">Oldest unpaid charge</p>
 				{#if oldestOpenCharge}
 					<p class="mt-1 font-medium">{oldestOpenCharge.ageDays ? `${oldestOpenCharge.ageDays} days late` : `Due ${formatAccountingDate(oldestOpenCharge.dueOn)}`}</p>
 					<p class="mt-0.5 font-mono text-xs tabular-nums text-muted-foreground">{formatAccountingCurrency(oldestOpenCharge.openAmount, currency)}</p>
 				{:else}
-					<p class="mt-1 font-medium">No open charges</p>
+					<p class="mt-1 font-medium">No unpaid charges</p>
 				{/if}
 			</div>
 		{:else}
