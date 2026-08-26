@@ -1953,7 +1953,12 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
             if (scheduledWindowEnd != null)
               'scheduledWindowEnd': localToWireIso(scheduledWindowEnd),
             'estimatedCost': ?estimatedCost,
+            'clearEstimatedCost':
+                estimatedCost == null &&
+                widget.workOrder.estimatedCost != null,
             'actualCost': ?actualCost,
+            'clearActualCost':
+                actualCost == null && widget.workOrder.actualCost != null,
           });
 
       widget.onSaved();

@@ -689,9 +689,12 @@ internal sealed class PropertyTenantCrudRule
         var update = Read<UpdateTenantRequest>(command);
         if (update.FirstName is not null) tenant.FirstName = update.FirstName;
         if (update.LastName is not null) tenant.LastName = update.LastName;
-        if (update.Email is not null) tenant.Email = update.Email;
-        if (update.Phone is not null) tenant.Phone = update.Phone;
-        if (update.EmergencyContact is not null) tenant.EmergencyContact = update.EmergencyContact;
+        if (update.ClearEmail) tenant.Email = null;
+        else if (update.Email is not null) tenant.Email = update.Email;
+        if (update.ClearPhone) tenant.Phone = null;
+        else if (update.Phone is not null) tenant.Phone = update.Phone;
+        if (update.ClearEmergencyContact) tenant.EmergencyContact = null;
+        else if (update.EmergencyContact is not null) tenant.EmergencyContact = update.EmergencyContact;
         if (update.DateOfBirth.HasValue) tenant.DateOfBirth = Utc(update.DateOfBirth);
         if (update.Notes is not null) tenant.Notes = update.Notes;
         tenant.UpdatedAt = mutationNow;

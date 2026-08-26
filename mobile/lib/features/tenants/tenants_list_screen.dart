@@ -505,6 +505,13 @@ class _TenantFormSheetState extends ConsumerState<TenantFormSheet> {
     try {
       final repo = ref.read(tenantsRepositoryProvider);
       if (_isEdit) {
+        body['clearEmail'] =
+            _emailCtrl.text.trim().isEmpty && widget.existing!.email != null;
+        body['clearPhone'] =
+            _phoneCtrl.text.trim().isEmpty && widget.existing!.phone != null;
+        body['clearEmergencyContact'] =
+            _emergencyCtrl.text.trim().isEmpty &&
+            widget.existing!.emergencyContact != null;
         await repo.updateTenant(widget.existing!.id, body);
       } else {
         await repo.createTenant(body);
