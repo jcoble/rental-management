@@ -8,32 +8,20 @@ import 'package:material_symbols_icons/symbols.dart';
 /// `eli5` copy, and the core-vs-optional split are kept faithful so the two
 /// surfaces speak with one voice.
 ///
-/// Each task carries:
-///  * plain-English copy (`label` + a one-line `eli5`) aimed at someone who has
-///    never used software like this — no jargon;
-///  * a [GettingStartedDest] deep-link target (the mobile screen that creates
-///    that record), so tapping a row lands the user in the exact create flow;
-///  * a completion predicate computed purely from data the app already fetches
-///    for other reasons (the list / settings endpoints), so a task auto-checks
-///    the moment the underlying record exists — there are NO per-task API calls.
-///    [GettingStartedSignals] is the small bag of those facts.
+/// Rentals are owned by you unless you add another owner or a management company
+/// under More details on the rental.
 ///
-/// Mobile parity note (M-10): two web tasks are intentionally NOT ported because
-/// their completion can't be derived from any endpoint mobile already calls, and
-/// a task that can never auto-check would keep the "hide when done" card nagging
-/// forever:
-///  * `portfolio` ("name your rental business") — needs `GET /portfolio` (the
-///    business name), which mobile has no repository for; mobile never fetches
-///    the portfolio document.
-/// The `owner` task IS kept but auto-completes (web does the same): onboarding
-/// creates a primary "self-owner" from the landlord's own account, and mobile
-/// has no owners-list endpoint to add more, so the row is informational only.
+/// Each task carries a short label plus one-line `eli5` copy, a
+/// [GettingStartedDest] deep-link to the screen that creates the record, and a
+/// completion predicate computed purely from data the app already fetches — so a
+/// task auto-checks the moment the record exists and there are NO per-task API
+/// calls. [GettingStartedSignals] is that small bag of facts.
 
 /// Where tapping a checklist row should take the user. Resolved to a concrete
 /// screen by the checklist UI (`getting_started_screen.dart`), which owns the
 /// imports — keeping this file free of screen dependencies.
 enum GettingStartedDest {
-  /// No destination — the task is informational / auto-complete (e.g. owner).
+  /// No destination — the task is informational only.
   none,
   properties,
   tenants,
@@ -126,24 +114,11 @@ class GettingStartedTask {
 /// The mobile getting-started task set. Order = display order.
 const List<GettingStartedTask> kGettingStartedTasks = [
   GettingStartedTask(
-    // Auto-completes: onboarding creates a primary "self-owner" from the
-    // landlord's own account, so this is checked off without a manual step.
-    key: 'owner',
-    label: 'Confirm who owns the properties',
-    eli5:
-        'The owner is the person or company that legally holds the property — '
-        'used later on owner reports and tax forms. We start this off as you.',
-    icon: Symbols.account_circle_rounded,
-    dest: GettingStartedDest.none,
-    core: true,
-    isComplete: _ownerComplete,
-  ),
-  GettingStartedTask(
     key: 'property',
     label: 'Add your first property',
     eli5:
         'A property is one building or address. Standalone homes get their '
-        'rental space automatically; larger buildings can add each unit.',
+        'rental automatically; larger buildings can add each rental.',
     icon: Symbols.home_rounded,
     dest: GettingStartedDest.properties,
     core: true,
@@ -151,10 +126,10 @@ const List<GettingStartedTask> kGettingStartedTasks = [
   ),
   GettingStartedTask(
     key: 'unit',
-    label: 'Confirm the rental spaces',
+    label: 'Confirm your rentals',
     eli5:
-        'A rental space is what gets leased. A house is one space; a duplex is '
-        'two. Open a property to add more spaces when needed.',
+        'A rental is what gets leased. A house is one rental; a duplex is two. '
+        'Open a property to add more rentals when needed.',
     icon: Symbols.meeting_room_rounded,
     dest: GettingStartedDest.properties,
     core: true,
@@ -175,8 +150,8 @@ const List<GettingStartedTask> kGettingStartedTasks = [
     key: 'lease',
     label: 'Create the first lease',
     eli5:
-        'A lease ties a tenant to a unit and sets the rent, dates, and deposit. '
-        'This is what drives rent charges and reminders.',
+        'A lease ties a tenant to a rental and sets the rent, dates, and '
+        'deposit. This is what drives rent charges and reminders.',
     icon: Symbols.description_rounded,
     dest: GettingStartedDest.leases,
     core: true,
@@ -214,7 +189,6 @@ const List<GettingStartedTask> kGettingStartedTasks = [
 ];
 
 // Predicates kept as top-level functions so the task list can stay `const`.
-bool _ownerComplete(GettingStartedSignals s) => true; // self-owner, always set
 bool _propertyComplete(GettingStartedSignals s) => s.propertyCount > 0;
 bool _unitComplete(GettingStartedSignals s) => s.unitCount > 0;
 bool _tenantComplete(GettingStartedSignals s) => s.tenantCount > 0;
