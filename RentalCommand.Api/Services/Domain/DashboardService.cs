@@ -746,22 +746,33 @@ public class DashboardService : IDashboardService
         WorkspaceReadScope scope,
         CancellationToken ct)
     {
-        var rows = await BuildRecentActivitySingleStatementQuery(scope).ToListAsync(ct);
-        return rows
-            .Select(row => new DashboardActivity
+        var auditPage = await BuildRecentActivityAuditPageQuery(scope).ToListAsync(ct);
+        var keysByType = auditPage
+            .GroupBy(row => row.Audit.EntityType)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(row => (long)row.Audit.EntityId).Distinct().ToArray(),
+                StringComparer.Ordinal);
+        var entityFacts = await BuildRecentActivityEntityFactQuery(scope, keysByType).ToListAsync(ct);
+        var factsByKey = entityFacts.ToDictionary(row => (row.EntityType, row.EntityId));
+
+        return auditPage.Select(row =>
+        {
+            var fact = factsByKey.GetValueOrDefault((row.Audit.EntityType, row.Audit.EntityId));
+            return new DashboardActivity
             {
                 Id = row.Audit.Id,
                 Type = row.Audit.EntityType,
                 EntityId = row.Audit.EntityId,
-                UnitId = row.UnitId,
-                LeaseManagementId = row.LeaseManagementId,
+                UnitId = fact?.UnitId,
+                LeaseManagementId = fact?.LeaseManagementId,
                 Action = row.Audit.Operation.ToString(),
                 Description = _auditDescriber.Describe(row.Audit),
-                Label = string.IsNullOrWhiteSpace(row.Label) ? null : row.Label.Trim(),
+                Label = fact?.Label?.Trim(),
                 Actor = AuditEntryResponse.ResolveActor(row.Audit, row.ResolvedActorName),
                 CreatedAt = row.Audit.Timestamp,
-            })
-            .ToList();
+            };
+        }).ToList();
     }
 
     /// <summary>
