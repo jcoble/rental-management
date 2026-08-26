@@ -3,9 +3,8 @@
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import { team, type TeamMemberSummary } from '$lib/api/endpoints/team';
 	import type { TeamRoutingRecipientPreview, TeamRoutingRuleResponse, TeamRoutingTopic } from '$lib/api/types/notification';
+	import { beforeNavigate } from '$app/navigation';
 	import { hasCapability } from '$lib/stores/auth.svelte';
-	import { getAuthState } from '$lib/stores/auth.svelte';
-	import { canAccessPathForEnvelope, safeLandingForAccess } from '$lib/auth/experience-policy';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -13,19 +12,11 @@
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
 	import NotificationPolicyAccordion from '$lib/components/notifications/NotificationPolicyAccordion.svelte';
-	import NotificationSetupJourney from '$lib/components/notifications/NotificationSetupJourney.svelte';
+	import NotificationHelpAction from '$lib/components/notifications/NotificationHelpAction.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Search, X } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
-	const authState = getAuthState();
-	const returnHref = $derived.by(() => {
-		const access = authState.accessEnvelope;
-		if (!access) return '/';
-		return canAccessPathForEnvelope(access, '/settings')
-			? '/settings#notifications'
-			: (safeLandingForAccess(access) ?? '/');
-	});
 	const canManage = $derived(hasCapability('notifications.manage'));
 	const topics: Array<{ topic: TeamRoutingTopic; label: string; detail: string }> = [
 		{ topic: 'RentAndMoney', label: 'Rent and money', detail: 'Rent due, balances, payment problems, and money tasks.' },
@@ -219,30 +210,44 @@
 			? 'Your saved team responsibilities and daily summary schedule are shown below.'
 			: 'Your personal alert choices are available. An administrator manages team responsibilities.'
 	);
+
+	beforeNavigate(({ cancel }) => {
+		if (!hasUnsavedChanges) return;
+		if (!window.confirm('You have unsaved notification changes. Leave this page without saving them?')) {
+			cancel();
+		}
+	});
 </script>
 
-<svelte:head><title>Team responsibilities · Rental Command</title></svelte:head>
+<section id="team-routing" class="scroll-mt-6 space-y-4" data-testid="notifications-team-routing">
+	<div class="flex flex-wrap items-start justify-between gap-4">
+		<div class="max-w-3xl">
+			<h2 class="text-lg font-semibold tracking-tight">Who gets told what</h2>
+			<p class="mt-1 text-sm leading-6 text-muted-foreground">
+				Choose who should receive alerts for rent, leasing, repairs, owner questions, and account safety.
+			</p>
+		</div>
+		<NotificationHelpAction
+			title="How team responsibilities work"
+			description="Responsibilities decide who receives a kind of team alert."
+			guidance="Choose the people responsible for each kind of work. Each person's saved alert choices decide whether Rental Command reaches them in the app, by email, by text message, or on their phone."
+			href="/docs/daily-briefing"
+			linkLabel="Open the team alerts guide"
+		/>
+	</div>
 
-<NotificationSetupJourney
-	currentStep={2}
-	description="Choose who should receive alerts for rent, leasing, repairs, owner questions, and account safety."
-	{savedSummary}
-	{returnHref}
-	{canManage}
-	{hasUnsavedChanges}
-	helpTitle="How team responsibilities work"
-	helpDescription="Responsibilities decide who receives a kind of team alert."
-	helpGuidance="Choose the people responsible for each kind of work. Each person's saved alert choices decide whether Rental Command reaches them in the app, by email, by text message, or on their phone."
-	helpHref="/docs/daily-briefing"
-	helpLinkLabel="Open the team alerts guide"
->
+	<div class="rounded-lg border border-border bg-muted/30 px-4 py-3" aria-live="polite">
+		<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Saved summary</p>
+		<p class="mt-1 text-sm text-foreground">{savedSummary}</p>
+	</div>
+
 	<div class="space-y-5" data-testid="team-routing-page">
 		{#if !canManage}
 			<Card.Root>
 				<Card.Content class="p-6">
 					<h2 class="font-semibold">An administrator manages team responsibilities</h2>
 					<p class="mt-2 text-sm text-muted-foreground">
-						You can still change your own alerts in Step 1. Ask a workspace administrator to change who handles team work or tenant messages.
+						Ask a workspace administrator to change who handles team work or tenant messages.
 					</p>
 				</Card.Content>
 			</Card.Root>
@@ -459,7 +464,7 @@
 									</Button>
 									<Button variant="ghost" onclick={cancelEdit}>Cancel</Button>
 									<p class="text-xs text-muted-foreground">
-										Each person keeps control of their own alert destinations in Step 1.
+										Each person keeps control of their own alert destinations under My alerts.
 									</p>
 								</div>
 							</div>
@@ -469,4 +474,4 @@
 			{/if}
 		{/if}
 	</div>
-</NotificationSetupJourney>
+</section>

@@ -152,6 +152,11 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	// routing plus tenant policy/template/delivery administration stay in Management even if a stale
 	// relationship or staff envelope happens to contain the workspace notification capability.
 	{
+		prefix: '/settings/notifications',
+		exact: true,
+		experiences: ['Management', 'Leasing', 'Maintenance', 'Owner', 'Tenant']
+	},
+	{
 		prefix: '/settings/notifications/my-alerts',
 		experiences: ['Management', 'Leasing', 'Maintenance', 'Owner', 'Tenant']
 	},

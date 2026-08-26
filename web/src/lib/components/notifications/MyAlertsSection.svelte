@@ -1,25 +1,15 @@
 <script lang="ts">
+	import { beforeNavigate } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { notifications } from '$lib/api/endpoints/notifications';
-	import { getAuthState, hasCapability } from '$lib/stores/auth.svelte';
-	import { canAccessPathForEnvelope, safeLandingForAccess } from '$lib/auth/experience-policy';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Card from '$lib/components/ui/card';
-	import NotificationSetupJourney from '$lib/components/notifications/NotificationSetupJourney.svelte';
+	import NotificationHelpAction from '$lib/components/notifications/NotificationHelpAction.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 
 	const queryClient = useQueryClient();
-	const authState = getAuthState();
-	const canManageTeamNotifications = $derived(hasCapability('notifications.manage'));
-	const returnHref = $derived.by(() => {
-		const access = authState.accessEnvelope;
-		if (!access) return '/';
-		return canAccessPathForEnvelope(access, '/settings')
-			? '/settings#notifications'
-			: (safeLandingForAccess(access) ?? '/');
-	});
 	const alertsQuery = createQuery(() => ({
 		queryKey: ['notification-settings', 'my-alerts'],
 		queryFn: () => notifications.myAlerts.get()
@@ -77,21 +67,37 @@
 			? `${saved.displayName} receives personal alerts in ${enabled.join(', ')}.`
 			: `${saved.displayName} has paused every personal alert destination.`;
 	});
+
+	beforeNavigate(({ cancel }) => {
+		if (!hasUnsavedChanges) return;
+		if (!window.confirm('You have unsaved notification changes. Leave this page without saving them?')) {
+			cancel();
+		}
+	});
 </script>
 
-<svelte:head><title>Your alerts · Rental Command</title></svelte:head>
+<section id="my-alerts" class="scroll-mt-6 space-y-4" data-testid="notifications-my-alerts">
+	<div class="flex flex-wrap items-start justify-between gap-4">
+		<div class="max-w-3xl">
+			<h2 class="text-lg font-semibold tracking-tight">My alerts</h2>
+			<p class="mt-1 text-sm leading-6 text-muted-foreground">
+				Choose where you personally receive alerts. This does not change what your team or tenants receive.
+			</p>
+		</div>
+		<NotificationHelpAction
+			title="How personal alerts work"
+			description="These destinations belong only to your signed-in account."
+			guidance="Choose where you personally receive Rental Command alerts. Team responsibilities and tenant messages are set further down this page and are never changed here."
+			href="/docs/settings-and-notifications"
+			linkLabel="Open notification documentation"
+		/>
+	</div>
 
-<NotificationSetupJourney
-	currentStep={1}
-	description="Choose where you personally receive alerts. This does not change what your team or tenants receive."
-	{savedSummary}
-	{returnHref}
-	canManage={canManageTeamNotifications}
-	{hasUnsavedChanges}
-	helpTitle="How personal alerts work"
-	helpDescription="These destinations belong only to your signed-in account."
-	helpGuidance="Choose where you personally receive Rental Command alerts. Team responsibilities and tenant messages have their own steps and are never changed here."
->
+	<div class="rounded-lg border border-border bg-muted/30 px-4 py-3" aria-live="polite">
+		<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Saved summary</p>
+		<p class="mt-1 text-sm text-foreground">{savedSummary}</p>
+	</div>
+
 	<div class="space-y-5" data-testid="my-alerts-page">
 	{#if alertsQuery.isLoading}
 		<LoadingState label="Loading your alert destinations" testid="my-alerts-loading" />
@@ -127,10 +133,9 @@
 					<Button onclick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="my-alerts-save">
 						{saveMutation.isPending ? 'Saving…' : 'Save my alert choices'}
 					</Button>
-					<p class="text-xs text-muted-foreground" aria-live="polite">Next, choose who handles each kind of work.</p>
 				</div>
 			</Card.Content>
 		</Card.Root>
 	{/if}
-</div>
-</NotificationSetupJourney>
+	</div>
+</section>
