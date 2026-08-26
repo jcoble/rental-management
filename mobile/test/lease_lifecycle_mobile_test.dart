@@ -114,12 +114,12 @@ void main() {
     expect(sheet, isNot(contains('.sort(')));
     expect(sheet, isNot(contains('.where(')));
     expect(
-      detail,
-      contains('if (operation.requiresEffectiveAddendumDecisions)'),
+      sheet,
+      contains('_operation.requiresEffectiveAddendumDecisions'),
     );
     expect(detail, contains('.effectiveAddendumSeries('));
     expect(detail, contains('addendumDecisions: result.addendumDecisions'));
-    expect(detail, contains('LeaseSuccessorOperation.restatement'));
+    expect(sheet, contains('LeaseSuccessorOperation.restatement'));
     expect(detail, isNot(contains('addendumCount')));
     expect(repository, contains('effective-addendum-series'));
     expect(repository, contains("'addendumDecisions': addendumDecisions"));
@@ -147,11 +147,14 @@ void main() {
         'lib/features/leases/leases_repository.dart',
       ).readAsStringSync();
 
-      expect(sheet, contains("labelText: 'Why is this correction needed?'"));
+      expect(sheet, contains("labelText: 'What was wrong?'"));
       expect(sheet, contains('_correctionReasonValid'));
       expect(
         sheet,
-        contains('The old lease stays in place until the replacement is fully signed.'),
+        contains(
+          'The lease you have now stays in place until the new version is '
+          'fully signed.',
+        ),
       );
       expect(editor, contains('Old agreement vs correction'));
       expect(editor, contains('unchanged copied field'));
