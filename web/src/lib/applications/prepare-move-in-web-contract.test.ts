@@ -116,4 +116,34 @@ describe('canonical web Prepare move-in workflow', () => {
 		assert.doesNotMatch(dialogSource, /terms-payload-input/);
 		assert.doesNotMatch(dialogSource, /schema version/i);
 	});
+
+	it('renders one review screen with no step navigation', () => {
+		assert.doesNotMatch(dialogSource, /FormStepper/);
+		assert.doesNotMatch(dialogSource, /StepperNextButton/);
+		assert.doesNotMatch(dialogSource, /currentStep/);
+		assert.doesNotMatch(dialogSource, /completedSteps/);
+		assert.doesNotMatch(dialogSource, /prepare-move-in-next/);
+		assert.doesNotMatch(dialogSource, /prepare-move-in-back/);
+		assert.match(dialogSource, /data-testid="movein-review"/);
+		assert.match(dialogSource, /data-testid="movein-more"/);
+		assert.match(dialogSource, /data-testid="movein-migration"/);
+		for (const testId of [
+			'prepare-move-in-unit-error',
+			'prepare-move-in-term-type-input',
+			'prepare-move-in-term-start-input',
+			'prepare-move-in-rent-input',
+			'prepare-move-in-due-day-input',
+			'prepare-move-in-deposit-input',
+			'prepare-move-in-late-fee-input',
+			'prepare-move-in-grace-input',
+			'prepare-move-in-template-input',
+			'prepare-move-in-party-effective-input',
+			'prepare-move-in-rent-tracking-mode',
+			'prepare-move-in-opening-amount-input',
+			'prepare-move-in-submit'
+		]) {
+			assert.match(dialogSource, new RegExp(`(?:data-testid|testid)="${testId}"`));
+		}
+		assert.doesNotMatch(dialogSource, /prepare-move-in-possession-input/);
+	});
 });
