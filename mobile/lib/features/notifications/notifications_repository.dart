@@ -123,6 +123,7 @@ class InboxNotifier extends Notifier<AsyncValue<List<AppNotification>>> {
 
   bool _hasMore = true;
   bool _loadingMore = false;
+  int _requestGeneration = 0;
 
   bool get hasMore => _hasMore;
 
@@ -136,13 +137,16 @@ class InboxNotifier extends Notifier<AsyncValue<List<AppNotification>>> {
       ref.read(notificationsRepositoryProvider);
 
   Future<void> load() async {
+    final generation = ++_requestGeneration;
     state = const AsyncValue.loading();
     _hasMore = true;
     try {
       final page = await _repo.list(skip: 0, take: _pageSize);
+      if (generation != _requestGeneration) return;
       _hasMore = page.length == _pageSize;
       state = AsyncValue.data(page);
     } on ApiException catch (e) {
+      if (generation != _requestGeneration) return;
       state = AsyncValue.error(e, StackTrace.current);
     }
   }
