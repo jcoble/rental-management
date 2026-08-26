@@ -60,9 +60,9 @@ class _TellMeScreenState extends ConsumerState<TellMeScreen> {
 
   Future<void> _speak(String text) async {
     _lastSpokenPrompt = text;
-    setState(() => _speaking = true);
     try {
       await _tts.stop();
+      setState(() => _speaking = true);
       await _tts.speak(text);
     } catch (_) {
       if (mounted) setState(() => _speaking = false);
