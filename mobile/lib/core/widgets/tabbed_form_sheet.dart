@@ -16,6 +16,37 @@ class TabbedFormStepSpec {
   final bool Function()? validate;
 }
 
+/// A collapsed "More details" disclosure for the optional fields on a sheet.
+///
+/// Keeps a phone form down to its essentials without pushing the rest of the
+/// fields onto extra steps.
+class MoreDetailsSection extends StatelessWidget {
+  const MoreDetailsSection({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Theme(
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        key: const Key('more-details-section'),
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(top: 4, bottom: 8),
+        expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+        title: Text(
+          'More details',
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        children: children,
+      ),
+    );
+  }
+}
+
 class TabbedFormSheet extends StatefulWidget {
   const TabbedFormSheet({
     super.key,
@@ -180,7 +211,6 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
 
   Widget _buildStepper(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    // A single card is one screen, not a journey — draw no step rail for it.
     if (widget.tabs.length < 2) return const SizedBox.shrink();
 
     return SizedBox(
