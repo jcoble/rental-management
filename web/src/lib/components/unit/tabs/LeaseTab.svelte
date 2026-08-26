@@ -18,6 +18,7 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import PossessionActions from '$lib/components/leases/PossessionActions.svelte';
+	import EndingDispositionDialog from '$lib/components/leases/EndingDispositionDialog.svelte';
 	import { prepareMoveInHrefForApprovedTenant } from '$lib/leases/prepare-move-in-prefill';
 	import { leaseAgreementStatusLabel } from '$lib/leases/lease-list-labels';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -32,7 +33,7 @@
 	let selected = $state<LeaseManagementSummary | null>(null);
 	let cancelOpen = $state(false);
 	let transferOpen = $state(false);
-	let closeOpen = $state(false);
+	let planMoveOutFor = $state<LeaseManagementSummary | null>(null);
 	let cancellationReasonCode = $state('');
 	let draftCancellationReason = $state('');
 	let cancellationNote = $state('');
@@ -46,8 +47,6 @@
 	let carryTenantBalance = $state(true);
 	let carrySecurityDeposit = $state(true);
 	let transferReason = $state('');
-	let closeReasonCode = $state('');
-	let closeNote = $state('');
 
 	const canManagePossession = $derived(
 		hasCapability('rentals.manage') || hasCapability('leasing.onboarding.manage')
@@ -138,24 +137,13 @@
 		onError: (error) => showError(apiErrorMessage(error, 'Could not transfer the relationship.')),
 	}));
 
-	const closeMutation = createMutation(() => ({
-		mutationFn: () => leaseManagements.closeAccount(selected!.leaseManagementId, {
-			tenantAccountId: selected!.tenantAccountId!,
-			closeReasonCode: closeReasonCode.trim(),
-			closeNote: closeNote.trim() || null,
-		}, crypto.randomUUID()),
-		onSuccess: async () => { closeOpen = false; await refresh(); showSuccess('Tenant account closed.'); },
-		onError: (error) => showError(apiErrorMessage(error, 'The account cannot close until possession, money, drafts, signatures, payments, and autopay are resolved.')),
-	}));
-
-	function choose(relationship: LeaseManagementSummary, action: 'cancel' | 'transfer' | 'close') {
+	function choose(relationship: LeaseManagementSummary, action: 'cancel' | 'transfer') {
 		selected = relationship;
 		if (action === 'cancel') cancelOpen = true;
 		if (action === 'transfer') {
 			effectiveOn = businessDateOrToday(relationship.businessDate);
 			transferOpen = true;
 		}
-		if (action === 'close') closeOpen = true;
 	}
 </script>
 
@@ -187,11 +175,11 @@
 								{#if !relationship.possessionGivenAtUtc && !relationship.canceledAtUtc}
 									<Button size="sm" variant="destructive" onclick={() => choose(relationship, 'cancel')}>Cancel planned move-in</Button>
 								{/if}
+								{#if relationship.possessionGivenAtUtc && !relationship.possessionReturnedAtUtc && !relationship.canceledAtUtc}
+									<Button size="sm" variant="outline" onclick={() => (planMoveOutFor = relationship)} data-testid="lease-plan-move-out-{relationship.leaseManagementId}">Plan move-out</Button>
+								{/if}
 								{#if relationship.possessionGivenAtUtc && !relationship.possessionReturnedAtUtc}
 									<Button size="sm" variant="outline" onclick={() => choose(relationship, 'transfer')}>Move to another rental</Button>
-								{/if}
-								{#if relationship.tenantAccountId && !relationship.accountClosedAtUtc}
-									<Button size="sm" variant="outline" onclick={() => choose(relationship, 'close')}>Close account</Button>
 								{/if}
 							</div>
 						{/if}
@@ -305,11 +293,10 @@
 	</Dialog.Content>
 </Dialog.Root>
 
-<Dialog.Root open={closeOpen} onOpenChange={(open) => (closeOpen = open)}>
-	<Dialog.Content class="max-w-lg" data-testid="close-account-dialog">
-		<Dialog.Header><Dialog.Title>Close tenant account</Dialog.Title><Dialog.Description>Before closing, confirm the keys were returned, nothing is owed, the deposit was settled, and no payments or signatures are still pending.</Dialog.Description></Dialog.Header>
-		<label class="block space-y-1 text-sm"><span>Reason for closing</span><input bind:value={closeReasonCode} class="m3-field-surface h-10 w-full px-3" /></label>
-		<label class="block space-y-1 text-sm"><span>Optional note</span><textarea bind:value={closeNote} class="min-h-20 w-full rounded-md border p-3"></textarea></label>
-		<Dialog.Footer><Button variant="outline" onclick={() => (closeOpen = false)}>Cancel</Button><Button disabled={!closeReasonCode.trim() || closeMutation.isPending} onclick={() => closeMutation.mutate()}>Close account</Button></Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
+{#if planMoveOutFor}
+	<EndingDispositionDialog
+		summary={planMoveOutFor}
+		onclose={() => (planMoveOutFor = null)}
+		onrecorded={refresh}
+	/>
+{/if}

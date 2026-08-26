@@ -7,6 +7,7 @@
 		type ReturnPossessionPartyDisposition,
 		type ReturnPossessionRequest
 	} from '$lib/api/endpoints/lease-managements';
+	import { defaultReturnDispositions } from '$lib/leases/moveout-defaults';
 	import type { LeaseManagementSummary } from '$lib/types';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
@@ -16,6 +17,9 @@
 	import { Input } from '$lib/components/ui/input';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { CalendarCheck, KeyRound, Loader2, Undo2 } from '@lucide/svelte';
+
+	/** What we send when the landlord does not bother to type a reason. */
+	const DEFAULT_TURNOVER_REASON = 'Tenant moved out';
 
 	let {
 		summary,
@@ -93,12 +97,12 @@
 			);
 		},
 		onSuccess: async () => {
-			showSuccess('Possession given.');
+			showSuccess('Keys handed over.');
 			giveOpen = false;
 			giveOperationKey = '';
 			await onchanged();
 		},
-		onError: (error) => showError(apiErrorMessage(error, 'Could not give possession.'))
+		onError: (error) => showError(apiErrorMessage(error, 'The key handover could not be saved.'))
 	}));
 
 	function historicalOperationKey() {
@@ -129,11 +133,11 @@
 	function submitHistorical() {
 		historicalValidationError = '';
 		if (historicalDateInvalid) {
-			historicalValidationError = 'Enter a valid possession date.';
+			historicalValidationError = 'Enter a valid move-in date.';
 			return;
 		}
 		if (!historicalPossessionDate) {
-			historicalValidationError = 'Possession date is required.';
+			historicalValidationError = 'The move-in date is required.';
 			return;
 		}
 		historicalMutation.mutate();
@@ -150,9 +154,13 @@
 		returnValidationError = '';
 		returnOperation = null;
 		try {
-			returnContext = await leaseManagements.getReturnPossessionContext(
+			const context = await leaseManagements.getReturnPossessionContext(
 				summary.leaseManagementId
 			);
+			const defaults = defaultReturnDispositions(context);
+			partyDispositions = defaults.parties;
+			accessDispositions = defaults.accesses;
+			returnContext = context;
 		} catch (error) {
 			returnContextError = apiErrorMessage(
 				error,
@@ -176,12 +184,9 @@
 			returnValidationError = 'Could not find the current tenants.';
 			return null;
 		}
-		if (!turnoverReason.trim()) {
-			returnValidationError = 'Turnover reason is required.';
-			return null;
-		}
-		if (turnoverReason.trim().length > 1000) {
-			returnValidationError = 'Turnover reason cannot exceed 1,000 characters.';
+		const reason = turnoverReason.trim() || DEFAULT_TURNOVER_REASON;
+		if (reason.length > 1000) {
+			returnValidationError = 'Keep the note under 1,000 characters.';
 			return null;
 		}
 
@@ -189,7 +194,7 @@
 		for (const party of returnContext.parties) {
 			const disposition = partyDispositions[party.leaseManagementPartyId];
 			if (!disposition) {
-				returnValidationError = `Choose an outcome for ${party.tenantName}.`;
+				returnValidationError = `Choose what happens to ${party.tenantName}.`;
 				return null;
 			}
 			parties.push({ leaseManagementPartyId: party.leaseManagementPartyId, disposition });
@@ -199,7 +204,7 @@
 		for (const access of returnContext.activeTenantUserAccesses) {
 			const disposition = accessDispositions[access.tenantUserAccessId];
 			if (!disposition) {
-				returnValidationError = `Choose an access outcome for ${access.userDisplayName || access.userEmail}.`;
+				returnValidationError = `Choose what happens to the app sign-in for ${access.userDisplayName || access.userEmail}.`;
 				return null;
 			}
 			accesses.push({ tenantUserAccessId: access.tenantUserAccessId, disposition });
@@ -209,7 +214,7 @@
 			unitId: summary.unitId,
 			parties,
 			accesses,
-			turnoverReason: turnoverReason.trim()
+			turnoverReason: reason
 		};
 	}
 
@@ -229,13 +234,13 @@
 				operationKey(request)
 			),
 		onSuccess: async () => {
-			showSuccess('Possession returned and turnover opened.');
+			showSuccess('Keys returned. Turnover started.');
 			returnOpen = false;
 			returnContext = null;
 			returnOperation = null;
 			await onchanged();
 		},
-		onError: (error) => showError(apiErrorMessage(error, 'Could not return possession.'))
+		onError: (error) => showError(apiErrorMessage(error, 'The move-out could not be saved.'))
 	}));
 
 	function submitReturn() {
@@ -255,31 +260,31 @@
 
 <Card data-testid="lease-possession-actions">
 	<CardHeader>
-		<CardTitle class="flex items-center gap-2"><KeyRound class="h-5 w-5" /> Possession</CardTitle>
+		<CardTitle class="flex items-center gap-2"><KeyRound class="h-5 w-5" /> Keys</CardTitle>
 		<p class="text-sm text-muted-foreground">
-			Track when keys and physical access are handed over or returned.
+			Track when the tenant gets the keys and when they hand them back.
 		</p>
 	</CardHeader>
 	<CardContent class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 		<div class="space-y-1 text-sm">
 			{#if summary.possessionReturnedAtUtc}
-				<p class="font-medium">Possession returned</p>
+				<p class="font-medium">Keys returned</p>
 				<p class="text-muted-foreground">{new Date(summary.possessionReturnedAtUtc).toLocaleString()}</p>
 			{:else if summary.possessionGivenAtUtc}
-				<p class="font-medium">Tenant has possession</p>
-				<p class="text-muted-foreground">Given {formatBusinessDate(summary.possessionGivenAtUtc)}</p>
+				<p class="font-medium">The tenant has the keys</p>
+				<p class="text-muted-foreground">Handed over {formatBusinessDate(summary.possessionGivenAtUtc)}</p>
 			{:else if summary.canceledAtUtc}
 				<p class="font-medium">Lease canceled</p>
-				<p class="text-muted-foreground">Possession actions are no longer available.</p>
+				<p class="text-muted-foreground">There is nothing left to hand over.</p>
 			{:else}
-				<p class="font-medium">Possession not yet given</p>
-				<p class="text-muted-foreground">Use this only when keys and physical control are handed over.</p>
+				<p class="font-medium">Keys not handed over yet</p>
+				<p class="text-muted-foreground">Record this only when the tenant actually gets the keys.</p>
 			{/if}
 		</div>
 		<div class="flex flex-wrap gap-2">
 			{#if canManage && canGivePossession}
 				<Button onclick={() => (giveOpen = true)} data-testid="lease-give-possession">
-					<KeyRound class="mr-2 h-4 w-4" /> Give possession
+					<KeyRound class="mr-2 h-4 w-4" /> Keys handed over
 				</Button>
 			{/if}
 			{#if canManage && canReconcileHistoricalPossession}
@@ -289,7 +294,7 @@
 			{/if}
 			{#if canManage && canReturnPossession}
 				<Button variant="destructive" onclick={openReturn} data-testid="lease-return-possession">
-					<Undo2 class="mr-2 h-4 w-4" /> Return possession
+					<Undo2 class="mr-2 h-4 w-4" /> Keys returned
 				</Button>
 			{/if}
 		</div>
@@ -299,14 +304,14 @@
 <Dialog.Root open={giveOpen} onOpenChange={(open) => { if (!open) closeGive(); }}>
 	<Dialog.Content class="max-w-md" data-testid="lease-give-possession-dialog">
 		<Dialog.Header>
-			<Dialog.Title>Give possession</Dialog.Title>
-			<Dialog.Description>Confirm that the tenant received the keys and physical access to unit {summary.unitNumber}. Rental Command will record the time.</Dialog.Description>
+			<Dialog.Title>Keys handed over</Dialog.Title>
+			<Dialog.Description>Confirm the tenant now has the keys and can get into unit {summary.unitNumber}. Rental Command records the time for you.</Dialog.Description>
 		</Dialog.Header>
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeGive} disabled={giveMutation.isPending}>Cancel</Button>
 			<Button onclick={() => giveMutation.mutate()} disabled={giveMutation.isPending}>
 				{#if giveMutation.isPending}<Loader2 class="mr-2 h-4 w-4 animate-spin" />{/if}
-				Give possession
+				Record keys handed over
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
@@ -316,10 +321,10 @@
 	<Dialog.Content class="max-w-md" data-testid="lease-reconcile-historical-possession-dialog">
 		<Dialog.Header>
 			<Dialog.Title>Update past move-in details</Dialog.Title>
-			<Dialog.Description>Record the actual historical date the tenant received possession for unit {summary.unitNumber}.</Dialog.Description>
+			<Dialog.Description>Record the date the tenant actually got the keys to unit {summary.unitNumber}.</Dialog.Description>
 		</Dialog.Header>
 		<div class="space-y-2">
-			<label for="historical-possession-date" class="text-sm font-medium">Possession date</label>
+			<label for="historical-possession-date" class="text-sm font-medium">Move-in date</label>
 			<DatePicker
 				id="historical-possession-date"
 				testid="historical-possession-date"
@@ -344,13 +349,13 @@
 <Dialog.Root open={returnOpen} onOpenChange={(open) => { if (!open) closeReturn(); }}>
 	<Dialog.Content class="max-h-[90vh] max-w-2xl overflow-y-auto" data-testid="lease-return-possession-dialog">
 		<Dialog.Header>
-			<Dialog.Title>Return possession</Dialog.Title>
-			<Dialog.Description>Choose what happens to each household member and their login access after the keys are returned. This will also start turnover work.</Dialog.Description>
+			<Dialog.Title>Keys returned</Dialog.Title>
+			<Dialog.Description>Record the move-out for unit {summary.unitNumber} and start the turnover work.</Dialog.Description>
 		</Dialog.Header>
 
 		{#if returnContextLoading}
 			<div class="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-				<Loader2 class="h-4 w-4 animate-spin" /> Loading current household and access…
+				<Loader2 class="h-4 w-4 animate-spin" /> Loading who lives here…
 			</div>
 		{:else if returnContextError}
 			<div class="space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">
@@ -358,88 +363,92 @@
 				<Button variant="outline" size="sm" onclick={openReturn}>Retry</Button>
 			</div>
 		{:else if returnContext}
-			<div class="space-y-6">
-				<section class="space-y-3">
-					<div>
-						<h3 class="font-medium">Current household</h3>
-						<p class="text-sm text-muted-foreground">Choose an explicit outcome for every current member.</p>
-					</div>
-					{#each returnContext.parties as party (party.leaseManagementPartyId)}
-						<label class="grid gap-1 sm:grid-cols-[1fr_15rem] sm:items-center">
-							<span class="text-sm"><span class="font-medium">{party.tenantName}</span> · {party.role}</span>
-							<Select.Root
-								type="single"
-								value={partyDispositions[party.leaseManagementPartyId] ?? ''}
-								onValueChange={(value) => {
-									partyDispositions = { ...partyDispositions, [party.leaseManagementPartyId]: value as ReturnPossessionPartyDisposition | undefined };
-									returnValidationError = '';
-								}}
-							>
-								<Select.Trigger class="w-full" data-testid="return-party-{party.leaseManagementPartyId}">
-									{partyDispositions[party.leaseManagementPartyId] === 'EndMembership'
-										? 'Remove from this household'
-										: partyDispositions[party.leaseManagementPartyId] === 'RetainGuarantor'
-											? 'Keep as guarantor'
-											: 'Choose what happens'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="EndMembership" label="Remove from this household">Remove from this household</Select.Item>
-									{#if party.role === 'Guarantor'}<Select.Item value="RetainGuarantor" label="Keep as guarantor">Keep as guarantor</Select.Item>{/if}
-								</Select.Content>
-							</Select.Root>
-						</label>
-					{/each}
-				</section>
+			<div class="space-y-4">
+				<p class="rounded-lg bg-muted/50 p-3 text-sm" data-testid="moveout-summary-line">
+					Everyone on this lease moves out and their app access ends.
+				</p>
 
-				<section class="space-y-3 border-t pt-5">
-					<div>
-						<h3 class="font-medium">Tenant app access</h3>
-						<p class="text-sm text-muted-foreground">Choose what happens to each tenant's app access.</p>
-					</div>
-					{#if returnContext.activeTenantUserAccesses.length === 0}
-						<p class="text-sm text-muted-foreground">There is no tenant app access.</p>
-					{/if}
-					{#each returnContext.activeTenantUserAccesses as access (access.tenantUserAccessId)}
-						<label class="grid gap-1 sm:grid-cols-[1fr_15rem] sm:items-center">
-							<span class="text-sm">
-								<span class="font-medium">{access.userDisplayName || access.userEmail}</span>
-								<span class="block text-xs text-muted-foreground">{access.tenantName} · {access.userEmail}</span>
-							</span>
-							<Select.Root
-								type="single"
-								value={accessDispositions[access.tenantUserAccessId] ?? ''}
-								onValueChange={(value) => {
-									accessDispositions = { ...accessDispositions, [access.tenantUserAccessId]: value as ReturnPossessionAccessDisposition | undefined };
-									returnValidationError = '';
-								}}
-							>
-								<Select.Trigger class="w-full" data-testid="return-access-{access.tenantUserAccessId}">
-									{accessDispositions[access.tenantUserAccessId] === 'RevokeNow'
-										? 'Remove login access now'
-										: accessDispositions[access.tenantUserAccessId] === 'RetainHistorical'
-											? 'Keep access to past records'
-											: 'Choose what happens'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="RevokeNow" label="Remove login access now">Remove login access now</Select.Item>
-									<Select.Item value="RetainHistorical" label="Keep access to past records">Keep access to past records</Select.Item>
-								</Select.Content>
-							</Select.Root>
-						</label>
-					{/each}
-				</section>
+				<details class="rounded-lg border" data-testid="moveout-access-changes">
+					<summary class="cursor-pointer px-3 py-2 text-sm font-medium">Change what happens to their access</summary>
+					<div class="space-y-6 border-t px-3 py-4">
+						<section class="space-y-3">
+							<div>
+								<h3 class="font-medium">Who lives here</h3>
+								<p class="text-sm text-muted-foreground">Everyone is moved out unless you change it here.</p>
+							</div>
+							{#each returnContext.parties as party (party.leaseManagementPartyId)}
+								<label class="grid gap-1 sm:grid-cols-[1fr_15rem] sm:items-center">
+									<span class="text-sm"><span class="font-medium">{party.tenantName}</span> · {party.role}</span>
+									<Select.Root
+										type="single"
+										value={partyDispositions[party.leaseManagementPartyId] ?? ''}
+										onValueChange={(value) => {
+											partyDispositions = { ...partyDispositions, [party.leaseManagementPartyId]: value as ReturnPossessionPartyDisposition | undefined };
+											returnValidationError = '';
+										}}
+									>
+										<Select.Trigger class="w-full" data-testid="return-party-{party.leaseManagementPartyId}">
+											{partyDispositions[party.leaseManagementPartyId] === 'RetainGuarantor'
+												? 'Stays on as guarantor'
+												: 'Moves out'}
+										</Select.Trigger>
+										<Select.Content>
+											<Select.Item value="EndMembership" label="Moves out">Moves out</Select.Item>
+											{#if party.role === 'Guarantor'}<Select.Item value="RetainGuarantor" label="Stays on as guarantor">Stays on as guarantor</Select.Item>{/if}
+										</Select.Content>
+									</Select.Root>
+								</label>
+							{/each}
+						</section>
 
-				<section class="space-y-2 border-t pt-5">
-					<label for="turnover-reason" class="text-sm font-medium">Turnover reason</label>
-					<Input
-						id="turnover-reason"
-						bind:value={turnoverReason}
-						maxlength={1000}
-						placeholder="Keys returned after final move-out inspection"
-						data-testid="return-turnover-reason"
-					/>
-					<p class="text-xs text-muted-foreground">The server records the possession-returned date and opens turnover.</p>
-				</section>
+						<section class="space-y-3 border-t pt-5">
+							<div>
+								<h3 class="font-medium">App sign-in</h3>
+								<p class="text-sm text-muted-foreground">Sign-in ends for everyone unless you change it here.</p>
+							</div>
+							{#if returnContext.activeTenantUserAccesses.length === 0}
+								<p class="text-sm text-muted-foreground">Nobody on this lease uses the tenant app.</p>
+							{/if}
+							{#each returnContext.activeTenantUserAccesses as access (access.tenantUserAccessId)}
+								<label class="grid gap-1 sm:grid-cols-[1fr_15rem] sm:items-center">
+									<span class="text-sm">
+										<span class="font-medium">{access.userDisplayName || access.userEmail}</span>
+										<span class="block text-xs text-muted-foreground">{access.tenantName} · {access.userEmail}</span>
+									</span>
+									<Select.Root
+										type="single"
+										value={accessDispositions[access.tenantUserAccessId] ?? ''}
+										onValueChange={(value) => {
+											accessDispositions = { ...accessDispositions, [access.tenantUserAccessId]: value as ReturnPossessionAccessDisposition | undefined };
+											returnValidationError = '';
+										}}
+									>
+										<Select.Trigger class="w-full" data-testid="return-access-{access.tenantUserAccessId}">
+											{accessDispositions[access.tenantUserAccessId] === 'RetainHistorical'
+												? 'Can still see their old records'
+												: 'Sign-in ends now'}
+										</Select.Trigger>
+										<Select.Content>
+											<Select.Item value="RevokeNow" label="Sign-in ends now">Sign-in ends now</Select.Item>
+											<Select.Item value="RetainHistorical" label="Can still see their old records">Can still see their old records</Select.Item>
+										</Select.Content>
+									</Select.Root>
+								</label>
+							{/each}
+						</section>
+
+						<section class="space-y-2 border-t pt-5">
+							<label for="turnover-reason" class="text-sm font-medium">Note <span class="font-normal text-muted-foreground">(optional)</span></label>
+							<Input
+								id="turnover-reason"
+								bind:value={turnoverReason}
+								maxlength={1000}
+								placeholder={DEFAULT_TURNOVER_REASON}
+								data-testid="return-turnover-reason"
+							/>
+						</section>
+					</div>
+				</details>
 			</div>
 		{/if}
 
@@ -453,7 +462,7 @@
 				data-testid="return-possession-submit"
 			>
 				{#if returnMutation.isPending}<Loader2 class="mr-2 h-4 w-4 animate-spin" />{/if}
-				Return possession
+				Record keys returned
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
