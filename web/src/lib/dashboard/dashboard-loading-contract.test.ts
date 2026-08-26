@@ -13,15 +13,21 @@ const briefing = readFileSync(
 const aiEndpoint = readFileSync(new URL('../api/endpoints/ai.ts', import.meta.url), 'utf8');
 
 describe('dashboard loading contract', () => {
-	test('renders the selected portfolio card before the independently queried Daily Briefing', () => {
+	test('opens on the ranked needs-attention list, with the assistant as a quiet line above it', () => {
+		const headerPosition = dashboard.indexOf('data-testid="dashboard-today-header"');
 		const briefingPosition = dashboard.indexOf('<DashboardBriefing');
-		const portfolioCardPosition = dashboard.indexOf('data-testid="dashboard-hero"');
+		const attentionPosition = dashboard.indexOf('data-testid="needs-attention"');
 
-		assert.ok(briefingPosition >= 0, 'the dashboard should render the Daily Briefing component');
+		assert.ok(headerPosition >= 0, 'the dashboard should start with the Today header');
+		assert.ok(briefingPosition > headerPosition, 'the assistant line sits under the header');
 		assert.ok(
-			portfolioCardPosition >= 0 && portfolioCardPosition < briefingPosition,
-			'the selected portfolio card must be the first dashboard card'
+			attentionPosition > briefingPosition,
+			'the needs-attention list must be the first section on the page'
 		);
+		// The competing sections are gone for good.
+		assert.doesNotMatch(dashboard, /data-testid="dashboard-hero"/);
+		assert.doesNotMatch(dashboard, /data-testid="dashboard-latest-messages"/);
+		assert.doesNotMatch(dashboard, /data-testid="dashboard-activity-row"/);
 	});
 
 	test('fails a stalled optional AI polish quickly and offers a manual retry', () => {
@@ -34,13 +40,9 @@ describe('dashboard loading contract', () => {
 		);
 	});
 
-	test('lets briefing text and action cards shrink and wrap in a narrow browser', () => {
-		assert.match(briefing, /class="grid min-w-0 gap-5 lg:grid-cols-5"/);
-		assert.match(briefing, /class="min-w-0 lg:col-span-3"/);
-		assert.match(
-			briefing,
-			/class="min-w-0 lg:col-span-2" data-testid="dashboard-briefing-actions"/
-		);
-		assert.match(briefing, /class="min-w-0 flex-1 break-words text-sm font-medium/);
+	test('lets the assistant line and the attention rows shrink and wrap in a narrow browser', () => {
+		assert.match(briefing, /class="min-w-0 break-words"/);
+		assert.match(briefing, /flex min-w-0 items-start gap-2/);
+		assert.match(dashboard, /class="min-w-0 truncate text-sm font-medium text-foreground"/);
 	});
 });

@@ -124,7 +124,7 @@
 				description: data.notes || `Payment for ${lease.relationshipNumber || 'tenant account'}`,
 				paymentMethodSummary: data.method,
 				externalReference: data.externalReference,
-				payerName: lease.tenantName || undefined,
+				payerName: data.payerName || lease.tenantName || undefined,
 				targetChargeEntryId: null,
 				allocateOldestCharges: true
 			});
