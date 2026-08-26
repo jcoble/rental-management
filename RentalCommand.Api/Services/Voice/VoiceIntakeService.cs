@@ -150,7 +150,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         operationKey = NormalizeOperationKey(operationKey);
         var portfolioId = scope.PortfolioId;
         var snapshot = await _db.ScanDrafts.AsNoTracking()
-            .WhereAuthorizedForReview(_db, scope, _timeProvider.GetUtcNow().UtcDateTime)
+            .WhereAuthorized(_db, scope, _timeProvider.GetUtcNow().UtcDateTime)
             .SingleOrDefaultAsync(d => d.Id == draftId, ct)
             ?? throw new KeyNotFoundException($"Voice draft {draftId} not found.");
 

@@ -66,11 +66,11 @@ public class AiController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest("Question is required.");
-        if (req.Question.Length > 4000) return BadRequest("Question is too long (max 4000 characters).");
+        if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest(new { error = "Question is required." });
+        if (req.Question.Length > 4000) return BadRequest(new { error = "Question is too long (max 4000 characters)." });
         var deliveryOperationId = NormalizeIdempotencyKey(idempotencyKey);
         if ((req.DeliverViaEmail || req.DeliverViaSms) && deliveryOperationId is null)
-            return BadRequest("A request key is required for Q&A delivery and cannot exceed 128 characters.");
+            return BadRequest(new { error = "A request key is required for Q&A delivery and cannot exceed 128 characters." });
 
         var scope = GetWorkspaceReadScope();
         if (!await HasPropertyCapabilityAsync(scope, CapabilityKeys.ReportsRead, ct)) return Forbid();
@@ -89,8 +89,8 @@ public class AiController : ManagementControllerBase
         [FromBody] AssistantActionDraftRequest req,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(req.Command)) return BadRequest("Command is required.");
-        if (req.Command.Length > 2000) return BadRequest("Command is too long (max 2000 characters).");
+        if (string.IsNullOrWhiteSpace(req.Command)) return BadRequest(new { error = "Command is required." });
+        if (req.Command.Length > 2000) return BadRequest(new { error = "Command is too long (max 2000 characters)." });
 
         var scope = GetWorkspaceReadScope();
         if (!await HasPropertyCapabilityAsync(scope, CapabilityKeys.MoneyExpensesManage, ct)) return Forbid();
@@ -110,8 +110,8 @@ public class AiController : ManagementControllerBase
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 128)
-            return BadRequest("A request key is required and cannot exceed 128 characters.");
-        if (req.Draft is null) return BadRequest("Draft is required.");
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
+        if (req.Draft is null) return BadRequest(new { error = "Draft is required." });
         if (req.Draft.Expense?.PropertyId is not int propertyId) return Forbid();
 
         var scope = GetWorkspaceReadScope();
@@ -186,8 +186,8 @@ public class AiController : ManagementControllerBase
     [ProducesResponseType(typeof(AiChatResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<AiChatResponse>> Chat([FromBody] AiChatRequest request, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(request.Message)) return BadRequest("Message is required.");
-        if (request.Message.Length > 8000) return BadRequest("Message is too long (max 8000 characters).");
+        if (string.IsNullOrWhiteSpace(request.Message)) return BadRequest(new { error = "Message is required." });
+        if (request.Message.Length > 8000) return BadRequest(new { error = "Message is too long (max 8000 characters)." });
 
         var portfolioId = GetPortfolioId();
         var prompt = $"""
@@ -224,8 +224,8 @@ public class AiController : ManagementControllerBase
     public async Task<ActionResult<FairHousingReviewResult>> FairHousingCheck(
         [FromBody] FairHousingCheckRequest request, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(request.Text)) return BadRequest("Text is required.");
-        if (request.Text.Length > 8000) return BadRequest("Text is too long (max 8000 characters).");
+        if (string.IsNullOrWhiteSpace(request.Text)) return BadRequest(new { error = "Text is required." });
+        if (request.Text.Length > 8000) return BadRequest(new { error = "Text is too long (max 8000 characters)." });
 
         return Ok(await _fairHousing.ReviewAsync(request.Text, ct));
     }

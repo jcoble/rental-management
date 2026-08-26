@@ -24,7 +24,7 @@ public sealed class AccountingImportService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
-    private readonly AccountingProviderResolver _providerResolver;
+    private readonly IAccountingProvider _provider;
     private readonly AccountingAppSettingsResolver _settingsResolver;
     private readonly AccountingTokenService _tokenService;
     private readonly IAccountingConnectionClaimStore _claims;
@@ -34,7 +34,7 @@ public sealed class AccountingImportService
     public AccountingImportService(
         RentalCommandDbContext db,
         IDataProtectionProvider dataProtection,
-        AccountingProviderResolver providerResolver,
+        IAccountingProvider provider,
         AccountingAppSettingsResolver settingsResolver,
         AccountingTokenService tokenService,
         IAccountingConnectionClaimStore claims,
@@ -43,7 +43,7 @@ public sealed class AccountingImportService
     {
         _db = db;
         _protector = dataProtection.CreateProtector("RentalCommand.Accounting.v1");
-        _providerResolver = providerResolver;
+        _provider = provider;
         _settingsResolver = settingsResolver;
         _tokenService = tokenService;
         _claims = claims;
@@ -69,7 +69,7 @@ public sealed class AccountingImportService
             throw new InvalidOperationException(
                 "Accounting pulls must hold a durable pull claim before contacting the provider.");
 
-        var provider = _providerResolver.Resolve(connection.Provider);
+        var provider = _provider;
         var ctx = BuildCallContext(connection);
         var cursors = ParseCursors(connection.LastPulledAtJson);
         var caps = provider.Capabilities;

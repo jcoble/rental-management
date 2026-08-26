@@ -7,7 +7,7 @@ namespace RentalCommand.Data.Authorization;
 
 public static class WorkspaceMoneyAuthorizationQuery
 {
-    public static IQueryable<Expense> WhereMoneyAuthorized(
+    public static IQueryable<Expense> WhereAuthorized(
         this IQueryable<Expense> query, RentalCommandDbContext db, WorkspaceReadScope scope,
         string capabilityKey, DateTime utcNow)
     {
@@ -29,7 +29,7 @@ public static class WorkspaceMoneyAuthorizationQuery
               unallocated.Any())));
     }
 
-    public static IQueryable<RecurringExpense> WhereMoneyAuthorized(
+    public static IQueryable<RecurringExpense> WhereAuthorized(
         this IQueryable<RecurringExpense> query, RentalCommandDbContext db, WorkspaceReadScope scope,
         string capabilityKey, DateTime utcNow)
     {
@@ -46,7 +46,7 @@ public static class WorkspaceMoneyAuthorizationQuery
              (expense.PropertyId == null && expense.UnitId == null && unallocated.Any())));
     }
 
-    public static IQueryable<Loan> WhereMoneyAuthorized(
+    public static IQueryable<Loan> WhereAuthorized(
         this IQueryable<Loan> query, RentalCommandDbContext db, WorkspaceReadScope scope,
         string capabilityKey, DateTime utcNow)
     {
@@ -55,7 +55,7 @@ public static class WorkspaceMoneyAuthorizationQuery
             loan.PortfolioId == scope.PortfolioId && properties.Any(property => property.Id == loan.PropertyId));
     }
 
-    public static IQueryable<OwnerDistribution> WhereMoneyAuthorized(
+    public static IQueryable<OwnerDistribution> WhereAuthorized(
         this IQueryable<OwnerDistribution> query, RentalCommandDbContext db, WorkspaceReadScope scope,
         string capabilityKey, DateTime utcNow)
     {
@@ -69,7 +69,7 @@ public static class WorkspaceMoneyAuthorizationQuery
              (distribution.PropertyId == null && unallocated.Any())));
     }
 
-    public static IQueryable<OwnerContribution> WhereMoneyAuthorized(
+    public static IQueryable<OwnerContribution> WhereAuthorized(
         this IQueryable<OwnerContribution> query, RentalCommandDbContext db, WorkspaceReadScope scope,
         string capabilityKey, DateTime utcNow)
     {

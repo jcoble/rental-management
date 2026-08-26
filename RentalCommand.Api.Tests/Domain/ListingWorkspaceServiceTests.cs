@@ -29,7 +29,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
             _context.Db,
             Mock.Of<IFileStorage>(),
             Mock.Of<IPendingFileUploadStore>(),
-            new ListingChannelAdapterResolver([new DisabledZillowListingChannelAdapter()]),
+            new DisabledZillowListingChannelAdapter(),
             NullLogger<ListingWorkspaceService>.Instance,
             TimeProvider.System,
             _writes);

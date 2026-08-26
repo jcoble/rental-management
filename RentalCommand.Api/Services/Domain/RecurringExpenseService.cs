@@ -49,7 +49,7 @@ public class RecurringExpenseService : IRecurringExpenseService
         WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var filtered = BuildListQuery(
-            _db.RecurringExpenses.AsNoTracking().WhereMoneyAuthorized(
+            _db.RecurringExpenses.AsNoTracking().WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
             scope.PortfolioId, propertyId, query);
         return BuildPageAsync(filtered, query, ct);
@@ -124,7 +124,7 @@ public class RecurringExpenseService : IRecurringExpenseService
     public Task<RecurringExpenseResponse?> GetAsync(
         WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
         GetAsync(
-            _db.RecurringExpenses.AsNoTracking().WhereMoneyAuthorized(
+            _db.RecurringExpenses.AsNoTracking().WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
             scope.PortfolioId, id, ct);
 

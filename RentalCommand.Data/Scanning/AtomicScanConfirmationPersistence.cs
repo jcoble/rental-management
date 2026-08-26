@@ -343,7 +343,7 @@ public sealed class AtomicScanConfirmationPersistence
         DateTime utcNow,
         CancellationToken ct = default) =>
         _db.ScanDrafts.AsNoTracking()
-            .WhereAuthorizedForReview(_db, scope, utcNow)
+            .WhereAuthorized(_db, scope, utcNow)
             .AnyAsync(candidate => candidate.Id == draftId, ct);
 
     public async Task<bool> RejectAuthorizedAsync(
@@ -355,7 +355,7 @@ public sealed class AtomicScanConfirmationPersistence
     {
         await _context.AcquireLockAsync("ScanDraft", draftId, ct);
         var draft = await _db.ScanDrafts
-            .WhereAuthorizedForReview(_db, scope, rejectedAtUtc)
+            .WhereAuthorized(_db, scope, rejectedAtUtc)
             .AsTracking()
             .SingleOrDefaultAsync(candidate => candidate.Id == draftId, ct);
         if (draft is null || draft.Status is "Confirmed" or "Rejected" or "Confirming")

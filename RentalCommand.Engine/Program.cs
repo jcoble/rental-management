@@ -229,12 +229,11 @@ builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<INotificationFoundationService, NotificationFoundationService>();
 builder.Services.AddScoped<INoticeDraftGenerationService, NoticeDraftGenerationService>();
 
-// Accounting-integration pull worker dependencies (provider-agnostic). The Engine does not call
-// AddDomainServices(), so the import engine + provider resolver/settings + the provider set are
-// registered explicitly here; AddAccountingProviders() (shared with the API) also binds QuickBooks
-// creds + registers each IAccountingProvider via AddHttpClient. IDataProtection is configured above
-// with the same SetApplicationName/keys path as the API, so tokens encrypted by the API decrypt here.
-builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingProviderResolver>();
+// Accounting-integration pull worker dependencies. The Engine does not call AddDomainServices(), so
+// the import engine + provider settings + the provider set are registered explicitly here;
+// AddAccountingProviders() (shared with the API) also binds QuickBooks creds + registers the
+// IAccountingProvider via AddHttpClient. IDataProtection is configured above with the same
+// SetApplicationName/keys path as the API, so tokens encrypted by the API decrypt here.
 builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingAppSettingsResolver>();
 builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingImportService>();
 // Shared token refresh+persist service — used by the import path's refresh-on-401 AND the token-refresh worker.

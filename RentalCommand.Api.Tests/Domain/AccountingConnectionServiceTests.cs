@@ -191,7 +191,7 @@ public class AccountingConnectionServiceTests : IDisposable
             "review queue must filter and page in SQL before materialization");
     }
 
-    private AccountingConnectionService CreateService(params IAccountingProvider[] providers)
+    private AccountingConnectionService CreateService(IAccountingProvider provider)
     {
         var qbOptions = Options.Create(new QuickBooksOptions
         {
@@ -200,17 +200,16 @@ public class AccountingConnectionServiceTests : IDisposable
             Environment = "sandbox",
         });
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions.Value));
-        var providerResolver = new AccountingProviderResolver(providers);
         var claims = new RentalCommand.Data.Accounting.AccountingConnectionClaimStore(_ctx.Db);
         var tokenService = new AccountingTokenService(
-            _dp, providerResolver, settingsResolver, claims,
+            _dp, provider, settingsResolver, claims,
             TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         var importService = new AccountingImportService(
-            _ctx.Db, _dp, providerResolver, settingsResolver, tokenService, claims,
+            _ctx.Db, _dp, provider, settingsResolver, tokenService, claims,
             TimeProvider.System,
             NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
-            _ctx.Db, _dp, providerResolver, settingsResolver, importService,
+            _ctx.Db, _dp, provider, settingsResolver, importService,
             TimeProvider.System,
             Moq.Mock.Of<IRequestWriteExecutor>(),
             NullLogger<AccountingConnectionService>.Instance);

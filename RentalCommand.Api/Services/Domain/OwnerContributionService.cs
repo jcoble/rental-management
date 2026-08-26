@@ -44,7 +44,7 @@ public sealed class OwnerContributionService : IOwnerContributionService
         CancellationToken ct = default)
     {
         var filtered = BuildListQuery(
-            _db.OwnerContributions.AsNoTracking().WhereMoneyAuthorized(
+            _db.OwnerContributions.AsNoTracking().WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyOwnerReportsRead, _timeProvider.UtcNow()),
             scope.PortfolioId,
             query);
@@ -56,7 +56,7 @@ public sealed class OwnerContributionService : IOwnerContributionService
         int id,
         CancellationToken ct = default) =>
         ProjectResponse(
-                _db.OwnerContributions.AsNoTracking().WhereMoneyAuthorized(
+                _db.OwnerContributions.AsNoTracking().WhereAuthorized(
                     _db, scope, CapabilityKeys.MoneyOwnerReportsRead, _timeProvider.UtcNow())
                     .Where(contribution =>
                         contribution.PortfolioId == scope.PortfolioId && contribution.Id == id))

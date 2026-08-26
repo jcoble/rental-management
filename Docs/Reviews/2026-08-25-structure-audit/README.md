@@ -65,7 +65,7 @@ Items both reviewers found independently are marked ★.
 | mob-b | Promote `money_format.dart` to `core/presentation/`; delete ~29 money copies ★ | O2, S10 | medium — visible |
 | mob-b | Collapse 13 month-name tables; 15 date helpers → `dateFmt` ★ | O4, S11 | low — visible |
 | mob-b | Delete 3 byte-identical label-helper pairs | O5 | low |
-| mob-c | One receipt command/model pair (delete `PaymentsRepository.recordReceipt` copy) | S3 | high — money |
+| ~~mob-c~~ | One receipt command/model pair — **retired**: the lane's field-by-field diff (receipts/mob-c.md) showed the two clients send different payloads to the same endpoint (trimming/omission of six server-read strings, explicit vs defaulted `allocateOldestCharges`) and parse the result differently, so this is a divergence bug for TSK-1019, not a safe merge | S3 | — |
 
 ### Deferred — needs an owner decision or a larger plan
 

@@ -14,7 +14,7 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 internal static class AuditAuthorizationQuery
 {
-    internal static IQueryable<AtomicAuditLog> WhereAuthorizedForReports(
+    internal static IQueryable<AtomicAuditLog> WhereAuthorized(
         this IQueryable<AtomicAuditLog> audits,
         RentalCommandDbContext db,
         WorkspaceReadScope scope,

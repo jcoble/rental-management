@@ -37,7 +37,7 @@ public sealed class AiIntegrationsController : ManagementControllerBase
         CancellationToken ct)
     {
         var key = RequireIdempotencyKey(idempotencyKey, request.ClientOperationId);
-        if (key is null) return BadRequest("A request key is required and cannot exceed 128 characters.");
+        if (key is null) return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         return Ok(await _credentials.ActivateAsync(
             GetActiveAccessContext(),
             request with { ClientOperationId = key },
@@ -51,7 +51,7 @@ public sealed class AiIntegrationsController : ManagementControllerBase
         CancellationToken ct)
     {
         var key = RequireIdempotencyKey(idempotencyKey, request.ClientOperationId);
-        if (key is null) return BadRequest("A request key is required and cannot exceed 128 characters.");
+        if (key is null) return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         return Ok(await _credentials.RotateAsync(
             GetActiveAccessContext(),
             request with { ClientOperationId = key },
@@ -64,7 +64,7 @@ public sealed class AiIntegrationsController : ManagementControllerBase
         CancellationToken ct)
     {
         var key = RequireIdempotencyKey(idempotencyKey, null);
-        if (key is null) return BadRequest("A request key is required and cannot exceed 128 characters.");
+        if (key is null) return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         await _credentials.RemoveAsync(GetActiveAccessContext(), key, ct);
         return NoContent();
     }

@@ -68,7 +68,7 @@ public class ExpenseService : IExpenseService
         CancellationToken ct = default)
     {
         var filtered = BuildListQuery(
-            _db.Expenses.AsNoTracking().WhereMoneyAuthorized(
+            _db.Expenses.AsNoTracking().WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
             scope.PortfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly, query);
         return BuildPageAsync(filtered, query, ct);
@@ -265,7 +265,7 @@ public class ExpenseService : IExpenseService
 
     public Task<ExpenseResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
         GetAsync(
-            _db.Expenses.AsNoTracking().WhereMoneyAuthorized(
+            _db.Expenses.AsNoTracking().WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
             scope.PortfolioId, id, ct);
 

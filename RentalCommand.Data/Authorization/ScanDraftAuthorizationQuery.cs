@@ -34,7 +34,7 @@ public static class ScanDraftAuthorizationQuery
         CapabilityKeys.LeasingApplicationsManage,
     ];
 
-    public static IQueryable<ScanDraft> WhereAuthorizedForReview(
+    public static IQueryable<ScanDraft> WhereAuthorized(
         this IQueryable<ScanDraft> drafts,
         RentalCommandDbContext db,
         WorkspaceReadScope scope,

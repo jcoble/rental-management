@@ -82,13 +82,8 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IPlaidBankingProvider, PlaidBankingProvider>();
 
         // --- accounting-integration backbone (provider-agnostic; QuickBooks is provider #1) ---
-        // The resolver dispatches the AccountingProvider enum to the registered IAccountingProvider
-        // implementations (none in Phase 1 — provider impls land in Phase 2). Scoped (mirrors
-        // EdiPlatform's ErpProviderResolver registration) so it can consume the providers Phase 2
-        // registers via AddHttpClient without a captive-dependency problem. The app-settings resolver
-        // maps the enum to the right *Options POCO so the backbone never reads QuickBooksOptions
-        // directly (AC-1).
-        services.AddScoped<AccountingProviderResolver>();
+        // The app-settings resolver maps the enum to the provider's *Options POCO so the backbone
+        // never reads QuickBooksOptions directly (AC-1).
         services.AddScoped<AccountingAppSettingsResolver>();
         services.AddScoped<AccountingConnectionService>();
         // Phase 2 — pull-into-domain import engine + the QuickBooks provider (provider #1).
@@ -135,7 +130,6 @@ public static class ServiceCollectionExtensions
         // Unit Command Center aggregate (per-unit dashboard + timeline union).
         services.AddScoped<IUnitDashboardService, UnitDashboardService>();
         services.AddSingleton<IListingChannelAdapter, DisabledZillowListingChannelAdapter>();
-        services.AddSingleton<IListingChannelAdapterResolver, ListingChannelAdapterResolver>();
         services.AddScoped<IListingWorkspaceService, ListingWorkspaceService>();
 
         // Portfolio analytics overview (occupancy, rent collection, trend, work orders, lease expiry).
