@@ -17,19 +17,12 @@ import { login } from './helpers';
 // Auth + Dashboard
 // ---------------------------------------------------------------------------
 test.describe('Auth + Dashboard', () => {
-	test('login succeeds and dashboard shows non-zero KPIs', async ({ page }) => {
+	test('login succeeds and dashboard shows today and its summary', async ({ page }) => {
 		await login(page);
-		// Should land on dashboard (/)
 		await expect(page).not.toHaveURL(/\/login/);
-
-		// Wait for the dashboard data to render — the dashboard renders a grid of KPI cards.
-		// The occupancy card shows a percentage like "73%" once data is loaded.
-		// Wait for the occupancy value to appear (indicates API responded with data).
-		await expect(page.locator('.tabular-nums').first()).toBeVisible({ timeout: 15_000 });
-
-		// Verify we are NOT on the loading skeleton by ensuring the portfolio name heading appears
-		// (the dashboard h1 is the portfolio name, rendered after data loads).
-		await expect(page.locator('h1')).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId('dashboard-today')).toBeVisible();
+		await expect(page.getByTestId('needs-attention')).toBeVisible();
+		await expect(page.getByTestId('dashboard-summary')).toBeVisible({ timeout: 20_000 });
 	});
 });
 
@@ -58,6 +51,7 @@ test.describe('Properties', () => {
 		// Click the first row to navigate to the detail page
 		await page.getByTestId('property-row').first().click();
 		await expect(page.getByTestId('property-detail-page')).toBeVisible({ timeout: 15_000 });
+		await page.getByTestId('property-area-rentals').click();
 
 		// Units section should be present
 		await expect(page.getByTestId('property-detail-units')).toBeVisible();
@@ -111,19 +105,14 @@ test.describe('Leases', () => {
 		expect(count).toBeGreaterThanOrEqual(1);
 	});
 
-	test('clicking first lease opens detail with payments grid', async ({ page }) => {
+	test('clicking first lease opens its lease and tenant account summary', async ({ page }) => {
 		await login(page);
 		await page.goto('/leases');
 		await expect(page.getByTestId('datagrid-row').first()).toBeVisible({ timeout: 15_000 });
 
 		await page.getByTestId('datagrid-row').first().click();
-		await expect(page.getByTestId('lease-detail-page')).toBeVisible({ timeout: 15_000 });
-
-		// The lease detail shows the lease number (Overview tab is the default)
-		await expect(page.getByTestId('lease-detail-number')).toBeVisible();
-		// After the tabbed redesign the payments grid lives on the Ledger tab
-		await page.getByTestId('lease-tab-ledger').click();
-		await expect(page.getByTestId('lease-payments-grid')).toBeVisible();
+		await expect(page.getByText('Lease at a glance', { exact: true })).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByText('Tenant account', { exact: true })).toBeVisible();
 	});
 });
 
@@ -131,29 +120,20 @@ test.describe('Leases', () => {
 // Accounting
 // ---------------------------------------------------------------------------
 test.describe('Accounting', () => {
-	test('KPI cards show non-zero collected amount', async ({ page }) => {
+	test('header shows a non-zero money summary', async ({ page }) => {
 		await login(page);
 		await page.goto('/accounting');
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
 
-		// Wait for the dollar value to appear inside the accounting-collected card.
-		// The card renders a loading skeleton first, then the money value (e.g. "$292,943").
-		// Use .locator('p.tabular-nums') or wait for text matching "$" inside the card.
-		const collectedCard = page.getByTestId('accounting-collected');
-		await expect(collectedCard).toBeVisible();
-		// Wait for the actual dollar value to appear (not the skeleton).
-		await expect(collectedCard.locator('.tabular-nums')).toBeVisible({ timeout: 15_000 });
-
-		// The seed has ≈$292,943 collected; check the value is non-zero.
-		const collectedText = await collectedCard.locator('.tabular-nums').textContent();
-		expect(collectedText).toMatch(/\$\d/);
-		// Should NOT be $0 given the seeded data
-		expect(collectedText).not.toMatch(/\$0$/);
+		const metrics = page.getByTestId('accounting-header-metrics');
+		await expect(metrics).toBeVisible();
+		await expect(metrics).toContainText('Kept this month');
+		await expect(metrics.locator('.tabular-nums').first()).toHaveText(/\$[1-9]/, { timeout: 15_000 });
 	});
 
 	test('Transactions grid has rows', async ({ page }) => {
 		await login(page);
-		await page.goto('/accounting');
+		await page.goto('/accounting?tab=activity');
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
 
 		// Accounting redesign: payments + expenses now share one unified, paged
@@ -168,7 +148,7 @@ test.describe('Accounting', () => {
 
 	test('Transactions grid filters to expenses', async ({ page }) => {
 		await login(page);
-		await page.goto('/accounting');
+		await page.goto('/accounting?tab=activity');
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
 
 		const grid = page.getByTestId('transactions-list');
@@ -241,9 +221,9 @@ test.describe('Deposits', () => {
 
 		await expect(page.getByTestId('deposits-list')).toBeVisible();
 		// Seeded leases should produce some deposit holdings
-		await expect(page.getByTestId('deposit-row').first()).toBeVisible({ timeout: 15_000 });
+		const rows = page.locator('[data-testid^="deposit-row-"]');
+		await expect(rows.first()).toBeVisible({ timeout: 15_000 });
 
-		const rows = page.getByTestId('deposit-row');
 		const count = await rows.count();
 		expect(count).toBeGreaterThanOrEqual(1);
 	});
@@ -377,10 +357,6 @@ test.describe('Admin Users', () => {
 		await page.goto('/admin/users');
 		await expect(page.getByTestId('team-page')).toBeVisible();
 
-		// Wait for members list to render
-		await expect(page.getByTestId('team-members-list')).toBeVisible({ timeout: 15_000 });
-
-		// The seeded admin user should appear (uses team-member-row testid from getRowTestId)
 		await expect(page.getByTestId('team-member-row').first()).toBeVisible({ timeout: 15_000 });
 	});
 });

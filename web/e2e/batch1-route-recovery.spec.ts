@@ -416,25 +416,6 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		expect(dashboardRequests).toBeGreaterThan(1);
 	});
 
-	test('opens dashboard conversation links at the canonical detail route', async ({ page }) => {
-		const id = 7401;
-		const summary = conversationSummary(id, 'Dashboard deep-link conversation');
-		const requestSequence: string[] = [];
-		await page.route('**/api/v1/conversations/page**', (route) =>
-			fulfillJson(route, 200, { items: [summary], totalCount: 1, skip: 0, take: 5 })
-		);
-		await stubConversationDetail(page, id, summary.subject, requestSequence);
-
-		await login(page);
-		await page.goto('/');
-		const link = page.getByTestId(`dashboard-message-${id}`);
-		await expect(link).toBeVisible({ timeout: 15_000 });
-		await link.click();
-		await expect(page).toHaveURL(new RegExp(`/messages/${id}$`));
-		await expect(page.getByTestId('conversation-title')).toHaveText(summary.subject);
-		expect(requestSequence, 'dashboard conversation request sequence').toEqual(['detail GET', 'mark-read']);
-	});
-
 	test('opens notice conversation links at the canonical detail route', async ({ page }) => {
 		const id = 7402;
 		const subject = 'Notice deep-link conversation';

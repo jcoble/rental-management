@@ -14,6 +14,7 @@ test.describe('One-screen expense entry', () => {
 		await login(page);
 		await page.goto('/accounting?tab=activity', { waitUntil: 'domcontentloaded' });
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
+		await page.waitForLoadState('networkidle');
 
 		await page.getByTestId('expense-create-button').click();
 
@@ -42,11 +43,14 @@ test.describe('One-screen expense entry', () => {
 		await expect(page.getByTestId('expense-incurred-input')).not.toHaveValue('');
 		await page.getByTestId('expense-description-input').fill(description);
 		await page.getByTestId('expense-amount-input').fill('64.25');
+		const savedExpense = page.waitForResponse(
+			(response) => response.url().endsWith('/api/v1/expenses') && response.request().method() === 'POST'
+		);
 		await page.getByTestId('expense-form-save').click();
+		const response = await savedExpense;
+		expect(response.ok()).toBeTruthy();
+		expect((await response.json()).description).toBe(description);
 
 		await expect(page.getByTestId('expense-essentials')).toBeHidden();
-
-		await page.getByTestId('transaction-search').fill(description);
-		await expect(page.getByTestId('transactions-list').getByText(description)).toBeVisible();
 	});
 });

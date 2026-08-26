@@ -27,6 +27,7 @@ test.describe('dashboard needs attention and record payment', () => {
 	test('the Money nav starts with Who\'s behind', async ({ page }) => {
 		await login(page);
 		await page.goto('/', { waitUntil: 'domcontentloaded' });
+		await page.waitForLoadState('networkidle');
 
 		const moneyGroup = page.getByTestId('nav-group-money');
 		await expect(moneyGroup).toBeVisible();

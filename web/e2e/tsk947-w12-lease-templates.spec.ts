@@ -19,6 +19,7 @@ async function openNavGroup(page: Page, groupId: string, probeTestId: string) {
 test.describe('Lease settings and one lease review', () => {
 	test('moves the lease form into Settings and keeps the old link working', async ({ page }) => {
 		await login(page);
+		await page.waitForLoadState('networkidle');
 
 		// Rentals is the daily list: no lease-form entry in it any more.
 		await openNavGroup(page, 'rentals', 'nav-leases');
@@ -41,6 +42,7 @@ test.describe('Lease settings and one lease review', () => {
 
 		await page.goto('/leases', { waitUntil: 'domcontentloaded' });
 		await expect(page.getByTestId('leases-page')).toBeVisible();
+		await page.waitForLoadState('networkidle');
 
 		// A lease still being prepared is the one with an editable draft on it.
 		const rows = page.getByRole('row');
@@ -52,6 +54,7 @@ test.describe('Lease settings and one lease review', () => {
 		for (let index = 1; index < rowCount; index += 1) {
 			await page.goto('/leases', { waitUntil: 'domcontentloaded' });
 			await expect(page.getByTestId('leases-page')).toBeVisible();
+			await page.waitForLoadState('networkidle');
 			await rows.nth(index).click();
 			await expect(page.getByTestId('lease-lifecycle-actions')).toBeVisible({ timeout: 15_000 });
 			if ((await editDraft.count()) > 0) {
