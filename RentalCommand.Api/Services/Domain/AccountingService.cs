@@ -154,18 +154,23 @@ public partial class AccountingService : IAccountingService
         WorkspaceReadScope scope,
         CancellationToken ct = default) =>
         GetSnapshotCoreAsync(
-            scope.PortfolioId,
+            scope,
             AuthorizedPropertyIds(scope, CapabilityKeys.MoneyBalancesRead),
             ct);
 
     private async Task<MoneySnapshotResponse> GetSnapshotCoreAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         IQueryable<int> authorizedPropertyIds,
         CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
         var now = _timeProvider.UtcNow();
         var monthStart = new DateOnly(now.Year, now.Month, 1);
         var last30Start = DateOnly.FromDateTime(now.AddDays(-30));
+        var nextBusinessDate = DateOnly.FromDateTime(now).AddDays(1);
+        var monthStartUtc = monthStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var last30StartUtc = last30Start.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var nextBusinessDateUtc = nextBusinessDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
 
         // Money in: payments actually collected. "Collected" means Status == Paid AND a real PaidDate
         // (the date the cash landed) — a row marked Paid but lacking a PaidDate is not yet collected and
@@ -180,10 +185,10 @@ public partial class AccountingService : IAccountingService
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(row => row.EffectiveOn >= monthStart
+                Mtd = g.Sum(row => row.EffectiveOn >= monthStart && row.EffectiveOn < nextBusinessDate
                     ? row.Amount
                     : 0m),
-                Last30 = g.Sum(row => row.EffectiveOn >= last30Start
+                Last30 = g.Sum(row => row.EffectiveOn >= last30Start && row.EffectiveOn < nextBusinessDate
                     ? row.Amount
                     : 0m),
             })
@@ -192,23 +197,22 @@ public partial class AccountingService : IAccountingService
         var collectedMtd = paymentsCollected?.Mtd ?? 0m;
         var collected30 = paymentsCollected?.Last30 ?? 0m;
 
-        // Money out: authorized-property expenses, using paid date when present and incurred date otherwise.
-        var expensesSpent = await _db.Expenses
-            .AsNoTracking()
-            .Where(e =>
-                e.PortfolioId == portfolioId &&
-                e.PropertyId != null &&
-                e.Status == ExpenseStatus.Paid)
-            .Join(
-                authorizedPropertyIds,
-                expense => expense.PropertyId!.Value,
-                propertyId => propertyId,
-                (expense, _) => expense)
+        // Money out: allocation-aware paid expenses authorized by the same projection as the dashboard.
+        var expensesSpent = await FinancialReportProjections.BuildAuthorizedCashFlowExpenseProjection(
+                _db,
+                scope,
+                CapabilityKeys.MoneyBalancesRead,
+                now,
+                last30StartUtc,
+                nextBusinessDateUtc.AddTicks(-1),
+                [])
+            .Where(expense => expense.PropertyId == null ||
+                authorizedPropertyIds.Contains(expense.PropertyId.Value))
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= monthStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? e.Amount : 0m),
-                Last30 = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= last30Start.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? e.Amount : 0m),
+                Mtd = g.Sum(expense => expense.EffectiveAt >= monthStartUtc ? expense.Amount : 0m),
+                Last30 = g.Sum(expense => expense.Amount),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -228,10 +232,10 @@ public partial class AccountingService : IAccountingService
             .GroupBy(_ => 1)
             .Select(group => new
             {
-                Mtd = group.Sum(payment => payment.PaidDate >= monthStart.ToDateTime(
-                    TimeOnly.MinValue, DateTimeKind.Utc) ? payment.TotalAmount : 0m),
-                Last30 = group.Sum(payment => payment.PaidDate >= last30Start.ToDateTime(
-                    TimeOnly.MinValue, DateTimeKind.Utc) ? payment.TotalAmount : 0m),
+                Mtd = group.Sum(payment => payment.PaidDate >= monthStartUtc &&
+                    payment.PaidDate < nextBusinessDateUtc ? payment.TotalAmount : 0m),
+                Last30 = group.Sum(payment => payment.PaidDate >= last30StartUtc &&
+                    payment.PaidDate < nextBusinessDateUtc ? payment.TotalAmount : 0m),
             })
             .FirstOrDefaultAsync(ct);
         spentMtd += debtServiceSpent?.Mtd ?? 0m;
