@@ -22,3 +22,8 @@
 ## Focused verification
 
 - `flutter test test/owner_reports_monthly_contract_test.dart test/work_order_detail_edit_tabs_test.dart test/deposits_repository_test.dart test/notices_screen_error_test.dart test/home_shell_regression_test.dart` — exit 0; `00:02 +19: All tests passed!`
+
+## Required verification
+
+- `flutter analyze` — exit 1; `23 issues found. (ran in 1.4s)`. This matches the stated main baseline. The only issue in a touched file is the pre-existing unused `_toast` at `tenant_detail_screen.dart:182` (verified by `git blame` as commit `250fbb587`, 2026-06-29); no issue is in a created file.
+- `flutter test` — exit 0; `00:38 +527: All tests passed!`
