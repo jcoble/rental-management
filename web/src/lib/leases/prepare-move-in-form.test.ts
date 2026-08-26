@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildPrepareMoveInRequest, createPrepareMoveInForm } from './prepare-move-in-form.ts';
+import {
+	buildPrepareMoveInRequest,
+	buildPrepareMoveInUnitOptions,
+	createPrepareMoveInForm
+} from './prepare-move-in-form.ts';
 
 function completeForm() {
 	return {
@@ -185,5 +189,61 @@ describe('Prepare move-in form contract', () => {
 		assert.equal(result.request, null);
 		assert.match(result.errors.termEndOn ?? '', /cannot be before/);
 		assert.match(result.errors.openingBalanceEffectiveOn ?? '', /together/);
+	});
+});
+
+describe('manual move-in planned date', () => {
+	it('plans the move-in for the date the landlord typed when no other date was given', () => {
+		const form = completeForm();
+		form.applicationId = '';
+		form.plannedPossessionOn = '';
+		form.partyEffectiveFrom = '2026-10-05';
+
+		const result = buildPrepareMoveInRequest(form);
+
+		assert.deepEqual(result.errors, {});
+		assert.equal(result.request?.plannedPossessionAtUtc, '2026-10-05T00:00:00.000Z');
+		assert.equal(result.request?.partyEffectiveFrom, '2026-10-05');
+	});
+
+	it('keeps a planned move-in date the landlord set themselves', () => {
+		const form = completeForm();
+		form.plannedPossessionOn = '2026-09-15';
+		form.partyEffectiveFrom = '2026-10-05';
+
+		const result = buildPrepareMoveInRequest(form);
+
+		assert.equal(result.request?.plannedPossessionAtUtc, '2026-09-15T00:00:00.000Z');
+	});
+
+	it('asks for a move-in date rather than planning one out of nothing', () => {
+		const form = completeForm();
+		form.plannedPossessionOn = '';
+		form.partyEffectiveFrom = '';
+
+		const result = buildPrepareMoveInRequest(form);
+
+		assert.equal(result.request, null);
+		assert.match(result.errors.partyEffectiveFrom ?? '', /move-in date/);
+	});
+});
+
+describe('move-in unit picker choices', () => {
+	it('will not let the landlord choose a unit that already has a move-in prepared', () => {
+		const options = buildPrepareMoveInUnitOptions([
+			{ id: 4, propertyName: 'Maple Court', unitNumber: '1', status: 'Vacant' },
+			{ id: 7, propertyName: 'Maple Court', unitNumber: '2', status: 'Reserved' }
+		]);
+
+		assert.deepEqual(options[0], {
+			value: '4',
+			label: 'Maple Court · Unit 1 · Vacant',
+			disabled: false
+		});
+		assert.deepEqual(options[1], {
+			value: '7',
+			label: 'Maple Court · Unit 2 · Move-in already prepared',
+			disabled: true
+		});
 	});
 });
