@@ -2,6 +2,38 @@ import type {
 	LeaseAgreementTermType,
 	PrepareMoveInRequest
 } from '$lib/api/endpoints/lease-managements';
+import { formatStatusLabel } from '../utils/status-labels.ts';
+
+export interface PrepareMoveInUnitChoice {
+	id: number;
+	propertyName: string;
+	unitNumber: string;
+	status?: string | null;
+}
+
+export interface PrepareMoveInUnitOption {
+	value: string;
+	label: string;
+	disabled: boolean;
+}
+
+/**
+ * Choices for the "which unit" picker. A unit that already has a move-in prepared cannot take a
+ * second one, so it is still listed - with a reason - but cannot be picked.
+ */
+export function buildPrepareMoveInUnitOptions(
+	units: PrepareMoveInUnitChoice[]
+): PrepareMoveInUnitOption[] {
+	return units.map((unit) => {
+		const alreadyPrepared = unit.status === 'Reserved';
+		const state = alreadyPrepared ? 'Move-in already prepared' : formatStatusLabel(unit.status);
+		return {
+			value: String(unit.id),
+			label: `${unit.propertyName} · Unit ${unit.unitNumber} · ${state}`,
+			disabled: alreadyPrepared
+		};
+	});
+}
 
 export interface PrepareMoveInForm {
 	applicationId: string;
@@ -192,12 +224,16 @@ export function buildPrepareMoveInRequest(
 		return { request: null, errors };
 	}
 
+	const plannedPossessionOn = form.plannedPossessionOn || form.partyEffectiveFrom;
+
 	return {
 		request: {
 			applicationId,
 			unitId,
-			plannedPossessionAtUtc: form.plannedPossessionOn
-				? `${form.plannedPossessionOn}T00:00:00.000Z`
+			// Without a planned move-in date the unit still looks empty everywhere else, so fall
+			// back to the move-in date the landlord already typed.
+			plannedPossessionAtUtc: plannedPossessionOn
+				? `${plannedPossessionOn}T00:00:00.000Z`
 				: null,
 			partyEffectiveFrom: form.partyEffectiveFrom,
 			parties: [

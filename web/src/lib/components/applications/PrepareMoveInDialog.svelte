@@ -12,6 +12,7 @@
 	import type { PrepareMoveInPrefill } from '$lib/leases/prepare-move-in-prefill';
 	import {
 		buildPrepareMoveInRequest,
+		buildPrepareMoveInUnitOptions,
 		createPrepareMoveInForm,
 		type PrepareMoveInForm,
 		type PrepareMoveInFormErrors
@@ -541,10 +542,7 @@
 					<SimpleSelect
 						bind:value={form.unitId}
 						onchange={() => clearError('unitId')}
-						options={(unitOptionsQuery.data?.items ?? []).map((unit) => ({
-							value: String(unit.id),
-							label: `${unit.propertyName} · Unit ${unit.unitNumber} · ${formatStatusLabel(unit.status)}`
-						}))}
+						options={buildPrepareMoveInUnitOptions(unitOptionsQuery.data?.items ?? [])}
 						placeholder="Choose a unit"
 						ariaLabel="Which unit"
 						testid="prepare-move-in-unit-input"
