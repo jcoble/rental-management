@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { login } from './helpers';
+import { apiToken, bearer, login, unique } from './helpers';
 
 /**
  * TSK-947 W7 — Prepare move-in is one review screen in the landlord's words.
@@ -7,7 +7,27 @@ import { login } from './helpers';
  * away under "More details" and the migration disclosure.
  */
 test.describe('Prepare move-in review screen', () => {
-	test('collects a move-in on one screen and saves it', async ({ page }) => {
+	test('collects a move-in on one screen and saves it', async ({ page, request }) => {
+		test.setTimeout(90_000);
+		const token = await apiToken(request);
+		const propertyName = unique('Move-in rental');
+		const setup = await request.post('/api/v1/properties/setup', {
+			headers: { ...bearer(token), 'Idempotency-Key': unique('move-in-property') },
+			data: {
+				property: {
+					name: propertyName,
+					type: 'SingleFamily',
+					rentalStructure: 'SingleRental',
+					status: 'Active',
+					addressLine1: '947 Move In Way',
+					city: 'Austin',
+					state: 'TX',
+					postalCode: '78701'
+				},
+				units: [{ unitNumber: '1', bedrooms: 2, bathrooms: 1, marketRent: 1200, status: 'Vacant' }]
+			}
+		});
+		expect(setup.ok(), `property setup failed: ${setup.status()}`).toBeTruthy();
 		await login(page);
 
 		await page.goto('/leases', { waitUntil: 'domcontentloaded' });
@@ -53,9 +73,12 @@ test.describe('Prepare move-in review screen', () => {
 		await page.getByTestId('prepare-move-in-new-tenant-last-name').fill(`In${stamp}`);
 		await page.getByTestId('prepare-move-in-new-tenant-email').fill(`movein${stamp}@example.test`);
 
-		// Unit: first vacant unit offered by the picker.
+		// Unit: choose the fresh vacant unit created for this run.
 		await page.getByTestId('prepare-move-in-manual-unit-trigger').click();
-		await page.getByRole('option').first().click();
+		await page.getByPlaceholder('Search property or unit…').fill(propertyName);
+		const availableUnit = page.getByRole('option').filter({ hasText: propertyName });
+		await expect(availableUnit).toBeVisible({ timeout: 30_000 });
+		await availableUnit.click();
 
 		// Dates default to today; a fixed term needs an end date.
 		await expect(page.getByTestId('prepare-move-in-term-start-input')).not.toHaveValue('');
