@@ -314,6 +314,28 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DemoDataSeeder_ExistingDemoWithoutOwnerships_RepairsOwnerReportData()
+    {
+        var (seeder, _) = BuildSeeder(_ctx.Db);
+        await seeder.SeedPortfolioAsync(1, "seed-owner-report-initial", CancellationToken.None);
+        await _ctx.Db.PropertyOwnerships
+            .Where(ownership => ownership.PortfolioId == 1)
+            .ExecuteDeleteAsync();
+
+        await seeder.SeedPortfolioAsync(1, "seed-owner-report-repair", CancellationToken.None);
+        await seeder.SeedPortfolioAsync(1, "seed-owner-report-idempotency", CancellationToken.None);
+
+        var ownerIds = await _ctx.Db.PropertyOwnerships
+            .Where(ownership => ownership.PortfolioId == 1)
+            .Select(ownership => ownership.OwnerEntityId)
+            .Distinct()
+            .ToListAsync();
+        ownerIds.Should().HaveCount(2);
+        (await _ctx.Db.Properties.CountAsync(property => property.PortfolioId == 1))
+            .Should().Be(await _ctx.Db.PropertyOwnerships.CountAsync(ownership => ownership.PortfolioId == 1));
+    }
+
+    [Fact]
     public async Task SeedPortfolio_ExactOperationRetryReplaysOnce()
     {
         var (atomic, atomicContext, _, atomicDb) = BuildAtomicServices(_ctx.Db);
