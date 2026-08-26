@@ -64,3 +64,26 @@ Called out, not changed (owner decision): Leases list showing vacant units as cl
 
 
 Still flagged after the fixes: the Activity history entity chip reads "Lease management #11" / "Tenant account #11" — record-type names a landlord would not use. Needs a small type-name map; not done in this pass.
+
+## What the Playwright suite found (2026-08-26, after the visual fixes)
+
+The full suite was run from `main` against the sample data eight times while lanes repaired stale specs and fixed the defects the suite exposed. Repairs to the specs themselves: #654, #658, #659, #663 (22 specs updated, 2 obsolete specs deleted, login helper now waits for the interactive shell).
+
+Product defects found and fixed:
+
+| Defect | Fix |
+|---|---|
+| Dashboard read took 30 s on 8 properties (EF expanded one query into ~187 KB of SQL) | #655 — 1.5 s |
+| Units list timed out (>30 s, HTTP 500) with 49 units | #662 — 2.9 s |
+| Owner Report timed out (>30 s) with 5 owners | #664 — 2.2 s |
+| Add-rental dialog could not save (server requires beds/baths the essentials did not send) | #656 |
+| Adding an operating cost from a unit saved `unitId: null` | #656 |
+| Work-order autofill on an expense left the property/unit labels blank | #656 |
+| Import help text omitted two required columns; live imports missing the idempotency header | #656 |
+| Live property CSV import returned 500 (nested raw-DML batch) | #657 |
+| Sample data seeded into an existing portfolio had no owner assignments (empty Owner Report) | #660 |
+| Manual move-in never recorded a planned date, so the unit stayed "Vacant" and could be picked again (409) | #661 |
+
+Still open, tracked in Notion: year-end report ~37 s (TSK-1032); unit dashboard 5–8 s and a sweep for the same query-shape disease everywhere (TSK-1033). `scan.spec` fails only because this workbox has no Claude CLI extraction provider.
+
+Final full run (run 8, from `main` at #664): **123 passed, 3 failed, 8 skipped** (14.5 min). The three: `scan.spec` (no extraction provider on this box), `year-end.spec` (TSK-1032), and `accounting-expense-autofill.spec` — the latter fails only because eight suite runs left ~30 `TSK605-*` vendors in the sample data and the expense form's "Who you paid" list is a plain dropdown with no search, so the freshly created vendor sits below the visible options. That is also a real gap for a landlord with many vendors: the vendor picker should be searchable (same `RemoteRecordSelect` used for property/unit on Rent & payments).
