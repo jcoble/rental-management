@@ -477,7 +477,10 @@ class _OverviewTabState extends ConsumerState<_OverviewTab> {
           children: [
             _CashPositionCard(position: position),
             const SizedBox(height: 12),
-            _PositionFacts(position: position),
+            _PositionFacts(
+              position: position,
+              onRentStillOwedTap: widget.onPastDueTap,
+            ),
             const SizedBox(height: 12),
             _PeriodFacts(
               position: position,
@@ -656,31 +659,36 @@ class _CashBridgeRow extends StatelessWidget {
 }
 
 class _PositionFacts extends ConsumerWidget {
-  const _PositionFacts({required this.position});
+  const _PositionFacts({required this.position, this.onRentStillOwedTap});
 
   final MoneyPositionResponse position;
+  final VoidCallback? onRentStillOwedTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(accountingDetailModeProvider);
-    final facts = <({String label, String value, IconData icon})>[
-      (
-        label: 'Rent still owed',
-        value: moneyFmt(position.rentStillOwed),
-        icon: Icons.receipt_long_outlined,
-      ),
-      (
-        label: 'Loan balance',
-        value: moneyFmt(position.loanBalance),
-        icon: Icons.account_balance_outlined,
-      ),
-      if (mode == AccountingDetailMode.advanced)
-        (
-          label: 'Book equity',
-          value: moneyFmt(position.bookEquity),
-          icon: Icons.insights_outlined,
-        ),
-    ];
+    final facts =
+        <({String label, String value, IconData icon, VoidCallback? onTap})>[
+          (
+            label: 'Rent still owed',
+            value: moneyFmt(position.rentStillOwed),
+            icon: Icons.receipt_long_outlined,
+            onTap: onRentStillOwedTap,
+          ),
+          (
+            label: 'Loan balance',
+            value: moneyFmt(position.loanBalance),
+            icon: Icons.account_balance_outlined,
+            onTap: null,
+          ),
+          if (mode == AccountingDetailMode.advanced)
+            (
+              label: 'Book equity',
+              value: moneyFmt(position.bookEquity),
+              icon: Icons.insights_outlined,
+              onTap: null,
+            ),
+        ];
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -693,28 +701,39 @@ class _PositionFacts extends ConsumerWidget {
       ),
       itemBuilder: (_, index) {
         final fact = facts[index];
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(fact.icon, size: 18),
-                const Spacer(),
-                Text(fact.label, style: Theme.of(context).textTheme.labelSmall),
-                const SizedBox(height: 2),
-                Text(
-                  fact.value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
+        final content = Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(fact.icon, size: 18),
+                  const Spacer(),
+                  if (fact.onTap != null)
+                    const Icon(Icons.chevron_right, size: 18),
+                ],
+              ),
+              const Spacer(),
+              Text(fact.label, style: Theme.of(context).textTheme.labelSmall),
+              const SizedBox(height: 2),
+              Text(
+                fact.value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  fontFeatures: const [FontFeature.tabularFigures()],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+        );
+        return Card(
+          clipBehavior: Clip.antiAlias,
+          child: fact.onTap == null
+              ? content
+              : InkWell(onTap: fact.onTap, child: content),
         );
       },
     );

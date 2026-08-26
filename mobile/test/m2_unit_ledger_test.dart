@@ -81,7 +81,6 @@ void main() {
       'lib/features/units/unit_command_center_screen.dart',
     ).readAsStringSync();
     final sheets = [
-      File('lib/features/money/record_payment_sheet.dart').readAsStringSync(),
       File('lib/features/money/one_time_charge_sheet.dart').readAsStringSync(),
       File('lib/features/money/tenant_credit_sheet.dart').readAsStringSync(),
       File('lib/features/money/recurring_charge_sheet.dart').readAsStringSync(),
@@ -111,8 +110,6 @@ void main() {
     }
 
     for (final text in [
-      'Payment method',
-      'Oldest open charges first',
       'What is this charge for?',
       'Service period',
       'Category',

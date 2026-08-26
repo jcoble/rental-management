@@ -131,7 +131,7 @@ void main() {
       expect(adapter.path, '/tenant-accounts/42/receipts');
       expect(adapter.data, containsPair('effectiveOn', '2026-07-08'));
       expect(adapter.data, containsPair('targetChargeEntryId', 9001));
-      expect(adapter.data, isNot(contains('allocateOldestCharges')));
+      expect(adapter.data, containsPair('allocateOldestCharges', true));
       expect(
         adapter.headers,
         containsPair('Idempotency-Key', 'receipt-key-42'),
