@@ -299,9 +299,9 @@ test.describe('Analytics (legacy → dashboard)', () => {
 		await expect(page).toHaveURL(/\/$|\/\?/);
 		await expect(page).not.toHaveURL(/\/analytics/);
 
-		// Dashboard hero renders once the dashboard data load resolves, and its KPI money
+		// The business summary renders once the dashboard data load resolves, and its money
 		// values use .tabular-nums — assert both so we know we landed on a populated dashboard.
-		await expect(page.getByTestId('dashboard-hero')).toBeVisible({ timeout: 20_000 });
+		await expect(page.getByTestId('dashboard-summary')).toBeVisible({ timeout: 20_000 });
 		await expect(page.locator('.tabular-nums').first()).toBeVisible({ timeout: 15_000 });
 	});
 });

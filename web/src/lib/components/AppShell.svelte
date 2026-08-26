@@ -7,6 +7,7 @@
 	import {
 		LayoutDashboard,
 		ScanLine,
+		AlertTriangle,
 		Building,
 		Users,
 		FileText,
@@ -126,6 +127,9 @@
 			label: 'Money',
 			icon: Wallet,
 			items: [
+				// "Who's behind" leads the Money group: chasing late rent is the landlord's most
+				// frequent money job, so it sits above the Overview page.
+				{ href: '/accounting/past-due', label: "Who's behind", icon: AlertTriangle },
 				{ href: '/accounting', label: 'Overview', icon: Calculator },
 				{ href: '/banking', label: 'Banking', icon: Landmark },
 				{ href: '/deposits', label: 'Deposits', icon: PiggyBank },
