@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/api/dio_client.dart';
 import 'package:rental_command/core/models/appointment.dart';
 import 'package:rental_command/core/models/lease.dart';
+import 'package:rental_command/core/time/app_clock.dart';
 import 'package:rental_command/features/accounting/accounting_book_models.dart';
 import 'package:rental_command/features/accounting/accounting_books_repository.dart';
 import 'package:rental_command/features/accounting/accounting_repository.dart';
@@ -65,6 +66,42 @@ void main() {
 
     expect(find.text('End time must be after start time.'), findsOneWidget);
     expect(adapter.savedBody, isNull);
+  });
+
+  testWidgets('appointment picker defaults to the local calendar date', (
+    tester,
+  ) async {
+    final adapter = _AppointmentAdapter();
+    final dio = Dio()..httpClientAdapter = adapter;
+    final instant = DateTime.utc(2026, 8, 26, 1);
+    expect(instant.toLocal().day, 25);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          dioProvider.overrideWithValue(dio),
+          appNowProvider.overrideWith((ref) async => instant),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: AppointmentFormSheet(existing: null, onSaved: () {}),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.ancestor(
+        of: find.text('Start date & time'),
+        matching: find.byType(InkWell),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final picker = tester.widget<CalendarDatePicker>(
+      find.byType(CalendarDatePicker),
+    );
+    expect(picker.initialDate, DateUtils.dateOnly(instant.toLocal()));
   });
 
   test('tenant ledger month range uses the UTC business date', () {

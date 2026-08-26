@@ -477,7 +477,7 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
     if (!mounted) return;
     final date = await showDatePicker(
       context: context,
-      initialDate: _startDate ?? now,
+      initialDate: _startDate ?? now.toLocal(),
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
@@ -498,7 +498,7 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
     if (!mounted) return;
     final date = await showDatePicker(
       context: context,
-      initialDate: _endDate ?? _startDate ?? now,
+      initialDate: _endDate ?? _startDate ?? now.toLocal(),
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
