@@ -563,20 +563,21 @@ public sealed class AtomicCoreCsvImportPersistence : ICoreCsvImportPreviewQuery
             });
         }
 
-        using var primaryPermit = write
-            ? _scope!.BeginInternalRawDml(
-                domain switch
-                {
-                    AtomicCoreCsvImportDomain.Property => "Properties",
-                    AtomicCoreCsvImportDomain.Tenant => "Tenants",
-                    AtomicCoreCsvImportDomain.Expense => "Expenses",
-                    AtomicCoreCsvImportDomain.Loan => "Loans",
-                    _ => throw new ArgumentOutOfRangeException(nameof(domain)),
-                },
-                AtomicRawDmlOperation.Insert)
-            : null;
-        using var unitPermit = write && domain == AtomicCoreCsvImportDomain.Property
-            ? _scope!.BeginInternalRawDml("Units", AtomicRawDmlOperation.Insert)
+        AtomicRawDmlTarget[] rawDmlTargets = domain switch
+        {
+            AtomicCoreCsvImportDomain.Property =>
+            [
+                new("Properties", AtomicRawDmlOperation.Insert),
+                new("PropertyOwnerships", AtomicRawDmlOperation.Insert),
+                new("Units", AtomicRawDmlOperation.Insert),
+            ],
+            AtomicCoreCsvImportDomain.Tenant => [new("Tenants", AtomicRawDmlOperation.Insert)],
+            AtomicCoreCsvImportDomain.Expense => [new("Expenses", AtomicRawDmlOperation.Insert)],
+            AtomicCoreCsvImportDomain.Loan => [new("Loans", AtomicRawDmlOperation.Insert)],
+            _ => throw new ArgumentOutOfRangeException(nameof(domain)),
+        };
+        using var rawDmlPermit = write
+            ? _scope!.BeginInternalRawDmlBatch(rawDmlTargets)
             : null;
         var result = await _db.Database.SingleTopLevelResultAsync<ImportResultRow>(
             AuthorizationSql + inputSql + suffixSql, parameters.ToArray(), ct);
