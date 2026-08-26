@@ -253,7 +253,7 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
-                      'No tenant relationships for this person.',
+                      'No tenancies for this person.',
                       style: TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
                   );

@@ -281,13 +281,13 @@ class _EditAgreementDraftSheetState
           onChanged: (value) => setState(() => _termEnd = value),
         ),
       _DateTile(
-        label: 'Becomes governing',
+        label: 'Lease start date',
         value: _governingFrom,
         onChanged: (value) => setState(() => _governingFrom = value),
       ),
       if (!_datesValid)
         Text(
-          'Governing and term dates must stay within the selected term.',
+          'Lease and term dates must stay within the selected term.',
           style: TextStyle(color: Theme.of(context).colorScheme.error),
         ),
     ],
@@ -330,7 +330,7 @@ class _EditAgreementDraftSheetState
       ],
       const SizedBox(height: 12),
       const Text(
-        'The template, structured terms, and ordered signer snapshot are preserved from the canonical draft read.',
+        'The template, structured terms, and who signs, in order, are preserved from the current draft.',
       ),
     ],
   );
@@ -545,7 +545,7 @@ Widget _signersStep(List<LeaseAgreementDraftSigner> signers) => Column(
   crossAxisAlignment: CrossAxisAlignment.start,
   children: [
     const Text(
-      'Ordered signer snapshot',
+      'Who signs, in order',
       style: TextStyle(fontWeight: FontWeight.w700),
     ),
     const SizedBox(height: 8),

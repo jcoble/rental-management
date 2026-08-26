@@ -126,9 +126,8 @@ class _PoliciesTab extends StatelessWidget {
           const _ModeExplanation(),
           const SizedBox(height: 12),
           Text(
-            'Each server-shaped row contains its automation and currently '
-            'bound immutable template. Tenant channels never inherit from '
-            'staff My alerts or Team routing.',
+            'Each notice type has its own automatic schedule and template. '
+            'Tenant messages use these settings, not staff alerts or team assignments.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
@@ -427,7 +426,7 @@ class _TenantPolicyEditorSheetState
           ),
           const SizedBox(height: 12),
           Text(
-            'Eligible relationship roles',
+            'Eligible tenant roles',
             style: Theme.of(context).textTheme.titleSmall,
           ),
           _Check(
@@ -658,9 +657,9 @@ class _TenantTemplateEditorSheetState
         ),
         children: [
           Text(
-            'Template v${policy.templateVersion} is bound to this automation. '
-            'Saving appends an immutable version and atomically makes it the '
-            'bound version; prior versions remain in history.',
+            'Template v${policy.templateVersion} is bound to this schedule. '
+            'Saving creates a new version and makes it the one used for this '
+            'notice; older versions remain in history.',
           ),
           const SizedBox(height: 8),
           Text(
@@ -906,8 +905,8 @@ class _DeliveriesTab extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
               children: [
                 Text(
-                  'The 50 most recent records are returned in server order, '
-                  'so the status below reflects the durable delivery queue.',
+                  'The 50 most recent records appear first, so the status below '
+                  'shows the delivery queue.',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),

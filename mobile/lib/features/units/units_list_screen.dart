@@ -192,16 +192,16 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
             filters: [
               MobileGridChoiceFilter(
                 id: 'stage',
-                label: 'Stage',
+                label: "Where it's at",
                 value: _stageFilter,
-                allLabel: 'All stages',
+                allLabel: 'All statuses',
                 options: const [
                   MobileGridControlOption(value: 'Active', label: 'Active'),
                   MobileGridControlOption(value: 'Renewal', label: 'Renewal'),
                   MobileGridControlOption(value: 'Move-Out', label: 'Move-out'),
                   MobileGridControlOption(value: 'Lease', label: 'Lease'),
                   MobileGridControlOption(value: 'Vacant', label: 'Vacant'),
-                  MobileGridControlOption(value: 'Turnover', label: 'Turnover'),
+                  MobileGridControlOption(value: 'Turnover', label: 'Getting it ready'),
                 ],
                 onChanged: _setStageFilter,
               ),
@@ -330,7 +330,11 @@ class _UnitHealthRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          _ToneChip(label: unit.simpleStage),
+          _ToneChip(
+            label: unit.simpleStage == 'Turnover'
+                ? 'Getting it ready'
+                : unit.simpleStage,
+          ),
         ],
       ),
       supporting: [

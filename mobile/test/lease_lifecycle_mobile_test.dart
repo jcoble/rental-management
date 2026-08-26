@@ -151,9 +151,7 @@ void main() {
       expect(sheet, contains('_correctionReasonValid'));
       expect(
         sheet,
-        contains(
-          'keeps governing until the replacement is fully signed and executed',
-        ),
+        contains('The old lease stays in place until the replacement is fully signed.'),
       );
       expect(editor, contains('Old agreement vs correction'));
       expect(editor, contains('unchanged copied field'));
@@ -321,11 +319,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Give possession'), findsOneWidget);
-      await tester.tap(find.text('Give possession'));
+      expect(find.text('Tenant has moved in'), findsOneWidget);
+      await tester.tap(find.text('Tenant has moved in'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Confirm possession'), findsOneWidget);
+      expect(find.text('Confirm move-in'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -346,11 +344,11 @@ void main() {
     expect(sheet, contains("value: 'RetainGuarantor'"));
     expect(sheet, contains("value: 'RevokeNow'"));
     expect(sheet, contains("value: 'RetainHistorical'"));
-    expect(sheet, contains('portfolio current business date'));
+    expect(sheet, contains('current portfolio date'));
     expect(sheet, contains('no phone date is submitted'));
     expect(sheet, isNot(contains('DateTime.now')));
     expect(sheet, isNot(contains('effectiveOn')));
-    expect(detail, contains("label: const Text('Return possession')"));
+    expect(detail, contains("label: const Text('Move-out')"));
     expect(detail, contains('.returnPossessionContext(summary.id)'));
   });
 }

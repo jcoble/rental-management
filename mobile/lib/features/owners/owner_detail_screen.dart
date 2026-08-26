@@ -311,7 +311,7 @@ class _OwnerDetailScreenState extends ConsumerState<OwnerDetailScreen> {
                 ),
               const SizedBox(height: 20),
               _InfoCard(
-                title: 'Portfolio',
+                title: 'Your rentals',
                 rows: [
                   _InfoRow(
                     label: 'Assigned properties',

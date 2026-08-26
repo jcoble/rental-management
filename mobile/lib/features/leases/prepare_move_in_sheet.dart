@@ -242,7 +242,7 @@ class _PrepareMoveInSheetState extends ConsumerState<_PrepareMoveInSheet> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Choose an approved application. Results stay server-filtered and paged.',
+          'Choose an approved application. Results are filtered and paged.',
         ),
         const SizedBox(height: 12),
         TextField(

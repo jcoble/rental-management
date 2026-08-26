@@ -133,7 +133,7 @@ void main() {
         home: Scaffold(
           floatingActionButton: MobileQuickActionFab(
             primaryAction: MobileQuickAction(
-              label: 'New work order',
+              label: 'New repair',
               icon: Icons.add,
               onPressed: () => primaryCount++,
             ),
@@ -148,12 +148,12 @@ void main() {
     await tester.tap(find.byTooltip('Scan / Add'));
     await tester.pumpAndSettle();
 
-    expect(find.text('New work order'), findsOneWidget);
+    expect(find.text('New repair'), findsOneWidget);
     expect(find.text('Assistant'), findsOneWidget);
     expect(find.text('Record'), findsOneWidget);
     expect(find.text('Scan / Add'), findsOneWidget);
 
-    await tester.tap(find.text('New work order'));
+    await tester.tap(find.text('New repair'));
     await tester.pumpAndSettle();
 
     expect(primaryCount, 1);
@@ -247,7 +247,7 @@ void main() {
               child: MobileQuickActionFab(
                 heroTag: 'embedded-fab',
                 primaryAction: MobileQuickAction(
-                  label: 'New work order',
+                  label: 'New repair',
                   icon: Icons.add,
                   onPressed: () => primaryCount++,
                 ),
@@ -279,7 +279,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(FloatingActionButton), findsOneWidget);
-      expect(find.text('New work order'), findsOneWidget);
+      expect(find.text('New repair'), findsOneWidget);
       expect(find.text('Assistant'), findsOneWidget);
       expect(find.text('Record'), findsOneWidget);
       expect(find.text('Scan / Add'), findsOneWidget);
@@ -292,7 +292,7 @@ void main() {
       await tester.tap(find.byTooltip('Scan / Add'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('New work order'));
+      await tester.tap(find.text('New repair'));
       await tester.pumpAndSettle();
 
       expect(primaryCount, 1);

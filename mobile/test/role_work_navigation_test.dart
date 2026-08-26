@@ -426,6 +426,6 @@ void main() {
       MobileDestinationId.automations,
       MobileDestinationId.notices,
     ]);
-    expect(destinations.first.label, 'Orders');
+    expect(destinations.first.label, 'Repairs');
   });
 }

@@ -177,7 +177,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
           minLines: 2,
           maxLines: 5,
           decoration: const InputDecoration(
-            hintText: 'What does the governing agreement say about pets?',
+            hintText: 'What does the current lease say about pets?',
           ),
         ),
         actions: [
@@ -234,21 +234,19 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Give possession',
+              'Tenant has moved in',
               style: Theme.of(sheetContext).textTheme.titleLarge,
             ),
             const SizedBox(height: 12),
             Text('${summary.propertyName} · Unit ${summary.unitNumber}'),
             const SizedBox(height: 8),
-            const Text(
-              'This records possession now. The server will recheck the executed governing agreement, open account, resident household, unit availability, and your current access before changing lifecycle state.',
-            ),
+            const Text('Record that the tenant has moved in?'),
             const SizedBox(height: 20),
             FilledButton.icon(
               onPressed: () =>
                   Navigator.of(sheetContext, rootNavigator: true).pop(true),
               icon: const Icon(Icons.key_outlined),
-              label: const Text('Confirm possession'),
+              label: const Text('Confirm move-in'),
             ),
             TextButton(
               onPressed: () =>
@@ -265,7 +263,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
     try {
       final result = await _runWithStableRetry(
         context,
-        actionLabel: 'give possession',
+        actionLabel: 'record move-in',
         action: () => ref
             .read(leaseManagementsRepositoryProvider)
             .givePossession(
@@ -280,7 +278,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Possession recorded for Unit ${summary.unitNumber}.',
+              'Tenant has moved into Unit ${summary.unitNumber}.',
             ),
           ),
         );
@@ -306,8 +304,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
           context,
           const ApiException(
             statusCode: 0,
-            message:
-                'The server did not return a current household to disposition.',
+            message: 'The app could not find the current household.',
           ),
         );
         return;
@@ -327,7 +324,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Possession returned for Unit ${summary.unitNumber}; turnover is open.',
+              'Move-out recorded for Unit ${summary.unitNumber}; getting it ready is open.',
             ),
           ),
         );
@@ -394,7 +391,7 @@ class _RelationshipHeader extends StatelessWidget {
                   child: Text(
                     summary.primaryTenantName?.trim().isNotEmpty == true
                         ? summary.primaryTenantName!
-                        : summary.relationshipNumber,
+                        : 'Tenancy #${summary.relationshipNumber}',
                     style: theme.textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
@@ -406,12 +403,12 @@ class _RelationshipHeader extends StatelessWidget {
             Text('${summary.propertyName} · Unit ${summary.unitNumber}'),
             const SizedBox(height: 16),
             _Fact(
-              label: 'Current agreement',
+              label: 'Current lease',
               value: summary.agreementNumber ?? 'Not issued',
             ),
             _Fact(
-              label: 'Agreement status',
-              value: summary.agreementStatus ?? 'No governing agreement',
+              label: 'Lease status',
+              value: summary.agreementStatus ?? 'No signed lease',
             ),
             _Fact(
               label: 'Term',
@@ -430,7 +427,7 @@ class _RelationshipHeader extends StatelessWidget {
               _Fact(
                 label: 'Upcoming',
                 value:
-                    '${summary.upcomingAgreementNumber ?? 'Future agreement'}'
+                    '${summary.upcomingAgreementNumber ?? 'Future lease'}'
                     '${summary.upcomingTermStartOn == null ? '' : ' · starts ${_date(summary.upcomingTermStartOn!)}'}'
                     '${summary.upcomingAgreementStatus == null ? '' : ' · ${summary.upcomingAgreementStatus}'}',
               ),
@@ -452,7 +449,7 @@ class _RelationshipHeader extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(
-                  'Needs review: the lifecycle facts do not agree.',
+                  'Needs review: the status details do not agree.',
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.error,
                     fontWeight: FontWeight.w700,
@@ -1053,7 +1050,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
         const ApiException(
           statusCode: 0,
           message:
-              'The draft does not have a complete, uniquely ordered signer snapshot.',
+              'The draft does not have a complete list of signers in order.',
         ),
       );
       return;
@@ -1555,7 +1552,7 @@ class _ActionsCard extends StatelessWidget {
             FilledButton.icon(
               onPressed: onGivePossession,
               icon: const Icon(Icons.key_outlined),
-              label: const Text('Give possession'),
+              label: const Text('Tenant has moved in'),
             ),
           ],
           if (onReturnPossession != null) ...[
@@ -1563,7 +1560,7 @@ class _ActionsCard extends StatelessWidget {
             FilledButton.icon(
               onPressed: onReturnPossession,
               icon: const Icon(Icons.key_off_outlined),
-              label: const Text('Return possession'),
+              label: const Text('Move-out'),
             ),
           ],
           if (management.summary.tenantAccountId != null) ...[
@@ -1670,7 +1667,7 @@ Future<T?> _runWithStableRetry<T>(
           title: const Text('Request not confirmed'),
           content: Text(
             '${error is ApiException ? error.message : error}\n\n'
-            'Retry $actionLabel with the same request key so the server can safely replay an earlier success.',
+            'Retry $actionLabel with the same request key so an earlier success is not repeated.',
           ),
           actions: [
             TextButton(

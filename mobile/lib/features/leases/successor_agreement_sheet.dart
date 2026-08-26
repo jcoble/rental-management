@@ -312,7 +312,7 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
         const SizedBox(height: 8),
         Text(
           replacement
-              ? 'The old agreement keeps governing until the replacement is fully signed and executed. Its signed term dates are copied into this draft.'
+              ? 'The old lease stays in place until the replacement is fully signed. Its signed term dates are copied into this draft.'
               : 'This creates a successor draft. The signed agreement remains immutable.',
         ),
         const SizedBox(height: 12),
@@ -349,7 +349,7 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
             onChanged: (value) => setState(() => _end = value),
           ),
         _DateTile(
-          label: 'Becomes governing',
+          label: 'Lease start date',
           value: _governingFrom,
           enabled: replacement,
           onChanged: (value) => setState(() => _governingFrom = value),
@@ -357,7 +357,7 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
         if (!_datesValid)
           Text(
             replacement
-                ? 'The governing date must be after the source governing date and within its term.'
+                ? 'The lease start date must be after the current lease date and within its term.'
                 : 'The successor must begin after the current term and use valid term dates.',
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
@@ -435,7 +435,7 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
                       key: ValueKey('addendum-series-${series.seriesPublicId}'),
                       value: _addendumDecisions[series.seriesPublicId],
                       decoration: const InputDecoration(
-                        labelText: 'Successor treatment',
+                        labelText: 'What to do with this add-on',
                       ),
                       items: const [
                         DropdownMenuItem(
@@ -506,7 +506,7 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
         label: 'Term ends',
         value: _end == null ? 'Month-to-month' : _date(_end!),
       ),
-      _ReviewFact(label: 'Becomes governing', value: _date(_governingFrom)),
+      _ReviewFact(label: 'Lease start date', value: _date(_governingFrom)),
       if (widget.operation.requiresEffectiveAddendumDecisions) ...[
         const SizedBox(height: 12),
         Text(
@@ -524,7 +524,7 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
       ],
       const SizedBox(height: 12),
       const Text(
-        'The new version remains a draft. The old agreement keeps governing until this replacement is fully signed and executed.',
+        'The new version remains a draft. The old lease stays in place until this replacement is fully signed.',
       ),
     ],
   );

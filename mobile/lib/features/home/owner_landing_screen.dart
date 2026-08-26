@@ -121,7 +121,7 @@ class _OwnerOverviewTabState extends ConsumerState<_OwnerOverviewTab> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Only information connected to your owner relationship is shown.',
+                'Only information connected to your ownership is shown.',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),

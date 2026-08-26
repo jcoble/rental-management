@@ -367,8 +367,8 @@ class _RecurringMaintenanceFormScreenState
             if (widget.isEditing) ...[
               Text(
                 widget.task!.generatedWorkOrderCount > 0
-                    ? '${widget.task!.generatedWorkOrderCount} generated work order${widget.task!.generatedWorkOrderCount == 1 ? '' : 's'} linked to this schedule.'
-                    : 'No work orders have been generated from this schedule yet.',
+                    ? '${widget.task!.generatedWorkOrderCount} generated repair${widget.task!.generatedWorkOrderCount == 1 ? '' : 's'} linked to this schedule.'
+                    : 'No repairs have been generated from this schedule yet.',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -382,8 +382,8 @@ class _RecurringMaintenanceFormScreenState
               title: const Text('Active'),
               subtitle: Text(
                 _isActive
-                    ? 'Auto-creates work orders when due'
-                    : 'Paused — no work orders are created',
+                    ? 'Auto-creates repairs when due'
+                    : 'Paused — no repairs are created',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
