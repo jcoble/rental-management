@@ -38,6 +38,14 @@ export interface BuildPrepareMoveInRequestOptions {
 	requireApplication?: boolean;
 }
 
+/** Today in the browser's own calendar day, as the yyyy-MM-dd the date inputs use. */
+function todayIsoDate(): string {
+	const now = new Date();
+	const month = String(now.getMonth() + 1).padStart(2, '0');
+	const day = String(now.getDate()).padStart(2, '0');
+	return `${now.getFullYear()}-${month}-${day}`;
+}
+
 export function createPrepareMoveInForm(
 	prefill: {
 		applicationId?: string;
@@ -45,6 +53,7 @@ export function createPrepareMoveInForm(
 		tenantId?: string;
 	} = {}
 ): PrepareMoveInForm {
+	const today = todayIsoDate();
 	return {
 		applicationId: prefill.applicationId ?? '',
 		unitId: prefill.unitId ?? '',
@@ -56,10 +65,10 @@ export function createPrepareMoveInForm(
 		newTenantPhone: '',
 		newTenantEmergencyContact: '',
 		plannedPossessionOn: '',
-		partyEffectiveFrom: '',
+		partyEffectiveFrom: today,
 		documentTemplateId: '',
 		termType: 'FixedTerm',
-		termStartOn: '',
+		termStartOn: today,
 		termEndOn: '',
 		baseRentAmount: '',
 		rentDueDay: '',
