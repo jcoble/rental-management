@@ -16,6 +16,7 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { formatAuditChangeValue, formatStatusLabel } from '$lib/utils/status-labels';
+	import { auditChangeLabel, auditEntryTitle } from '$lib/utils/audit-change-label';
 
 	// The forensic view includes IP addresses and raw before/after JSON. Its API is intentionally
 	// platform-operator-only, so workspace security administrators must not receive a dead link. The
@@ -318,6 +319,9 @@
 				<ul class="divide-y divide-border" role="list">
 					{#each entries as entry (entry.id)}
 						{@const Tag = entry.detailHref ? 'a' : 'div'}
+						{@const visibleChanges = (entry.changes ?? [])
+							.map((change) => ({ change, label: auditChangeLabel(change.field) }))
+							.filter((row) => row.label !== null)}
 						<li>
 							<svelte:element
 								this={Tag}
@@ -333,7 +337,7 @@
 
 								<!-- Main content -->
 								<div class="min-w-0 flex-1">
-									<p class="text-sm font-medium leading-snug">{entry.description}</p>
+									<p class="text-sm font-medium leading-snug">{auditEntryTitle(entry.description)}</p>
 									<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
 										<span>{entry.actor}</span>
 										<span aria-hidden="true">·</span>
@@ -354,15 +358,15 @@
 									{formatRelative(entry.timestamp)}
 								</time>
 							</svelte:element>
-							{#if entry.changes?.length || entry.changeReason}
+							{#if visibleChanges.length || entry.changeReason}
 								<div
 									class="ml-8 border-l border-border px-3 pb-2 text-xs text-muted-foreground"
 									data-testid="audit-changes-{entry.id}"
 								>
-									{#if entry.changes?.length}
-										{#each entry.changes as change (change.field)}
+									{#if visibleChanges.length}
+										{#each visibleChanges as { change, label } (change.field)}
 											<p>
-												<span class="font-medium text-foreground">{change.field}</span>
+												<span class="font-medium text-foreground">{label}</span>
 												{#if entry.operationName === 'Created'}
 													set to {formatAuditChangeValue(change.field, change.newValue)}
 												{:else if entry.operationName === 'Deleted'}
