@@ -1,6 +1,5 @@
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,11 +10,14 @@ using RentalCommand.Api.Tests;
 using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Auth;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -25,44 +27,49 @@ namespace RentalCommand.Api.Tests.Domain;
 /// features unsupported by the EF InMemory provider). Verifies the IDOR-safe public submit (portfolio
 /// resolved by token), bad-token rejection, and approve → Tenant creation.
 /// </summary>
-public class ApplicationServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name3)]
+public class ApplicationServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int OtherPortfolioId = 2;
     private const string Token = "good-token-abc";
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
     private readonly List<string> _commands = [];
-    private readonly RentalCommandDbContext _db;
+    private RentalCommandDbContext _db = null!;
     private readonly Mock<IFileStorage> _files = new();
     private readonly RecordingAuditService _audit = new();
-    private readonly ServiceProvider _services;
-    private readonly ApplicationService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private ServiceProvider _services = null!;
+    private ApplicationService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public ApplicationServiceTests()
+    public ApplicationServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection($"Data Source=application-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        _services = AtomicDomainTestKernel.CreateForApplications(
-            _conn.ConnectionString,
-            [new RecordingCommandInterceptor(_commands)]);
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseNpgsql(_ctx.ConnectionString)
+                .AddInterceptors(new RecordingCommandInterceptor(_commands))
+                .UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
         _db = _services.GetRequiredService<RentalCommandDbContext>();
-        _db.Database.EnsureCreated();
 
         // The portfolio reachable by the public token, plus an unrelated portfolio used to prove
         // cross-tenant isolation.
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Frank's Rentals",
-            ManagementCompanyName = "Frank Property Management",
-            TimeZone = "UTC",
-            PublicApplicationToken = Token,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
+        var portfolio = _db.Portfolios.Single(row => row.Id == PortfolioId);
+        portfolio.Name = "Frank's Rentals";
+        portfolio.ManagementCompanyName = "Frank Property Management";
+        portfolio.PublicApplicationToken = Token;
         _db.Portfolios.Add(new Portfolio
         {
             Id = OtherPortfolioId,
@@ -80,11 +87,10 @@ public class ApplicationServiceTests : IDisposable
             _services.GetRequiredService<IRequestWriteExecutor>());
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _services.Dispose();
-        _db.Dispose();
-        _conn.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -95,8 +101,17 @@ public class ApplicationServiceTests : IDisposable
         SeedApplication("Cora", "Cedar", ApplicationStatus.Submitted);
         SeedApplication("Dee", "Delta", ApplicationStatus.Approved);
 
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, "Submitted", new ListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, "Submitted", new ListQuery
         {
             Sort = "lastName",
             Skip = 1,
@@ -158,8 +173,17 @@ public class ApplicationServiceTests : IDisposable
         SeedApplicationForUnit("Cora", "Cedar", unitB.Id, property.Id);
         SeedApplicationForUnit("Dee", "Delta", unitId: null, propertyId: property.Id);
 
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, status: null, new ListQuery(), unitId: unitA.Id);
+        var result = await _sut.ListPageAuthorizedAsync(_scope, status: null, new ListQuery(), unitId: unitA.Id);
 
         result.TotalCount.Should().Be(2, "only the two applications tied to unit A are in scope");
         result.Items.Select(a => a.LastName).Should().BeEquivalentTo(["Alpha", "Bravo"]);
@@ -528,7 +552,16 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var list = await _sut.ListAsync(PortfolioId, status: null, new ListQuery());
+        await _db.Database.OpenConnectionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
+        var list = await _sut.ListAuthorizedAsync(_scope, status: null, new ListQuery());
         var detail = await _sut.GetAsync(PortfolioId, app.Id);
 
         list.Should().ContainSingle();
@@ -947,9 +980,6 @@ public class ApplicationServiceTests : IDisposable
     }
 }
 
-/// <summary>
-/// SQLite application context using the shared test-only compatibility model.
-/// </summary>
 internal sealed class ApplicationTestDbContext : SqliteCompatibleRentalCommandDbContext
 {
     public ApplicationTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }

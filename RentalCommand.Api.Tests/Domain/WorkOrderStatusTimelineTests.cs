@@ -1,5 +1,4 @@
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -22,46 +21,35 @@ namespace RentalCommand.Api.Tests.Domain;
 /// status change (in the same save), the detail timeline ordered oldest→newest, and the tenant
 /// IDOR guard on the portal work-order-detail read.
 /// </summary>
-public class WorkOrderStatusTimelineTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name4)]
+public class WorkOrderStatusTimelineTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteConnection _conn;
-    private readonly RentalCommandDbContext _db;
-    private readonly ServiceProvider _services;
-    private readonly WorkOrderService _service;
-    private readonly PortalService _portal;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private RentalCommandDbContext _serviceDb = null!;
+    private ServiceProvider _services = null!;
+    private WorkOrderService _service = null!;
+    private PortalService _portal = null!;
+    private WorkspaceReadScope _scope;
 
-    public WorkOrderStatusTimelineTests()
+    public WorkOrderStatusTimelineTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection($"Data Source=work-order-status-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .Options;
-
-        _db = new AccountingServiceTestDbContext(options);
-        _db.Database.EnsureCreated();
-        InstallTenantAccessView();
-
-        var now = DateTime.UtcNow;
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _db.SaveChanges();
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _db = _ctx.Db;
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(WorkOrderStatusTimelineTests));
-        _services = AtomicDomainTestKernel.CreateForWorkOrders(_conn.ConnectionString);
+        _services = AtomicDomainTestKernel.CreateForWorkOrdersPostgreSql(_ctx.ConnectionString);
+        _serviceDb = _services.GetRequiredService<RentalCommandDbContext>();
 
         _service = new WorkOrderService(
-            _services.GetRequiredService<RentalCommandDbContext>(),
+            _serviceDb,
             new NoopDataUpdateService(),
             new NoopMessagePublisher(),
             Mock.Of<IFileStorage>(),
@@ -71,11 +59,10 @@ public class WorkOrderStatusTimelineTests : IDisposable
         _portal = new PortalService(_db, new NoopLeaseQaService(), TimeProvider.System);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _services.Dispose();
-        _db.Dispose();
-        _conn.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -296,7 +283,16 @@ public class WorkOrderStatusTimelineTests : IDisposable
         await UpdateAsync(created.Id,
             new UpdateWorkOrderRequest { Status = WorkOrderStatus.Completed });
 
-        var detail = await _service.GetAsync(PortfolioId, created.Id);
+        await _serviceDb.Database.OpenConnectionAsync();
+        await _serviceDb.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
+        var detail = await _service.GetAuthorizedAsync(_scope, created.Id);
 
         detail.Should().NotBeNull();
         detail!.Timeline.Should().HaveCount(4);
@@ -525,36 +521,6 @@ public class WorkOrderStatusTimelineTests : IDisposable
         _db.SaveChanges();
         return new PortalTenantReadScope(
             PortfolioId, user.Id, context.Id, context.AccessRevision);
-    }
-
-    private void InstallTenantAccessView()
-    {
-        _db.Database.ExecuteSqlRaw("""
-            DROP VIEW IF EXISTS "vw_effective_tenant_access";
-            CREATE VIEW "vw_effective_tenant_access" AS
-            SELECT context."Id" AS "AccessContextId", context."UserId", context."PortfolioId",
-                   context."AccessRevision", access."Id" AS "TenantUserAccessId",
-                   party."Id" AS "LeaseManagementPartyId", party."TenantId",
-                   party."LeaseManagementId", NULL AS "TenantAccountId",
-                   relationship."PropertyId", relationship."UnitId"
-            FROM "WorkspaceAccessContexts" context
-            JOIN "TenantUserAccesses" access
-              ON access."AccessContextId" = context."Id"
-             AND access."ApplicationUserId" = context."UserId"
-             AND access."PortfolioId" = context."PortfolioId"
-            JOIN "LeaseManagementParties" party
-              ON party."Id" = access."LeaseManagementPartyId"
-             AND party."PortfolioId" = access."PortfolioId"
-            JOIN "LeaseManagements" relationship
-              ON relationship."Id" = party."LeaseManagementId"
-             AND relationship."PortfolioId" = party."PortfolioId"
-            WHERE context."Status" = 'Active'
-              AND context."SuspendedAtUtc" IS NULL
-              AND context."RevokedAtUtc" IS NULL
-              AND access."RevokedAtUtc" IS NULL
-              AND party."EffectiveFrom" <= date('now')
-              AND (party."EffectiveThrough" IS NULL OR party."EffectiveThrough" >= date('now'));
-            """);
     }
 
     private (Property property, Unit occupiedUnit, Unit otherUnit, Tenant tenant) SeedPropertyWithTenantLease()

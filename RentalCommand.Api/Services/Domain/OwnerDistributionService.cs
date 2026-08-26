@@ -30,24 +30,10 @@ public class OwnerDistributionService : IOwnerDistributionService
     }
 
     public async Task<IReadOnlyList<OwnerDistributionResponse>> ListAsync(
-        int portfolioId, OwnerDistributionListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, query, ct);
-        return page.Items;
-    }
-
-    public async Task<IReadOnlyList<OwnerDistributionResponse>> ListAsync(
         WorkspaceReadScope scope, OwnerDistributionListQuery query, CancellationToken ct = default)
     {
         var page = await ListPageAsync(scope, query, ct);
         return page.Items;
-    }
-
-    public async Task<OwnerDistributionListResponse> ListPageAsync(
-        int portfolioId, OwnerDistributionListQuery query, CancellationToken ct = default)
-    {
-        var filtered = BuildListQuery(portfolioId, query);
-        return await BuildPageAsync(filtered, query, ct);
     }
 
     public Task<OwnerDistributionListResponse> ListPageAsync(
@@ -78,9 +64,6 @@ public class OwnerDistributionService : IOwnerDistributionService
             Take = query.NormalizedTake,
         };
     }
-
-    public Task<OwnerDistributionResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
-        GetAsync(_db.OwnerDistributions.AsNoTracking(), portfolioId, id, ct);
 
     public Task<OwnerDistributionResponse?> GetAsync(
         WorkspaceReadScope scope, int id, CancellationToken ct = default) =>

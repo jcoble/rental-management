@@ -53,30 +53,12 @@ public class ConversationService : IConversationService
     // Landlord
     // ===========================================================================================
 
-    public async Task<IReadOnlyList<ConversationSummary>> ListAsync(int portfolioId, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, new ConversationListQuery(), ct);
-        return page.Items;
-    }
-
     public async Task<IReadOnlyList<ConversationSummary>> ListAuthorizedAsync(
         WorkspaceReadScope scope,
         CancellationToken ct = default)
     {
         var page = await ListPageAuthorizedAsync(scope, new ConversationListQuery(), ct);
         return page.Items;
-    }
-
-    public async Task<ConversationListResponse> ListPageAsync(
-        int portfolioId,
-        ConversationListQuery query,
-        CancellationToken ct = default)
-    {
-        var conversations = _db.Conversations
-            .AsNoTracking()
-            .Where(c => c.PortfolioId == portfolioId);
-        return await ListPageFromQueryAsync(
-            conversations, query, tenantViewer: false, ct: ct);
     }
 
     public Task<ConversationListResponse> ListPageAuthorizedAsync(
@@ -151,12 +133,6 @@ public class ConversationService : IConversationService
         };
     }
 
-    public async Task<int> GetUnreadCountAsync(int portfolioId, CancellationToken ct = default) =>
-        await _db.Conversations
-            .AsNoTracking()
-            .Where(c => c.PortfolioId == portfolioId)
-            .SumAsync(c => (int?)c.LandlordUnreadCount, ct) ?? 0;
-
     public async Task<int> GetUnreadCountAuthorizedAsync(
         WorkspaceReadScope scope,
         CancellationToken ct = default) =>
@@ -168,9 +144,6 @@ public class ConversationService : IConversationService
                 ConversationReadCapabilities,
                 _timeProvider.UtcNow())
             .SumAsync(c => (int?)c.LandlordUnreadCount, ct) ?? 0;
-
-    public async Task<ConversationDetail?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-        => await LoadDetailAsync(portfolioId, id, tenantId: null, tenantViewer: false, ct);
 
     public async Task<ConversationDetail?> GetAuthorizedAsync(
         WorkspaceReadScope scope,

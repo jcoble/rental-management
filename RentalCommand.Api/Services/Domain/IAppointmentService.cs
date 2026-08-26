@@ -29,7 +29,4 @@ public interface IAppointmentService
         WorkspaceReadScope scope, int id, int? expectedPropertyId, string idempotencyKey,
         CancellationToken ct = default);
 
-    Task<IReadOnlyList<AppointmentResponse>> ListAsync(int portfolioId, int? propertyId, int? tenantId, ListQuery query, CancellationToken ct = default);
-    Task<AppointmentListResponse> ListPageAsync(int portfolioId, AppointmentListQuery query, CancellationToken ct = default);
-    Task<AppointmentResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 }

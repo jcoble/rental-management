@@ -315,8 +315,8 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
 
         _sqlCapture.Clear();
-        var page = await service.ListPageAsync(
-            target.PortfolioId,
+        var page = await service.ListPageAuthorizedAsync(
+            target.Scope,
             status: null,
             new ListQuery
             {
@@ -804,7 +804,57 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             Application(otherPortfolio.Id, crossProperty.Id, crossUnit.Id,
                 "Casey", "CrossScope", now));
         await db.SaveChangesAsync();
-        return new(1, unit.Id);
+
+        var actor = await db.Users.SingleAsync(user => user.Id == 1);
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = actor.Id,
+            PortfolioId = 1,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = 1,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = 1,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = actor,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(assignment, session);
+        await db.SaveChangesAsync();
+
+        return new(
+            1,
+            unit.Id,
+            new WorkspaceReadScope(
+                1, actor.Id, session.Id, accessContext.Id, accessContext.AccessRevision));
     }
 
     private async Task<GraphCounts> LifecycleGraphCountsAsync()
@@ -976,7 +1026,7 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
         int SourcePartyId,
         int? SecurityDepositAccountId);
 
-    private sealed record ApplicationSeed(int PortfolioId, int UnitId);
+    private sealed record ApplicationSeed(int PortfolioId, int UnitId, WorkspaceReadScope Scope);
 
     private sealed record GraphCounts(
         int LeaseManagements,

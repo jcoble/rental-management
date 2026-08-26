@@ -18,26 +18,33 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class TenantServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name4)]
+public class TenantServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int ActorUserId = 9001;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
     private readonly MutableTimeProvider _timeProvider = new(
         new DateTimeOffset(2027, 1, 31, 5, 0, 0, TimeSpan.Zero));
-    private readonly ServiceProvider _services;
-    private readonly TenantService _sut;
-    private readonly TenantService _writeSut;
-    private readonly WorkspaceReadScope _scope;
+    private ServiceProvider _services = null!;
+    private TenantService _sut = null!;
+    private TenantService _writeSut = null!;
+    private WorkspaceReadScope _scope;
 
-    public TenantServiceTests()
+    public TenantServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         SeedCanonicalLeaseReadModel();
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(TenantServiceTests));
-        _services = AtomicDomainTestKernel.CreateForCoreCrud(_ctx.ConnectionString, _timeProvider);
+        _services = AtomicDomainTestKernel.CreateForCoreCrudPostgreSql(_ctx.ConnectionString, _timeProvider);
         _sut = new TenantService(
             _ctx.Db, Mock.Of<IDataUpdateService>(), _timeProvider,
             _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
@@ -59,70 +66,12 @@ public class TenantServiceTests : IDisposable
         });
         _ctx.Db.SaveChanges();
 
-        _ctx.Db.Database.ExecuteSqlRaw("""
-            CREATE VIEW "vw_unit_occupancy" AS
-            SELECT
-                lm."PortfolioId",
-                lm."PropertyId",
-                lm."UnitId",
-                CURRENT_TIMESTAMP AS "EffectiveNowUtc",
-                CASE WHEN lm."PossessionGivenAtUtc" IS NOT NULL
-                          AND lm."PossessionReturnedAtUtc" IS NULL
-                          AND lm."CanceledAtUtc" IS NULL THEN 1 ELSE 0 END AS "IsOccupied",
-                CASE WHEN lm."PossessionGivenAtUtc" IS NOT NULL
-                          AND lm."PossessionReturnedAtUtc" IS NULL
-                          AND lm."CanceledAtUtc" IS NULL THEN lm."Id" END AS "CurrentLeaseManagementId",
-                CASE WHEN lm."PlannedPossessionAtUtc" IS NOT NULL
-                          AND lm."PossessionGivenAtUtc" IS NULL
-                          AND lm."CanceledAtUtc" IS NULL THEN 1 ELSE 0 END AS "HasScheduledMoveIn",
-                lm."PlannedPossessionAtUtc" AS "NextPlannedPossessionAtUtc",
-                CASE WHEN lm."PlannedPossessionAtUtc" IS NOT NULL
-                          AND lm."PossessionGivenAtUtc" IS NULL
-                          AND lm."CanceledAtUtc" IS NULL THEN lm."Id" END AS "PlannedLeaseManagementId",
-                0 AS "IsInTurnover",
-                0 AS "IsOutOfService",
-                0 AS "IsOnManagementHold",
-                0 AS "HasGoverningAgreementWithoutPossession",
-                0 AS "HasPossessionWithoutGoverningAgreement",
-                NULL AS "OccupancyExceptionCode"
-            FROM "LeaseManagements" lm;
-
-            CREATE VIEW "vw_lease_management_lifecycle" AS
-            SELECT
-                lm."PortfolioId",
-                lm."PropertyId",
-                lm."UnitId",
-                lm."Id" AS "LeaseManagementId",
-                CURRENT_TIMESTAMP AS "EffectiveNowUtc",
-                date('now') AS "BusinessDate",
-                CASE WHEN lm."PossessionGivenAtUtc" IS NOT NULL
-                          AND lm."PossessionReturnedAtUtc" IS NULL THEN 'PossessionActive'
-                     WHEN lm."PossessionReturnedAtUtc" IS NOT NULL THEN 'PossessionReturned'
-                     ELSE 'PrePossession' END AS "Lifecycle",
-                NULL AS "CurrentAgreementId",
-                NULL AS "UpcomingAgreementId",
-                0 AS "CurrentPartyCount",
-                0 AS "CurrentResidentCount",
-                0 AS "CurrentFinanciallyResponsiblePartyCount",
-                NULL AS "CurrentPrimaryPartyId",
-                NULL AS "CurrentPrimaryTenantId",
-                NULL AS "CurrentPrimaryTenantName",
-                NULL AS "TenantAccountId",
-                0 AS "HasMissingTenantAccount",
-                0 AS "HasMultipleGoverningAgreements",
-                0 AS "HasMultipleCurrentPrimaryTenants",
-                0 AS "HasAccountCloseMismatch",
-                0 AS "HasGoverningAgreementWithoutPossession",
-                0 AS "HasPossessionWithoutGoverningAgreement",
-                0 AS "HasReconciliationException"
-            FROM "LeaseManagements" lm;
-            """);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _services.Dispose();
-        _ctx.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -170,8 +119,9 @@ public class TenantServiceTests : IDisposable
         SeedTenant("Casey", "Moss", activeRelationshipCount: 0);
         SeedTenant("Devon", "Nash", activeRelationshipCount: 2);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             Sort = "-activeLeaseCount",
             Skip = 1,
@@ -184,7 +134,7 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => t.FirstName).Should().Equal("Devon", "Avery");
         result.Items.Select(t => t.ActiveLeaseCount).Should().Equal(2, 1);
 
-        _commands.Should().HaveCount(2, "the count and requested page each execute as one DB-side query");
+        _commands.Should().HaveCount(3, "count, page, and relationship projection each execute DB-side");
         _commands.Should().Contain(sql =>
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase));
@@ -201,7 +151,8 @@ public class TenantServiceTests : IDisposable
         var tenant = SeedTenant("Harper", "Resident", activeRelationshipCount: 2);
         SeedRelationshipMembership(tenant, occupying: false);
 
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             Sort = "name",
             Skip = 0,
@@ -236,7 +187,8 @@ public class TenantServiceTests : IDisposable
         var tenant = SeedTenant("Jordan", "Occupant", activeRelationshipCount: 0);
         SeedRelationshipOnUnit(tenant, currentProperty, targetUnit, occupying: true);
 
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             UnitId = targetUnit.Id,
             PropertyId = otherProperty.Id,
@@ -256,8 +208,9 @@ public class TenantServiceTests : IDisposable
         SeedTenant("Avery", "Stone", activeRelationshipCount: 0);
         SeedTenant("Blair", "Ellis", activeRelationshipCount: 0);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             Search = "Avery-Ellis",
             Sort = "name",
@@ -270,7 +223,7 @@ public class TenantServiceTests : IDisposable
         tenant.FirstName.Should().Be("Avery");
         tenant.LastName.Should().Be("Ellis");
 
-        _commands.Should().HaveCount(2);
+        _commands.Should().HaveCount(3);
         _commands.Where(sql => sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase))
             .Should().OnlyContain(sql =>
             sql.Contains("LIKE", StringComparison.OrdinalIgnoreCase) ||
@@ -289,8 +242,9 @@ public class TenantServiceTests : IDisposable
         SeedRelationshipMembership(expiredTenant, occupying: false);
         SeedRelationshipMembership(pendingTenant, occupying: false);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             AvailableForLease = true,
             Sort = "name",
@@ -302,11 +256,11 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => $"{t.FirstName} {t.LastName}")
             .Should().Equal("Avery Available", "Devon Expired", "Emery Pending");
 
-        _commands.Should().HaveCount(2);
+        _commands.Should().HaveCount(3);
         _commands.Where(sql => sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase))
             .Should().OnlyContain(sql =>
-            sql.Contains("NOT EXISTS", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("LeaseManagementParties", StringComparison.OrdinalIgnoreCase));
+            sql.Contains("LEFT JOIN", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("TenantId\" IS NULL", StringComparison.OrdinalIgnoreCase));
         _commands.Should().Contain(sql =>
             sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase));
     }
@@ -327,8 +281,9 @@ public class TenantServiceTests : IDisposable
         _ctx.Db.SaveChanges();
         SeedRelationshipMembership(conflictTenant, occupying: true);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             AvailableForLease = true,
             IncludeLeaseManagementId = currentRelationship.Id,
@@ -340,7 +295,7 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => $"{t.FirstName} {t.LastName}")
             .Should().Equal("Avery Available", "Blair Current", "Casey Current");
         result.Items.Should().NotContain(t => t.FirstName == "Devon");
-        _commands.Should().HaveCount(2);
+        _commands.Should().HaveCount(3);
         _commands.Should().OnlyContain(sql =>
             sql.Contains("LeaseManagementParties", StringComparison.OrdinalIgnoreCase));
     }
@@ -375,8 +330,9 @@ public class TenantServiceTests : IDisposable
         SeedRelationshipOnUnit(otherUnitTenant, property, otherUnit, occupying: true);
         SeedRelationshipOnUnit(expiredTenant, property, targetUnit, occupying: false);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             UnitId = targetUnit.Id,
             Sort = "name",
@@ -388,7 +344,7 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => $"{t.FirstName} {t.LastName}")
             .Should().Equal("Avery Active", "Blair Primary Holder", "Blair Member");
 
-        _commands.Should().HaveCount(2);
+        _commands.Should().HaveCount(3);
         _commands.Where(sql => sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase))
             .Should().OnlyContain(sql =>
             sql.Contains("UnitId", StringComparison.OrdinalIgnoreCase) &&
@@ -430,8 +386,9 @@ public class TenantServiceTests : IDisposable
         SeedRelationshipOnUnit(unionTenant, unionProperty, unionUnit, occupying: true);
         SeedRelationshipOnUnit(franklinTenant, franklinProperty, franklinUnit, occupying: true);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
         {
             PropertyId = unionProperty.Id,
             Sort = "name",
@@ -449,7 +406,7 @@ public class TenantServiceTests : IDisposable
         tenant.CurrentUnitId.Should().Be(unionUnit.Id);
         tenant.CurrentUnitNumber.Should().Be("B");
 
-        _commands.Should().HaveCount(2, "count and page remain DB-side translated queries");
+        _commands.Should().HaveCount(3, "count, page, and relationship projection remain DB-side queries");
         _commands.Should().Contain(sql =>
             sql.Contains("LeaseManagementParties", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase) &&
@@ -553,7 +510,8 @@ public class TenantServiceTests : IDisposable
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("current resident");
-        (await _sut.GetAsync(PortfolioId, tenant.Id))
+        await _ctx.ActivateApiScopeAsync(_scope);
+        (await _sut.GetAuthorizedAsync(_scope, tenant.Id))
             .Should().NotBeNull("a tenant who still occupies a unit must not be deleted");
     }
 
@@ -568,7 +526,8 @@ public class TenantServiceTests : IDisposable
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
         ex.Which.Message.Should().Contain("rental relationship history");
-        (await _sut.GetAsync(PortfolioId, tenant.Id))
+        await _ctx.ActivateApiScopeAsync(_scope);
+        (await _sut.GetAuthorizedAsync(_scope, tenant.Id))
             .Should().NotBeNull("a tenant with relationship history is preserved for agreements and account history");
     }
 
@@ -581,7 +540,8 @@ public class TenantServiceTests : IDisposable
             _scope, tenant.Id, Guid.NewGuid().ToString("N"));
 
         deleted.Should().BeTrue();
-        (await _sut.GetAsync(PortfolioId, tenant.Id)).Should().BeNull();
+        await _ctx.ActivateApiScopeAsync(_scope);
+        (await _sut.GetAuthorizedAsync(_scope, tenant.Id)).Should().BeNull();
     }
 
     [Fact]
@@ -589,7 +549,8 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenantWithRelationship(occupying: false);
 
-        var response = await _sut.GetAsync(PortfolioId, tenant.Id);
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var response = await _sut.GetAuthorizedAsync(_scope, tenant.Id);
 
         response!.ActiveLeaseCount.Should().Be(0);
         response.LeaseHistoryCount.Should().Be(1);
@@ -602,7 +563,8 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenantWithRelationship(occupying: true, noticeGiven: true);
 
-        var response = await _sut.GetAsync(PortfolioId, tenant.Id);
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var response = await _sut.GetAuthorizedAsync(_scope, tenant.Id);
 
         // ActiveLeaseCount is the existing DTO name for occupied rental relationships. The web delete-state helper
         // disables delete while it is > 0, so a notice-given-only tenant is also blocked in the UI.
@@ -898,11 +860,11 @@ public class TenantServiceTests : IDisposable
         PropertyId = property.Id,
         UnitId = unit.Id,
         RelationshipNumber = $"LM-{unit.Id}-{Guid.NewGuid():N}",
-        PlannedPossessionAtUtc = occupying ? now.AddMonths(-1) : now.AddMonths(-2),
-        PossessionGivenAtUtc = now.AddMonths(-1),
+        PlannedPossessionAtUtc = occupying ? now.AddMonths(-1) : now.AddMonths(-3),
+        PossessionGivenAtUtc = occupying ? now.AddMonths(-1) : now.AddMonths(-3),
         NoticeGivenAtUtc = noticeGiven ? now.AddDays(-7) : null,
         PlannedMoveOutAtUtc = noticeGiven ? now.AddMonths(1) : null,
-        PossessionReturnedAtUtc = occupying ? null : now.AddDays(-1),
+        PossessionReturnedAtUtc = occupying ? null : now.AddMonths(-2),
         CreatedAtUtc = now,
         CreatedByUserId = ActorUserId,
         UpdatedAtUtc = now,

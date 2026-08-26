@@ -33,7 +33,4 @@ public interface IRecurringMaintenanceTaskService
     Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default);
 
-    Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default);
-    Task<RecurringMaintenanceTaskListResponse> ListPageAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default);
-    Task<RecurringMaintenanceTaskResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 }

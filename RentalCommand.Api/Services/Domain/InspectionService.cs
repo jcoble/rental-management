@@ -66,24 +66,6 @@ public class InspectionService : IInspectionService
     private IRequestWriteExecutor Writes => _writes ?? throw new InvalidOperationException(
         "Inspection changes must use the shared write executor.");
 
-    // Internal portfolio-id entry points exist only for the focused service tests via
-    // InternalsVisibleTo. Production callers resolve IInspectionService, whose only surface requires
-    // a server-derived WorkspaceReadScope and therefore cannot bypass capability/property checks.
-    internal async Task<IReadOnlyList<InspectionResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, propertyId, query, ct);
-        return page.Items;
-    }
-
-    internal async Task<InspectionListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-    {
-        var q = _db.Inspections
-            .AsNoTracking()
-            .Where(i => i.PortfolioId == portfolioId);
-
-        return await ListPageFromQueryAsync(q, propertyId, query, ct);
-    }
-
     public async Task<IReadOnlyList<InspectionResponse>> ListAuthorizedAsync(
         WorkspaceReadScope scope,
         int? propertyId,
@@ -220,11 +202,6 @@ public class InspectionService : IInspectionService
                 .ToList(),
         });
 
-    internal async Task<InspectionDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-        => await InspectionDetailQuery(_db.Inspections.AsNoTracking()
-                .Where(inspection => inspection.PortfolioId == portfolioId))
-            .SingleOrDefaultAsync(inspection => inspection.Id == id, ct);
-
     public async Task<InspectionDetailResponse?> GetAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
@@ -232,7 +209,8 @@ public class InspectionService : IInspectionService
         => await InspectionDetailQuery(AuthorizedInspections(scope, ReadCapabilities))
             .SingleOrDefaultAsync(inspection => inspection.Id == id, ct);
 
-    internal async Task<IReadOnlyList<InspectionTemplateResponse>> ListTemplatesAsync(int portfolioId, CancellationToken ct = default)
+    private async Task<IReadOnlyList<InspectionTemplateResponse>> ListTemplatesAsync(
+        WorkspaceReadScope scope, CancellationToken ct = default)
     {
         // Built-ins (code-defined) first, then any portfolio-custom templates from the DB.
         var result = InspectionTemplateCatalog.BuiltIns
@@ -241,7 +219,7 @@ public class InspectionService : IInspectionService
 
         var custom = await _db.InspectionTemplates
             .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId)
+            .Where(t => t.PortfolioId == scope.PortfolioId)
             .OrderBy(t => t.Name)
             .ThenBy(t => t.Id)
             .Select(t => new InspectionTemplateResponse
@@ -269,10 +247,11 @@ public class InspectionService : IInspectionService
         WorkspaceReadScope scope,
         CancellationToken ct = default)
         => await HasAllPropertiesAccessAsync(scope, ReadCapabilities, ct)
-            ? await ListTemplatesAsync(scope.PortfolioId, ct)
+            ? await ListTemplatesAsync(scope, ct)
             : [];
 
-    internal async Task<InspectionTemplateResponse?> GetTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default)
+    private async Task<InspectionTemplateResponse?> GetTemplateAsync(
+        WorkspaceReadScope scope, int templateId, CancellationToken ct = default)
     {
         if (InspectionTemplateCatalog.IsBuiltInId(templateId))
         {
@@ -281,7 +260,7 @@ public class InspectionService : IInspectionService
         }
 
         return await _db.InspectionTemplates.AsNoTracking()
-            .Where(template => template.Id == templateId && template.PortfolioId == portfolioId)
+            .Where(template => template.Id == templateId && template.PortfolioId == scope.PortfolioId)
             .Select(template => new InspectionTemplateResponse
             {
                 Id = template.Id,
@@ -304,7 +283,7 @@ public class InspectionService : IInspectionService
         int templateId,
         CancellationToken ct = default)
         => await HasAllPropertiesAccessAsync(scope, ReadCapabilities, ct)
-            ? await GetTemplateAsync(scope.PortfolioId, templateId, ct)
+            ? await GetTemplateAsync(scope, templateId, ct)
             : null;
 
     public async Task<InspectionTemplateResponse?> CreateTemplateAuthorizedAsync(
@@ -536,11 +515,12 @@ public class InspectionService : IInspectionService
         return (result, null);
     }
 
-    internal async Task<(Stream Stream, string FileName, string ContentType)?> GetReportAsync(int portfolioId, int id, CancellationToken ct = default)
+    private async Task<(Stream Stream, string FileName, string ContentType)?> GetReportAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
         var inspection = await _db.Inspections
             .AsNoTracking()
-            .FirstOrDefaultAsync(i => i.Id == id && i.PortfolioId == portfolioId, ct);
+            .FirstOrDefaultAsync(i => i.Id == id && i.PortfolioId == scope.PortfolioId, ct);
         if (inspection?.ReportStoredFileId == null)
         {
             return null;
@@ -549,7 +529,7 @@ public class InspectionService : IInspectionService
         var file = await _db.StoredFiles
             .AsNoTracking()
             .FirstOrDefaultAsync(f => f.Id == inspection.ReportStoredFileId.Value
-                && f.PortfolioId == portfolioId
+                && f.PortfolioId == scope.PortfolioId
                 && f.DeletedAt == null, ct);
         if (file == null)
         {
@@ -576,7 +556,7 @@ public class InspectionService : IInspectionService
     {
         var allowed = await AuthorizedInspections(scope, ReadCapabilities)
             .AnyAsync(inspection => inspection.Id == id, ct);
-        return allowed ? await GetReportAsync(scope.PortfolioId, id, ct) : null;
+        return allowed ? await GetReportAsync(scope, id, ct) : null;
     }
 
     // -------------------------------------------------------------------------

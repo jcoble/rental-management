@@ -25,12 +25,6 @@ public interface ICapitalAssetService
     Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope, int id, string operationKey, CancellationToken ct = default);
 
-    Task<IReadOnlyList<CapitalAssetResponse>> ListAsync(
-        int portfolioId, CapitalAssetListQuery query, CancellationToken ct = default);
-
-    Task<CapitalAssetListResponse> ListPageAsync(
-        int portfolioId, CapitalAssetListQuery query, CancellationToken ct = default);
-
     Task<CapitalAssetResponse?> GetAsync(
         int portfolioId, int id, int? depreciationYear = null, CancellationToken ct = default);
 
