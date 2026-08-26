@@ -9,7 +9,7 @@
 import { fail } from '@sveltejs/kit';
 import { createHash } from 'node:crypto';
 import type { Actions, PageServerLoad } from './$types';
-import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { serverPost } from '$lib/api/server-fetch';
 
 export const load: PageServerLoad = async ({ url }) => {
 	return { email: url.searchParams.get('email')?.trim() ?? '' };
@@ -30,12 +30,20 @@ export const actions: Actions = {
 			const operationKey = createHash('sha256')
 				.update(`${email}:${Math.floor(Date.now() / 60_000)}`)
 				.digest('hex');
-			const response = await fetch(`${SERVER_API_BASE_URL}/auth/forgot-password`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
-				body: JSON.stringify({ email })
-			});
-			if (!response.ok) {
+			const result = await serverPost(
+				'/auth/forgot-password',
+				undefined,
+				{ email },
+				{ headers: { 'Idempotency-Key': operationKey } }
+			);
+			if (result.networkError) {
+				return fail(503, {
+					error: 'Unable to connect to Rental Command. Please try again.',
+					sent: false,
+					email
+				});
+			}
+			if (result.status < 200 || result.status >= 300) {
 				return fail(503, {
 					error: 'Password recovery is temporarily unavailable. Please try again.',
 					sent: false,

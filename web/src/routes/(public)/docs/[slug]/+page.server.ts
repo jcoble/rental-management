@@ -17,7 +17,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { marked } from 'marked';
 import sanitizeHtmlLib from 'sanitize-html';
-import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { serverGet } from '$lib/api/server-fetch';
 import type { DocArticle, DocsIndex } from '$lib/api/endpoints/docs';
 import type { PageServerLoad } from './$types';
 
@@ -108,33 +108,30 @@ function injectHeadingIdsAndToc(html: string): { html: string; toc: DocTocItem[]
 	return { html: out, toc };
 }
 
-export const load: PageServerLoad = async ({ params, fetch }) => {
+export const load: PageServerLoad = async ({ params }) => {
 	const { slug } = params;
 
-	let articleRes: Response;
-	let indexRes: Response;
-	try {
-		[articleRes, indexRes] = await Promise.all([
-			fetch(`${SERVER_API_BASE_URL}/docs/${encodeURIComponent(slug)}`),
-			fetch(`${SERVER_API_BASE_URL}/docs`)
-		]);
-	} catch {
+	const [articleResult, indexResult] = await Promise.all([
+		serverGet<DocArticle>(`/docs/${encodeURIComponent(slug)}`),
+		serverGet<DocsIndex>('/docs')
+	]);
+	if (articleResult.networkError) {
 		// Service unreachable → send the reader to the graceful docs index instead of a
 		// hard 502 error page.
 		throw redirect(307, '/docs');
 	}
 
-	if (articleRes.status === 404) {
+	if (articleResult.status === 404) {
 		throw error(404, 'That documentation article could not be found.');
 	}
-	if (!articleRes.ok) {
+	if (articleResult.status < 200 || articleResult.status >= 300 || !articleResult.data) {
 		// Server-side failure → fall back to the docs index rather than a scary error.
-		if (articleRes.status >= 500) throw redirect(307, '/docs');
-		throw error(articleRes.status, 'Could not load this article.');
+		if (articleResult.status >= 500) throw redirect(307, '/docs');
+		throw error(articleResult.status, 'Could not load this article.');
 	}
 
-	const article = (await articleRes.json()) as DocArticle;
-	const index = indexRes.ok ? ((await indexRes.json()) as DocsIndex) : { categories: [] };
+	const article = articleResult.data;
+	const index = indexResult.data ?? { categories: [] };
 
 	// Render the trusted markdown body to HTML on the server, then add heading anchors + build
 	// the "On this page" table of contents.

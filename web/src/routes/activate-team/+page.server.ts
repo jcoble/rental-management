@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
-import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { serverPost } from '$lib/api/server-fetch';
 
 export const load: PageServerLoad = async ({ url }) => {
 	const token = url.searchParams.get('token');
@@ -25,21 +25,24 @@ export const actions: Actions = {
 		}
 
 		try {
-			const response = await fetch(
-				`${SERVER_API_BASE_URL}/auth/workspace-invitations/activate`,
-				{
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ token, password })
-				}
+			const result = await serverPost(
+				'/auth/workspace-invitations/activate',
+				undefined,
+				{ token, password }
 			);
-			if (!response.ok) {
-				const problem = await response.json().catch(() => null);
+			if (result.networkError) {
+				return fail(500, {
+					error: 'Unable to connect to Rental Command. Please try again.',
+					activated: false
+				});
+			}
+			if (result.status < 200 || result.status >= 300) {
+				const problem = result.problem;
 				const message =
-					problem?.errors?.Password?.[0] ??
-					problem?.error ??
+					result.validationErrors?.Password?.[0] ??
+					(typeof problem?.error === 'string' ? problem.error : undefined) ??
 					'This activation link is invalid, expired, or has already been used.';
-				return fail(response.status, { error: message, activated: false });
+				return fail(result.status, { error: message, activated: false });
 			}
 			return { activated: true };
 		} catch (error) {

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 const endpointSource = readFileSync(new URL('./tenant-accounts.ts', import.meta.url), 'utf8');
-const paymentSource = readFileSync(new URL('./payments.ts', import.meta.url), 'utf8');
+const tenantMoneySource = readFileSync(new URL('./tenant-money.ts', import.meta.url), 'utf8');
 const scanReviewSource = readFileSync(
 	new URL('../../../routes/(protected)/scan/[draftId]/+page.svelte', import.meta.url),
 	'utf8'
@@ -17,9 +17,9 @@ describe('staff tenant-account read contract', () => {
 		assert.match(endpointSource, /\/tenant-accounts\/\$\{tenantAccountId\}\/entries\/\$\{tenantLedgerEntryId\}/);
 	});
 
-	it('keeps the payments endpoint module command-only', () => {
-		assert.doesNotMatch(paymentSource, /api\.get/);
-		assert.doesNotMatch(paymentSource, /\/payments(?:\/|`|'|")/);
+	it('keeps the tenant money endpoint module command-only', () => {
+		assert.doesNotMatch(tenantMoneySource, /api\.get/);
+		assert.doesNotMatch(tenantMoneySource, /\/payments(?:\/|`|'|")/);
 	});
 
 	it('merges one exact contextual account into the current server page', () => {

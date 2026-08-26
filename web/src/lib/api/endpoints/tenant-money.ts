@@ -124,6 +124,35 @@ export interface TenantPaymentRefundResult {
 	error: string | null;
 }
 
+export interface TenantPaymentRefundConflict {
+	outcome: 'AlreadyRefunded' | 'ExternalCorrectionUnavailable';
+	error?: string | null;
+}
+
+export function linkedTenantPaymentRefund(
+	response: TenantMoneyCommandResponse<TenantPaymentRefundResult>
+): {
+	refundEntryId: number;
+	compensatedAllocationAmount: number;
+	compensatedAllocationCount: number;
+	replayed: boolean;
+} | null {
+	const result = response.value;
+	if (!result.applied || result.outcome !== 'Refunded' || result.refundEntryId == null) return null;
+	return {
+		refundEntryId: result.refundEntryId,
+		compensatedAllocationAmount: result.compensatedAllocationAmount,
+		compensatedAllocationCount: result.compensatedAllocationCount,
+		replayed: response.replayed
+	};
+}
+
+export function isTenantPaymentRefundConflict(value: unknown): value is TenantPaymentRefundConflict {
+	if (!value || typeof value !== 'object') return false;
+	const outcome = (value as { outcome?: unknown }).outcome;
+	return outcome === 'AlreadyRefunded' || outcome === 'ExternalCorrectionUnavailable';
+}
+
 function mutationOptions(operationKey: string): RequestInit {
 	return { headers: { 'Idempotency-Key': operationKey } };
 }
