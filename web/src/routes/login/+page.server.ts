@@ -9,7 +9,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import type { AccessContextSelectionRequiredResponse, LoginResponse } from '$lib/types/user';
-import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { serverPost } from '$lib/api/server-fetch';
 import { AUTH_COOKIE_NAMES, deleteLegacyAuthCookies } from '$lib/server/auth-cookies';
 import { env } from '$env/dynamic/public';
 import { canAccessPathForEnvelope, safeLandingForAccess } from '$lib/auth/experience-policy';
@@ -68,16 +68,16 @@ export const actions: Actions = {
 
 		let data: LoginResponse;
 		try {
-			const response = await fetch(`${SERVER_API_BASE_URL}/auth/login`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ email, password, accessContextId })
-			});
+			const result = await serverPost<LoginResponse>(
+				'/auth/login',
+				undefined,
+				{ email, password, accessContextId }
+			);
 
-			if (!response.ok) {
-				const errorData = await response.json().catch(() => ({ error: 'Login failed' }));
-				if (response.status === 409 && errorData.code === 'ACCESS_CONTEXT_REQUIRED') {
-					const selection = errorData as AccessContextSelectionRequiredResponse;
+			if (result.status < 200 || result.status >= 300 || !result.data) {
+				const errorData = result.problem ?? {};
+				if (result.status === 409 && errorData.code === 'ACCESS_CONTEXT_REQUIRED') {
+					const selection = errorData as unknown as AccessContextSelectionRequiredResponse;
 					return fail(409, {
 						error: selection.error,
 						emailNotVerified: false,
@@ -85,16 +85,25 @@ export const actions: Actions = {
 						contexts: selection.contexts
 					});
 				}
+				const rawError = errorData.error;
 				const errorMessage =
-					typeof errorData.error === 'object'
-						? errorData.error?.message
-						: errorData.error;
+					typeof rawError === 'string'
+						? rawError
+						: (rawError as { message?: string } | undefined)?.message ?? 'Login failed';
 				// The API marks an unverified-email login with an EMAIL_NOT_VERIFIED: prefix. Surface a
 				// clean boolean (and keep the email) so the page can offer a "resend verification" action
 				// instead of just printing the raw marker string.
 				const emailNotVerified =
 					typeof errorMessage === 'string' && errorMessage.includes('EMAIL_NOT_VERIFIED');
-				return fail(response.status, {
+				if (result.networkError) {
+					const message = result.error ?? '';
+					const userMessage =
+						message.includes('fetch failed') || message.includes('ECONNREFUSED')
+							? 'Unable to connect to the API server. Please ensure the backend is running.'
+							: 'An unexpected error occurred. Please try again.';
+					return fail(500, { error: userMessage, emailNotVerified: false, email });
+				}
+				return fail(result.status, {
 					error: emailNotVerified
 						? 'Please verify your email address before signing in.'
 						: errorMessage || 'Invalid email or password',
@@ -103,7 +112,7 @@ export const actions: Actions = {
 				});
 			}
 
-			data = (await response.json()) as LoginResponse;
+			data = result.data;
 
 			// Access token cookie (used for SSR Authorization headers).
 			cookies.set(AUTH_COOKIE_NAMES.accessToken, data.accessToken, {
@@ -123,7 +132,7 @@ export const actions: Actions = {
 
 			// Copy the refresh token from the API's Set-Cookie into a first-party
 			// cookie on this origin so client JS can refresh via our proxy.
-			const setCookieHeader = response.headers.get('set-cookie');
+			const setCookieHeader = result.responseHeaders?.get('set-cookie');
 			if (setCookieHeader) {
 				const refreshMatch = setCookieHeader.match(
 					new RegExp(`${AUTH_COOKIE_NAMES.refreshToken}=([^;]+)`)

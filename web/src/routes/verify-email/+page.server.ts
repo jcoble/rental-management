@@ -8,7 +8,7 @@
 
 import type { PageServerLoad } from './$types';
 import { createHash } from 'node:crypto';
-import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { serverPost } from '$lib/api/server-fetch';
 
 export const load: PageServerLoad = async ({ url }) => {
 	const userId = url.searchParams.get('userId');
@@ -22,23 +22,29 @@ export const load: PageServerLoad = async ({ url }) => {
 		const operationKey = createHash('sha256')
 			.update(JSON.stringify({ userId, token }))
 			.digest('hex');
-		const response = await fetch(`${SERVER_API_BASE_URL}/auth/confirm-email`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
-			body: JSON.stringify({ userId, token })
-		});
+		const result = await serverPost<{ message?: string }>(
+			'/auth/confirm-email',
+			undefined,
+			{ userId, token },
+			{ headers: { 'Idempotency-Key': operationKey } }
+		);
 
-		if (!response.ok) {
-			const errorData = await response.json().catch(() => ({ error: 'Verification failed' }));
+		if (result.networkError) {
+			return {
+				success: false,
+				error: 'Unable to connect to the server. Please try again later.'
+			};
+		}
+		if (result.status < 200 || result.status >= 300) {
+			const rawError = result.problem?.error;
 			const message =
-				typeof errorData.error === 'object'
-					? errorData.error?.message
-					: errorData.error;
-			return { success: false, error: message || 'Verification failed.' };
+				typeof rawError === 'string'
+					? rawError
+					: (rawError as { message?: string } | undefined)?.message;
+			return { success: false, error: message || 'Verification failed' };
 		}
 
-		const data = await response.json().catch(() => ({ message: 'Email verified.' }));
-		return { success: true, message: data.message as string | undefined };
+		return { success: true, message: result.data?.message ?? 'Email verified.' };
 	} catch (err) {
 		console.error('Email verification error:', err);
 		return {

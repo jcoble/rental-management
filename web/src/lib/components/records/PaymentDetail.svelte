@@ -5,8 +5,8 @@
 	import {
 		isTenantPaymentRefundConflict,
 		linkedTenantPaymentRefund,
-		payments
-	} from '$lib/api/endpoints/payments';
+		tenantMoney
+	} from '$lib/api/endpoints/tenant-money';
 	import { ApiError } from '$lib/api/client';
 	import { currentCapabilities } from '$lib/stores/auth.svelte';
 	import {
@@ -110,7 +110,7 @@
 			if (!correctionAllowed || !correction || !correctionKey) {
 				throw new Error('Payment correction is not authorized.');
 			}
-			return payments.refundPayment(tenantAccountId, correctionKey, {
+			return tenantMoney.refundPayment(tenantAccountId, correctionKey, {
 				paymentEntryId: tenantLedgerEntryId,
 				effectiveOn: correction.effectiveOn,
 				reason: correction.reason.trim(),

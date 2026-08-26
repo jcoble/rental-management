@@ -1,8 +1,8 @@
 /**
- * Server-side authenticated fetch for +page.server.ts / +server.ts loaders.
+ * Server-side fetch for +page.server.ts / +server.ts loaders.
  *
- * Uses the absolute SERVER_API_BASE_URL and an explicit access token
- * (from event.locals.accessToken). Returns a discriminated result rather than
+ * Uses the absolute SERVER_API_BASE_URL and an optional access token
+ * (from event.locals.accessToken for authenticated calls). Returns a discriminated result rather than
  * throwing, so loaders can render partial pages on a single failed call.
  */
 
@@ -11,7 +11,7 @@ import { SERVER_API_BASE_URL } from '$lib/server/config';
 const SERVER_FETCH_TIMEOUT_MS = 20_000;
 
 export interface ServerFetchOptions extends RequestInit {
-	accessToken: string;
+	accessToken?: string;
 }
 
 export interface ServerFetchResult<T> {
@@ -19,13 +19,19 @@ export interface ServerFetchResult<T> {
 	error: string | null;
 	status: number;
 	validationErrors?: Record<string, string[]>;
+	problem?: Record<string, unknown>;
+	responseHeaders?: Headers;
+	networkError?: boolean;
 }
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), SERVER_FETCH_TIMEOUT_MS);
 	try {
-		return await fetch(input, { ...init, signal: controller.signal });
+		const signal = init.signal
+			? AbortSignal.any([controller.signal, init.signal])
+			: controller.signal;
+		return await fetch(input, { ...init, signal });
 	} finally {
 		clearTimeout(timeout);
 	}
@@ -46,7 +52,7 @@ export async function serverFetch<T>(
 	const { accessToken, ...fetchOptions } = options;
 
 	const headers: Record<string, string> = {
-		Authorization: `Bearer ${accessToken}`,
+		...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
 		'Content-Type': 'application/json',
 		...(fetchOptions.headers as Record<string, string>)
 	};
@@ -58,27 +64,29 @@ export async function serverFetch<T>(
 		});
 
 		if (!response.ok) {
-			const errorData = await response.json().catch(() => ({}));
+			const errorData = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 			const rawError = errorData.error;
 			const errorMessage =
 				typeof rawError === 'string'
 					? rawError
-					: rawError?.title ||
-						rawError?.message ||
+					: (rawError as { title?: string; message?: string } | undefined)?.title ||
+						(rawError as { title?: string; message?: string } | undefined)?.message ||
 						errorData.message ||
 						errorData.title ||
 						fallbackHttpErrorMessage(response.status);
 
 			const validationErrors: Record<string, string[]> | undefined =
 				errorData.errors && !Array.isArray(errorData.errors) && typeof errorData.errors === 'object'
-					? errorData.errors
+					? (errorData.errors as Record<string, string[]>)
 					: undefined;
 
 			return {
 				data: null,
-				error: validationErrors ? 'Please fix the validation errors below.' : errorMessage,
+				error: validationErrors ? 'Please fix the validation errors below.' : String(errorMessage),
 				status: response.status,
-				validationErrors
+				validationErrors,
+				problem: errorData,
+				responseHeaders: response.headers
 			};
 		}
 
@@ -86,24 +94,25 @@ export async function serverFetch<T>(
 			response.status === 204 || response.status === 205
 				? (null as T | null)
 				: ((await response.text().then((t) => (t.trim() ? JSON.parse(t) : null))) as T | null);
-		return { data, error: null, status: response.status };
+		return { data, error: null, status: response.status, responseHeaders: response.headers };
 	} catch (err) {
 		console.error(`Server fetch error for ${endpoint}:`, err);
 		return {
 			data: null,
 			error: err instanceof Error ? err.message : 'Network error',
-			status: 500
+			status: 500,
+			networkError: true
 		};
 	}
 }
 
-export function serverGet<T>(endpoint: string, accessToken: string): Promise<ServerFetchResult<T>> {
+export function serverGet<T>(endpoint: string, accessToken?: string): Promise<ServerFetchResult<T>> {
 	return serverFetch<T>(endpoint, { accessToken, method: 'GET' });
 }
 
 export function serverPost<T>(
 	endpoint: string,
-	accessToken: string,
+	accessToken: string | undefined,
 	body?: unknown,
 	options: RequestInit = {}
 ): Promise<ServerFetchResult<T>> {
