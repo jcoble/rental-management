@@ -53,6 +53,9 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
       leaseAgreementHistoryProvider(leaseManagementId),
     );
     final agreementHistory = agreements.asData?.value;
+    final currentSignedLease = _currentSignedLease(
+      agreementHistory?.items ?? const [],
+    );
     final auth = ref.watch(authControllerProvider);
     final canManageHousehold =
         auth is AuthStateAuthenticated &&
@@ -128,6 +131,23 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
             _ActionsCard(
               management: management,
               onAsk: () => _ask(context, ref),
+              onRenew: canPrepareAgreements && currentSignedLease != null
+                  ? () => _changeLease(
+                      context,
+                      ref,
+                      management,
+                      currentSignedLease,
+                      initialOperation: LeaseSuccessorOperation.renewal,
+                    )
+                  : null,
+              onChangeLease: canPrepareAgreements && currentSignedLease != null
+                  ? () => _changeLease(
+                      context,
+                      ref,
+                      management,
+                      currentSignedLease,
+                    )
+                  : null,
               onGivePossession:
                   canManageHousehold &&
                       management.summary.possessionGivenAt == null &&
@@ -325,6 +345,116 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
       if (context.mounted) _showError(context, error);
     }
   }
+
+  Future<void> _changeLease(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseManagementDetail management,
+    LeaseAgreementHistory source, {
+    LeaseSuccessorOperation? initialOperation,
+  }) async {
+    final summary = management.summary;
+    LeaseAgreementEffectiveAddendumSeries? effectiveAddendumSeries;
+    try {
+      effectiveAddendumSeries = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .effectiveAddendumSeries(
+            leaseManagementId: summary.id,
+            sourceAgreementId: source.id,
+          );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+      return;
+    }
+    if (!context.mounted) return;
+
+    final result = await showSuccessorAgreementSheet(
+      context,
+      source: source,
+      initialOperation: initialOperation,
+      propertyName: summary.propertyName,
+      unitNumber: summary.unitNumber,
+      businessDate: summary.businessDate,
+      effectiveAddendumSeries: effectiveAddendumSeries,
+    );
+    if (result == null || !context.mounted) return;
+    try {
+      final created = await _runWithStableRetry(
+        context,
+        actionLabel: 'save the lease change',
+        action: () => ref
+            .read(leaseManagementsRepositoryProvider)
+            .createSuccessorDraft(
+              leaseManagementId: summary.id,
+              sourceAgreementId: source.id,
+              changeType: result.operation.apiChangeType,
+              termStartOn: result.termStart,
+              termEndOn: result.termEnd,
+              governingFromOn: result.governingFrom,
+              correctionReason: result.correctionReason,
+              addendumDecisions: result.addendumDecisions,
+              operationKey: result.operationKey,
+            ),
+      );
+      if (created == null || !context.mounted) return;
+      await _refreshLease(context, ref, summary.id);
+      if (!context.mounted) return;
+      final createdDraft = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .agreementDraft(
+            leaseManagementId: summary.id,
+            leaseAgreementId: created.leaseAgreementId,
+          );
+      if (!context.mounted) return;
+      if (createdDraft.documentTemplateId != null) {
+        final edited = await showEditAgreementDraftSheet(
+          context,
+          draft: createdDraft,
+          propertyName: summary.propertyName,
+          unitNumber: summary.unitNumber,
+          source: source,
+        );
+        if (edited != null && context.mounted) {
+          await _refreshLease(context, ref, summary.id);
+        }
+      } else if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'The new version is saved. Open it from the lease history to '
+              'send it for signature.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _refreshLease(
+    BuildContext context,
+    WidgetRef ref,
+    int id,
+  ) async {
+    try {
+      await Future.wait([
+        ref.refresh(leaseManagementDetailProvider(id).future),
+        ref.refresh(leaseAgreementHistoryProvider(id).future),
+      ]);
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+}
+
+/// The signed lease that is currently in charge, if there is one. Only that
+/// one can be renewed or changed (LeaseAgreementDraftRules.cs).
+LeaseAgreementHistory? _currentSignedLease(List<LeaseAgreementHistory> items) {
+  for (final item in items) {
+    if (item.isGoverning && item.fullyExecutedAt != null) return item;
+  }
+  return null;
 }
 
 class _RelationshipHeader extends StatelessWidget {
@@ -749,49 +879,6 @@ class _AgreementHistoryCard extends ConsumerWidget {
                       ),
                     ),
                   ),
-                if (canPrepare && agreement.isGoverning)
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      OutlinedButton(
-                        onPressed: () => _openSuccessor(
-                          context,
-                          ref,
-                          agreement,
-                          LeaseSuccessorOperation.correction,
-                        ),
-                        child: const Text('Create correction'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () => _openSuccessor(
-                          context,
-                          ref,
-                          agreement,
-                          LeaseSuccessorOperation.restatement,
-                        ),
-                        child: const Text('Create restatement'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () => _openSuccessor(
-                          context,
-                          ref,
-                          agreement,
-                          LeaseSuccessorOperation.renewal,
-                        ),
-                        child: const Text('Create renewal'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () => _openSuccessor(
-                          context,
-                          ref,
-                          agreement,
-                          LeaseSuccessorOperation.monthToMonth,
-                        ),
-                        child: const Text('Create month-to-month'),
-                      ),
-                    ],
-                  ),
                 const Divider(),
               ],
           ],
@@ -971,7 +1058,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
     try {
       final canceled = await _runWithStableRetry(
         context,
-        actionLabel: 'cancel successor draft',
+        actionLabel: 'throw the draft away',
         action: () => ref
             .read(leaseManagementsRepositoryProvider)
             .cancelSuccessorDraft(
@@ -985,7 +1072,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
       await _refresh(context, ref);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Successor draft canceled.')),
+          const SnackBar(content: Text('Draft thrown away.')),
         );
       }
     } catch (error) {
@@ -1037,93 +1124,6 @@ class _AgreementHistoryCard extends ConsumerWidget {
     }
   }
 
-  Future<void> _openSuccessor(
-    BuildContext context,
-    WidgetRef ref,
-    LeaseAgreementHistory source,
-    LeaseSuccessorOperation operation,
-  ) async {
-    LeaseAgreementEffectiveAddendumSeries? effectiveAddendumSeries;
-    if (operation.requiresEffectiveAddendumDecisions) {
-      try {
-        effectiveAddendumSeries = await ref
-            .read(leaseManagementsRepositoryProvider)
-            .effectiveAddendumSeries(
-              leaseManagementId: leaseManagementId,
-              sourceAgreementId: source.id,
-            );
-      } catch (error) {
-        if (context.mounted) _showError(context, error);
-        return;
-      }
-      if (!context.mounted) return;
-    }
-
-    final result = await showSuccessorAgreementSheet(
-      context,
-      source: source,
-      operation: operation,
-      propertyName: propertyName,
-      unitNumber: unitNumber,
-      businessDate: managementBusinessDate,
-      effectiveAddendumSeries: effectiveAddendumSeries,
-    );
-    if (result == null || !context.mounted) return;
-    try {
-      final created = await _runWithStableRetry(
-        context,
-        actionLabel: 'create successor draft',
-        action: () => ref
-            .read(leaseManagementsRepositoryProvider)
-            .createSuccessorDraft(
-              leaseManagementId: leaseManagementId,
-              sourceAgreementId: source.id,
-              changeType: operation.apiChangeType,
-              termStartOn: result.termStart,
-              termEndOn: result.termEnd,
-              governingFromOn: result.governingFrom,
-              correctionReason: result.correctionReason,
-              addendumDecisions: result.addendumDecisions,
-              operationKey: result.operationKey,
-            ),
-      );
-      if (created == null || !context.mounted) return;
-      await Future.wait([
-        ref.refresh(leaseManagementDetailProvider(leaseManagementId).future),
-        ref.refresh(leaseAgreementHistoryProvider(leaseManagementId).future),
-      ]);
-      if (!context.mounted) return;
-      final createdDraft = await ref
-          .read(leaseManagementsRepositoryProvider)
-          .agreementDraft(
-            leaseManagementId: leaseManagementId,
-            leaseAgreementId: created.leaseAgreementId,
-          );
-      if (!context.mounted) return;
-      if (createdDraft.documentTemplateId != null) {
-        final edited = await showEditAgreementDraftSheet(
-          context,
-          draft: createdDraft,
-          propertyName: propertyName,
-          unitNumber: unitNumber,
-          source: source,
-        );
-        if (edited != null && context.mounted) {
-          await _refresh(context, ref);
-        }
-      } else if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Draft v${created.versionNumber} created. Open it from agreement history to continue.',
-            ),
-          ),
-        );
-      }
-    } catch (error) {
-      if (context.mounted) _showError(context, error);
-    }
-  }
 }
 
 class _CancelSuccessorDraftDialog extends StatefulWidget {
@@ -1146,13 +1146,13 @@ class _CancelSuccessorDraftDialogState
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Cancel successor draft?'),
+    title: const Text('Throw this draft away?'),
     content: Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'The source agreement is unchanged and keeps governing. Explain why this draft is being abandoned.',
+          'The lease you have now is unchanged and stays in place. Say why this draft is being thrown away.',
         ),
         const SizedBox(height: 12),
         TextField(
@@ -1472,6 +1472,8 @@ class _ActionsCard extends StatelessWidget {
   const _ActionsCard({
     required this.management,
     required this.onAsk,
+    required this.onRenew,
+    required this.onChangeLease,
     required this.onGivePossession,
     required this.onReturnPossession,
     required this.onEndingDisposition,
@@ -1479,6 +1481,8 @@ class _ActionsCard extends StatelessWidget {
 
   final LeaseManagementDetail management;
   final VoidCallback onAsk;
+  final VoidCallback? onRenew;
+  final VoidCallback? onChangeLease;
   final VoidCallback? onGivePossession;
   final VoidCallback? onReturnPossession;
   final VoidCallback? onEndingDisposition;
@@ -1490,17 +1494,26 @@ class _ActionsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FilledButton.tonalIcon(
-            onPressed: onAsk,
-            icon: const Icon(Icons.auto_awesome_outlined),
-            label: const Text('Ask this tenant & lease'),
-          ),
+          if (onRenew != null)
+            FilledButton.icon(
+              onPressed: onRenew,
+              icon: const Icon(Icons.event_repeat_outlined),
+              label: const Text('Renew'),
+            ),
+          if (onChangeLease != null) ...[
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: onChangeLease,
+              icon: const Icon(Icons.edit_calendar_outlined),
+              label: const Text('Change the lease'),
+            ),
+          ],
           if (onEndingDisposition != null) ...[
             const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: onEndingDisposition,
               icon: const Icon(Icons.event_available_outlined),
-              label: const Text('Record lease ending plan'),
+              label: const Text('End the lease'),
             ),
           ],
           if (onGivePossession != null) ...[
@@ -1519,27 +1532,56 @@ class _ActionsCard extends StatelessWidget {
               label: const Text('Move-out'),
             ),
           ],
-          if (management.summary.tenantAccountId != null) ...[
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: () => Navigator.of(context).push<void>(
-                MaterialPageRoute<void>(
-                  builder: (_) => Scaffold(
-                    appBar: AppBar(title: const Text('Tenant account')),
-                    body: LeaseLedgerView(
-                      leaseManagementId: management.summary.id,
-                    ),
-                  ),
-                ),
-              ),
-              icon: const Icon(Icons.account_balance_wallet_outlined),
-              label: const Text('View tenant account'),
-            ),
-          ],
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => _showMore(context),
+            icon: const Icon(Icons.more_horiz),
+            label: const Text('More'),
+          ),
         ],
       ),
     ),
   );
+
+  void _showMore(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.auto_awesome_outlined),
+              title: const Text('Ask about this tenant & lease'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                onAsk();
+              },
+            ),
+            if (management.summary.tenantAccountId != null)
+              ListTile(
+                leading: const Icon(Icons.account_balance_wallet_outlined),
+                title: const Text('View tenant account'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => Scaffold(
+                        appBar: AppBar(title: const Text('Tenant account')),
+                        body: LeaseLedgerView(
+                          leaseManagementId: management.summary.id,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _Fact extends StatelessWidget {

@@ -202,7 +202,9 @@ class LeaseAddendumDraftInput {
   final DateTime? effectiveThroughOn;
   final int termsSchemaVersion;
   final Map<String, dynamic> termsPayload;
-  final int documentTemplateId;
+  /// Optional. When it is null the built-in Rental Command lease form is used
+  /// (RentalCommand.Api/DTOs/PrepareMoveInDtos.cs).
+  final int? documentTemplateId;
   final List<LeaseAddendumDraftSigner> signers;
   final List<LeaseAddendumFinancialEffect> financialEffects;
   final int? draftRevision;
@@ -492,7 +494,9 @@ class PrepareMoveInInput {
   final DateTime? plannedPossessionAtUtc;
   final DateTime partyEffectiveFrom;
   final List<PrepareMoveInPartyInput> parties;
-  final int documentTemplateId;
+  /// Optional. When it is null the built-in Rental Command lease form is used
+  /// (RentalCommand.Api/DTOs/PrepareMoveInDtos.cs).
+  final int? documentTemplateId;
   final String termType;
   final DateTime termStartOn;
   final DateTime? termEndOn;
@@ -677,7 +681,9 @@ class EditAgreementDraftInput {
   final int gracePeriodDays;
   final int termsSchemaVersion;
   final Map<String, dynamic> termsPayload;
-  final int documentTemplateId;
+  /// Optional. When it is null the built-in Rental Command lease form is used
+  /// (RentalCommand.Api/DTOs/PrepareMoveInDtos.cs).
+  final int? documentTemplateId;
   final List<LeaseAgreementDraftSigner> signers;
 
   Map<String, dynamic> toJson() => {
