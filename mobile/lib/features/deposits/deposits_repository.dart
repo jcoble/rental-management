@@ -379,16 +379,20 @@ class DepositsNotifier extends Notifier<AsyncValue<TenantAccountDepositPage>> {
     final current = state.value;
     if (current == null || !current.hasMore) return;
     final nextQuery = current.query.copyWith(skip: current.items.length);
-    final next = await _repo.listDepositsPage(nextQuery);
-    state = AsyncValue.data(
-      TenantAccountDepositPage(
-        items: [...current.items, ...next.items],
-        totalCount: next.totalCount,
-        skip: 0,
-        take: current.take,
-        query: current.query,
-      ),
-    );
+    try {
+      final next = await _repo.listDepositsPage(nextQuery);
+      state = AsyncValue.data(
+        TenantAccountDepositPage(
+          items: [...current.items, ...next.items],
+          totalCount: next.totalCount,
+          skip: 0,
+          take: current.take,
+          query: current.query,
+        ),
+      );
+    } on ApiException catch (e, stackTrace) {
+      state = AsyncValue.error(e, stackTrace);
+    }
   }
 }
 
