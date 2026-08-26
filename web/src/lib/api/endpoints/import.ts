@@ -57,7 +57,8 @@ export function importCsv(
 	const fd = new FormData();
 	fd.append('file', file);
 	const headers: Record<string, string> = {};
-	if (!dryRun && (entityType === 'payment' || entityType === 'unit')) {
+	// Every live import needs a request key so a retry cannot create the same rows twice.
+	if (!dryRun) {
 		let operationId = atomicImportOperationIds.get(file);
 		if (!operationId) {
 			operationId = crypto.randomUUID();
