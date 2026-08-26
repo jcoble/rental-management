@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../../core/time/app_clock.dart';
+import '../../core/utils/date_wire.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
@@ -476,7 +477,7 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
     if (!mounted) return;
     final date = await showDatePicker(
       context: context,
-      initialDate: _startDate ?? now,
+      initialDate: _startDate ?? now.toLocal(),
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
@@ -497,7 +498,7 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
     if (!mounted) return;
     final date = await showDatePicker(
       context: context,
-      initialDate: _endDate ?? _startDate ?? now,
+      initialDate: _endDate ?? _startDate ?? now.toLocal(),
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
@@ -535,7 +536,13 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
       setState(() => _error = 'Please select a start date and time.');
       return false;
     }
-    if (_error == 'Please select a start date and time.') {
+    final end = _combineDateAndTime(_endDate, _endTime);
+    if (end != null && !end.isAfter(start)) {
+      setState(() => _error = 'End time must be after start time.');
+      return false;
+    }
+    if (_error == 'Please select a start date and time.' ||
+        _error == 'End time must be after start time.') {
       setState(() => _error = null);
     }
     return true;
@@ -551,13 +558,17 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
     }
 
     final end = _combineDateAndTime(_endDate, _endTime);
+    if (end != null && !end.isAfter(start)) {
+      setState(() => _error = 'End time must be after start time.');
+      return;
+    }
 
     final body = <String, dynamic>{
       'title': _titleCtrl.text.trim(),
       'type': _selectedType,
       'status': _selectedStatus,
-      'scheduledStart': start.toIso8601String(),
-      if (end != null) 'scheduledEnd': end.toIso8601String(),
+      'scheduledStart': localToWireIso(start),
+      if (end != null) 'scheduledEnd': localToWireIso(end),
       if (_selectedPropertyId != null) 'propertyId': _selectedPropertyId,
       if (_selectedTenantId != null) 'tenantId': _selectedTenantId,
       if (_prospectNameCtrl.text.trim().isNotEmpty)

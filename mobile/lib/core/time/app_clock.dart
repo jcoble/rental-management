@@ -26,7 +26,7 @@ final appNowProvider = FutureProvider.autoDispose<DateTime>((ref) async {
     return parsed.toUtc();
   } on DioException catch (error) {
     if (error.response?.statusCode == 404) {
-      return DateTime.now();
+      return DateTime.now().toUtc();
     }
     rethrow;
   }

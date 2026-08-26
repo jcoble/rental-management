@@ -74,7 +74,7 @@ class _HouseholdManagementSheetState
     _role = widget.party?.role ?? 'Occupant';
     final businessDate = widget.management.summary.businessDate;
     _effectiveDate = widget.action == HouseholdAction.end
-        ? businessDate.subtract(const Duration(days: 1))
+        ? DateUtils.addDaysToDate(businessDate, -1)
         : businessDate;
     if (widget.action == HouseholdAction.add) _searchCandidates();
   }
