@@ -1,7 +1,7 @@
 import type { ScanContext } from '$lib/scan/scan-context';
 
 export const UNIT_MAINTENANCE_SUBJECTS = [
-	{ view: 'work-orders', label: 'Work orders' },
+	{ view: 'work-orders', label: 'Repairs' },
 	{ view: 'inspections', label: 'Inspections' },
 	{ view: 'recurring', label: 'Recurring maintenance' },
 	{ view: 'turnover', label: 'Turnover/make-ready' },

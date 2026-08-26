@@ -152,7 +152,7 @@
 			items: [
 				// A6: one professional term for the "things to fix" concept — "Work Orders" — used
 				// consistently across the staff nav, the page heading, and the dashboard.
-				{ href: '/maintenance', label: 'Work Orders', icon: Wrench },
+				{ href: '/maintenance', label: 'Repairs', icon: Wrench },
 				{ href: '/appointments', label: 'Appointments', icon: Calendar },
 				{ href: '/vendors', label: 'Vendors', icon: Contact }
 			]
@@ -186,7 +186,7 @@
 		icon: Settings,
 		items: [
 			{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
-			{ href: '/settings/notifications/team-routing', label: 'Team routing', icon: Users },
+			{ href: '/settings/notifications/team-routing', label: 'Who gets told what', icon: Users },
 			{ href: '/settings/notifications/tenant-notices', label: 'Tenant notices', icon: BellRing },
 			{ href: '/settings', label: 'Settings', icon: Settings },
 			{ href: '/admin/users', label: 'Team', icon: Shield },

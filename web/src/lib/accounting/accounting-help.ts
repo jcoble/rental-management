@@ -31,7 +31,7 @@ export const ACCOUNTING_HELP = {
 		href: '/docs/general-ledger'
 	},
 	tenantLedger: {
-		title: 'How the tenant ledger works',
+		title: 'How charges and payments work',
 		summary: 'Charges add what is owed. Payments and credits reduce it. Security deposits stay separate because they are held for the tenant.',
 		href: '/docs/lease-and-tenant-ledgers'
 	},

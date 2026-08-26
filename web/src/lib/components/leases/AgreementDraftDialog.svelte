@@ -204,7 +204,7 @@
 				(signer) => !signer.nameSnapshot.trim() || !signer.emailSnapshot.trim()
 			)
 		)
-			validationError = 'Every signer needs a name and email snapshot.';
+			validationError = 'Every signer needs a name and email.';
 		else if (new Set(form.signers.map((signer) => signer.signingOrder)).size !== form.signers.length)
 			validationError = 'Signer order values must be unique.';
 		if (validationError) return null;

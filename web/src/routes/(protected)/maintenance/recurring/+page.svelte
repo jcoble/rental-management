@@ -150,7 +150,7 @@
 		{ key: 'recurrenceInterval', title: 'Schedule', sortable: true, mobileRole: 'meta', cell: scheduleCell },
 		{ key: 'nextDueDate', title: 'Next', sortable: true, mobileRole: 'meta', cell: nextDueCell },
 		{ key: 'budget', title: 'Budget', align: 'right', mobileRole: 'meta', cell: budgetCell },
-		{ key: 'generated', title: 'Work orders', align: 'right', mobileRole: 'meta', cell: generatedCell },
+		{ key: 'generated', title: 'Repairs', align: 'right', mobileRole: 'meta', cell: generatedCell },
 		{ key: 'priority', title: 'Priority', sortable: true, mobileRole: 'badge', cell: priorityCell },
 		{ key: 'isActive', title: 'Active', sortable: true, align: 'center', mobileRole: 'badge', cell: activeCell },
 		{ key: 'actions', title: '', align: 'right', mobileRole: 'hidden', cell: actionsCell },
@@ -261,7 +261,7 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="recurring-maintenance-page">
-	<PageBreadcrumb crumbs={[{ label: 'Work Orders', href: '/maintenance' }, { label: 'Recurring' }]} />
+	<PageBreadcrumb crumbs={[{ label: 'Repairs', href: '/maintenance' }, { label: 'Recurring' }]} />
 
 	<PageHeader
 		class="mt-4 mb-6"
@@ -270,7 +270,7 @@
 		tone="coral"
 		eyebrow="Work"
 		title="Recurring Maintenance"
-		description='Set up work that repeats on a schedule, like "Change the HVAC filter every quarter." Rental Command creates each work order when it is due.'
+		description='Set up work that repeats on a schedule, like "Change the HVAC filter every quarter." Rental Command creates each repair when it is due.'
 		actions={headerActions}
 		data-testid="recurring-maintenance-header"
 	/>
@@ -285,7 +285,7 @@
 		data={tasks}
 		{columns}
 		loading={tasksQuery.isLoading}
-		emptyMessage="No recurring tasks yet. Add one to have work orders created on a schedule."
+		emptyMessage="No recurring tasks yet. Add one to have repairs created on a schedule."
 		onRowClick={(t) => openEdit(t)}
 		getRowKey={(t) => t.id}
 		data-testid="recurring-tasks-list"
@@ -321,7 +321,7 @@
 <ConfirmDialog
 	open={deleteTarget !== null}
 	title="Delete recurring task"
-	message={deleteTarget ? `Delete "${deleteTarget.title}"? We'll stop creating work orders for it.` : ''}
+	message={deleteTarget ? `Delete "${deleteTarget.title}"? We'll stop creating repairs for it.` : ''}
 	busy={deleteMutation.isPending}
 	testid="recurring-task-delete"
 	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}

@@ -1027,7 +1027,7 @@
 							<div class="flex items-center justify-between gap-2 px-1">
 								<div class="flex items-center gap-2">
 									<PanelLeft class="h-4 w-4 text-primary" />
-									<h3 class="text-sm font-semibold">Dynamic Fields</h3>
+									<h3 class="text-sm font-semibold">Information we fill in</h3>
 								</div>
 								<Badge variant="secondary">{catalog.length}</Badge>
 							</div>

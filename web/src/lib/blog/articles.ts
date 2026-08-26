@@ -68,7 +68,7 @@ export const BLOG_POSTS: readonly BlogPost[] = [
 		readingTime: '5 minute read',
 		intro: [
 			'A bank deposit tells you that money arrived. It does not tell you which rent charge it paid, whether part remains due, or why the tenant received a credit.',
-			'That is the job of a lease or tenant ledger: one dated history of amounts charged, paid, credited, refunded, corrected, and still owed.'
+			'That is the job of a lease or rent ledger: one dated history of amounts charged, paid, credited, refunded, corrected, and still owed.'
 		],
 		sections: [
 			{
@@ -77,7 +77,7 @@ export const BLOG_POSTS: readonly BlogPost[] = [
 			},
 			{
 				heading: 'Connect payments to what they paid',
-				paragraphs: ['A payment needs the received date, amount, method, payer, and check or confirmation number when available. It should also show which open charges it reduced.', 'If a payment is not yet applied, keep it visible as a credit instead of forcing it against the wrong month.']
+				paragraphs: ['A payment needs the received date, amount, method, payer, and check or confirmation number when available. It should also show which unpaid charges it reduced.', 'If a payment is not yet applied, keep it visible as a credit instead of forcing it against the wrong month.']
 			},
 			{
 				heading: 'Use credits for reductions, not imaginary payments',
