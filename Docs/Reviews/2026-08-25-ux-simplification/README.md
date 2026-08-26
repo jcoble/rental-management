@@ -13,7 +13,7 @@ Four independent read-only reviews, two per app:
 | [mobile-sol.md](mobile-sol.md) | mobile | flow and plumbing (static) | SOL medium |
 
 Consolidated proposal for item-by-item approval: **[landlord-first-cut.html](landlord-first-cut.html)** —
-29 proposals, two decide-first flags, a 30-row rename table, and the intrinsic complexity that stays.
+30 proposals, two decide-first flags, a 30-row rename table, and the intrinsic complexity that stays.
 Decisions made on the page persist in the viewer's browser only; record the outcome in TSK-947.
 
 Where all four reviews landed: recording an expense (7-step/26-field wizard on web, 4-step form on
