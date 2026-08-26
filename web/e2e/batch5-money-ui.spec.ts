@@ -108,6 +108,8 @@ async function openTenantMoney(page: Page, request: Parameters<typeof findLeased
 		waitUntil: 'domcontentloaded'
 	});
 	await expect(page.getByTestId('tenant-ledger-panel')).toBeVisible({ timeout: 15_000 });
+	await expect(page.getByRole('button', { name: 'Add charge', exact: true })).toBeEnabled();
+	await expect(page.getByRole('button', { name: 'Record payment', exact: true })).toBeEnabled();
 }
 
 test.describe('Batch 5 money overlay behavior', () => {
@@ -134,10 +136,12 @@ test.describe('Batch 5 money overlay behavior', () => {
 			await page.getByRole('button', { name: 'Record payment', exact: true }).click();
 			await expect(page.getByTestId('record-payment-sheet')).toBeVisible();
 			await page.locator('#record-payment-method').click();
-			await assertOverlayStaysInDialog(page, await visibleOverlay(page));
-			await page.getByRole('option').first().click();
+			const methodOverlay = await visibleOverlay(page);
+			await assertOverlayStaysInDialog(page, methodOverlay);
+			await methodOverlay.getByRole('option').first().click();
+			await expect(methodOverlay).toBeHidden();
 
-			await page.locator('input[name="record-payment-apply"][value="specific"]').check();
+			await page.getByRole('radio', { name: /A specific charge/ }).check();
 			await page.getByTestId('record-payment-allocation').locator('[data-slot="select-trigger"]').click();
 			await assertOverlayStaysInDialog(page, await visibleOverlay(page));
 			await page.getByRole('button', { name: 'Cancel', exact: true }).click();
