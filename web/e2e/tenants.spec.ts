@@ -17,6 +17,7 @@ test.describe('Tenants', () => {
 		await expect(page.getByTestId('tenant-form')).toBeVisible();
 		await page.getByTestId('tenant-first-name-input').fill('Pat');
 		await page.getByTestId('tenant-last-name-input').fill(last);
+		await page.getByTestId('tenant-step-next').click();
 		await page.getByTestId('tenant-form-save').click();
 		await expect(page.getByTestId('tenant-form')).toBeHidden();
 
@@ -31,6 +32,7 @@ test.describe('Tenants', () => {
 		await row.getByTestId('tenant-edit').click();
 		await expect(page.getByTestId('tenant-form')).toBeVisible();
 		await page.getByTestId('tenant-first-name-input').fill('Patricia');
+		await page.getByTestId('tenant-step-next').click();
 		await page.getByTestId('tenant-form-save').click();
 		await expect(page.getByTestId('tenant-form')).toBeHidden();
 

@@ -25,6 +25,7 @@ test.describe('one notifications page and a reply that just sends', () => {
 	test('the Settings rail has one Notifications entry', async ({ page }) => {
 		await login(page);
 		await page.goto('/', { waitUntil: 'domcontentloaded' });
+		await page.waitForLoadState('networkidle');
 
 		const settingsGroup = page.getByTestId('nav-group-settings');
 		await expect(settingsGroup).toBeVisible();

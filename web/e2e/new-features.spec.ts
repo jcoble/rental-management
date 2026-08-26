@@ -27,6 +27,8 @@ test.describe('New features (message center, owners report, owner email)', () =>
 		await page.getByTestId('owner-create-button').click();
 		await expect(page.getByTestId('owner-form')).toBeVisible();
 		await page.getByTestId('owner-name-input').fill(name);
+		await page.getByTestId('owner-step-next').click();
+		await page.getByTestId('owner-step-next').click();
 		await page.getByTestId('owner-email-input').fill('e2e-owner@example.com');
 		await page.getByTestId('owner-form-save').click();
 

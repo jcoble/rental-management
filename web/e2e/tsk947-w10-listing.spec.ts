@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
-import { apiToken, bearer, login } from './helpers';
+import { apiToken, bearer, login, unique } from './helpers';
 
 /**
  * TSK-947 W10 — the Listing tab stops mirroring Zillow.
@@ -29,7 +29,7 @@ test.describe('Unit listing review sheet', () => {
 
 		// A listing must exist before the sheet has anything to review.
 		const prepare = await request.post(`/api/v1/units/${unitId}/listing-workspace/generate`, {
-			headers: bearer(token),
+			headers: { ...bearer(token), 'Idempotency-Key': unique('e2e-listing-generate') },
 		});
 		expect(prepare.ok(), `prepare failed: ${prepare.status()}`).toBeTruthy();
 

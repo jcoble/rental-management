@@ -13,6 +13,7 @@ test.describe('TSK-947 W6 simple money', () => {
 		await login(page);
 		await page.goto('/accounting', { waitUntil: 'domcontentloaded' });
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
+		await page.waitForLoadState('networkidle');
 
 		const tabs = page.getByTestId('accounting-tabs').getByRole('tab');
 		await expect(tabs.first()).toBeVisible();

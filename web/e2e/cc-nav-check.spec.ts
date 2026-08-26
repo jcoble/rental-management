@@ -1,15 +1,15 @@
 import { test, expect } from '@playwright/test';
 import { login } from './helpers';
 
-test('Command Center nav: appears below Scan/Add, lists labelled units, opens a unit CC', async ({
+test('Units picker appears below Scan/Add, lists labelled units, and opens a unit', async ({
 	page
 }) => {
 	await login(page);
 
-	// The pinned "Command Center" toggle is present in the sidebar.
-	const ccToggle = page.getByTestId('nav-command-center');
+	// The pinned Units toggle is present in the sidebar.
+	const ccToggle = page.getByTestId('nav-units-picker');
 	await expect(ccToggle).toBeVisible();
-	await expect(ccToggle).toContainText('Command Center');
+	await expect(ccToggle).toContainText('Units');
 
 	// Expand it → a list of units appears. Wait for hydration first, and only click while closed
 	// (so a retry never toggles it back shut), to avoid a pre-hydration click being dropped.
@@ -25,7 +25,7 @@ test('Command Center nav: appears below Scan/Add, lists labelled units, opens a 
 	const label = (await firstUnit.textContent())?.trim() ?? '';
 	expect(label.toLowerCase()).toContain('unit');
 
-	// Clicking a unit navigates to its Command Center page...
+	// Clicking a unit navigates to its unit page...
 	await firstUnit.click();
 	await expect(page).toHaveURL(/\/units\/\d+/);
 	await expect(page.getByRole('heading', { name: /Unit / })).toBeVisible();
