@@ -105,7 +105,7 @@ describe('tenant shell hierarchy', () => {
 		assert.match(commandCenterNav, /staleTime:\s*5 \* 60 \* 1000/);
 		assert.match(
 			appShell,
-			/!currentPath\.startsWith\('\/settings\/notifications\/'\)/
+			/!currentPath\.startsWith\('\/settings\/notifications'\)/
 		);
 	});
 

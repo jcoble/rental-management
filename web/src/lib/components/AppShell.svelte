@@ -167,7 +167,7 @@
 			icon: MessageSquare,
 			items: [
 				{ href: '/messages', label: 'Messages', icon: MessageSquare },
-				{ href: '/notices', label: 'Tenant notices', icon: BellRing }
+				{ href: '/notices', label: 'Sent notices', icon: BellRing }
 			]
 		}
 	];
@@ -189,9 +189,7 @@
 		label: 'Settings',
 		icon: Settings,
 		items: [
-			{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
-			{ href: '/settings/notifications/team-routing', label: 'Who gets told what', icon: Users },
-			{ href: '/settings/notifications/tenant-notices', label: 'Tenant notices', icon: BellRing },
+			{ href: '/settings/notifications', label: 'Notifications', icon: BellRing },
 			{ href: '/settings', label: 'Settings', icon: Settings },
 			{ href: '/admin/users', label: 'Team', icon: Shield },
 			{ href: '/audit', label: 'Activity history', icon: History }
@@ -223,9 +221,8 @@
 		'/notices': 'campaign',
 		'/ai': 'auto_awesome',
 		'/docs': 'menu_book',
+		'/settings/notifications': 'notifications',
 		'/settings/notifications/my-alerts': 'notifications',
-		'/settings/notifications/team-routing': 'group',
-		'/settings/notifications/tenant-notices': 'campaign',
 		'/settings': 'settings',
 		'/admin/users': 'shield',
 		'/owners': 'account_balance',
@@ -403,7 +400,7 @@
 		if (href === '/settings') {
 			return currentPath === '/settings'
 				|| (currentPath.startsWith('/settings/')
-					&& !currentPath.startsWith('/settings/notifications/'));
+					&& !currentPath.startsWith('/settings/notifications'));
 		}
 		return currentPath.startsWith(href);
 	}
