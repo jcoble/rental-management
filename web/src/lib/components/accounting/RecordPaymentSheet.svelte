@@ -94,7 +94,7 @@
 		if (!form.effectiveOn) errors.effectiveOn = 'Pick the date received.';
 		if (!form.method) errors.method = 'Choose a payment method.';
 		if (form.applyMode === 'specific' && !form.targetChargeEntryId) {
-			errors.targetChargeEntryId = 'Choose an open charge.';
+			errors.targetChargeEntryId = 'Choose an unpaid charge.';
 		}
 		return Object.keys(errors).length === 0;
 	}
@@ -168,23 +168,23 @@
 			<legend class="px-1 text-sm font-medium">Apply to</legend>
 			<label class="flex items-center gap-2 text-sm">
 				<input type="radio" name="record-payment-apply" value="oldest" bind:group={form.applyMode} />
-				Oldest open charges first
+				Oldest unpaid charges first
 			</label>
 			<label class="flex items-start gap-2 text-sm">
 				<input class="mt-1" type="radio" name="record-payment-apply" value="specific" bind:group={form.applyMode} />
 				<span class="min-w-0 flex-1">
 					<span class="block">A specific charge</span>
 					<Select.Root type="single" bind:value={form.targetChargeEntryId} disabled={form.applyMode !== 'specific'}>
-						<Select.Trigger class="mt-2 w-full">{#if form.targetChargeEntryId}{normalizeTenantLedgerDescription(openCharges.find((charge) => String(charge.tenantLedgerEntryId) === form.targetChargeEntryId)?.description) || 'Selected charge'}{:else}Choose an open charge{/if}</Select.Trigger>
+						<Select.Trigger class="mt-2 w-full">{#if form.targetChargeEntryId}{normalizeTenantLedgerDescription(openCharges.find((charge) => String(charge.tenantLedgerEntryId) === form.targetChargeEntryId)?.description) || 'Selected charge'}{:else}Choose an unpaid charge{/if}</Select.Trigger>
 						<Select.Content>
 							{#if openChargesQuery.isLoading}
-								<div class="px-3 py-2 text-sm text-muted-foreground">Loading open charges…</div>
+								<div class="px-3 py-2 text-sm text-muted-foreground">Loading unpaid charges…</div>
 							{:else if openCharges.length === 0}
-								<div class="px-3 py-2 text-sm text-muted-foreground">No open charges.</div>
+								<div class="px-3 py-2 text-sm text-muted-foreground">No unpaid charges.</div>
 							{:else}
 								{#each openCharges as charge (charge.tenantLedgerEntryId)}
 									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${normalizeTenantLedgerDescription(charge.description)} · ${formatAccountingCurrency(charge.openAmount, currency)}`}>
-										{normalizeTenantLedgerDescription(charge.description)} · {formatAccountingCurrency(charge.openAmount, currency)} open · {formatAccountingDate(charge.effectiveOn)}
+										{normalizeTenantLedgerDescription(charge.description)} · {formatAccountingCurrency(charge.openAmount, currency)} unpaid · {formatAccountingDate(charge.effectiveOn)}
 									</Select.Item>
 								{/each}
 							{/if}

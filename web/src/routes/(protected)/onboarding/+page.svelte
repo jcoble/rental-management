@@ -2045,7 +2045,7 @@
 								<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><input type="checkbox" bind:checked={alertForm.enableEmail} /> <span>Email</span></label>
 								<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><input type="checkbox" bind:checked={alertForm.enableSms} /> <span>SMS</span></label>
 							</div>
-							<p class="mt-3 text-xs text-muted-foreground">These choices are only for you. Team routing and tenant notices are separate.</p>
+							<p class="mt-3 text-xs text-muted-foreground">These choices are only for you. Team alerts and tenant notices are separate.</p>
 						</WizardStepScaffold>
 					{/if}
 				</Card.Content>

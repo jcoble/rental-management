@@ -134,7 +134,7 @@
 					<div class="h-5 w-full animate-pulse rounded bg-muted"></div>
 				</div>
 			</div>
-			<div class="rounded-xl border border-border bg-card p-5" aria-label="Loading financial position">
+			<div class="rounded-xl border border-border bg-card p-5" aria-label="Loading what you own and owe">
 				<div class="h-4 w-36 animate-pulse rounded bg-muted"></div>
 				<div class="mt-5 space-y-5">
 					{#each Array(4) as _}
@@ -150,7 +150,7 @@
 		<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/5 p-5" role="alert" data-testid="money-position-error">
 			<div>
 				<h2 class="font-semibold">Cash position unavailable</h2>
-				<p class="mt-1 text-sm text-muted-foreground">The server could not load this portfolio's money position.</p>
+				<p class="mt-1 text-sm text-muted-foreground">We couldn't load what you own and owe.</p>
 			</div>
 			<Button variant="outline" size="sm" onclick={() => positionQuery.refetch()}>Try again</Button>
 		</div>
@@ -198,7 +198,7 @@
 
 			<Card.Root class="gap-0 py-0" data-testid="money-position-facts-card">
 				<Card.Header class="px-5 pb-2 pt-5">
-					<Card.Title class="text-base">Financial position</Card.Title>
+					<Card.Title class="text-base">What you own and owe</Card.Title>
 				</Card.Header>
 				<Card.Content class="space-y-4 px-5 pb-5 pt-0 text-sm">
 					<div class="flex items-center justify-between gap-4">
@@ -226,7 +226,7 @@
 					<p class="mt-1 text-sm text-muted-foreground">Cash movement and profit for the selected dates.</p>
 				</div>
 				<Select.Root type="single" value={period} onValueChange={(value) => selectPeriod(typeof value === 'string' ? value : value?.[0])}>
-					<Select.Trigger class="w-44" aria-label="Money position period" data-testid="money-position-period">
+					<Select.Trigger class="w-44" aria-label="What you own and owe period" data-testid="money-position-period">
 						{period === 'this-month' ? 'This month' : period === 'last-month' ? 'Last month' : period === 'year-to-date' ? 'Year to date' : 'Custom'}
 					</Select.Trigger>
 					<Select.Content>

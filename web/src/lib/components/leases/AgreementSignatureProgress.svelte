@@ -201,7 +201,7 @@
 
 			<div class="space-y-3">
 				<div>
-					<h4 class="font-medium">Signer timeline</h4>
+					<h4 class="font-medium">Who signs, in order</h4>
 					<p class="text-xs text-muted-foreground">Ordered by the packet’s required signing sequence.</p>
 				</div>
 				{#each progress.signers as signer (signer.leaseAgreementSignerId)}

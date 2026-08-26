@@ -128,10 +128,10 @@
 	const inheritedContextItems = $derived([
 		scanContext.propertyId ? `Property #${scanContext.propertyId}` : null,
 		scanContext.unitId ? `Unit #${scanContext.unitId}` : null,
-		scanContext.leaseManagementId ? `Rental relationship #${scanContext.leaseManagementId}` : null,
+		scanContext.leaseManagementId ? `Tenant name #${scanContext.leaseManagementId}` : null,
 		scanContext.leaseAgreementId ? `Agreement #${scanContext.leaseAgreementId}` : null,
-		scanContext.tenantAccountId ? `Rental account #${scanContext.tenantAccountId}` : null,
-		scanContext.tenantLedgerEntryId ? `Ledger entry #${scanContext.tenantLedgerEntryId}` : null,
+		scanContext.tenantAccountId ? `Tenant balance #${scanContext.tenantAccountId}` : null,
+		scanContext.tenantLedgerEntryId ? `Charge or payment #${scanContext.tenantLedgerEntryId}` : null,
 		scanContext.workOrderId ? `Work order #${scanContext.workOrderId}` : null,
 		scanContext.applicationId ? `Application #${scanContext.applicationId}` : null,
 		scanContext.rentalListingId ? `Listing #${scanContext.rentalListingId}` : null
@@ -1721,7 +1721,7 @@
 								</label>
 								<Input
 									aria-label="Search rental accounts"
-									placeholder="Search tenant, property, unit, or relationship number"
+									placeholder="Search tenant, property, unit, or tenancy number"
 									value={tenantAccountSearch}
 									disabled={disablePaymentTenantAccountSelector}
 									oninput={(event) => {

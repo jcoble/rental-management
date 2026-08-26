@@ -393,7 +393,7 @@
 	<div class="mb-4">
 		<PageBreadcrumb
 			crumbs={[
-				{ label: 'Work Orders', href: '/maintenance' },
+				{ label: 'Repairs', href: '/maintenance' },
 				{ label: inspection ? `${inspectionTypeLabel} inspection` : 'Inspection' },
 			]}
 		/>
@@ -485,7 +485,7 @@
 					</p>
 					{#if createdWorkOrderIds.length > 0}
 						<p class="mt-2">
-							Created {createdWorkOrderIds.length} work order{createdWorkOrderIds.length === 1 ? '' : 's'} for the failed items:
+							Created {createdWorkOrderIds.length} repair{createdWorkOrderIds.length === 1 ? '' : 's'} for the failed items:
 						</p>
 						<div class="mt-1 flex flex-wrap gap-2" data-testid="inspection-created-work-orders">
 							{#each createdWorkOrderIds as woId (woId)}
@@ -494,7 +494,7 @@
 									class="m3-tone-chip border m3-tone--success rounded px-2 py-1 text-xs font-medium"
 									data-testid="inspection-work-order-link-{woId}"
 								>
-									Work order #{woId}
+									Repair #{woId}
 								</a>
 							{/each}
 						</div>
@@ -800,7 +800,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Complete this inspection?</Dialog.Title>
 			<Dialog.Description>
-				We'll lock the checklist, generate a PDF report, and open work orders for any items marked
+				We'll lock the checklist, generate a PDF report, and open repairs for any items marked
 				<span class="font-medium">Fail</span>. This can't be undone.
 			</Dialog.Description>
 		</Dialog.Header>

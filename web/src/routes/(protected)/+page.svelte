@@ -126,7 +126,7 @@
 			<Card.Content class="m3-dashboard-hero__content grid gap-5 p-5 md:grid-cols-[1.35fr_0.9fr] md:p-6">
 				<div class="min-w-0">
 					<div class="mb-4 flex flex-wrap items-center gap-2">
-						<span class="m3-dashboard-chip m3-dashboard-chip--active">Command center</span>
+						<span class="m3-dashboard-chip m3-dashboard-chip--active">Today</span>
 						<span class="m3-dashboard-chip">
 							<span class="m3-dashboard-chip__dot text-warning"></span>
 							{data.maintenance.openCount} open work orders
@@ -154,7 +154,7 @@
 					<div class="flex items-start justify-between gap-4">
 						<div>
 							<p class="m3-type-title-medium text-foreground">Today</p>
-							<p class="m3-type-body-medium text-muted-foreground">Portfolio pulse</p>
+							<p class="m3-type-body-medium text-muted-foreground">Today's summary</p>
 						</div>
 						<div class="flex h-12 w-12 items-center justify-center rounded-[var(--m3-shape-large)] bg-primary/20 text-primary ring-1 ring-primary/25">
 							<Home class="h-5 w-5" />

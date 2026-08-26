@@ -134,7 +134,7 @@
 			</div>
 			<div class="rounded-md border bg-muted/30 p-3">
 				<p class="font-medium">3. Ready</p>
-				<p class="mt-1 text-muted-foreground">Close work orders, attach receipts, and hand the unit back to listing.</p>
+				<p class="mt-1 text-muted-foreground">Close repairs, attach receipts, and hand the unit back to listing.</p>
 			</div>
 		</div>
 	</DetailCard>

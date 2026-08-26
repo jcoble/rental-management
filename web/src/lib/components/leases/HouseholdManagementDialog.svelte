@@ -120,18 +120,18 @@
 				return leaseManagements.endParty(summary.leaseManagementId, party.leaseManagementPartyId, request, keyFor(request));
 			}
 			if (mode === 'grant') return leaseManagements.grantPartyAccess(summary.leaseManagementId, party.leaseManagementPartyId, reason.trim(), keyFor({ reason }));
-			if (!accessId) throw new Error('An active login grant is required.');
+			if (!accessId) throw new Error('Tenant app access is required.');
 			return leaseManagements.revokePartyAccess(summary.leaseManagementId, party.leaseManagementPartyId, accessId, reason.trim(), keyFor({ reason, accessId }));
 		},
 		onSuccess: async () => {
-			showSuccess(mode === 'grant' ? 'Resident activation invitation queued.' : mode === 'revoke' ? 'Resident login access revoked.' : 'Household relationship updated.');
+			showSuccess(mode === 'grant' ? 'Tenant app invitation queued.' : mode === 'revoke' ? 'Tenant app access removed.' : 'Tenant details updated.');
 			await onchanged();
 			onclose();
 		},
 		onError: (error) => showError(apiErrorMessage(error, 'The household change could not be saved.'))
 	}));
 
-	const title = $derived(mode === 'add' ? 'Add household member' : mode === 'change' ? 'Change household role' : mode === 'end' ? 'End household membership' : mode === 'grant' ? 'Create resident login' : 'Revoke resident login');
+	const title = $derived(mode === 'add' ? 'Add tenant' : mode === 'change' ? 'Change tenant role' : mode === 'end' ? 'Remove tenant' : mode === 'grant' ? 'Create tenant app access' : 'Remove tenant app access');
 </script>
 
 <Dialog.Root open onOpenChange={(open) => { if (!open && !mutation.isPending) onclose(); }}>
@@ -164,7 +164,7 @@
 				<label class="space-y-1 text-sm"><span class="font-medium">Signed document authorizing this change</span><Select.Root type="single" value={agreementId ? String(agreementId) : ''} onValueChange={(value) => (agreementId = value ? Number(value) : null)}><Select.Trigger class="w-full">{agreements.find((agreement) => agreement.leaseAgreementId === agreementId)?.agreementNumber ?? 'Choose a signed correction or replacement'}</Select.Trigger><Select.Content>{#each agreements as agreement}{#if (agreement.changeType === 'Correction' || agreement.changeType === 'Restatement') && agreement.executedArtifact}<Select.Item value={String(agreement.leaseAgreementId)} label={`${agreement.agreementNumber}, version ${agreement.versionNumber}`}>{agreement.agreementNumber} · version {agreement.versionNumber}</Select.Item>{/if}{/each}</Select.Content></Select.Root></label>
 			{/if}
 			<label class="space-y-1 text-sm"><span class="font-medium">Reason</span><textarea bind:value={reason} rows="3" maxlength="500" class="w-full rounded-md border bg-background px-3 py-2" placeholder={mode === 'grant' ? 'Why this person needs resident access' : 'What changed and why'}></textarea></label>
-			{#if mode === 'grant'}<p class="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">A passwordless resident account is prepared from this member’s email if needed. Access is limited to this relationship, and the activation invitation is queued atomically with the grant.</p>{/if}
+			{#if mode === 'grant'}<p class="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">A passwordless resident account is prepared from this member’s email if needed. Access is limited to this tenant, and the invitation is queued.</p>{/if}
 			{#if validationError}<p class="text-sm text-destructive">{validationError}</p>{/if}
 		</div>
 		<Dialog.Footer><Button variant="outline" onclick={onclose} disabled={mutation.isPending}>Cancel</Button><Button onclick={() => mutation.mutate()} disabled={mutation.isPending}>{#if mutation.isPending}<Loader2 class="mr-2 h-4 w-4 animate-spin" />{/if}Confirm</Button></Dialog.Footer>

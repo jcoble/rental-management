@@ -326,9 +326,9 @@
 			{#if editingId != null}
 				<div class="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm" data-testid="recurring-task-linked-summary">
 					{#if (linkedTask?.generatedWorkOrderCount ?? 0) > 0}
-						{linkedTask?.generatedWorkOrderCount} generated work order{(linkedTask?.generatedWorkOrderCount ?? 0) === 1 ? '' : 's'} linked to this schedule.
+						{linkedTask?.generatedWorkOrderCount} generated repair{(linkedTask?.generatedWorkOrderCount ?? 0) === 1 ? '' : 's'} linked to this schedule.
 					{:else}
-						No work orders have been generated from this schedule yet.
+						No repairs have been generated from this schedule yet.
 					{/if}
 				</div>
 			{/if}
@@ -367,7 +367,7 @@
 
 			<label class="flex items-center gap-2 text-sm" data-testid="recurring-task-active-input">
 				<Checkbox bind:checked={form.isActive} />
-				<span>Active <span class="text-muted-foreground">— when on, we create the work order automatically each time it's due.</span></span>
+				<span>Active <span class="text-muted-foreground">— when on, we create the repair automatically each time it's due.</span></span>
 			</label>
 		</div>
 		<Dialog.Footer data-testid="recurring-task-dialog-footer">
