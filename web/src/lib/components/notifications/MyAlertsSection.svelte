@@ -42,8 +42,8 @@
 	const channels = [
 		{ key: 'enableInApp', label: 'In Rental Command', detail: 'See alerts in the bell and notification list.' },
 		{ key: 'enableMobilePush', label: 'Phone app', detail: 'Receive alerts on phones signed in to your account.' },
-		{ key: 'enableEmail', label: 'Email', detail: 'Send alerts to the account email shown below.' },
-		{ key: 'enableSms', label: 'Text message', detail: 'Send alerts to the mobile number shown below.' }
+		{ key: 'enableEmail', label: 'Email', detail: 'Send alerts to the account email shown above.' },
+		{ key: 'enableSms', label: 'Text message', detail: 'Send alerts to the mobile number shown above.' }
 	] as const;
 
 	const hasUnsavedChanges = $derived.by(() => {
