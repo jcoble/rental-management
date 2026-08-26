@@ -143,26 +143,27 @@ Future<void> showCreateTenantNoticeFlow(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
-    builder: (_) => _ReviewNoticeSheet(drafts: drafts),
+    builder: (_) => ReviewNoticeSheet(drafts: drafts),
   );
 }
 
 /// Review sheet for one or more freshly generated drafts — shows the copy and
 /// lets the landlord send it now (approve with selected channels) or keep it as
 /// a draft for the Notices queue.
-class _ReviewNoticeSheet extends ConsumerStatefulWidget {
-  const _ReviewNoticeSheet({required this.drafts});
+class ReviewNoticeSheet extends ConsumerStatefulWidget {
+  const ReviewNoticeSheet({super.key, required this.drafts});
 
   final List<NoticeDraft> drafts;
 
   @override
-  ConsumerState<_ReviewNoticeSheet> createState() => _ReviewNoticeSheetState();
+  ConsumerState<ReviewNoticeSheet> createState() => _ReviewNoticeSheetState();
 }
 
-class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
+class _ReviewNoticeSheetState extends ConsumerState<ReviewNoticeSheet> {
   final Map<int, TextEditingController> _subjectCtrls = {};
   final Map<int, TextEditingController> _bodyCtrls = {};
   final Map<int, List<TenantNoticeRecipientPreview>> _recipientPreviews = {};
+  final _sent = <int>{};
 
   bool _portal = true;
   bool _email = true;
@@ -197,8 +198,9 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
     if (_sms) 'Sms',
   ];
 
-  List<NoticeDraft> get _sendableDrafts =>
-      widget.drafts.where((d) => d.status == 'Draft').toList();
+  List<NoticeDraft> get _sendableDrafts => widget.drafts
+      .where((d) => d.status == 'Draft' && !_sent.contains(d.id))
+      .toList();
 
   String? get _contentSafetyIssue {
     for (final draft in _sendableDrafts) {
@@ -230,6 +232,7 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
               .update(d.id, subject: subject, body: body);
         }
         await ref.read(noticesRepositoryProvider).approve(d.id, channels);
+        if (mounted) setState(() => _sent.add(d.id));
       }
       // Refresh the standalone notices queue if it's listening.
       ref.invalidate(noticeDraftsProvider);
@@ -238,7 +241,10 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
         ..hideCurrentSnackBar()
         ..showSnackBar(const SnackBar(content: Text('Notice sent.')));
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      setState(
+        () => _error =
+            '${_sent.length} of ${widget.drafts.length} sent. ${e.message}',
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -315,7 +321,7 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
             for (final d in widget.drafts) ...[
               Builder(
                 builder: (context) {
-                  final editable = d.status == 'Draft';
+                  final editable = d.status == 'Draft' && !_sent.contains(d.id);
                   return Card(
                     margin: const EdgeInsets.only(bottom: 8),
                     color: cs.surfaceContainerHighest.withValues(alpha: 0.4),

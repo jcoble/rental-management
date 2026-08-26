@@ -38,7 +38,10 @@ String? extractRefreshTokenFromCookies(Response<dynamic> response) {
       final start =
           cookie.indexOf('rc_refresh_token=') + 'rc_refresh_token='.length;
       final end = cookie.indexOf(';', start);
-      return end == -1 ? cookie.substring(start) : cookie.substring(start, end);
+      final token = end == -1
+          ? cookie.substring(start)
+          : cookie.substring(start, end);
+      return token.isEmpty ? null : token;
     }
   }
   return null;
@@ -332,7 +335,9 @@ class AuthInterceptor extends Interceptor {
 
       await tokenStore.saveTokens(
         accessToken: newAccessToken,
-        refreshToken: newRefreshToken ?? refreshToken,
+        refreshToken: newRefreshToken == null || newRefreshToken.isEmpty
+            ? refreshToken
+            : newRefreshToken,
       );
       final accessJson = Map<String, dynamic>.from(access);
       await tokenStore.saveAccessEnvelope(accessJson);

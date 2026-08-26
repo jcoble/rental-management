@@ -163,6 +163,29 @@ void main() {
 
   group('refresh failure classification', () {
     test(
+      'clearing refresh cookie preserves the stored refresh token',
+      () async {
+        final tokenStore = _MemoryTokenStore();
+        final refreshDio = Dio()
+          ..httpClientAdapter = _RefreshAdapter.clearingCookieSuccess();
+        final requestDio = Dio()
+          ..httpClientAdapter = _UnauthorizedThenSuccessAdapter();
+        requestDio.interceptors.add(
+          AuthInterceptor(
+            tokenStore: tokenStore,
+            dio: refreshDio,
+            onLogout: () {},
+            onAccessChanged: (_) {},
+          ),
+        );
+
+        await requestDio.get<dynamic>('/protected');
+
+        expect(tokenStore.savedRefreshToken, 'stored-refresh-token');
+      },
+    );
+
+    test(
       'an unavailable refresh endpoint preserves tokens and does not signal logout',
       () async {
         final tokenStore = _MemoryTokenStore();
@@ -241,6 +264,7 @@ Map<String, dynamic> _accessEnvelope({
 
 class _MemoryTokenStore implements TokenStore {
   int clearTokensCalls = 0;
+  String? savedRefreshToken;
 
   @override
   Future<void> clearTokens() async {
@@ -263,7 +287,32 @@ class _MemoryTokenStore implements TokenStore {
   Future<void> saveTokens({
     required String accessToken,
     required String refreshToken,
-  }) async {}
+  }) async {
+    savedRefreshToken = refreshToken;
+  }
+}
+
+class _UnauthorizedThenSuccessAdapter implements HttpClientAdapter {
+  int calls = 0;
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    calls++;
+    return ResponseBody.fromString(
+      '{}',
+      calls == 1 ? 401 : 200,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
+  }
 }
 
 class _AlwaysUnauthorizedAdapter implements HttpClientAdapter {
@@ -285,12 +334,14 @@ class _AlwaysUnauthorizedAdapter implements HttpClientAdapter {
 }
 
 class _RefreshAdapter implements HttpClientAdapter {
-  _RefreshAdapter._(this._unauthorized);
+  _RefreshAdapter._(this._mode);
 
-  factory _RefreshAdapter.transientFailure() => _RefreshAdapter._(false);
-  factory _RefreshAdapter.unauthorized() => _RefreshAdapter._(true);
+  factory _RefreshAdapter.transientFailure() => _RefreshAdapter._('transient');
+  factory _RefreshAdapter.unauthorized() => _RefreshAdapter._('unauthorized');
+  factory _RefreshAdapter.clearingCookieSuccess() =>
+      _RefreshAdapter._('success');
 
-  final bool _unauthorized;
+  final String _mode;
 
   @override
   void close({bool force = false}) {}
@@ -301,12 +352,22 @@ class _RefreshAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
-    if (_unauthorized) {
+    if (_mode == 'unauthorized') {
       return ResponseBody.fromString(
         '{"error":"Invalid or expired refresh token"}',
         401,
         headers: {
           Headers.contentTypeHeader: [Headers.jsonContentType],
+        },
+      );
+    }
+    if (_mode == 'success') {
+      return ResponseBody.fromString(
+        '{"accessToken":"new-access-token","access":${_jsonAccessEnvelope()}}',
+        200,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType],
+          'set-cookie': ['rc_refresh_token=; Path=/; HttpOnly'],
         },
       );
     }
@@ -316,3 +377,8 @@ class _RefreshAdapter implements HttpClientAdapter {
     );
   }
 }
+
+String _jsonAccessEnvelope() => '''{
+  "identity":{"userId":5,"displayName":"Test user"},
+  "selectedContext":{"accessContextId":11,"portfolioId":3,"workspaceName":"Test workspace","accessRevision":7,"activeExperience":"Management"}
+}''';

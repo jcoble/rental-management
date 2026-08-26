@@ -1,21 +1,15 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'banking_models.dart';
 
 class BankingRepository {
   BankingRepository(this._dio);
 
   final Dio _dio;
-  static const _uuid = Uuid();
-
-  Map<String, dynamic> _operation(DateTime expectedUpdatedAt) => {
-    'operationKey': _uuid.v4(),
-    'expectedUpdatedAtUtc': expectedUpdatedAt.toUtc().toIso8601String(),
-  };
 
   Future<BankingSummary> summary() async {
     try {
@@ -33,7 +27,9 @@ class BankingRepository {
     }
   }
 
-  Future<List<BankTransaction>> transactions({String? status}) async {
+  Future<({List<BankTransaction> items, int totalCount})> transactions({
+    String? status,
+  }) async {
     try {
       final query = <String, dynamic>{'skip': 0, 'take': 50};
       if (status != null) query['status'] = status;
@@ -41,10 +37,15 @@ class BankingRepository {
         '/banking/transactions',
         queryParameters: query,
       );
-      return (response.data?['items'] as List? ?? [])
+      final items = (response.data?['items'] as List? ?? [])
           .whereType<Map<String, dynamic>>()
           .map(BankTransaction.fromJson)
           .toList();
+      return (
+        items: items,
+        totalCount:
+            (response.data?['totalCount'] as num?)?.toInt() ?? items.length,
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -53,9 +54,17 @@ class BankingRepository {
   Future<void> match(BankTransaction transaction) async {
     if (transaction.suggestedMatch == null) return;
     try {
-      await _dio.post<Map<String, dynamic>>(
-        '/banking/transactions/${transaction.id}/confirm-match',
-        data: _operation(transaction.updatedAt),
+      await IdempotentMutation.run(
+        'banking:match:${transaction.id}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/banking/transactions/${transaction.id}/confirm-match',
+          data: {
+            'operationKey': key,
+            'expectedUpdatedAtUtc': transaction.updatedAt
+                .toUtc()
+                .toIso8601String(),
+          },
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -64,9 +73,17 @@ class BankingRepository {
 
   Future<void> clearMatch(BankTransaction transaction) async {
     try {
-      await _dio.post<Map<String, dynamic>>(
-        '/banking/transactions/${transaction.id}/clear-match',
-        data: _operation(transaction.updatedAt),
+      await IdempotentMutation.run(
+        'banking:clear-match:${transaction.id}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/banking/transactions/${transaction.id}/clear-match',
+          data: {
+            'operationKey': key,
+            'expectedUpdatedAtUtc': transaction.updatedAt
+                .toUtc()
+                .toIso8601String(),
+          },
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -95,15 +112,18 @@ class BankingRepository {
     int? expenseId,
   }) async {
     try {
-      final body = _operation(expectedUpdatedAt);
-      if (tenantAccountId != null) body['tenantAccountId'] = tenantAccountId;
-      if (tenantLedgerEntryId != null) {
-        body['tenantLedgerEntryId'] = tenantLedgerEntryId;
-      }
-      if (expenseId != null) body['expenseId'] = expenseId;
-      await _dio.post<Map<String, dynamic>>(
-        '/banking/transactions/$transactionId/confirm-match',
-        data: body,
+      await IdempotentMutation.run(
+        'banking:confirm-match:$transactionId',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/banking/transactions/$transactionId/confirm-match',
+          data: {
+            'operationKey': key,
+            'expectedUpdatedAtUtc': expectedUpdatedAt.toUtc().toIso8601String(),
+            'tenantAccountId': ?tenantAccountId,
+            'tenantLedgerEntryId': ?tenantLedgerEntryId,
+            'expenseId': ?expenseId,
+          },
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -116,9 +136,15 @@ class BankingRepository {
     DateTime expectedUpdatedAt,
   ) async {
     try {
-      await _dio.post<Map<String, dynamic>>(
-        '/banking/transactions/$transactionId/dismiss-match',
-        data: _operation(expectedUpdatedAt),
+      await IdempotentMutation.run(
+        'banking:dismiss-match:$transactionId',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/banking/transactions/$transactionId/dismiss-match',
+          data: {
+            'operationKey': key,
+            'expectedUpdatedAtUtc': expectedUpdatedAt.toUtc().toIso8601String(),
+          },
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -145,9 +171,18 @@ class BankingRepository {
     int? propertyId,
   ) async {
     try {
-      await _dio.put<Map<String, dynamic>>(
-        '/banking/transactions/${transaction.id}/route',
-        data: {..._operation(transaction.updatedAt), 'propertyId': propertyId},
+      await IdempotentMutation.run(
+        'banking:route:${transaction.id}',
+        (key) => _dio.put<Map<String, dynamic>>(
+          '/banking/transactions/${transaction.id}/route',
+          data: {
+            'operationKey': key,
+            'expectedUpdatedAtUtc': transaction.updatedAt
+                .toUtc()
+                .toIso8601String(),
+            'propertyId': propertyId,
+          },
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -166,9 +201,11 @@ final bankingSummaryProvider = FutureProvider.autoDispose<BankingSummary>((
 });
 
 final bankingTransactionsProvider =
-    FutureProvider.autoDispose<List<BankTransaction>>((ref) {
-      return ref.watch(bankingRepositoryProvider).transactions();
-    });
+    FutureProvider.autoDispose<({List<BankTransaction> items, int totalCount})>(
+      (ref) {
+        return ref.watch(bankingRepositoryProvider).transactions();
+      },
+    );
 
 final bankingReviewQueueProvider = FutureProvider.autoDispose<BankReviewQueue>((
   ref,
