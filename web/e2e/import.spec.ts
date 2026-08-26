@@ -122,7 +122,13 @@ test.describe('CSV import workflow', () => {
 		await expect(page).toHaveURL(/\/properties/);
 
 		await page.goto('/import');
-		await page.getByTestId('import-entity-unit').click();
+		// The page is server-rendered; a click before hydration is lost. Click until the choice sticks.
+		await expect
+			.poll(async () => {
+				await page.getByTestId('import-entity-unit').click();
+				return page.getByTestId('import-entity-unit').getAttribute('aria-pressed');
+			})
+			.toBe('true');
 		await expect(page.getByTestId('import-columns')).toContainText(
 			'propertyName, propertyId, unitNumber, bedrooms, bathrooms, marketRent'
 		);
@@ -131,7 +137,7 @@ test.describe('CSV import workflow', () => {
 			'unit-import-valid.csv',
 			[
 				'propertyName,propertyId,unitNumber,bedrooms,bathrooms,marketRent',
-				`${propertyName},,201,2,1.5,"$1,275"`
+				`${propertyName},,202,2,1.5,"$1,275"`
 			].join('\n')
 		);
 		await uploadCsv(page, unitCsv);
