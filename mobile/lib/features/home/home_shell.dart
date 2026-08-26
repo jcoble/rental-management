@@ -47,6 +47,7 @@ import '../onboarding/getting_started_screen.dart';
 import '../onboarding/getting_started_tasks.dart';
 import '../payments/payment_detail_screen.dart';
 import '../payments/payments_screen.dart';
+import '../payments/tenant_account_receipt_flow.dart';
 import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_maintenance_screen.dart';
 import '../portal/tenant_portal_repository.dart';
@@ -2218,6 +2219,15 @@ class _HomeTab extends ConsumerWidget {
       AsyncData(:final value) => _greeting(value),
       _ => 'Hello',
     };
+    final auth = ref.watch(authControllerProvider);
+    final canRecordPayment =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.payments.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
 
     return Scaffold(
       appBar: AppBar(
@@ -2313,16 +2323,35 @@ class _HomeTab extends ConsumerWidget {
                 ),
               ),
             ),
-            // Open the full Money tab from the dashboard headline.
+            // Record a payment, or open the full Money tab, from Today.
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
               sliver: SliverToBoxAdapter(
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: () => onSwitchToTab(_moneyTabIndex),
-                    child: const Text('Open Money'),
-                  ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    if (canRecordPayment)
+                      FilledButton.tonalIcon(
+                        onPressed: () async {
+                          final result =
+                              await showGlobalRecordTenantReceiptFlow(
+                                context,
+                                ref,
+                              );
+                          if (result != null) {
+                            ref.invalidate(moneySnapshotProvider);
+                          }
+                        },
+                        icon: const Icon(Icons.add_card_outlined),
+                        label: const Text('Rent came in'),
+                      )
+                    else
+                      const SizedBox.shrink(),
+                    TextButton(
+                      onPressed: () => onSwitchToTab(_moneyTabIndex),
+                      child: const Text('Open Money'),
+                    ),
+                  ],
                 ),
               ),
             ),

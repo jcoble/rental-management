@@ -396,6 +396,7 @@ class RecordTenantReceiptInput {
     this.bankName,
     this.sourceStoredFileId,
     this.targetChargeEntryId,
+    this.allocateOldestCharges = true,
   });
 
   final double amount;
@@ -408,6 +409,10 @@ class RecordTenantReceiptInput {
   final String? bankName;
   final int? sourceStoredFileId;
   final int? targetChargeEntryId;
+
+  /// Matches the server default: an unassigned receipt pays down the oldest
+  /// open charges first. Set false to leave the money sitting as credit.
+  final bool allocateOldestCharges;
 }
 
 class RecordTenantReceiptResult {
@@ -663,6 +668,7 @@ class PaymentsRepository {
           if (input.sourceStoredFileId != null)
             'sourceStoredFileId': input.sourceStoredFileId,
           'targetChargeEntryId': input.targetChargeEntryId,
+          'allocateOldestCharges': input.allocateOldestCharges,
         },
         options: Options(headers: {'Idempotency-Key': operationKey}),
       );

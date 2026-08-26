@@ -247,7 +247,7 @@ class _RecordTenantReceiptSheetState
         ? ''
         : widget.initialAmount!.toStringAsFixed(2),
   );
-  final _description = TextEditingController(text: 'Tenant payment received');
+  final _description = TextEditingController(text: 'Rent payment');
   final _method = TextEditingController();
   final _reference = TextEditingController();
   final _payer = TextEditingController();
@@ -297,13 +297,6 @@ class _RecordTenantReceiptSheetState
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (widget.targetChargeEntryId == null && !_leaveUnapplied) {
-      setState(
-        () => _error =
-            'Choose Leave unapplied/advance receipt to record this without a charge target.',
-      );
-      return;
-    }
     setState(() {
       _saving = true;
       _error = null;
@@ -316,11 +309,18 @@ class _RecordTenantReceiptSheetState
             RecordTenantReceiptInput(
               amount: double.parse(_amount.text.trim()),
               effectiveOn: _receivedOn,
-              description: _description.text.trim(),
+              description: _description.text.trim().isEmpty
+                  ? 'Rent payment'
+                  : _description.text.trim(),
               paymentMethodSummary: _method.text.trim(),
-              externalReference: _reference.text,
-              payerName: _payer.text,
+              externalReference: _reference.text.trim().isEmpty
+                  ? null
+                  : _reference.text.trim(),
+              payerName: _payer.text.trim().isEmpty
+                  ? null
+                  : _payer.text.trim(),
               targetChargeEntryId: widget.targetChargeEntryId,
+              allocateOldestCharges: !_leaveUnapplied,
             ),
             operationKey: _operationKey,
           );
@@ -358,6 +358,7 @@ class _RecordTenantReceiptSheetState
               ],
               const SizedBox(height: 16),
               TextFormField(
+                key: const Key('tenant-receipt-amount'),
                 controller: _amount,
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
@@ -375,18 +376,14 @@ class _RecordTenantReceiptSheetState
               ),
               const SizedBox(height: 12),
               TextFormField(
+                key: const Key('tenant-receipt-method'),
                 controller: _method,
-                decoration: const InputDecoration(labelText: 'Payment method'),
+                decoration: const InputDecoration(
+                  labelText: 'How they paid',
+                  hintText: 'Cash, check, bank transfer…',
+                ),
                 validator: (value) => value == null || value.trim().isEmpty
-                    ? 'Payment method is required'
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _description,
-                decoration: const InputDecoration(labelText: 'Description'),
-                validator: (value) => value == null || value.trim().isEmpty
-                    ? 'Description is required'
+                    ? 'Say how they paid'
                     : null,
               ),
               const SizedBox(height: 12),
@@ -397,36 +394,16 @@ class _RecordTenantReceiptSheetState
                 trailing: const Icon(Icons.calendar_today_outlined),
                 onTap: _pickDate,
               ),
-              if (widget.targetChargeEntryId == null)
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: _leaveUnapplied,
-                  onChanged: _saving
-                      ? null
-                      : (value) =>
-                            setState(() => _leaveUnapplied = value ?? false),
-                  title: const Text('Leave unapplied/advance receipt'),
-                  controlAffinity: ListTileControlAffinity.leading,
-                )
-              else
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.receipt_long_outlined),
-                  title: const Text('Apply to selected past-due charge'),
-                  subtitle: Text('Charge #${widget.targetChargeEntryId}'),
-                ),
-              TextFormField(
-                controller: _reference,
-                decoration: const InputDecoration(
-                  labelText: 'Reference (optional)',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _payer,
-                decoration: const InputDecoration(
-                  labelText: 'Payer name (optional)',
-                ),
+              const SizedBox(height: 4),
+              _MoreReceiptDetails(
+                targetChargeEntryId: widget.targetChargeEntryId,
+                leaveUnapplied: _leaveUnapplied,
+                onLeaveUnappliedChanged: _saving
+                    ? null
+                    : (value) => setState(() => _leaveUnapplied = value),
+                payer: _payer,
+                reference: _reference,
+                notes: _description,
               ),
               if (_error != null) ...[
                 const SizedBox(height: 12),
@@ -437,6 +414,7 @@ class _RecordTenantReceiptSheetState
               ],
               const SizedBox(height: 20),
               FilledButton(
+                key: const Key('tenant-receipt-submit'),
                 onPressed: _saving ? null : _submit,
                 child: Text(_saving ? 'Saving…' : 'Record receipt'),
               ),
@@ -446,6 +424,75 @@ class _RecordTenantReceiptSheetState
       ),
     );
   }
+}
+
+/// Everything past the three essentials (amount, how they paid, date) lives
+/// behind one collapsed disclosure so the common case stays a three-field form.
+class _MoreReceiptDetails extends StatelessWidget {
+  const _MoreReceiptDetails({
+    required this.targetChargeEntryId,
+    required this.leaveUnapplied,
+    required this.onLeaveUnappliedChanged,
+    required this.payer,
+    required this.reference,
+    required this.notes,
+  });
+
+  final int? targetChargeEntryId;
+  final bool leaveUnapplied;
+  final ValueChanged<bool>? onLeaveUnappliedChanged;
+  final TextEditingController payer;
+  final TextEditingController reference;
+  final TextEditingController notes;
+
+  @override
+  Widget build(BuildContext context) => ExpansionTile(
+    key: const Key('tenant-receipt-more-details'),
+    tilePadding: EdgeInsets.zero,
+    childrenPadding: const EdgeInsets.only(bottom: 8),
+    expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+    title: const Text('More details'),
+    children: [
+      if (targetChargeEntryId == null)
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          value: leaveUnapplied,
+          onChanged: onLeaveUnappliedChanged == null
+              ? null
+              : (value) => onLeaveUnappliedChanged!(value ?? false),
+          title: const Text('Leave this payment unapplied'),
+          subtitle: const Text(
+            'Hold it as credit instead of paying off the oldest rent owed.',
+          ),
+          controlAffinity: ListTileControlAffinity.leading,
+        )
+      else
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.receipt_long_outlined),
+          title: const Text('Goes toward the charge you picked'),
+          subtitle: Text('Charge #$targetChargeEntryId'),
+        ),
+      const SizedBox(height: 8),
+      TextFormField(
+        controller: payer,
+        decoration: const InputDecoration(labelText: 'Payer name (optional)'),
+      ),
+      const SizedBox(height: 12),
+      TextFormField(
+        controller: reference,
+        decoration: const InputDecoration(
+          labelText: 'Reference (optional)',
+          hintText: 'Check number or confirmation code',
+        ),
+      ),
+      const SizedBox(height: 12),
+      TextFormField(
+        controller: notes,
+        decoration: const InputDecoration(labelText: 'Notes'),
+      ),
+    ],
+  );
 }
 
 class _ErrorCard extends StatelessWidget {
