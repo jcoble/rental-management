@@ -12,7 +12,7 @@ import 'package:rental_command/features/onboarding/getting_started_provider.dart
 import 'package:rental_command/features/onboarding/onboarding_repository.dart';
 
 void main() {
-  testWidgets('UTC clock is converted to local time for the greeting', (
+  testWidgets('local evening hour renders the evening greeting', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -24,7 +24,7 @@ void main() {
             ),
           ),
           appNowProvider.overrideWith(
-            (ref) async => DateTime.utc(2026, 8, 25, 1),
+            (ref) async => DateTime(2026, 8, 25, 21),
           ),
           homeBriefingProvider.overrideWith(
             (ref) => Future.error(StateError('briefing unavailable')),
