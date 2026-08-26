@@ -477,7 +477,7 @@ public class ScanController : ManagementControllerBase
     }
 
     private IQueryable<ScanDraft> AuthorizedDrafts(WorkspaceReadScope scope) =>
-        _db.ScanDrafts.AsNoTracking().WhereAuthorizedForReview(
+        _db.ScanDrafts.AsNoTracking().WhereAuthorized(
             _db, scope, _timeProvider.GetUtcNow().UtcDateTime);
 
     private static readonly Expression<Func<ScanBatchSummaryQueryRow, ScanBatchSummaryResponse>> BatchSummaryProjection =

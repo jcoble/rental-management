@@ -21,12 +21,6 @@ public interface IListingChannelAdapter
     Task<ListingLeadReceipt> IngestLeadAsync(IngestListingLeadCommand command, CancellationToken ct);
 }
 
-public interface IListingChannelAdapterResolver
-{
-    IListingChannelAdapter Resolve(string providerKey);
-    ListingChannelAvailability GetAvailability(string providerKey);
-}
-
 public sealed record ListingChannelAvailability(bool Available, string State, string? Reason);
 
 public sealed record ListingChannelPackage(

@@ -786,7 +786,7 @@ public class DashboardService : IDashboardService
         var portfolioId = scope.PortfolioId;
         var audits = _db.AtomicAuditLogs
             .AsNoTracking()
-            .WhereAuthorizedForReports(
+            .WhereAuthorized(
                 _db,
                 scope,
                 _timeProvider.GetUtcNow().UtcDateTime)

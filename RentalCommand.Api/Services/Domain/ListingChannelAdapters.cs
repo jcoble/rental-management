@@ -2,23 +2,6 @@ using RentalCommand.Core.Listings;
 
 namespace RentalCommand.Api.Services.Domain;
 
-public sealed class ListingChannelAdapterResolver(IEnumerable<IListingChannelAdapter> adapters)
-    : IListingChannelAdapterResolver
-{
-    private readonly IReadOnlyDictionary<string, IListingChannelAdapter> _adapters = adapters
-        .ToDictionary(adapter => adapter.ProviderKey, StringComparer.OrdinalIgnoreCase);
-
-    public IListingChannelAdapter Resolve(string providerKey)
-        => _adapters.TryGetValue(providerKey, out var adapter)
-            ? adapter
-            : throw new ListingChannelUnavailableException(providerKey, $"No Connected adapter is registered for {providerKey}.");
-
-    public ListingChannelAvailability GetAvailability(string providerKey)
-        => _adapters.TryGetValue(providerKey, out var adapter)
-            ? adapter.Availability
-            : new ListingChannelAvailability(false, "Unavailable", $"No Connected adapter is registered for {providerKey}.");
-}
-
 /// <summary>
 /// Safe production default. It exposes the complete Connected workflow without making a provider call
 /// or requiring credentials. A provider adapter replaces this registration after approval.

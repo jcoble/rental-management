@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
 using RentalCommand.Data.Accounting;
@@ -29,7 +30,7 @@ namespace RentalCommand.Api.Services.Domain;
 public sealed class AccountingTokenService
 {
     private readonly IDataProtector _protector;
-    private readonly AccountingProviderResolver _providerResolver;
+    private readonly IAccountingProvider _provider;
     private readonly AccountingAppSettingsResolver _settingsResolver;
     private readonly TimeProvider _timeProvider;
     private readonly IAccountingConnectionClaimStore _claims;
@@ -37,14 +38,14 @@ public sealed class AccountingTokenService
 
     public AccountingTokenService(
         IDataProtectionProvider dataProtection,
-        AccountingProviderResolver providerResolver,
+        IAccountingProvider provider,
         AccountingAppSettingsResolver settingsResolver,
         IAccountingConnectionClaimStore claims,
         TimeProvider timeProvider,
         ILogger<AccountingTokenService> logger)
     {
         _protector = dataProtection.CreateProtector("RentalCommand.Accounting.v1");
-        _providerResolver = providerResolver;
+        _provider = provider;
         _settingsResolver = settingsResolver;
         _claims = claims;
         _timeProvider = timeProvider;
@@ -93,7 +94,7 @@ public sealed class AccountingTokenService
         }
 
         var settings = _settingsResolver.Resolve(connection.Provider);
-        var provider = _providerResolver.Resolve(connection.Provider);
+        var provider = _provider;
 
         try
         {

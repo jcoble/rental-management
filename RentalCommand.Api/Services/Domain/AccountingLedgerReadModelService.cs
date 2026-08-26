@@ -150,7 +150,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         var authorizationNowUtc = DateTime.UtcNow;
         var authorizedLines = _db.JournalLines
             .AsNoTracking()
-            .WhereAccountingAuthorized(
+            .WhereAuthorized(
                 _db, scope, CapabilityKeys.MoneyBalancesRead, authorizationNowUtc);
         var lines = authorizedLines;
 
@@ -240,7 +240,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         WorkspaceReadScope scope, Guid publicId, CancellationToken ct = default)
     {
         var portfolioId = scope.PortfolioId;
-        var authorizedLines = _db.JournalLines.AsNoTracking().WhereAccountingAuthorized(
+        var authorizedLines = _db.JournalLines.AsNoTracking().WhereAuthorized(
             _db, scope, CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow);
         var header = await _db.JournalEntries
             .AsNoTracking()
@@ -342,7 +342,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         SourceJournalQuery query,
         CancellationToken ct = default)
     {
-        var authorizedLines = _db.JournalLines.AsNoTracking().WhereAccountingAuthorized(
+        var authorizedLines = _db.JournalLines.AsNoTracking().WhereAuthorized(
             _db, scope, CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow);
         return await _db.JournalEntries.AsNoTracking()
             .Where(entry =>
@@ -404,7 +404,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         if (to < from)
             throw new ArgumentException("The money-position end date cannot precede its start date.", nameof(query));
 
-        var authorized = _db.JournalLines.AsNoTracking().WhereAccountingAuthorized(
+        var authorized = _db.JournalLines.AsNoTracking().WhereAuthorized(
             _db, scope, CapabilityKeys.MoneyBalancesRead, asOfUtc);
         var authorizedProperties = _db.Properties.AsNoTracking()
             .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, asOfUtc);
@@ -1548,7 +1548,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
     private IQueryable<JournalLine> FilterStatementLines(
         WorkspaceReadScope scope, StatementQuery query, DateOnly? from, DateOnly? to)
     {
-        var lines = _db.JournalLines.AsNoTracking().WhereAccountingAuthorized(
+        var lines = _db.JournalLines.AsNoTracking().WhereAuthorized(
             _db, scope, CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow);
         if (from is DateOnly start)
             lines = lines.Where(line => line.JournalEntry!.EffectiveOn >= start);

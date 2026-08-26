@@ -124,7 +124,7 @@ public class AuditQueryService : IAuditQueryService
     {
         var authorized = _db.AtomicAuditLogs
             .AsNoTracking()
-            .WhereAuthorizedForReports(
+            .WhereAuthorized(
                 _db,
                 scope,
                 _timeProvider.GetUtcNow().UtcDateTime);

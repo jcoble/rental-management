@@ -146,7 +146,7 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         await _ctx.ActivateApiScopeAsync(_authorization.Scope);
         var now = DateTime.UtcNow;
         (await _db.ScanDrafts.AsNoTracking()
-                .WhereAuthorizedForReview(_db, _authorization.Scope, now)
+            .WhereAuthorized(_db, _authorization.Scope, now)
                 .AnyAsync(candidate => candidate.Id == draft.Id))
             .Should().BeTrue();
         var writeDb = _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
@@ -243,7 +243,7 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         _db.ChangeTracker.Clear();
 
         var authorizedDrafts = _db.ScanDrafts.AsNoTracking()
-            .WhereAuthorizedForReview(
+            .WhereAuthorized(
                 _db,
                 _authorization.Scope,
                 businessNow,

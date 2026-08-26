@@ -365,16 +365,16 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var queries = new[]
         {
             db.Expenses.AsNoTracking()
-                .WhereMoneyAuthorized(db, scope, CapabilityKeys.MoneyBalancesRead, _now)
+                .WhereAuthorized(db, scope, CapabilityKeys.MoneyBalancesRead, _now)
                 .OrderBy(row => row.Id).Skip(20).Take(20).Select(row => row.Id).ToQueryString(),
             db.RecurringExpenses.AsNoTracking()
-                .WhereMoneyAuthorized(db, scope, CapabilityKeys.MoneyBalancesRead, _now)
+                .WhereAuthorized(db, scope, CapabilityKeys.MoneyBalancesRead, _now)
                 .OrderBy(row => row.Id).Skip(20).Take(20).Select(row => row.Id).ToQueryString(),
             db.Loans.AsNoTracking()
-                .WhereMoneyAuthorized(db, scope, CapabilityKeys.MoneyBalancesRead, _now)
+                .WhereAuthorized(db, scope, CapabilityKeys.MoneyBalancesRead, _now)
                 .OrderBy(row => row.Id).Skip(20).Take(20).Select(row => row.Id).ToQueryString(),
             db.OwnerDistributions.AsNoTracking()
-                .WhereMoneyAuthorized(db, scope, CapabilityKeys.MoneyOwnerReportsRead, _now)
+                .WhereAuthorized(db, scope, CapabilityKeys.MoneyOwnerReportsRead, _now)
                 .OrderBy(row => row.Id).Skip(20).Take(20).Select(row => row.Id).ToQueryString(),
         };
 

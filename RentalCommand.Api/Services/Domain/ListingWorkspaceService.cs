@@ -35,18 +35,18 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly IPendingFileUploadStore _pendingUploads;
-    private readonly IListingChannelAdapterResolver _listingChannels;
+    private readonly IListingChannelAdapter _listingChannel;
     private readonly ILogger<ListingWorkspaceService> _logger;
     private readonly TimeProvider _time;
     private readonly IRequestWriteExecutor? _writes;
 
     public ListingWorkspaceService(RentalCommandDbContext db,
         IFileStorage files,
-        IPendingFileUploadStore pendingUploads, IListingChannelAdapterResolver listingChannels,
+        IPendingFileUploadStore pendingUploads, IListingChannelAdapter listingChannel,
         ILogger<ListingWorkspaceService> logger, TimeProvider time,
         IRequestWriteExecutor? writes = null)
-        => (_db, _files, _pendingUploads, _listingChannels, _logger, _time, _writes) =
-            (db, files, pendingUploads, listingChannels, logger, time, writes);
+        => (_db, _files, _pendingUploads, _listingChannel, _logger, _time, _writes) =
+            (db, files, pendingUploads, listingChannel, logger, time, writes);
 
     public Task<bool> UnitExistsInPortfolioAsync(int portfolioId, int unitId, CancellationToken ct = default)
         => _db.Units.AsNoTracking().AnyAsync(unit => unit.Id == unitId && unit.PortfolioId == portfolioId, ct);
@@ -665,17 +665,16 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
 
     private IListingChannelAdapter RequireAvailableAdapter(string providerKey)
     {
-        IListingChannelAdapter adapter;
-        try { adapter = _listingChannels.Resolve(providerKey); }
-        catch (ListingChannelUnavailableException exception)
+        if (!string.Equals(_listingChannel.ProviderKey, providerKey, StringComparison.OrdinalIgnoreCase))
         {
-            throw new DomainValidationException(exception.Message, StatusCodes.Status409Conflict);
-        }
-        if (!adapter.Availability.Available)
             throw new DomainValidationException(
-                adapter.Availability.Reason ?? $"Connected publishing for {providerKey} is not configured.",
+                $"No Connected adapter is registered for {providerKey}.", StatusCodes.Status409Conflict);
+        }
+        if (!_listingChannel.Availability.Available)
+            throw new DomainValidationException(
+                _listingChannel.Availability.Reason ?? $"Connected publishing for {providerKey} is not configured.",
                 StatusCodes.Status409Conflict);
-        return adapter;
+        return _listingChannel;
     }
 
     private async Task<ConnectedListingSnapshot?> LoadConnectedSnapshotAsync(
@@ -878,7 +877,11 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private ListingWorkspaceResponse ToResponse(RentalListing listing)
-        => ListingWorkspaceResponse.FromEntity(listing, _listingChannels.GetAvailability);
+        => ListingWorkspaceResponse.FromEntity(listing, providerKey =>
+            string.Equals(_listingChannel.ProviderKey, providerKey, StringComparison.OrdinalIgnoreCase)
+                ? _listingChannel.Availability
+                : new ListingChannelAvailability(false, "Unavailable",
+                    $"No Connected adapter is registered for {providerKey}."));
 
     private sealed record ConnectedListingSnapshot(
         ListingChannelPackage Package,

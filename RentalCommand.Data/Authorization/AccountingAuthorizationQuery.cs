@@ -11,7 +11,7 @@ namespace RentalCommand.Data.Authorization;
 /// </summary>
 public static class AccountingAuthorizationQuery
 {
-    public static IQueryable<JournalLine> WhereAccountingAuthorized(
+    public static IQueryable<JournalLine> WhereAuthorized(
         this IQueryable<JournalLine> query,
         RentalCommandDbContext db,
         WorkspaceReadScope scope,

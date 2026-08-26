@@ -9,6 +9,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
@@ -30,9 +31,7 @@ public sealed class AccountingNotConfiguredException : Exception
 /// Connection-lifecycle service for the accounting-integration backbone — the
 /// provider-agnostic port of EdiPlatform's <c>ErpConnectionService</c>. The
 /// controller is thin and delegates everything here. Every provider interaction
-/// goes through <see cref="AccountingProviderResolver"/> +
-/// <see cref="AccountingAppSettingsResolver"/>, so nothing in this class names a
-/// provider (AC-1).
+/// goes through <see cref="IAccountingProvider"/> + <see cref="AccountingAppSettingsResolver"/>.
 ///
 /// <list type="bullet">
 ///   <item><see cref="StartConnectAsync"/>: persist a single-use <c>OAuthState</c> and return the provider authorize URL.</item>
@@ -55,7 +54,7 @@ public class AccountingConnectionService
 {
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
-    private readonly AccountingProviderResolver _providerResolver;
+    private readonly IAccountingProvider _provider;
     private readonly AccountingAppSettingsResolver _settingsResolver;
     private readonly AccountingImportService _importService;
     private readonly TimeProvider _timeProvider;
@@ -65,7 +64,7 @@ public class AccountingConnectionService
     public AccountingConnectionService(
         RentalCommandDbContext db,
         IDataProtectionProvider dataProtection,
-        AccountingProviderResolver providerResolver,
+        IAccountingProvider provider,
         AccountingAppSettingsResolver settingsResolver,
         AccountingImportService importService,
         TimeProvider timeProvider,
@@ -74,7 +73,7 @@ public class AccountingConnectionService
     {
         _db = db;
         _protector = dataProtection.CreateProtector("RentalCommand.Accounting.v1");
-        _providerResolver = providerResolver;
+        _provider = provider;
         _settingsResolver = settingsResolver;
         _importService = importService;
         _timeProvider = timeProvider;
@@ -122,8 +121,7 @@ public class AccountingConnectionService
         var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
             AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
 
-        var prov = _providerResolver.Resolve(provider);
-        return prov.BuildAuthorizeUrl(
+        return _provider.BuildAuthorizeUrl(
             settings,
             outcome.Value.RedirectUri,
             outcome.Value.StateToken,
@@ -201,13 +199,12 @@ public class AccountingConnectionService
         }
 
         var refreshToken = UnprotectNullable(prepared.Value.RefreshTokenCipherText);
-        if (!string.IsNullOrWhiteSpace(refreshToken) && _providerResolver.IsRegistered(provider))
+        if (!string.IsNullOrWhiteSpace(refreshToken) && _provider.Provider == provider)
         {
             try
             {
                 var settings = _settingsResolver.Resolve(provider);
-                var prov = _providerResolver.Resolve(provider);
-                await prov.RevokeAsync(settings, refreshToken, ct);
+                await _provider.RevokeAsync(settings, refreshToken, ct);
             }
             catch (Exception ex)
             {
@@ -612,12 +609,12 @@ public class AccountingConnectionService
 
     private AccountingCapabilitiesDto? TryGetCapabilities(AccountingProvider provider)
     {
-        if (!_providerResolver.IsRegistered(provider))
+        if (_provider.Provider != provider)
         {
             return null;
         }
 
-        var c = _providerResolver.Resolve(provider).Capabilities;
+        var c = _provider.Capabilities;
         return new AccountingCapabilitiesDto
         {
             CanPullCustomers = c.CanPullCustomers,

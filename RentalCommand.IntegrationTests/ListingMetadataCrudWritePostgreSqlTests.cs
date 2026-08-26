@@ -790,9 +790,8 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton(timeProvider);
         services.AddSingleton(files.Object);
-        services.AddSingleton<IListingChannelAdapterResolver>(
-            new ListingChannelAdapterResolver(
-                [adapter ?? new DisabledZillowListingChannelAdapter()]));
+        services.AddSingleton<IListingChannelAdapter>(
+            adapter ?? new DisabledZillowListingChannelAdapter());
         services.AddSingleton<ILogger<ListingWorkspaceService>>(
             NullLogger<ListingWorkspaceService>.Instance);
         services.AddScoped<ICurrentActor, TestActor>();
