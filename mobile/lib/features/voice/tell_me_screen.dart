@@ -126,6 +126,7 @@ class _TellMeScreenState extends ConsumerState<TellMeScreen> {
 
     final file = File(path);
     final bytes = Uint8List.fromList(await file.readAsBytes());
+    if (!mounted) return;
     unawaited(file.delete().catchError((_) => file));
 
     final controller = ref.read(voiceConversationProvider.notifier);
