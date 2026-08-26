@@ -12,6 +12,7 @@ class _FakeAiRepository extends AiRepository {
   _FakeAiRepository() : super(Dio());
 
   final executeResult = Completer<AssistantActionExecuteResponse>();
+  final deliveryResult = Completer<AskResponse>();
   var ordinaryAskCount = 0;
 
   static const draft = AssistantActionDraft(
@@ -51,6 +52,7 @@ class _FakeAiRepository extends AiRepository {
     List<QaTurn> history, {
     AskDelivery? delivery,
   }) {
+    if (delivery != null) return deliveryResult.future;
     ordinaryAskCount++;
     return Future.value(_answer('Original answer'));
   }
@@ -112,6 +114,32 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Expense created.'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'delivery stays attached to its answer while delivery is active',
+    (tester) async {
+      final repository = _FakeAiRepository();
+      await _pumpScreen(tester, repository);
+      await _submit(tester, 'What is the balance?');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Text me this'));
+      await tester.pump();
+      expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
+      await _submit(tester, 'What is overdue?');
+      expect(repository.ordinaryAskCount, 1);
+
+      repository.deliveryResult.complete(
+        _FakeAiRepository._answer(
+          'Original answer',
+          deliveredChannels: const ['Sms'],
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Texted to you.'), findsOneWidget);
+      expect(find.text('What is overdue?'), findsNothing);
     },
   );
 
