@@ -281,13 +281,37 @@ public class OwnerStatementServiceTests : IAsyncLifetime
         summaries.Single(s => s.OwnerName == "Acme Holdings").Undistributed.Should().Be(1300m);
         summaries.Single(s => s.OwnerName == "Beta Estates").Undistributed.Should().Be(750m);
 
-        var ownerSummarySql = _commands.FirstOrDefault(sql =>
-            sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(command =>
+            command.Contains("TenantLedgerAllocations", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "owner income must be grouped and summed per owner in its bounded SQL statement");
+        _commands.Should().Contain(command =>
+            command.Contains("Expenses", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "owner expenses must be grouped and summed per owner in their bounded SQL statement");
+    }
 
-        ownerSummarySql.Should().NotBeNull("owner net summaries must group and sum per owner in SQL");
+    [Fact]
+    public async Task ListOwnersWithNetAsync_UsesBoundedSqlStatements()
+    {
+        var owner1 = SeedOwner("Acme Holdings");
+        var owner2 = SeedOwner("Beta Estates");
+        SeedProperty(owner1.Id, "Maple Duplex", managementFeePercent: 10m);
+        SeedProperty(owner2.Id, "Oak Cottage", managementFeePercent: 0m);
+
+        _commands.Clear();
+
+        await _sut.ListOwnersWithNetAsync(_scope, Year, CancellationToken.None);
+
+        _commands.Should().HaveCountLessThanOrEqualTo(5);
+        _commands.Should().OnlyContain(sql => sql.Length < 20_000,
+            "owner-statement reads must remain bounded as the portfolio grows");
+        _commands.Should().NotContain(sql =>
+                sql.Contains("TenantLedgerAllocations", StringComparison.Ordinal) &&
+                sql.Contains("OwnerDistributions", StringComparison.Ordinal),
+            "owner net and distribution totals must execute as separate set-based statements");
     }
 
     [Fact]
