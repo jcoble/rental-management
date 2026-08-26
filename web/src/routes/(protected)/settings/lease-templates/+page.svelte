@@ -55,6 +55,14 @@
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let designerTemplateId = $state<number | null>(null);
 	let activatingTemplateId = $state<number | null>(null);
+	// The lease PDF that was just uploaded, so the page can walk the landlord straight
+	// from "upload" to "place the fields" to "looks right" the very first time.
+	let firstRunTemplateId = $state<number | null>(null);
+
+	const isFirstRun = $derived(
+		!templatesQuery.isLoading && !templatesQuery.isError && (!hasTemplates || firstRunTemplateId !== null)
+	);
+	const firstRunTemplate = $derived(templates.find((template) => template.id === firstRunTemplateId) ?? null);
 
 	const catalogGroups = $derived.by(() => {
 		const groups = new Map<DocumentTemplateSignerRole, DocumentTemplateFieldCatalogItem[]>();
@@ -90,8 +98,9 @@
 			);
 		},
 		onSuccess: (template) => {
-			showSuccess(`${template.name} uploaded as a draft lease template.`);
+			showSuccess(`${template.name} uploaded.`);
 			designerTemplateId = template.id;
+			if (!hasTemplates) firstRunTemplateId = template.id;
 			selectedFile = null;
 			templateName = '';
 			templateDescription = '';
@@ -116,7 +125,11 @@
 			);
 		},
 		onSuccess: (template) => {
-			showSuccess(`${template.name} is now the default lease PDF.`);
+			showSuccess(`${template.name} is now the lease form we use.`);
+			if (firstRunTemplateId === template.id) {
+				firstRunTemplateId = null;
+				designerTemplateId = null;
+			}
 			queryClient.invalidateQueries({ queryKey: ['document-templates'] });
 		},
 		onError: (err) => showError(apiErrorMessage(err, 'Could not activate lease template.')),
@@ -151,10 +164,14 @@
 
 	function activateDefault(template: DocumentTemplate) {
 		if (template.fieldCount === 0) {
-			showError('Place at least one dynamic field before using this lease PDF as the default.');
+			showError('Put at least one field on the lease before using it.');
 			return;
 		}
 		activateTemplateMutation.mutate(template);
+	}
+
+	function confirmSuggestedPlacement() {
+		if (firstRunTemplate) activateDefault(firstRunTemplate);
 	}
 
 	function statusVariant(status: DocumentTemplate['status']): 'default' | 'secondary' | 'outline' {
@@ -202,7 +219,7 @@
 </script>
 
 <svelte:head>
-	<title>Lease Templates - Rental Command</title>
+	<title>Lease settings - Rental Command</title>
 </svelte:head>
 
 {#snippet headerActions()}
@@ -218,14 +235,14 @@
 		band
 		art={5}
 		tone="amber"
-		eyebrow="Rentals"
-		title="Lease Templates"
-		description="Upload landlord lease PDFs and prepare them for auto-fill fields and e-signature."
+		eyebrow="Settings"
+		title="Lease settings"
+		description="Give us the lease form you already use. We fill it in for you and send it out to be signed."
 		actions={headerActions}
 		data-testid="lease-templates-header"
 	/>
 
-	<div class="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
+	{#snippet uploadCard()}
 		<Card.Root class="h-fit" data-testid="lease-template-upload-card">
 			<Card.Header>
 				<Card.Title class="text-base">Upload landlord PDF</Card.Title>
@@ -297,7 +314,9 @@
 				</Button>
 			</Card.Content>
 		</Card.Root>
+	{/snippet}
 
+	{#snippet libraryList()}
 		<section class="space-y-4" aria-labelledby="lease-template-library-heading">
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<div>
@@ -420,19 +439,22 @@
 				</div>
 			{/if}
 		</section>
-	</div>
+	{/snippet}
 
-	{#if designerTemplateId}
-		<section class="mt-6" aria-label="Lease template field designer">
-			<LeaseTemplateDesigner
-				templateId={designerTemplateId}
-				catalog={catalogQuery.data ?? []}
-				onClose={() => (designerTemplateId = null)}
-			/>
-		</section>
-	{/if}
+	{#snippet designerPanel()}
+		{#if designerTemplateId}
+			<section aria-label="Where each answer goes on your lease">
+				<LeaseTemplateDesigner
+					templateId={designerTemplateId}
+					catalog={catalogQuery.data ?? []}
+					onClose={() => (designerTemplateId = null)}
+				/>
+			</section>
+		{/if}
+	{/snippet}
 
-	<section class="mt-8 space-y-4" aria-labelledby="lease-template-fields-heading" data-testid="lease-template-field-catalog">
+	{#snippet fieldCatalog()}
+	<section class="space-y-4" aria-labelledby="lease-template-fields-heading" data-testid="lease-template-field-catalog">
 		<div>
 			<h2 id="lease-template-fields-heading" class="text-lg font-semibold tracking-tight">Information we fill in</h2>
 			<p class="text-sm text-muted-foreground">
@@ -488,4 +510,57 @@
 			</div>
 		{/if}
 	</section>
+	{/snippet}
+
+	{#if isFirstRun}
+		<!-- First time here: one job on the screen — hand over the lease form you already use. -->
+		<div class="mx-auto max-w-2xl space-y-6" data-testid="lease-template-first-run">
+			<div>
+				<h2 class="text-lg font-semibold tracking-tight">Upload the lease form you already use</h2>
+				<p class="mt-1 text-sm text-muted-foreground">
+					A PDF of your own lease. Nothing changes about the wording — we just learn where each
+					answer goes so we can type it for you.
+				</p>
+			</div>
+			{@render uploadCard()}
+
+			{#if firstRunTemplate}
+				<section class="space-y-4" data-testid="lease-template-suggested-placement">
+					<div>
+						<h2 class="text-lg font-semibold tracking-tight">Suggested field placement</h2>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Drag each item from the list onto the blank it belongs in — the tenant's name, the
+							rent, the signature line — then confirm below.
+						</p>
+					</div>
+					{@render designerPanel()}
+					<Button
+						class="w-full gap-1.5"
+						onclick={confirmSuggestedPlacement}
+						disabled={activateTemplateMutation.isPending}
+						data-testid="lease-template-looks-right"
+					>
+						<CheckCircle2 class="h-4 w-4" />
+						{activateTemplateMutation.isPending ? 'Saving…' : 'Looks right — use this lease'}
+					</Button>
+				</section>
+			{/if}
+
+			<details class="rounded-lg bg-card px-4 py-3" data-testid="lease-template-advanced">
+				<summary class="cursor-pointer text-sm font-medium">Advanced editing</summary>
+				<div class="mt-4 space-y-8">
+					{@render libraryList()}
+					{@render fieldCatalog()}
+				</div>
+			</details>
+		</div>
+	{:else}
+		<div class="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
+			{@render uploadCard()}
+			{@render libraryList()}
+		</div>
+
+		<div class="mt-6">{@render designerPanel()}</div>
+		<div class="mt-8">{@render fieldCatalog()}</div>
+	{/if}
 </div>

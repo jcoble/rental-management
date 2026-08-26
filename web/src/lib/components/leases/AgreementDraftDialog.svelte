@@ -15,7 +15,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
-	import { FileSignature, Loader2, Save, Trash2 } from '@lucide/svelte';
+	import { Eye, FileSignature, Loader2, Save, Trash2 } from '@lucide/svelte';
+	import { defaultSignerOrder, needsSigningOrderControls } from '$lib/leases/signer-defaults';
 
 	let {
 		leaseManagementId,
@@ -125,15 +126,18 @@
 			securityDepositObligation: String(draft.securityDepositObligation),
 			lateFeeAmount: String(draft.lateFeeAmount),
 			gracePeriodDays: String(draft.gracePeriodDays),
-			signers: draft.signers.map((signer) => ({
-				leaseManagementPartyId: signer.leaseManagementPartyId,
-				tenantId: signer.tenantId,
-				signerRole: signer.signerRole,
-				nameSnapshot: signer.nameSnapshot,
-				emailSnapshot: signer.emailSnapshot,
-				signingOrder: signer.signingOrder,
-				isRequired: true
-			}))
+			// Tenants sign, then the landlord countersigns — decided here so nobody has to answer it.
+			signers: defaultSignerOrder(
+				draft.signers.map((signer) => ({
+					leaseManagementPartyId: signer.leaseManagementPartyId,
+					tenantId: signer.tenantId,
+					signerRole: signer.signerRole,
+					nameSnapshot: signer.nameSnapshot,
+					emailSnapshot: signer.emailSnapshot,
+					signingOrder: signer.signingOrder,
+					isRequired: true
+				}))
+			)
 		};
 	}
 
@@ -151,6 +155,37 @@
 	});
 
 	const isDirty = $derived(Boolean(form && JSON.stringify(form) !== savedFingerprint));
+	const selectedTemplateId = $derived(Number(form?.documentTemplateId ?? '') || 0);
+	// Only worth asking about the order when more than one tenant has to sign.
+	const showSigningOrder = $derived(form ? needsSigningOrderControls(form.signers) : false);
+	let previewLoading = $state(false);
+
+	async function previewLease() {
+		if (!selectedTemplateId) return;
+		const opened = window.open('', '_blank');
+		if (!opened) {
+			showError('Could not open the lease preview in a new tab.');
+			return;
+		}
+		opened.opener = null;
+		previewLoading = true;
+		try {
+			const blob = await documentTemplates.previewLeaseAgreementPdf(
+				selectedTemplateId,
+				leaseAgreementId
+			);
+			const url = URL.createObjectURL(blob);
+			opened.location.href = url;
+			// Keep the object URL alive long enough for the new tab to load the PDF.
+			window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+		} catch (error) {
+			opened.close();
+			showError(apiErrorMessage(error, 'Could not build the lease preview.'));
+		} finally {
+			previewLoading = false;
+		}
+	}
+
 	const correctionComparison = $derived.by(() => {
 		if (!source || !form || draftQuery.data?.changeType !== 'Correction') return null;
 		const fields = [
@@ -356,9 +391,9 @@
 <Dialog.Root open onOpenChange={(open) => { if (!open && !editMutation.isPending && !issueMutation.isPending && !cancelMutation.isPending) onclose(); }}>
 	<Dialog.Content class="max-w-4xl" data-testid="agreement-draft-dialog">
 		<Dialog.Header>
-			<Dialog.Title>Edit lease draft</Dialog.Title>
+			<Dialog.Title>Create and send lease</Dialog.Title>
 			<Dialog.Description>
-				Reloaded from the current draft with its exact revision. Issuing freezes this version and the signer details.
+				Check the dates, the money, and who signs. Sending locks this lease and the signer details.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -370,7 +405,7 @@
 			</div>
 		{:else}
 			{@const draft = draftQuery.data}
-			<div class="space-y-5">
+			<div class="space-y-5" data-testid="lease-send-review">
 				{#if draft.changeType === 'Correction'}
 					<div class="rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm" data-testid="agreement-correction-governing-notice">
 						<p class="font-medium">The old lease is still in effect</p>
@@ -378,72 +413,115 @@
 						{#if draft.correctionReason}<p class="mt-2"><span class="font-medium">Reason:</span> {draft.correctionReason}</p>{/if}
 					</div>
 				{/if}
-				<div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
-					<span>Version {draft.versionNumber}</span><span>·</span>
-					<span>Revision {draft.draftRevision}</span><span>·</span>
-					<span>{draft.documentTemplateId ? `Landlord template ${draft.documentTemplateId}${draft.documentTemplateVersion ? ` v${draft.documentTemplateVersion}` : ''}` : 'Rental Command supplied lease'}</span>
-				</div>
-				<label class="block space-y-1">
-					<span class="text-sm font-medium">Lease document</span>
-					<SimpleSelect
-						bind:value={form.documentTemplateId}
-						options={[
-							{ value: '', label: 'Rental Command lease (recommended)' },
-							...(templatesQuery.data?.items ?? []).map((template) => ({
-								value: String(template.id),
-								label: `${template.name} · version ${template.version}`
-							}))
-						]}
-						testid="agreement-draft-template"
-					/>
-					<p class="text-xs text-muted-foreground">The selected document is saved with this draft when you send it for signature.</p>
-				</label>
-
-				<div class="grid gap-4 md:grid-cols-3">
-					<label class="space-y-1 md:col-span-2">
-						<span class="text-sm font-medium">Lease number</span>
-						<Input bind:value={form.agreementNumber} data-testid="agreement-draft-number" />
-					</label>
+				<div class="grid gap-4 sm:grid-cols-2">
 					<label class="space-y-1">
-						<span class="text-sm font-medium">Term type</span>
-						<SimpleSelect bind:value={form.termType} options={[{ value: 'FixedTerm', label: 'Fixed term' }, { value: 'MonthToMonth', label: 'Month to month' }]} testid="agreement-draft-term-type" />
-					</label>
-					<label class="space-y-1">
-						<span class="text-sm font-medium">Term starts</span>
+						<span class="text-sm font-medium">Lease starts</span>
 						<DatePicker bind:value={form.termStartOn} testid="agreement-draft-term-start" />
 					</label>
 					{#if form.termType === 'FixedTerm'}
 						<label class="space-y-1">
-							<span class="text-sm font-medium">Term ends</span>
+							<span class="text-sm font-medium">Lease ends</span>
 							<DatePicker bind:value={form.termEndOn} testid="agreement-draft-term-end" />
 						</label>
 					{/if}
 					<label class="space-y-1">
-						<span class="text-sm font-medium">Applies from</span>
-						<DatePicker bind:value={form.governingFromOn} testid="agreement-draft-governing-from" />
+						<span class="text-sm font-medium">Monthly rent</span>
+						<Input type="number" min="0" step="0.01" bind:value={form.baseRentAmount} data-testid="agreement-draft-rent" />
+					</label>
+					<label class="space-y-1">
+						<span class="text-sm font-medium">Security deposit</span>
+						<Input type="number" min="0" step="0.01" bind:value={form.securityDepositObligation} data-testid="agreement-draft-deposit" />
 					</label>
 				</div>
 
-				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-					<label class="space-y-1"><span class="text-sm font-medium">Monthly rent</span><Input type="number" min="0" step="0.01" bind:value={form.baseRentAmount} /></label>
-					<label class="space-y-1"><span class="text-sm font-medium">Due day</span><Input type="number" min="1" max="31" bind:value={form.rentDueDay} /></label>
-					<label class="space-y-1"><span class="text-sm font-medium">Deposit</span><Input type="number" min="0" step="0.01" bind:value={form.securityDepositObligation} /></label>
-					<label class="space-y-1"><span class="text-sm font-medium">Late fee</span><Input type="number" min="0" step="0.01" bind:value={form.lateFeeAmount} /></label>
-					<label class="space-y-1"><span class="text-sm font-medium">Grace days</span><Input type="number" min="0" bind:value={form.gracePeriodDays} /></label>
-				</div>
-
 				<div class="space-y-3">
-					<div><h3 class="font-medium">People who must sign</h3><p class="text-xs text-muted-foreground">Review these names and email addresses before sending the lease. They cannot be changed after it is sent.</p></div>
+					<div>
+						<h3 class="font-medium">People who must sign</h3>
+						<p class="text-xs text-muted-foreground">Check every name and email address. They cannot be changed once the lease goes out.</p>
+					</div>
 					{#each form.signers as signer, index}
-						<div class="grid gap-3 rounded-xl bg-muted/30 p-3 md:grid-cols-[5rem_1fr_1fr_10rem_auto]">
-							<label class="space-y-1"><span class="text-xs text-muted-foreground">Order</span><Input type="number" min="1" bind:value={signer.signingOrder} /></label>
+						<div class="grid gap-3 rounded-xl bg-muted/30 p-3 md:grid-cols-2">
 							<label class="space-y-1"><span class="text-xs text-muted-foreground">Name</span><Input bind:value={signer.nameSnapshot} data-testid="agreement-draft-signer-name-{index}" /></label>
 							<label class="space-y-1"><span class="text-xs text-muted-foreground">Email</span><Input type="email" bind:value={signer.emailSnapshot} data-testid="agreement-draft-signer-email-{index}" /></label>
-							<label class="space-y-1"><span class="text-xs text-muted-foreground">Role</span><SimpleSelect bind:value={signer.signerRole} options={signerRoleOptions} /></label>
-							<p class="pt-6 text-sm text-muted-foreground">Required signer</p>
 						</div>
 					{/each}
+					<details class="rounded-xl bg-muted/20 px-3 py-2" open={showSigningOrder} data-testid="lease-signing-order">
+						<summary class="cursor-pointer text-sm font-medium">Signing order</summary>
+						<p class="mt-2 text-xs text-muted-foreground">The tenant signs first and you sign last. Change it here if this lease needs a different order.</p>
+						<div class="mt-3 space-y-2">
+							{#each form.signers as signer, index}
+								<div class="grid gap-3 md:grid-cols-[5rem_1fr_11rem]">
+									<label class="space-y-1"><span class="text-xs text-muted-foreground">Order</span><Input type="number" min="1" bind:value={signer.signingOrder} data-testid="agreement-draft-signer-order-{index}" /></label>
+									<p class="truncate pt-6 text-sm">{signer.nameSnapshot}</p>
+									<label class="space-y-1"><span class="text-xs text-muted-foreground">Signing as</span><SimpleSelect bind:value={signer.signerRole} options={signerRoleOptions} testid="agreement-draft-signer-role-{index}" /></label>
+								</div>
+							{/each}
+						</div>
+					</details>
 				</div>
+
+				<div>
+					<Button
+						variant="outline"
+						class="gap-2"
+						onclick={previewLease}
+						disabled={!selectedTemplateId || previewLoading}
+						title={selectedTemplateId
+							? 'Open a filled-in copy of this lease in a new tab'
+							: 'Choose your own lease form under More details to preview it.'}
+						data-testid="agreement-draft-preview"
+					>
+						<Eye class="h-4 w-4" />
+						{previewLoading ? 'Building the preview…' : 'Preview the lease'}
+					</Button>
+				</div>
+
+				<details class="rounded-xl bg-muted/20 px-3 py-2" data-testid="agreement-draft-more-details">
+					<summary class="cursor-pointer text-sm font-medium">More details</summary>
+					<div class="mt-3 space-y-4">
+						<label class="block space-y-1">
+							<span class="text-sm font-medium">Which lease form to use</span>
+							<SimpleSelect
+								bind:value={form.documentTemplateId}
+								options={[
+									{ value: '', label: 'Rental Command lease (recommended)' },
+									...(templatesQuery.data?.items ?? []).map((template) => ({
+										value: String(template.id),
+										label: `${template.name} · version ${template.version}`
+									}))
+								]}
+								testid="agreement-draft-template"
+							/>
+							<p class="text-xs text-muted-foreground">Saved with this lease when you send it out to be signed.</p>
+						</label>
+
+						<div class="grid gap-4 md:grid-cols-3">
+							<label class="space-y-1">
+								<span class="text-sm font-medium">Lease number</span>
+								<Input bind:value={form.agreementNumber} data-testid="agreement-draft-number" />
+							</label>
+							<label class="space-y-1">
+								<span class="text-sm font-medium">Fixed term or month to month</span>
+								<SimpleSelect bind:value={form.termType} options={[{ value: 'FixedTerm', label: 'Fixed term' }, { value: 'MonthToMonth', label: 'Month to month' }]} testid="agreement-draft-term-type" />
+							</label>
+							<label class="space-y-1">
+								<span class="text-sm font-medium">Applies from</span>
+								<DatePicker bind:value={form.governingFromOn} testid="agreement-draft-governing-from" />
+							</label>
+						</div>
+
+						<div class="grid gap-4 sm:grid-cols-3">
+							<label class="space-y-1"><span class="text-sm font-medium">Rent due day</span><Input type="number" min="1" max="31" bind:value={form.rentDueDay} data-testid="agreement-draft-due-day" /></label>
+							<label class="space-y-1"><span class="text-sm font-medium">Late fee</span><Input type="number" min="0" step="0.01" bind:value={form.lateFeeAmount} data-testid="agreement-draft-late-fee" /></label>
+							<label class="space-y-1"><span class="text-sm font-medium">Days before the late fee</span><Input type="number" min="0" bind:value={form.gracePeriodDays} data-testid="agreement-draft-grace-days" /></label>
+						</div>
+
+						<p class="text-xs text-muted-foreground">
+							Version {draft.versionNumber} · Revision {draft.draftRevision} ·
+							{draft.documentTemplateId ? `Your lease form ${draft.documentTemplateId}${draft.documentTemplateVersion ? ` v${draft.documentTemplateVersion}` : ''}` : 'Rental Command supplied lease'}
+						</p>
+					</div>
+				</details>
 
 				{#if correctionComparison}
 					<section class="space-y-3" data-testid="agreement-correction-comparison">
@@ -495,8 +573,8 @@
 			<Button variant="outline" onclick={onclose} disabled={editMutation.isPending || issueMutation.isPending || cancelMutation.isPending}>Close</Button>
 			{#if draftQuery.data && form}
 				{#if canCancel}<Button variant="destructive" class="gap-2" onclick={() => (cancelConfirmationOpen = true)} disabled={editMutation.isPending || issueMutation.isPending || cancelMutation.isPending}><Trash2 class="h-4 w-4" /> Cancel draft</Button>{/if}
-				<Button variant="outline" class="gap-2" onclick={openIssueConfirmation} disabled={isDirty || editMutation.isPending || issueMutation.isPending}><FileSignature class="h-4 w-4" /> Prepare and send</Button>
-				<Button class="gap-2" onclick={saveDraft} disabled={!isDirty || editMutation.isPending || issueMutation.isPending}>{#if editMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Saving…{:else}<Save class="h-4 w-4" /> Save draft{/if}</Button>
+				<Button variant="outline" class="gap-2" onclick={openIssueConfirmation} disabled={isDirty || editMutation.isPending || issueMutation.isPending} data-testid="agreement-draft-send"><FileSignature class="h-4 w-4" /> Send lease to sign</Button>
+				<Button class="gap-2" onclick={saveDraft} disabled={!isDirty || editMutation.isPending || issueMutation.isPending} data-testid="agreement-draft-save">{#if editMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Saving…{:else}<Save class="h-4 w-4" /> Save draft{/if}</Button>
 			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>
