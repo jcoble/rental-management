@@ -58,6 +58,7 @@ class _AppointmentDetailScreenState
           .read(appointmentsRepositoryProvider)
           .updateStatus(id, newStatus);
       await _refresh();
+      await ref.read(appointmentsProvider.notifier).refresh();
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -94,6 +95,7 @@ class _AppointmentDetailScreenState
             appointment.id,
             propertyId: appointment.propertyId,
           );
+      await ref.read(appointmentsProvider.notifier).refresh();
       if (!mounted) return;
       Navigator.of(context).pop();
     } on ApiException catch (e) {
