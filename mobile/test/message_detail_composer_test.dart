@@ -14,9 +14,13 @@ class _FakeMessagesRepository extends MessagesRepository {
   final bodies = <String>[];
   final channelSelections = <List<String>>[];
   bool failNextSend = false;
+  int getConversationCalls = 0;
 
   @override
-  Future<Conversation> getConversation(int id) async => _conversation;
+  Future<Conversation> getConversation(int id) async {
+    getConversationCalls++;
+    return _conversation;
+  }
 
   @override
   Future<List<Conversation>> listConversations() async => [_conversation];
@@ -74,6 +78,39 @@ void main() {
     await tester.tap(sendButton);
     await tester.pumpAndSettle();
   }
+
+  testWidgets('opening message detail twice reloads the conversation', (
+    tester,
+  ) async {
+    final repository = _FakeMessagesRepository();
+    final scope = ProviderContainer(
+      overrides: [messagesRepositoryProvider.overrideWithValue(repository)],
+    );
+    addTearDown(scope.dispose);
+
+    Future<void> openDetail() async {
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: scope,
+          child: const MaterialApp(
+            home: MessageDetailScreen(conversationId: 42),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await openDetail();
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: scope,
+        child: const MaterialApp(home: SizedBox()),
+      ),
+    );
+    await openDetail();
+
+    expect(repository.getConversationCalls, 2);
+  });
 
   testWidgets('message composer keeps the text box full width', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));

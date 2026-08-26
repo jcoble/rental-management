@@ -84,6 +84,13 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   void initState() {
     super.initState();
     _composeCtrl.addListener(_invalidateSendOperation);
+    Future.microtask(() {
+      if (mounted) {
+        ref
+            .read(conversationProvider(widget.conversationId).notifier)
+            .refresh();
+      }
+    });
   }
 
   @override
