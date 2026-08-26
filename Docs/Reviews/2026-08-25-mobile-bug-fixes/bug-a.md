@@ -38,3 +38,16 @@
 - `flutter analyze` — exit 1; `23 issues found. (ran in 2.8s)`. No new diagnostics. The only diagnostic in a touched file is the pre-existing `deprecated_member_use` info at `lib/features/leases/successor_agreement_sheet.dart:436:23`.
 - `flutter test` — exit 0; `00:47 +532: All tests passed!`
 - `TZ=America/New_York flutter test test/date_time_bug_fixes_test.dart` — exit 0; `00:02 +10: All tests passed!`
+
+## Review fix (round 2)
+
+- Started: 2026-08-25T21:01:36-04:00
+- Finding 1 — `49b166dd`; strengthened `appointment response exposes scheduled instants in local time` to assert `isUtc == false` and the formatted local hour; passed under UTC and America/New_York.
+- Finding 2 — `49b166dd`; made the appointment-picker and rendered scan-date expectations derive from the host-local instant. The picker test uses 00:30 UTC and asserts that the date crosses to the prior day whenever the host offset is at most -1 hour; passed under UTC and America/New_York.
+
+### Review-fix round 2 verification
+
+- `flutter analyze` — exit 1; `23 issues found. (ran in 1.7s)`. No diagnostic is in `test/date_time_bug_fixes_test.dart`; all 23 are pre-existing diagnostics in other files.
+- `flutter test` — exit 0; `01:05 +532: All tests passed!`
+- `TZ=UTC flutter test test/date_time_bug_fixes_test.dart` — exit 0; `00:02 +10: All tests passed!`
+- `TZ=America/New_York flutter test test/date_time_bug_fixes_test.dart` — exit 0; `00:03 +10: All tests passed!`
