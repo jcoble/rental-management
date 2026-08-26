@@ -19,22 +19,20 @@
 		queryKey: ['year-end', year, selectedPropertyId],
 		queryFn: () => accounting.yearEnd(year, selectedPropertyId === 'all' ? undefined : selectedPropertyId)
 	}));
-	const optionsQuery = createQuery(() => ({
-		queryKey: ['year-end-property-options', year],
-		queryFn: () => accounting.yearEnd(year)
-	}));
 	const view = $derived(query.data);
-	const optionsView = $derived(optionsQuery.data);
 
-	// Property options come from whichever properties appear in either block.
-	const propertyOptions = $derived(() => {
+	let propertyOptions = $state<{ id: number; name: string }[]>([]);
+	$effect(() => {
+		if (selectedPropertyId !== 'all' || !view) return;
 		const map = new Map<number, string>();
-		for (const p of optionsView?.cashFlow.properties ?? []) map.set(p.propertyId, p.propertyName);
-		for (const p of optionsView?.scheduleE.properties ?? []) map.set(p.propertyId, p.propertyName);
-		for (const p of optionsView?.propertyDispositions ?? []) {
+		for (const p of view.cashFlow.properties) map.set(p.propertyId, p.propertyName);
+		for (const p of view.scheduleE.properties) map.set(p.propertyId, p.propertyName);
+		for (const p of view.propertyDispositions) {
 			if (p.propertyName) map.set(p.propertyId, p.propertyName);
 		}
-		return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+		propertyOptions = [...map.entries()]
+			.map(([id, name]) => ({ id, name }))
+			.sort((a, b) => a.name.localeCompare(b.name));
 	});
 
 	const cashRows = $derived(view?.cashFlow.properties ?? []);
@@ -84,7 +82,10 @@
 				<Select.Root
 					type="single"
 					value={String(year)}
-					onValueChange={(value) => (year = Number(value))}
+					onValueChange={(value) => {
+						year = Number(value);
+						selectedPropertyId = 'all';
+					}}
 				>
 					<Select.Trigger class="h-10 w-28 text-sm text-foreground" data-testid="year-end-year-select">
 						{year}
@@ -106,11 +107,11 @@
 					<Select.Trigger class="h-10 min-w-48 text-sm text-foreground" data-testid="year-end-property-select">
 						{selectedPropertyId === 'all'
 							? 'All properties'
-							: propertyOptions().find((property) => property.id === selectedPropertyId)?.name ?? 'Select property'}
+							: propertyOptions.find((property) => property.id === selectedPropertyId)?.name ?? 'Select property'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="all" label="All properties">All properties</Select.Item>
-						{#each propertyOptions() as property}
+						{#each propertyOptions as property}
 							<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
 						{/each}
 					</Select.Content>
