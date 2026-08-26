@@ -9,6 +9,7 @@
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { moneyPosition, type MoneyPositionResponse } from '$lib/api/endpoints/money-position';
+	import { accounting } from '$lib/api/endpoints/accounting';
 	import {
 		formatAccountingCurrency,
 		formatAccountingDate
@@ -66,8 +67,13 @@
 	const periodRange = $derived.by(() => rangeForPeriod(period, customFrom, customTo));
 	const positionQuery = createQuery(() => ({
 		queryKey: ['accounting-money-position', portfolioId, period, periodRange.from, periodRange.to],
-		enabled: authState.isAuthenticated,
+		enabled: authState.isAuthenticated && advanced,
 		queryFn: () => moneyPosition.get(periodRange)
+	}));
+	const snapshotQuery = createQuery(() => ({
+		queryKey: ['accounting-snapshot', portfolioId],
+		enabled: authState.isAuthenticated && !advanced,
+		queryFn: () => accounting.snapshot()
 	}));
 
 	const position = $derived(positionQuery.data as MoneyPositionResponse | undefined);
@@ -92,7 +98,31 @@
 </script>
 
 <section class={['space-y-4', className]} data-testid={testid}>
-	{#if positionQuery.isLoading}
+	{#if !advanced}
+		{#if snapshotQuery.isLoading}
+			<div class="grid gap-4 sm:grid-cols-3">
+				{#each Array(3) as _}
+					<div class="h-32 animate-pulse rounded-xl border border-border bg-muted"></div>
+				{/each}
+			</div>
+		{:else if snapshotQuery.isError || !snapshotQuery.data}
+			<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-5" role="alert" data-testid="money-summary-error">
+				<p class="font-semibold">Money overview unavailable</p>
+				<Button class="mt-3" variant="outline" size="sm" onclick={() => snapshotQuery.refetch()}>Try again</Button>
+			</div>
+		{:else}
+			{@const snapshot = snapshotQuery.data}
+			<div class="grid gap-4 sm:grid-cols-3">
+				<Card.Root class="gap-0 py-0"><Card.Content class="p-5"><p class="text-sm text-muted-foreground">Collected this month</p><p class="mt-1 font-mono text-3xl font-semibold tabular-nums">{amount(snapshot.collected)}</p></Card.Content></Card.Root>
+				<Card.Root class="gap-0 py-0"><Card.Content class="p-5"><p class="text-sm text-muted-foreground">Spent this month</p><p class="mt-1 font-mono text-3xl font-semibold tabular-nums">{decreaseAmount(snapshot.spent)}</p></Card.Content></Card.Root>
+				<Card.Root class="gap-0 py-0"><Card.Content class="p-5"><p class="text-sm text-muted-foreground">Kept this month</p><p class="mt-1 font-mono text-3xl font-semibold tabular-nums">{amount(snapshot.net)}</p></Card.Content></Card.Root>
+			</div>
+			<div class="rounded-xl border border-border bg-card p-5 text-sm" data-testid="money-summary-past-due">
+				<span class="text-muted-foreground">Past due</span>
+				<strong class="ml-2 font-mono tabular-nums">{amount(snapshot.pastDueAmount)} ({snapshot.pastDueCount})</strong>
+			</div>
+		{/if}
+	{:else if positionQuery.isLoading}
 		<div class="grid gap-4 lg:grid-cols-[1.25fr_1fr]">
 			<div class="rounded-xl border border-border bg-card p-5" aria-label="Loading cash position">
 				<div class="h-4 w-20 animate-pulse rounded bg-muted"></div>

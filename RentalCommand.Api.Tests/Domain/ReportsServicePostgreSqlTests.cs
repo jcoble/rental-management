@@ -325,6 +325,40 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
     }
 
     [Fact]
+    public async Task MoneyTotals_DashboardAndSummary_Agree()
+    {
+        await using var context = await postgres.CreateContextAsync();
+        var scope = context.Db.SeedAdministratorScope(
+            1,
+            nameof(MoneyTotals_DashboardAndSummary_Agree));
+        var now = DateTime.UtcNow;
+        var property = SeedProperty(context, "Money totals", now);
+        var unit = SeedUnit(context, property, "4D", now);
+        var account = SeedTenantAccount(context, property, unit, now);
+        SeedDashboardReceivables(context, account, now);
+        context.Db.ChangeTracker.Clear();
+        await context.ActivateApiScopeAsync(scope);
+
+        var timeProvider = new FixedTimeProvider(now);
+        var dashboard = await new DashboardService(context.Db, new AuditDescriber(), timeProvider)
+            .GetDashboardAsync(scope);
+        var accounting = new AccountingService(
+            context.Db,
+            new ScheduleEService(context.Db),
+            new YearEndPacketPdfGenerator(),
+            timeProvider);
+        var summary = await accounting.GetSummaryAsync(scope);
+        var snapshot = await accounting.GetSnapshotAsync(scope);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.Accounting.OverdueAmount.Should().Be(60m)
+            .And.Be(summary.Payments.Overdue)
+            .And.Be(snapshot.PastDueAmount);
+        dashboard.Accounting.NetThisMonth.Should().Be(40m)
+            .And.Be(snapshot.Net);
+    }
+
+    [Fact]
     public async Task FutureEffectiveReversal_AllLiveReadModelsMatchCanonicalViewsAcrossBoundary()
     {
         var commands = new ReadModelCommandRecorder();

@@ -69,7 +69,6 @@
 	import AccountingDetailMode from '$lib/components/accounting/AccountingDetailMode.svelte';
 	import AccountingDetailModeControl from '$lib/components/accounting/AccountingDetailModeControl.svelte';
 	import MoneyPositionPanel from '$lib/components/accounting/MoneyPositionPanel.svelte';
-	import { moneyPosition, type MoneyPositionResponse } from '$lib/api/endpoints/money-position';
 	import { formatAccountingCurrency, formatAccountingDate } from '$lib/accounting/accounting-display';
 	import GeneralLedgerPanel from '$lib/components/accounting/GeneralLedgerPanel.svelte';
 	import CashFlowPanel from '$lib/components/accounting/CashFlowPanel.svelte';
@@ -78,12 +77,12 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	const moneyPositionSummaryQuery = createQuery(() => ({
-		queryKey: ['accounting-money-position-header', portfolioId],
+	const moneySnapshotQuery = createQuery(() => ({
+		queryKey: ['accounting-snapshot', portfolioId],
 		enabled: portfolioId > 0,
-		queryFn: () => moneyPosition.get()
+		queryFn: () => accounting.snapshot()
 	}));
-	const moneyPositionSummary = $derived(moneyPositionSummaryQuery.data as MoneyPositionResponse | undefined);
+	const moneySnapshot = $derived(moneySnapshotQuery.data);
 	const accountingTabs = [
 		{ value: 'overview', label: 'Overview' },
 		{ value: 'cash-flow', label: 'Cash flow' },
@@ -1210,9 +1209,9 @@
 {#snippet accountingHeaderActions()}
 	<div class="flex flex-wrap items-center justify-end gap-2">
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs" data-testid="accounting-header-metrics">
-			<span><span class="text-muted-foreground">Cash available</span> <strong class="font-mono tabular-nums">{moneyPositionSummary ? formatAccountingCurrency(moneyPositionSummary.totalCashOnHand) : '—'}</strong></span>
-			<span><span class="text-muted-foreground">Past due</span> <strong class="font-mono tabular-nums">{moneyPositionSummary ? formatAccountingCurrency(moneyPositionSummary.pastDueAmount) : '—'} ({moneyPositionSummary?.pastDueCount ?? '—'})</strong></span>
-			<span class="text-muted-foreground">As of {moneyPositionSummary ? formatAccountingDate(moneyPositionSummary.asOfUtc) : '—'}</span>
+			<span><span class="text-muted-foreground">Kept this month</span> <strong class="font-mono tabular-nums">{moneySnapshot ? formatAccountingCurrency(moneySnapshot.net) : '—'}</strong></span>
+			<span><span class="text-muted-foreground">Past due</span> <strong class="font-mono tabular-nums">{moneySnapshot ? formatAccountingCurrency(moneySnapshot.pastDueAmount) : '—'} ({moneySnapshot?.pastDueCount ?? '—'})</strong></span>
+			<span class="text-muted-foreground">As of {moneySnapshot ? formatAccountingDate(moneySnapshot.periodEnd) : '—'}</span>
 		</div>
 		<span class="hidden text-xs text-muted-foreground xl:inline">Advanced adds bookkeeping detail where available.</span>
 		<AccountingDetailModeControl testid="accounting-detail-mode" />
