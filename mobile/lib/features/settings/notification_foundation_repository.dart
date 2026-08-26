@@ -801,6 +801,8 @@ final myAlertsProvider =
     );
 
 class MyAlertsNotifier extends Notifier<AsyncValue<MyAlerts>> {
+  int _requestGeneration = 0;
+
   @override
   AsyncValue<MyAlerts> build() {
     Future.microtask(load);
@@ -811,8 +813,11 @@ class MyAlertsNotifier extends Notifier<AsyncValue<MyAlerts>> {
       ref.read(notificationFoundationRepositoryProvider);
 
   Future<void> load() async {
+    final generation = ++_requestGeneration;
     state = const AsyncValue.loading();
-    state = await AsyncValue.guard(_repository.getMyAlerts);
+    final result = await AsyncValue.guard(_repository.getMyAlerts);
+    if (generation != _requestGeneration || !ref.mounted) return;
+    state = result;
   }
 
   void update(MyAlerts Function(MyAlerts current) edit) {
@@ -824,6 +829,7 @@ class MyAlertsNotifier extends Notifier<AsyncValue<MyAlerts>> {
     final current = state.value;
     if (current == null) return;
     final saved = await _repository.updateMyAlerts(current);
+    if (!ref.mounted) return;
     state = AsyncValue.data(saved);
   }
 }
