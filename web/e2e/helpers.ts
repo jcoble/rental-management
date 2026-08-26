@@ -16,6 +16,7 @@ export async function login(page: Page, email = ADMIN_EMAIL, password = ADMIN_PA
 	await page.getByTestId('login-submit').click();
 	// Staff land on the dashboard ('/'); wait until we leave the login route.
 	await expect(page).not.toHaveURL(/\/login/);
+	await expect(page.getByTestId('main-nav')).toBeVisible();
 }
 
 /**
@@ -127,7 +128,13 @@ export function bearer(token: string): Record<string, string> {
 
 export interface UnitDashboardLite {
 	unit: { id: number; propertyId: number; unitNumber: string };
-	currentLease?: { id: number; leaseManagementId: number; tenantAccountId?: number | null };
+	currentLease?: {
+		id: number;
+		leaseManagementId: number;
+		tenantAccountId?: number | null;
+		leaseNumber: string;
+		monthlyRent: number;
+	};
 }
 
 /**

@@ -56,12 +56,13 @@ test.describe('CSV import workflow', () => {
 
 		await login(page);
 		await page.goto('/import');
+		await page.waitForLoadState('networkidle');
 
 		await expect(page.getByTestId('import-page')).toBeVisible();
 		await expect(page.getByTestId('import-title')).toHaveText('Import from a spreadsheet');
 		await expect(page.getByTestId('import-entity-tenant')).toHaveAttribute('aria-pressed', 'true');
 		await expect(page.getByTestId('import-columns')).toContainText(
-			'first name, last name, email, phone'
+			'firstName, lastName, email, phone'
 		);
 
 		const download = page.waitForEvent('download');
@@ -87,13 +88,15 @@ test.describe('CSV import workflow', () => {
 		await uploadCsv(page, tenantCsv);
 		await expect(page.getByTestId('import-selected-file')).toContainText('tenant-import-mixed.csv');
 		await expect(page.getByTestId('import-preview')).toBeVisible();
-		await expect(page.getByTestId('import-preview-summary')).toContainText('1 of 2 rows look good');
+		await expect(page.getByTestId('import-preview-summary')).toContainText('1 of 2 rows are ready to import');
 		await expect(page.getByTestId('import-row')).toHaveCount(2);
 		await expect(page.getByTestId('import-row-errors')).toContainText('FirstName');
 
 		await page.getByTestId('import-entity-property').click();
 		await expect(page.getByTestId('import-entity-property')).toHaveAttribute('aria-pressed', 'true');
-		await expect(page.getByTestId('import-columns')).toContainText('name, address, city, state, ZIP');
+		await expect(page.getByTestId('import-columns')).toContainText(
+			'name, addressLine1, addressLine2, city, state, postalCode, type, rentalStructure, unitNumber'
+		);
 		await expect(page.getByTestId('import-selected-file')).toHaveCount(0);
 		await expect(page.getByTestId('import-preview')).toHaveCount(0);
 
@@ -102,13 +105,13 @@ test.describe('CSV import workflow', () => {
 			testInfo.outputDir,
 			'property-import-mixed.csv',
 			[
-				'name,addressLine1,addressLine2,city,state,postalCode,type',
-				`${propertyName},397 Import Ave,,Columbus,OH,43215,MultiFamily`,
-				`${suffix} Bad Type,399 Import Ave,,Columbus,OH,43215,Castle`
+				'name,addressLine1,addressLine2,city,state,postalCode,type,rentalStructure,unitNumber',
+				`${propertyName},397 Import Ave,,Columbus,OH,43215,MultiFamily,MultiRental,201`,
+				`${suffix} Bad Type,399 Import Ave,,Columbus,OH,43215,Castle,MultiRental,201`
 			].join('\n')
 		);
 		await uploadCsv(page, propertyCsv);
-		await expect(page.getByTestId('import-preview-summary')).toContainText('1 of 2 rows look good');
+		await expect(page.getByTestId('import-preview-summary')).toContainText('1 of 2 rows are ready to import');
 		await expect(page.getByTestId('import-row-errors')).toContainText('not a valid property type');
 		await page.getByTestId('import-commit').click();
 		await expect(page.getByTestId('import-result')).toBeVisible();
@@ -120,7 +123,9 @@ test.describe('CSV import workflow', () => {
 
 		await page.goto('/import');
 		await page.getByTestId('import-entity-unit').click();
-		await expect(page.getByTestId('import-columns')).toContainText('property name, unit number');
+		await expect(page.getByTestId('import-columns')).toContainText(
+			'propertyName, propertyId, unitNumber, bedrooms, bathrooms, marketRent'
+		);
 		const unitCsv = writeFixture(
 			testInfo.outputDir,
 			'unit-import-valid.csv',
@@ -130,7 +135,7 @@ test.describe('CSV import workflow', () => {
 			].join('\n')
 		);
 		await uploadCsv(page, unitCsv);
-		await expect(page.getByTestId('import-preview-summary')).toContainText('1 of 1 row looks good');
+		await expect(page.getByTestId('import-preview-summary')).toContainText('1 of 1 row is ready to import');
 		await page.getByTestId('import-commit').click();
 		await expect(page.getByTestId('import-result-summary')).toContainText('Created 1 unit');
 
@@ -148,7 +153,7 @@ test.describe('CSV import workflow', () => {
 			].join('\n')
 		);
 		await uploadCsv(page, tenantCommitCsv);
-		await expect(page.getByTestId('import-preview-summary')).toContainText('1 of 1 row looks good');
+		await expect(page.getByTestId('import-preview-summary')).toContainText('1 of 1 row is ready to import');
 		await page.getByTestId('import-commit').click();
 		await expect(page.getByTestId('import-result-summary')).toContainText('Created 1 tenant');
 

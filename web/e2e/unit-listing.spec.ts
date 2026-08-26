@@ -52,7 +52,7 @@ async function findListingUnit(request: APIRequestContext, token: string): Promi
 
 async function ensureSandboxChoice(request: APIRequestContext, token: string): Promise<void> {
 	const res = await request.post('/api/v1/portfolio/onboarding-choice', {
-		headers: bearer(token),
+		headers: { ...bearer(token), 'Idempotency-Key': unique('e2e-sandbox-choice') },
 		data: { mode: 'sandbox' },
 	});
 	expect(res.ok(), `sandbox choice failed: ${res.status()}`).toBeTruthy();
@@ -107,7 +107,7 @@ test.describe('Unit listing workspace', () => {
 			page.getByRole('button', { name: /Prepare listing|Sync unit details/ }).first().click(),
 		]);
 		expect(generateResponse.ok(), `prepare failed: ${generateResponse.status()}`).toBeTruthy();
-		await expect(page.getByText('Listing copy', { exact: true })).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByRole('heading', { name: 'Listing', exact: true })).toBeVisible({ timeout: 15_000 });
 
 		const prepared = await readListingWorkspace(request, token, unitId);
 		expect(prepared.unitId).toBe(unitId);
@@ -133,12 +133,15 @@ test.describe('Unit listing workspace', () => {
 		await page.getByLabel('Description').fill(description);
 		await page.getByLabel('Rent').fill('2125');
 		await page.getByLabel('Deposit').fill('2125');
+		await page.getByTestId('listing-more-details').getByText('More about this rental').click();
 		await page.getByLabel('Lease terms').fill('12-month lease; renter pays utilities');
 		await page.getByLabel('Pet policy').fill('Pets considered case by case');
 		await page.getByLabel('Utilities').fill('Tenant pays electric and gas');
 		await page.getByLabel('Parking').fill('One off-street parking spot');
 		await page.getByLabel('Amenities').fill('In-unit laundry, central air, quiet street');
-		await page.getByLabel('Publication state').selectOption('Published');
+		await page.getByTestId('listing-posting-details').getByText('Posting details').click();
+		await page.getByText('Where is this listing in the publishing process?').locator('..').getByRole('button').click();
+		await page.getByRole('option', { name: 'Published', exact: true }).click();
 		await page.getByLabel('Copy entered in Zillow').check();
 		await page.getByLabel('Terms reviewed in Zillow').check();
 		await page.getByLabel('Photos uploaded in order').check();
@@ -198,13 +201,13 @@ test.describe('Unit listing workspace', () => {
 		expect(changed.contentVersion).toBeGreaterThan(published.contentVersion);
 		expect(guidedPublication(changed).needsRepublish).toBeTruthy();
 
-		await page.getByLabel('Copy headline').click();
-		await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(revisedHeadline);
+		await page.getByTestId('listing-copy-all').click();
+		await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain(revisedHeadline);
 
 		const signedLeaseLink = page.getByRole('link', { name: 'Import signed Zillow lease' });
 		await expect(signedLeaseLink).toHaveAttribute(
 			'href',
-			`/scan?type=LeaseAgreement&propertyId=${changed.propertyId}&unitId=${unitId}&rentalListingId=${changed.id}&sourceLabel=Zillow%20signed%20lease%20import&returnTo=%2Funits%2F${unitId}%3Ftab%3Dlease`
+			`/scan?type=LeaseAgreement&propertyId=${changed.propertyId}&unitId=${unitId}&rentalListingId=${changed.id}&sourceLabel=Zillow%20signed%20lease%20import&returnTo=%2Funits%2F${unitId}%3Ftab%3Dtenant-lease%26view%3Dagreements`
 		);
 	});
 
@@ -214,13 +217,13 @@ test.describe('Unit listing workspace', () => {
 		const unitId = await findListingUnit(request, token);
 
 		const prepare = await request.post(`/api/v1/units/${unitId}/listing-workspace/generate`, {
-			headers: bearer(token),
+			headers: { ...bearer(token), 'Idempotency-Key': unique('e2e-listing-generate') },
 		});
 		expect(prepare.ok(), `prepare failed: ${prepare.status()}`).toBeTruthy();
 
 		await login(page);
 		await page.goto(`/units/${unitId}?tab=leasing&view=listing`);
-		await expect(page.getByText('Listing copy', { exact: true })).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByRole('heading', { name: 'Listing', exact: true })).toBeVisible({ timeout: 15_000 });
 
 		const save = page.getByRole('button', { name: 'Save', exact: true });
 		await expect(save).toBeEnabled();

@@ -96,7 +96,7 @@ test.describe('Unit Command Center', () => {
 		await expect(page).toHaveURL(/tab=money/);
 
 		// Open the operating-costs ledger and reveal the INLINE add-expense form on the page (not a drawer/modal).
-		await page.getByTestId('ledger-tab-expenses').click();
+		await page.getByTestId('unit-money-view-operating-costs').click();
 		await expect(page.getByTestId('unit-expenses-tab')).toBeVisible({ timeout: 10_000 });
 		await page.getByTestId('expenses-create').click();
 		await expect(page.getByTestId('expenses-create-form')).toBeVisible();

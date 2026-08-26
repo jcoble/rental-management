@@ -21,7 +21,7 @@ async function createJson<T>(
 	data: Record<string, unknown>
 ): Promise<T> {
 	const response = await request.post(path, {
-		headers: bearer(token),
+		headers: { ...bearer(token), 'Idempotency-Key': unique(`e2e-${path}`) },
 		data
 	});
 	expect(response.ok(), `${path} failed: ${response.status()} ${await response.text()}`).toBeTruthy();
@@ -50,23 +50,28 @@ async function seedExpenseContext(request: APIRequestContext): Promise<SeededExp
 	const vendorTwoName = `${suffix} Electric`;
 	const workOrderTitle = `${suffix} disposal repair`;
 
-	const property = await createJson<{ id: number }>(request, '/api/v1/properties', token, {
-		name: propertyName,
-		type: 'SingleFamily',
-		addressLine1: '605 Cypress Lane',
-		city: 'Austin',
-		state: 'TX',
-		postalCode: '78701',
-		clearOwnerEntity: true
-	});
-	const unit = await createJson<{ id: number }>(request, '/api/v1/units', token, {
-		propertyId: property.id,
-		unitNumber,
-		bedrooms: 2,
-		bathrooms: 1,
-		marketRent: 1450,
-		status: 'Vacant'
-	});
+	const setup = await createJson<{ property: { id: number }; units: Array<{ id: number }> }>(
+		request,
+		'/api/v1/properties/setup',
+		token,
+		{
+			property: {
+				name: propertyName,
+				type: 'SingleFamily',
+				rentalStructure: 'SingleRental',
+				status: 'Active',
+				addressLine1: '605 Cypress Lane',
+				city: 'Austin',
+				state: 'TX',
+				postalCode: '78701'
+			},
+			units: [{ unitNumber, bedrooms: 2, bathrooms: 1, marketRent: 1450, status: 'Vacant' }]
+		}
+	);
+	const property = setup.property;
+	const unit = setup.units[0];
+	expect(unit, 'property setup returned no unit').toBeTruthy();
+	const unitId = unit.id;
 	const vendorOne = await createJson<{ id: number }>(request, '/api/v1/vendors', token, {
 		name: vendorOneName,
 		serviceType: 'Plumbing',
@@ -90,7 +95,7 @@ async function seedExpenseContext(request: APIRequestContext): Promise<SeededExp
 	});
 	await createJson<{ id: number }>(request, '/api/v1/work-orders', token, {
 		propertyId: property.id,
-		unitId: unit.id,
+		unitId,
 		vendorId: vendorOne.id,
 		title: workOrderTitle,
 		description: 'Garbage disposal is leaking under the sink.',
@@ -122,7 +127,7 @@ test.describe('Accounting expense autofill', () => {
 		const seeded = await seedExpenseContext(request);
 
 		await loginWithApi(page, request);
-		await page.goto('/accounting', { waitUntil: 'domcontentloaded' });
+		await page.goto('/accounting?tab=activity', { waitUntil: 'domcontentloaded' });
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
 		await page.waitForLoadState('networkidle');
 
