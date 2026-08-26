@@ -691,7 +691,7 @@ class _EditExpenseSheetState extends ConsumerState<_EditExpenseSheet> {
       });
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      if (mounted) setState(() => _error = e.message);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
