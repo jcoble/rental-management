@@ -11,7 +11,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Payments;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -27,7 +26,6 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 using RentalCommand.Engine.Services;
-using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 using Stripe.Checkout;
 using Xunit;
@@ -82,8 +80,6 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<ProviderPaymentFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -1515,7 +1511,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             Options.Create(new StripeConfig { SecretKey = "sk_test_deterministic" }),
             TimeProvider.System,
-            scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+            scope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             NullLogger<AutopayChargeService>.Instance,
             provider);
 
@@ -1567,7 +1563,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             Options.Create(new StripeConfig { SecretKey = "sk_test_deterministic" }),
             TimeProvider.System,
-            scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+            scope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             NullLogger<AutopayChargeService>.Instance,
             provider);
 
@@ -1629,7 +1625,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             db,
             new NoopLeaseQaService(),
             TimeProvider.System,
-            atomicScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+            atomicScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
 
         var active = await service.GetAutopayStatusAsync(
             scenario.PortfolioId, scenario.TenantId, scenario.AccountId);
@@ -2116,7 +2112,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var handler = new RecordTenantReceiptRule(db);
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey,
                     TenantMoneyWriteSupport.Write(
                         receipt, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
@@ -2140,12 +2136,12 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             if (command is ScheduleProviderPaymentReconciliationCommand
                 or ReconcileClaimedProviderPaymentEventCommand)
             {
-                return await scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>()
+                return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                     .ExecuteAsync(identity.IdempotencyKey, write, ct);
             }
-            var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+            var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
             return command is RecordVerifiedProviderPaymentEventCommand
-                ? await writes.ExecuteExactAsync(identity.IdempotencyKey, write, ct)
+                ? await writes.ExecuteAsync(identity.IdempotencyKey, write, ct)
                 : await writes.ExecuteAsync(identity.IdempotencyKey, write, ct);
         }
 
@@ -2169,7 +2165,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         SubmitRaceBarrier? submitRaceBarrier = null)
     {
         await using var scope = _services!.CreateAsyncScope();
-        IRequestWriteExecutor writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        IWriteExecutor writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         if (throwAfterFinalize)
             writes = new ThrowAfterFinalizeRequestWriteExecutor(writes);
         if (submitRaceBarrier is not null)
@@ -2198,7 +2194,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         await using var scope = _services!.CreateAsyncScope();
         var service = new InteractivePaymentReconciliationService(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            scope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+            scope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>(),
             timeProvider ?? TimeProvider.System,
             Options.Create(options),
@@ -2217,7 +2213,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             NullLogger<StripePaymentService>.Instance,
             TimeProvider.System,
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
+            scope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>());
         return await service.CancelPaymentAttemptAsync(
             scenario.PortfolioId, scenario.TenantId, scenario.AccountId, paymentAttemptId,
@@ -2256,7 +2252,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     }
 
     private sealed class SubmitRaceBarrierRequestWriteExecutor(
-        IRequestWriteExecutor inner, SubmitRaceBarrier barrier) : IRequestWriteExecutor
+        IWriteExecutor inner, SubmitRaceBarrier barrier) : IWriteExecutor
     {
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
@@ -2269,11 +2265,6 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             return await inner.ExecuteAsync(idempotencyKey, write, ct);
         }
 
-        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
-            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData where TResult : notnull =>
-            inner.ExecuteExactAsync(idempotencyKey, write, ct);
     }
 
     private static TenantLedgerEntry Charge(Scenario scenario, string suffix, decimal amount) => new()
@@ -2298,8 +2289,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             Task.FromResult(false);
     }
 
-    private sealed class ThrowAfterFinalizeRequestWriteExecutor(IRequestWriteExecutor inner)
-        : IRequestWriteExecutor
+    private sealed class ThrowAfterFinalizeRequestWriteExecutor(IWriteExecutor inner)
+        : IWriteExecutor
     {
         private int _thrown;
 
@@ -2316,11 +2307,6 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             return outcome;
         }
 
-        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
-            string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData where TResult : notnull =>
-            inner.ExecuteExactAsync(idempotencyKey, write, ct);
     }
 
     private sealed class FinalizeResponseLostException()

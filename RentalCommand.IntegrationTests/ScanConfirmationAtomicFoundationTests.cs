@@ -4,7 +4,6 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -54,7 +53,6 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         services.AddSingleton<AtomicCompanionFailureInterceptor>();
         services.AddScoped<IScanConfirmationTargetWriter, TestExpenseTargetWriter>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -852,7 +850,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         if (command is RejectScanDraftCommand reject)
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(
                     identity.IdempotencyKey,
                     ScanDraftWriteSupport.Write(
@@ -867,7 +865,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var writer = scope.ServiceProvider.GetRequiredService<IScanConfirmationTargetWriter>();
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(
                     identity.IdempotencyKey,
                     ScanDraftWriteSupport.Write(

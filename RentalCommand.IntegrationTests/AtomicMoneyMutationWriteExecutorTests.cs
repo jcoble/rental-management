@@ -4,7 +4,6 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -154,7 +153,7 @@ public sealed class AtomicMoneyMutationWriteExecutorTests
             .ReturnsAsync(new AtomicCommandOutcome<AtomicMoneyMutationResult>(
                 stored, AtomicCommandDisposition.Replayed, Guid.NewGuid()));
         var service = new ExpenseService(
-            db, Mock.Of<IFileStorage>(), TimeProvider.System, new RequestWriteExecutor(executor.Object));
+            db, Mock.Of<IFileStorage>(), TimeProvider.System, executor.Object);
 
         var replay = await service.CreateAsync(
             new WorkspaceReadScope(7, 8, SessionId, 9, 10),

@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -59,7 +58,7 @@ public class AccountingConnectionService
     private readonly AccountingImportService _importService;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingConnectionService> _logger;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public AccountingConnectionService(
         RentalCommandDbContext db,
@@ -68,7 +67,7 @@ public class AccountingConnectionService
         AccountingAppSettingsResolver settingsResolver,
         AccountingImportService importService,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         ILogger<AccountingConnectionService> logger)
     {
         _db = db;

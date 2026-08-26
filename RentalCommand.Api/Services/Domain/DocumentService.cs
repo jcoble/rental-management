@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Documents;
 using RentalCommand.Core.Authorization;
@@ -18,7 +17,7 @@ namespace RentalCommand.Api.Services.Domain;
 public sealed class DocumentService : IDocumentService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IFileStorage _storage;
     private readonly IPendingFileUploadStore _pendingUploads;
     private readonly ILogger<DocumentService> _logger;
@@ -26,7 +25,7 @@ public sealed class DocumentService : IDocumentService
 
     public DocumentService(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IFileStorage storage,
         IPendingFileUploadStore pendingUploads,
         ILogger<DocumentService> logger,

@@ -4,7 +4,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -23,7 +22,7 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControllerBase
 {
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IAccountingLedgerReadModelService _ledgerReadModels;
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
@@ -32,7 +31,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         IAccountingLedgerReadModelService ledgerReadModels,
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _ledgerReadModels = ledgerReadModels;
         _db = db;

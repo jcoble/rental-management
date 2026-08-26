@@ -8,7 +8,6 @@ using RentalCommand.Core.Notifications;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Notifications;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -22,13 +21,13 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
     private static readonly AtomicJsonResultCodec<EnqueueMorningBriefingsResult> ResultCodec =
         new("notifications.morning-briefing.enqueue.v1");
 
-    private readonly IJobStepWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DailyBriefingDeliveryService> _logger;
 
     public DailyBriefingDeliveryService(
-        IJobStepWriteExecutor writes,
+        IWriteExecutor writes,
         RentalCommandDbContext db,
         TimeProvider timeProvider,
         ILogger<DailyBriefingDeliveryService> logger)

@@ -4,11 +4,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Core.Automation;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Automation;
 using RentalCommand.Engine.Services;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Tests.Automation;
 
@@ -78,7 +78,7 @@ public sealed class ScheduledFinanceServiceWriteExecutorTests
         var writes = new CapturingJobStepWriteExecutor(
             new ApplyScheduledFinanceBatchResult(ScheduledFinanceApplyOutcome.Applied, 1, 1));
         var services = new ServiceCollection()
-            .AddSingleton<IJobStepWriteExecutor>(writes)
+            .AddSingleton<IWriteExecutor>(writes)
             .AddScoped(_ => NewDb())
             .BuildServiceProvider();
         var service = new RecurringMaintenanceService(

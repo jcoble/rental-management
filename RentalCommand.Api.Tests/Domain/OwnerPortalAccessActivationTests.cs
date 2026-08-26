@@ -13,7 +13,6 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -770,7 +769,7 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         _services.GetRequiredService<RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
         new FixedTimeProvider(FrozenBusinessNowUtc),
-        writes: _services.GetRequiredService<IRequestWriteExecutor>());
+        writes: _services.GetRequiredService<IWriteExecutor>());
 
     private static ServiceProvider BuildServices(
         string connectionString,
@@ -785,7 +784,6 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         }
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(connectionString)

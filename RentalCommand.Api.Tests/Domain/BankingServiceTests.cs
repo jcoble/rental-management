@@ -10,7 +10,6 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Atomic;
@@ -2361,7 +2360,6 @@ public class BankingServiceTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(db.Database.GetDbConnection(), contextOwnsConnection: false);
@@ -2377,7 +2375,7 @@ public class BankingServiceTests : IAsyncLifetime
             scope.ServiceProvider.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
             new EphemeralDataProtectionProvider(),
             _plaid.Object,
-            scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
+            scope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             Options.Create(options ?? new PlaidOptions
             {
                 Environment = "sandbox",

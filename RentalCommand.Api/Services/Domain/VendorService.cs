@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -26,14 +25,14 @@ public class VendorService : IVendorService
         [CapabilityKeys.WorkRead, CapabilityKeys.WorkManage];
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
 
     public VendorService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes)
     {
         _db = db;
         _dataUpdate = dataUpdate;
@@ -101,7 +100,7 @@ public class VendorService : IVendorService
             createdAtUtc: _timeProvider.UtcNow());
         var write = CoreCrudWriteSupport.Write(
             writeRequest, CreateVendorAsync, AuthorizeCoreCrudReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return DeserializeSnapshot<VendorResponse>(outcome.Value);
     }
@@ -118,7 +117,7 @@ public class VendorService : IVendorService
             changedAtUtc: _timeProvider.UtcNow());
         var write = CoreCrudWriteSupport.Write(
             writeRequest, UpdateVendorAsync, AuthorizeCoreCrudReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return DeserializeSnapshot<VendorResponse>(outcome.Value);
     }
@@ -134,7 +133,7 @@ public class VendorService : IVendorService
             changedAtUtc: _timeProvider.UtcNow());
         var write = CoreCrudWriteSupport.Write(
             writeRequest, DeleteVendorAsync, AuthorizeCoreCrudReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return outcome.Value.Found;
     }
@@ -235,10 +234,6 @@ public class VendorService : IVendorService
         CancellationToken ct) =>
         CoreCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
 
-    private IRequestWriteExecutor RequireWrites() =>
-        _writes ?? throw new InvalidOperationException(
-            "The shared request write executor is required for vendor changes.");
-
     private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
         where TResponse : class =>
         result.Found && result.ResponseJson is not null
@@ -276,7 +271,7 @@ public class VendorService : IVendorService
                 scope.AccessContextId,
                 scope.AccessRevision,
                 _timeProvider.UtcNow());
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             operationKey, RequestVendorW9Rule.Write(command, _db), ct);
 
         return outcome.Value.Outcome switch

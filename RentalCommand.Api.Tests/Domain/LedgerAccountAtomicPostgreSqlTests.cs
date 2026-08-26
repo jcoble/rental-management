@@ -11,7 +11,6 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
@@ -431,7 +430,7 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         await using var scope = _services.CreateAsyncScope();
         var handler = new CreateLedgerAccountRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(command.DeliveryIdempotencyKey,
                 AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }
@@ -442,7 +441,7 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         await using var scope = _services.CreateAsyncScope();
         var handler = new UpdateLedgerAccountRule(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(command.DeliveryIdempotencyKey,
                 AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }
@@ -610,7 +609,6 @@ public sealed class LedgerAccountAtomicPostgreSqlTests : IAsyncLifetime
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(InterceptorNow));
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider();

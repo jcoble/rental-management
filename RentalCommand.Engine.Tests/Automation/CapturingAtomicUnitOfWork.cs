@@ -1,9 +1,8 @@
 using RentalCommand.Core.Atomic;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Tests.Automation;
 
-internal sealed class CapturingJobStepWriteExecutor : IJobStepWriteExecutor
+internal sealed class CapturingJobStepWriteExecutor : IWriteExecutor
 {
     private readonly object _result;
     private readonly Exception? _exception;

@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -15,9 +14,9 @@ namespace RentalCommand.Api.Services.Domain;
 public class DeviceService : IDeviceService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
-    public DeviceService(RentalCommandDbContext db, IRequestWriteExecutor writes)
+    public DeviceService(RentalCommandDbContext db, IWriteExecutor writes)
     {
         _db = db;
         _writes = writes;

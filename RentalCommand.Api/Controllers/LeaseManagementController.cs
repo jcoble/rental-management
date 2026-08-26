@@ -4,7 +4,6 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data;
@@ -17,7 +16,7 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class LeaseManagementController : ManagementControllerBase
 {
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly ILeaseManagementQueryService _queryService;
     private readonly ILeaseQaService _qa;
@@ -29,7 +28,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         ILeaseQaService qa,
         IConfiguration configuration,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         RentalCommandDbContext db)
     {
         _queryService = queryService;

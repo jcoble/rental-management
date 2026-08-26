@@ -12,7 +12,6 @@ using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
 using RentalCommand.Api.Services.Payments;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -442,7 +441,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
 
         var setupCommand = new SeedDemoPortfolioCommand(
             1, false, businessNowUtc, "frozen-demo-legal-setup");
-        await writes.ExecuteExactAsync(
+        await writes.ExecuteAsync(
             "portfolio:1:frozen-demo-legal-setup",
             DemoSeedCommandRule.Write(atomicDb, setupCommand), CancellationToken.None);
         var candidateAgreements = await atomicDb.LeaseAgreements
@@ -1159,7 +1158,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             new UnexpectedRequestWriteExecutor());
     }
 
-    private sealed class UnexpectedRequestWriteExecutor : IRequestWriteExecutor
+    private sealed class UnexpectedRequestWriteExecutor : IWriteExecutor
     {
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
@@ -1336,7 +1335,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             CompletedAt = DateTime.UnixEpoch,
         };
 
-    private (IRequestWriteExecutor Writes, IAtomicCommandContext Context, IPendingFileUploadStore PendingUploads, RentalCommandDbContext Db)
+    private (IWriteExecutor Writes, IAtomicCommandContext Context, IPendingFileUploadStore PendingUploads, RentalCommandDbContext Db)
         BuildAtomicServices(
         RentalCommandDbContext db,
         IEnumerable<IInterceptor>? interceptors = null)
@@ -1346,7 +1345,6 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, DemoSeedTestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddPendingFileUploadStore();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
@@ -1360,7 +1358,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         var serviceProvider = services.BuildServiceProvider();
         _atomicProviders.Add(serviceProvider);
         return (
-            serviceProvider.GetRequiredService<IRequestWriteExecutor>(),
+            serviceProvider.GetRequiredService<IWriteExecutor>(),
             serviceProvider.GetRequiredService<IAtomicCommandContext>(),
             serviceProvider.GetRequiredService<IPendingFileUploadStore>(),
             serviceProvider.GetRequiredService<RentalCommandDbContext>());

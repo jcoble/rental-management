@@ -7,7 +7,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Documents;
@@ -83,7 +82,6 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<IFileStorage>(provider => provider.GetRequiredService<CapturingFileStorage>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddPendingFileUploadStore();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
@@ -554,7 +552,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
                 ManagementAccess());
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             StoredDocumentWriteSupport.CreateIdempotencyKey(
                 _portfolioId, ActorUserId, Digest(operationId)),
             StoredDocumentWriteSupport.Create(
@@ -587,7 +585,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     {
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             StoredDocumentWriteSupport.DeleteIdempotencyKey(
                 command.PortfolioId, command.StoredFileId, Digest(operationId)),
             StoredDocumentWriteSupport.Delete(

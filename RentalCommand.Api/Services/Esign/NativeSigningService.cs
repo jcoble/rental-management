@@ -9,7 +9,6 @@ using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Documents;
-using RentalCommand.Api.Writes;
 using RentalCommand.Data.Esign;
 
 namespace RentalCommand.Api.Services.Esign;
@@ -18,14 +17,14 @@ namespace RentalCommand.Api.Services.Esign;
 public sealed class NativeSigningService : INativeSigningService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IFileStorage _storage;
     private readonly ILogger<NativeSigningService> _logger;
     private readonly IPendingFileUploadStore _pendingUploads;
 
     public NativeSigningService(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IFileStorage storage,
         IPendingFileUploadStore pendingUploads,
         ILogger<NativeSigningService> logger)

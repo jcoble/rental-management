@@ -9,7 +9,6 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Esign;
 using RentalCommand.Data.Documents;
-using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Esign;
 
@@ -24,7 +23,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         $"{Environment.MachineName}:{Environment.ProcessId}:native-esign-api:{Guid.NewGuid():N}";
 
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly INativeEsignExecutionClaimStore _claims;
     private readonly IFileStorage _storage;
     private readonly IExecutedLeasePdfGenerator _executedPdf;
@@ -33,7 +32,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 
     public NativeEsignExecutionService(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         INativeEsignExecutionClaimStore claims,
         IFileStorage storage,
         IExecutedLeasePdfGenerator executedPdf,

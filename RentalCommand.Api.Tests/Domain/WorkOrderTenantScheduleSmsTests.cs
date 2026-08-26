@@ -63,7 +63,7 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System,
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public void Dispose()

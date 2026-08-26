@@ -6,7 +6,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -180,19 +179,6 @@ public sealed class RecurringMaintenanceCrudWritePostgreSqlTests : IAsyncLifetim
             .Should().Be(4);
     }
 
-    [Fact]
-    public async Task MutationWithoutSharedExecutor_RequiresWriteExecutor()
-    {
-        var sut = new RecurringMaintenanceTaskService(_context.Db, TimeProvider.System);
-        var scope = new WorkspaceReadScope(1, 1, Guid.NewGuid(), 1, 1);
-
-        Func<Task> act = () => sut.CreateAuthorizedAsync(
-            scope, CreateRequest(1, "Missing executor"), "recurring-missing-executor");
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("The shared request write executor is required for recurring maintenance changes.");
-    }
-
     private async Task<WorkspaceReadScope> SeedScopeAsync(DateTime now)
     {
         var user = await _context.Db.Users.SingleAsync(row => row.Id == 1);
@@ -275,7 +261,6 @@ public sealed class RecurringMaintenanceCrudWritePostgreSqlTests : IAsyncLifetim
         services.AddSingleton(timeProvider);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<RecurringMaintenanceTaskService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString)

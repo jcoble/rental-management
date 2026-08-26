@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -33,7 +32,6 @@ public sealed class AutomationSettingsServiceTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString)
                 .UseAtomicPersistenceKernel(provider));
@@ -86,7 +84,7 @@ public sealed class AutomationSettingsServiceTests : IAsyncLifetime
         var sut = new NotificationFoundationService(
             _db,
             TimeProvider.System,
-            _services.GetRequiredService<IRequestWriteExecutor>());
+            _services.GetRequiredService<IWriteExecutor>());
 
         var saved = await sut.UpdateLateFeeAutomationSettingsAsync(
             scope,

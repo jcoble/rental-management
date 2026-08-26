@@ -39,7 +39,8 @@ public class WorkOrderServiceListTests : IAsyncLifetime
             Mock.Of<IMessagePublisher>(),
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();

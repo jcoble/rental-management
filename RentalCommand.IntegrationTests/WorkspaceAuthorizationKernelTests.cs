@@ -9,7 +9,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -96,7 +95,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<WorkspaceLockRecorder>();
         services.AddScoped<ICurrentActor, AccessTestActor>();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddAtomicPersistenceKernel();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString)
@@ -2490,7 +2488,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         if (command is AtomicMoneyMutationCommand money)
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey, AtomicMoneyMutation.Write(money, db));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
@@ -2498,7 +2496,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var handler = new StartAuthSessionRule(db);
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey,
                     AuthSessionWriteSupport.Write(start, handler.ExecuteAsync, handler.AuthorizeAsync));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
@@ -2506,15 +2504,15 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         if (command is CreateWorkspaceMembershipCommand createMembership)
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
-                .ExecuteExactAsync(identity.IdempotencyKey,
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey,
                     WorkspaceTeamWriteSupport.Write(db, createMembership));
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         if (command is AddWorkspaceRoleAssignmentCommand addAssignment)
         {
             var provider = scope.ServiceProvider;
-            var outcome = await provider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+            var outcome = await provider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
                 identity.IdempotencyKey, WorkspaceTeamWriteSupport.Write(
                     provider.GetRequiredService<RentalCommandDbContext>(),
                     provider.GetRequiredService<WorkspaceAccessRevisionGuard>(),
@@ -2524,7 +2522,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         if (command is EndWorkspaceRoleAssignmentCommand endAssignment)
         {
             var provider = scope.ServiceProvider;
-            var outcome = await provider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+            var outcome = await provider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
                 identity.IdempotencyKey, WorkspaceTeamWriteSupport.Write(
                     provider.GetRequiredService<RentalCommandDbContext>(),
                     provider.GetRequiredService<WorkspaceAccessRevisionGuard>(),
@@ -2534,7 +2532,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         if (command is ReplaceWorkspaceAssignmentPropertyScopeCommand replaceScope)
         {
             var provider = scope.ServiceProvider;
-            var outcome = await provider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+            var outcome = await provider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
                 identity.IdempotencyKey, WorkspaceTeamWriteSupport.Write(
                     provider.GetRequiredService<RentalCommandDbContext>(),
                     provider.GetRequiredService<WorkspaceAccessRevisionGuard>(),
@@ -2544,7 +2542,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         if (command is ChangeWorkspaceMembershipStatusCommand changeStatus)
         {
             var provider = scope.ServiceProvider;
-            var outcome = await provider.GetRequiredService<IRequestWriteExecutor>().ExecuteExactAsync(
+            var outcome = await provider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
                 identity.IdempotencyKey, WorkspaceTeamWriteSupport.Write(
                     provider.GetRequiredService<RentalCommandDbContext>(),
                     provider.GetRequiredService<WorkspaceAccessRevisionGuard>(),

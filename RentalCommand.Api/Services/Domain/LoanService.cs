@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -16,9 +15,9 @@ public class LoanService : ILoanService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
-    public LoanService(RentalCommandDbContext db, TimeProvider timeProvider, IRequestWriteExecutor writes)
+    public LoanService(RentalCommandDbContext db, TimeProvider timeProvider, IWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;

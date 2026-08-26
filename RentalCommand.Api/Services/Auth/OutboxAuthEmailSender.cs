@@ -3,7 +3,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using RentalCommand.Core.Atomic;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data;
@@ -19,13 +18,13 @@ namespace RentalCommand.Api.Services.Auth;
 public sealed class OutboxAuthEmailSender : IAuthEmailSender
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IConfiguration _configuration;
     private readonly ILogger<OutboxAuthEmailSender> _logger;
 
     public OutboxAuthEmailSender(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IConfiguration configuration,
         ILogger<OutboxAuthEmailSender> logger)
     {

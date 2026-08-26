@@ -3,7 +3,6 @@ using System.Net.Mail;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -21,12 +20,12 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _clock;
     private readonly IServiceProvider? _services;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public NotificationFoundationService(
         RentalCommandDbContext db,
         TimeProvider clock,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IServiceProvider? services = null)
     {
         _db = db;
@@ -54,7 +53,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             _clock.GetUtcNow().UtcDateTime);
         var write = NotificationCrudWriteSupport.Write(
             writeRequest, UpdateMyAlertsAsync, AuthorizeNotificationCrudReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             NotificationCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return ReadSnapshot<MyAlertsResponse>(outcome.Value);
     }
@@ -110,8 +109,6 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         IAtomicCommandContext context,
         CancellationToken ct) =>
         NotificationCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
-
-    private IRequestWriteExecutor RequireWrites() => _writes;
 
     public async Task<MorningBriefingSettingsResponse> GetMorningBriefingSettingsAsync(
         int portfolioId, CancellationToken ct) =>
@@ -581,7 +578,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             throw new InvalidOperationException("At least one delivery channel is required.");
         var command = AtomicNoticeDelivery.Command(
             context, draftId, request.Channels, workFence, operationKey);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             AtomicNoticeDelivery.Identity(command).IdempotencyKey,
             AtomicNoticeDelivery.Write(_db, command), ct);
         return outcome.Value.RenderedNoticeId;
@@ -590,7 +587,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     private Task<AtomicCommandOutcome<AtomicNotificationMutationResult>> ExecuteAsync(
         AtomicNotificationMutationCommand command,
         CancellationToken ct) =>
-        _writes.ExecuteExactAsync(
+        _writes.ExecuteAsync(
             AtomicNotificationMutation.Identity(command).IdempotencyKey,
             AtomicNotificationMutation.Write(_db, command), ct);
 

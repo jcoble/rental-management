@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Data;
@@ -12,11 +11,11 @@ namespace RentalCommand.Api.Services.Domain;
 public class PortfolioService : IPortfolioService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public PortfolioService(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _writes = writes;
@@ -122,7 +121,7 @@ public class PortfolioService : IPortfolioService
         }
         var command = AtomicWorkspaceCoreMutation.Command(
             scope, AtomicWorkspaceCoreMutationOperation.UpdatePortfolio, operationKey, request);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             AtomicWorkspaceCoreMutation.Identity(command).IdempotencyKey,
             AtomicWorkspaceCoreMutation.Write(_db, command), ct);
         return outcome.Value.Found && outcome.Value.ResponseJson is not null
@@ -142,7 +141,7 @@ public class PortfolioService : IPortfolioService
         }
         var command = AtomicWorkspaceCoreMutation.Command(
             scope, AtomicWorkspaceCoreMutationOperation.DeletePortfolio, operationKey, new { });
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             AtomicWorkspaceCoreMutation.Identity(command).IdempotencyKey,
             AtomicWorkspaceCoreMutation.Write(_db, command), ct);
         return outcome.Value.Found;

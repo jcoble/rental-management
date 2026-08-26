@@ -8,7 +8,6 @@ using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Authorization;
@@ -25,7 +24,6 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 using RentalCommand.Engine.Services;
-using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 using Xunit;
 
@@ -70,8 +68,6 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<CompanionFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -667,7 +663,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         await FreezeAtAsync(chargeNow, "America/New_York");
         await using var atomicScope = _services!.CreateAsyncScope();
         var service = new RentChargeService(
-            atomicScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+            atomicScope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             new FixedTimeProvider(chargeNow),
             NullLogger<RentChargeService>.Instance);
@@ -745,7 +741,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         await FreezeAtAsync(chargeNow, "America/New_York");
         await using var atomicScope = _services!.CreateAsyncScope();
         var service = new RentChargeService(
-            atomicScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>(),
+            atomicScope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             new FixedTimeProvider(chargeNow),
             NullLogger<RentChargeService>.Instance);
@@ -2341,7 +2337,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     {
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         if (command is PostTenantChargeCommand post)
         {
             var handler = new PostTenantChargeRule(db);

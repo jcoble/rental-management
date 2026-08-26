@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Operations;
 using RentalCommand.Data;
@@ -17,13 +16,13 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
 {
     private readonly ITechnicianExperienceService _service;
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
 
     public TechnicianController(
         ITechnicianExperienceService service,
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         TimeProvider timeProvider)
     {
         _service = service;

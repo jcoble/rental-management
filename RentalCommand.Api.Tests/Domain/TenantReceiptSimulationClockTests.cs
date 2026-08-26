@@ -22,7 +22,6 @@ using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
 using RentalCommand.Api.Tests.Scanning;
-using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -611,7 +610,6 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         services.AddSingleton<NotificationFailureInterceptor>();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
@@ -629,7 +627,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var writer = scope.ServiceProvider.GetRequiredService<IScanConfirmationTargetWriter>();
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(
                 identity.IdempotencyKey,
                 ScanDraftWriteSupport.Write(
@@ -648,7 +646,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var handler = new RecordTenantReceiptRule(db);
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey, TenantMoneyWriteSupport.Write(
                 command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }
@@ -661,7 +659,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var handler = new FundSecurityDepositRule(db);
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey, TenantMoneyWriteSupport.Write(
                 command, handler.ExecuteAsync, handler.AuthorizeAsync));
     }

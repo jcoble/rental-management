@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -16,10 +15,10 @@ public class RecurringExpenseService : IRecurringExpenseService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public RecurringExpenseService(
-        RentalCommandDbContext db, TimeProvider timeProvider, IRequestWriteExecutor writes)
+        RentalCommandDbContext db, TimeProvider timeProvider, IWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;

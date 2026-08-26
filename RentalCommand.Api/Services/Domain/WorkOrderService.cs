@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -24,7 +23,7 @@ public class WorkOrderService : IWorkOrderService
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
 
     public WorkOrderService(
         RentalCommandDbContext db,
@@ -33,7 +32,7 @@ public class WorkOrderService : IWorkOrderService
         IFileStorage files,
         ILogger<WorkOrderService> logger,
         TimeProvider timeProvider,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes)
     {
         _db = db;
         _files = files;
@@ -455,7 +454,7 @@ public class WorkOrderService : IWorkOrderService
             request.ScheduledFor.ToUtcDateTime(), request.ScheduledWindowEnd.ToUtcDateTime(),
             request.CompletedAt.ToUtc(), request.EstimatedCost, request.ActualCost,
             request.CreatedBy, request.ExtractedData, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
             WorkOrderCrudWriteSupport.Write(command, CreateWorkOrderAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
@@ -482,7 +481,7 @@ public class WorkOrderService : IWorkOrderService
             request.ScheduledWindowEnd.ToUtcDateTime(), request.CompletedAt.ToUtc(),
             request.EstimatedCost, request.ActualCost,
             _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
             WorkOrderCrudWriteSupport.Write(command, UpdateWorkOrderAsync, AuthorizeReplayAsync), ct);
         return Response(outcome.Value);
@@ -496,7 +495,7 @@ public class WorkOrderService : IWorkOrderService
     {
         var command = new DeleteWorkOrderCommand(
             scope.PortfolioId, Actor(scope), id, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
             WorkOrderCrudWriteSupport.Write(command, DeleteWorkOrderAsync, AuthorizeReplayAsync), ct);
         return outcome.Value.Outcome == OperationMutationOutcome.Applied;
@@ -512,7 +511,7 @@ public class WorkOrderService : IWorkOrderService
         var command = new AddStaffWorkOrderCommentCommand(
             scope.PortfolioId, Actor(scope), id, request.Body, request.IsPrivate,
             _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
             WorkOrderCrudWriteSupport.Write(command, AddCommentAsync, AuthorizeReplayAsync), ct);
         return Receipt(outcome.Value);
@@ -549,9 +548,6 @@ public class WorkOrderService : IWorkOrderService
     private Task AuthorizeReplayAsync(
         AddStaffWorkOrderCommentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         new AddStaffWorkOrderCommentRule(_db).AuthorizeReplayAsync(command, context, ct);
-
-    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
-        "The shared request write executor is required for work-order changes.");
 
     private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
         scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);

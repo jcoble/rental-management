@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -19,12 +18,12 @@ public class NotificationService : INotificationService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public NotificationService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
@@ -106,7 +105,7 @@ public class NotificationService : INotificationService
             new { });
         var write = NotificationCrudWriteSupport.Write(
             request, MarkAsReadAsync, AuthorizeNotificationCrudReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
         return outcome.Value.Found;
     }
@@ -125,7 +124,7 @@ public class NotificationService : INotificationService
             new { });
         var write = NotificationCrudWriteSupport.Write(
             request, MarkAllAsReadAsync, AuthorizeNotificationCrudReplayAsync);
-        await RequireWrites().ExecuteAsync(
+        await _writes.ExecuteAsync(
             NotificationCrudWriteSupport.IdempotencyKey(request), write, ct);
     }
 
@@ -226,8 +225,6 @@ public class NotificationService : INotificationService
         CancellationToken ct) =>
         NotificationCrudWriteSupport.AuthorizeReplayAsync(request, _db, context, ct);
 
-    private IRequestWriteExecutor RequireWrites() => _writes;
-
     public async Task<NotificationResponse> CreateBroadcastAsync(
         WorkspaceReadScope scope,
         CreateBroadcastNotificationRequest request,
@@ -236,7 +233,7 @@ public class NotificationService : INotificationService
     {
         var command = AtomicNotificationMutation.Command(scope,
             AtomicNotificationMutationDomain.Broadcast, 0, string.Empty, operationKey, request);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             AtomicNotificationMutation.Identity(command).IdempotencyKey,
             AtomicNotificationMutation.Write(_db, command), ct);
         return outcome.Value.ResponseJson is not null

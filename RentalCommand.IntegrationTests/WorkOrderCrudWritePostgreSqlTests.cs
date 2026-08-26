@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -374,7 +373,6 @@ public sealed class WorkOrderCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddSingleton(Mock.Of<ILogger<WorkOrderService>>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<WorkOrderService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString).UseAtomicPersistenceKernel(provider));

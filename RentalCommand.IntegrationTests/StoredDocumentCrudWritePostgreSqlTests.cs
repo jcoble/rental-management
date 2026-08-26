@@ -11,7 +11,6 @@ using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Documents;
@@ -302,7 +301,6 @@ public sealed class StoredDocumentCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddPendingFileUploadStore();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<DocumentService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString)

@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
+using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
@@ -90,7 +91,9 @@ public sealed class FinancialReportPostgreSqlTests : IAsyncLifetime
             _context.Db,
             new OwnerStatementService(_context.Db, TimeProvider.System),
             new ScheduleEService(_context.Db),
-            new PropertyDispositionService(_context.Db, TimeProvider.System),
+            new PropertyDispositionService(
+                _context.Db, TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>()),
             TimeProvider.System);
 
     private async Task<WorkspaceReadScope> SeedScopeAsync(

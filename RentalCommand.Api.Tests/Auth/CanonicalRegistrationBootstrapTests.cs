@@ -15,7 +15,6 @@ using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.Tests;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Authorization;
@@ -36,7 +35,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
     private MigratedPostgreSqlTestContext _ctx = null!;
     private UserManager<ApplicationUser> _users = null!;
     private ServiceProvider _services = null!;
-    private IRequestWriteExecutor _writes = null!;
+    private IWriteExecutor _writes = null!;
     private RentalCommandDbContext _writeDb = null!;
 
     public CanonicalRegistrationBootstrapTests(MigratedPostgreSqlFixture fixture)
@@ -49,7 +48,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
         _ctx = await _fixture.CreateContextAsync();
         _services = AtomicDomainTestKernel.CreateForAccountBootstrapPostgreSql(
             (NpgsqlConnection)_ctx.Db.Database.GetDbConnection());
-        _writes = _services.GetRequiredService<IRequestWriteExecutor>();
+        _writes = _services.GetRequiredService<IWriteExecutor>();
         _writeDb = _services.GetRequiredService<RentalCommandDbContext>();
         _users = CreateUserManager(_ctx.Db);
     }

@@ -7,7 +7,6 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
@@ -56,7 +55,7 @@ public class ApplicationServiceTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
+        services.AddScoped<IWriteExecutor, WriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_ctx.ConnectionString)
                 .AddInterceptors(new RecordingCommandInterceptor(_commands))
@@ -84,7 +83,7 @@ public class ApplicationServiceTests : IAsyncLifetime
         _sut = new ApplicationService(
             _db, _files.Object, Mock.Of<IDataUpdateService>(), _audit,
             TimeProvider.System,
-            _services.GetRequiredService<IRequestWriteExecutor>());
+            _services.GetRequiredService<IWriteExecutor>());
     }
 
     public async Task DisposeAsync()
@@ -1016,7 +1015,7 @@ public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<IRequestWriteExecutor>());
+            Mock.Of<IWriteExecutor>());
     }
 
     public async Task DisposeAsync()

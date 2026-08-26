@@ -9,7 +9,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -46,7 +45,6 @@ public class ConversationNotificationTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<NotificationService>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_ctx.ConnectionString)
@@ -68,14 +66,14 @@ public class ConversationNotificationTests : IAsyncLifetime
         new NoopFairHousingReviewService(),
         NullLogger<ConversationService>.Instance,
         TimeProvider.System,
-        _services.GetRequiredService<IRequestWriteExecutor>());
+        _services.GetRequiredService<IWriteExecutor>());
 
     private async Task<AtomicCommandOutcome<AtomicNoticeDeliveryResult>> ExecuteNoticeDeliveryAsync(
         AtomicNoticeDeliveryCommand command)
     {
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             AtomicNoticeDelivery.Identity(command).IdempotencyKey,
             AtomicNoticeDelivery.Write(db, command));
     }
@@ -299,7 +297,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         _db.SaveChanges();
 
         var sut = new NotificationService(
-            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
+            _db, TimeProvider.System, _services.GetRequiredService<IWriteExecutor>());
 
         var tenantContext = _db.WorkspaceAccessContexts.Single(context =>
             context.PortfolioId == 1 && context.UserId == 20);
@@ -351,7 +349,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         var scope = new WorkspaceReadScope(
             1, 20, Guid.NewGuid(), tenantContext.Id, tenantContext.AccessRevision);
         var sut = new NotificationService(
-            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
+            _db, TimeProvider.System, _services.GetRequiredService<IWriteExecutor>());
 
         _commands.Clear();
         var items = await sut.ListAsync(scope, NavigationExperience.Tenant);
@@ -448,7 +446,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         var scope = new WorkspaceReadScope(
             1, 20, Guid.NewGuid(), tenantContext.Id, tenantContext.AccessRevision);
         var sut = new NotificationService(
-            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
+            _db, TimeProvider.System, _services.GetRequiredService<IWriteExecutor>());
 
         _commands.Clear();
         var items = await sut.ListAsync(scope, NavigationExperience.Tenant);
@@ -512,7 +510,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         var adminScope = new WorkspaceReadScope(
             1, 10, Guid.NewGuid(), adminContext.Id, adminContext.AccessRevision);
         var sut = new NotificationService(
-            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
+            _db, TimeProvider.System, _services.GetRequiredService<IWriteExecutor>());
 
         _commands.Clear();
         var tenantItems = await sut.ListAsync(tenantScope, NavigationExperience.Tenant);
@@ -701,7 +699,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         await _db.SaveChangesAsync();
         var scope = new WorkspaceReadScope(1, 10, session.Id, context.Id, context.AccessRevision);
         var sut = new NotificationService(
-            _db, TimeProvider.System, _services.GetRequiredService<IRequestWriteExecutor>());
+            _db, TimeProvider.System, _services.GetRequiredService<IWriteExecutor>());
 
         var created = await sut.CreateBroadcastAsync(
             scope,

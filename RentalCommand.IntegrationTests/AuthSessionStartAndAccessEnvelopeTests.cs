@@ -9,7 +9,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Authorization;
@@ -105,7 +104,6 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         services.AddSingleton(_queryCapture!);
         services.AddScoped<ICurrentActor, AuthStartTestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -1428,7 +1426,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             ConfirmGoogleAccountEmailCommand value => Build(value, new ConfirmGoogleAccountEmailRule(db)),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey, (TransactionalWrite<TCommand, TResult>)write);
     }
 

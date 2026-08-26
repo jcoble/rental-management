@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -38,13 +37,13 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private readonly IListingChannelAdapter _listingChannel;
     private readonly ILogger<ListingWorkspaceService> _logger;
     private readonly TimeProvider _time;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
 
     public ListingWorkspaceService(RentalCommandDbContext db,
         IFileStorage files,
         IPendingFileUploadStore pendingUploads, IListingChannelAdapter listingChannel,
         ILogger<ListingWorkspaceService> logger, TimeProvider time,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes)
         => (_db, _files, _pendingUploads, _listingChannel, _logger, _time, _writes) =
             (db, files, pendingUploads, listingChannel, logger, time, writes);
 
@@ -199,7 +198,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
                 command.UnitId),
             executeAsync,
             AuthorizeLocalReplayAsync);
-        return RequireWrites().ExecuteAsync(identity.IdempotencyKey, write, ct);
+        return _writes.ExecuteAsync(identity.IdempotencyKey, write, ct);
     }
 
     private async Task<ListingWorkspaceMutationResult> GenerateListingAsync(
@@ -465,9 +464,6 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         where TCommand : IListingWorkspaceAtomicCommand =>
         ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
-    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
-        "The shared request write executor is required for local listing changes.");
-
     public async Task<ListingPhotoFileResult?> OpenPhotoAsync(int portfolioId, int unitId, int photoId, CancellationToken ct = default)
     {
         var file = await (from photo in _db.ListingPhotos.AsNoTracking()
@@ -621,7 +617,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             scope.PortfolioId, snapshot.Package.UnitId, scope.UserId, scope.SessionId,
             scope.AccessContextId, scope.AccessRevision, snapshot.Package.PublicationId,
             snapshot.Package.RentalListingId, snapshot.Package.ContentVersion, operation);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             identity.IdempotencyKey, ConnectedListingWriteSupport.Write(command, _db), ct);
         if (outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound) return null;
         if (outcome.Value.PropertyId != snapshot.Package.PropertyId
@@ -739,7 +735,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             ConnectedIntentCodec.ContractName,
             status, deliveryKey, deliveryStatus, deliveryError, externalListingId, listingUrl,
             markPublishedVersion, reason);
-        var persisted = await RequireWrites().ExecuteAsync(
+        var persisted = await _writes.ExecuteAsync(
             persistenceIdentity.IdempotencyKey,
             ConnectedListingWriteSupport.Write(persistenceCommand, _db), ct);
         if (persisted.Value.AdmissionAttemptId != admission.AttemptId)
@@ -762,7 +758,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             admission.ActorUserId, snapshot.Package.ContentVersion,
             persistenceAttemptId, "listing-workspace.connected.persist-result", persistenceIdempotencyKey,
             ConnectedPersistenceCodec.ContractName, persistenceResult, markPublishedVersion, reason);
-        var applied = await RequireWrites().ExecuteAsync(
+        var applied = await _writes.ExecuteAsync(
             applicationIdentity.IdempotencyKey,
             ConnectedListingWriteSupport.Write(applicationCommand, _db), ct);
         if (applied.Value.AdmissionAttemptId != admission.AttemptId)
@@ -786,7 +782,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             scope.AccessContextId, scope.AccessRevision, publicationId, providerMessageKey,
             signalType, suggestedExternalListingId, suggestedListingUrl,
             suggestedExternalStatus);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             identity.IdempotencyKey, ConnectedListingWriteSupport.Write(command, _db), ct);
         var admitted = outcome.Value;
         return !admitted.Found
@@ -806,7 +802,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         var command = new ConfirmExternalListingSignalCommand(
             scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
             scope.AccessContextId, scope.AccessRevision, signalId, accept);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             identity.IdempotencyKey, ConnectedListingWriteSupport.Write(command, _db), ct);
         return outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound
             ? null

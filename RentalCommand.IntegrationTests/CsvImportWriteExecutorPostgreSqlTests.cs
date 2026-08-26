@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Import;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -450,7 +449,6 @@ public sealed class CsvImportWriteExecutorPostgreSqlTests : IAsyncLifetime
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(SeparatedAuditClock));
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<IUnitCsvImportPreviewQuery, AtomicUnitImportPersistence>();
         services.AddScoped<ICoreCsvImportPreviewQuery, AtomicCoreCsvImportPersistence>();
         services.AddScoped<IPaymentCsvImportPreviewQuery, AtomicPaymentCsvImportPersistence>();

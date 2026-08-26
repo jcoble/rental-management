@@ -10,7 +10,6 @@ using RentalCommand.Core.Payments;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Payments;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -21,7 +20,7 @@ public sealed class AutopayChargeService : IAutopayChargeService
     private readonly RentalCommandDbContext _db;
     private readonly StripeConfig _config;
     private readonly TimeProvider _timeProvider;
-    private readonly IJobStepWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IAutopayProviderClient _provider;
     private readonly ILogger<AutopayChargeService> _logger;
 
@@ -29,7 +28,7 @@ public sealed class AutopayChargeService : IAutopayChargeService
         RentalCommandDbContext db,
         IOptions<StripeConfig> config,
         TimeProvider timeProvider,
-        IJobStepWriteExecutor writes,
+        IWriteExecutor writes,
         ILogger<AutopayChargeService> logger,
         IAutopayProviderClient? provider = null)
     {

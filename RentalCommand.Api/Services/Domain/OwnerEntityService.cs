@@ -4,7 +4,6 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -23,7 +22,7 @@ public class OwnerEntityService : IOwnerEntityService
     private const string EntityType = "OwnerEntity";
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
     private readonly TimeProvider _timeProvider;
     private readonly string _webBaseUrl;
 
@@ -31,8 +30,8 @@ public class OwnerEntityService : IOwnerEntityService
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        IConfiguration? configuration = null,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes,
+        IConfiguration? configuration = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
@@ -51,7 +50,7 @@ public class OwnerEntityService : IOwnerEntityService
             AtomicCoreCrudMutationOperation.Create, 0, operationKey, request);
         var write = CoreCrudWriteSupport.Write(
             writeRequest, CreateOwnerAsync, AuthorizeCoreCrudReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return DeserializeSnapshot<OwnerEntityResponse>(outcome.Value);
     }
@@ -67,7 +66,7 @@ public class OwnerEntityService : IOwnerEntityService
             AtomicCoreCrudMutationOperation.Update, id, operationKey, request);
         var write = CoreCrudWriteSupport.Write(
             writeRequest, UpdateOwnerAsync, AuthorizeCoreCrudReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return DeserializeSnapshot<OwnerEntityResponse>(outcome.Value);
     }
@@ -82,7 +81,7 @@ public class OwnerEntityService : IOwnerEntityService
             AtomicCoreCrudMutationOperation.Delete, id, operationKey, new { });
         var write = CoreCrudWriteSupport.Write(
             writeRequest, DeleteOwnerAsync, AuthorizeCoreCrudReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(writeRequest), write, ct);
         return outcome.Value.Found;
     }
@@ -233,7 +232,7 @@ public class OwnerEntityService : IOwnerEntityService
             StableGuid($"{scope.PortfolioId}:owner-portal:{id}"),
             _webBaseUrl);
         var keyDigest = Digest(operationKey);
-        var outcome = await RequireWrites().ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             $"{scope.PortfolioId}:{id}:{keyDigest}",
             OwnerRelationshipAccessWriteSupport.Write(_db, command), ct);
         return outcome.Value.Outcome switch
@@ -349,7 +348,7 @@ public class OwnerEntityService : IOwnerEntityService
             scope.AccessRevision,
             _timeProvider.UtcNow(),
             $"owner-entity.portal-access.revoke:{scope.PortfolioId}:{id}:{keyDigest}");
-        var outcome = await RequireWrites().ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             $"{scope.PortfolioId}:{id}:{keyDigest}",
             OwnerRelationshipAccessWriteSupport.Write(_db, command), ct);
         var replayed = outcome.Disposition == AtomicCommandDisposition.Replayed;
@@ -422,10 +421,6 @@ public class OwnerEntityService : IOwnerEntityService
                        .Select(access => (int?)access.Id)
                        .FirstOrDefault());
     }
-
-    private IRequestWriteExecutor RequireWrites() =>
-        _writes ?? throw new InvalidOperationException(
-            "The shared request write executor is required for owner changes.");
 
     private async Task<string> SnapshotOwnerAsync(
         OwnerEntity owner,

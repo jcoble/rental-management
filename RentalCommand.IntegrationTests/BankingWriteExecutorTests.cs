@@ -6,7 +6,6 @@ using Microsoft.Extensions.Options;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
@@ -428,7 +427,6 @@ public sealed class BankingWriteExecutorTests(MigratedPostgreSqlFixture fixture)
         }));
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<BankingService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));

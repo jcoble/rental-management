@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Import;
 using RentalCommand.Api.Tests.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Import;
 using RentalCommand.Core.Authorization;
@@ -430,7 +429,7 @@ public class CsvImportServiceTests : IDisposable
     }
 
     private sealed class CapturingAtomicUnitOfWork
-        : IRequestWriteExecutor,
+        : IWriteExecutor,
           IUnitCsvImportPreviewQuery, ICoreCsvImportPreviewQuery,
           IPaymentCsvImportPreviewQuery
     {

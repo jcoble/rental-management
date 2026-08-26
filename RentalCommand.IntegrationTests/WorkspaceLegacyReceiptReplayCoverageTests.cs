@@ -13,7 +13,6 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.AiIntegrations;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -79,7 +78,6 @@ public sealed class WorkspaceLegacyReceiptReplayCoverageTests : IAsyncLifetime
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(Now));
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString).UseAtomicPersistenceKernel(provider));
         services.AddIdentityCore<ApplicationUser>()
@@ -99,7 +97,7 @@ public sealed class WorkspaceLegacyReceiptReplayCoverageTests : IAsyncLifetime
         await SeedOwnerTeamAndConversationAsync();
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         const string ownerResult = "{\"SourceNotificationId\":7301,\"OwnerEntityId\":7201,\"StaffNotificationIds\":[],\"RecordedAtUtc\":\"2099-08-21T12:00:00Z\"}";
         await SeedReceiptAsync("owner-portal.approval-decision",
             "1:7301:fe783e27e5cf2c6912e11405fe2e341010b7e9fde9fdd9ea4f04b0bfb2758829",
@@ -142,7 +140,7 @@ public sealed class WorkspaceLegacyReceiptReplayCoverageTests : IAsyncLifetime
         (await conversations.PostMessageAuthorizedAsync(Scope(), 7401,
             "Frozen conversation reply", [], "frozen-conversation"))!.Id.Should().Be(7401);
         var owners = new OwnerEntityService(db, Mock.Of<IDataUpdateService>(),
-            new FixedTimeProvider(Now), new ConfigurationBuilder().Build(), writes);
+            new FixedTimeProvider(Now), writes, new ConfigurationBuilder().Build());
         (await owners.ActivateOwnerPortalAccessAsync(Scope(), 7201,
             new ActivateOwnerPortalAccessRequest(Reason: "Frozen activate"),
             "frozen-owner-activate")).Replayed.Should().BeTrue();
@@ -170,7 +168,7 @@ public sealed class WorkspaceLegacyReceiptReplayCoverageTests : IAsyncLifetime
         await SeedOwnerTeamAndConversationAsync();
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         await SeedReceiptAsync("workspace-experience.select",
             "1:7101:9badd178cb025101079ee0bc40059829f571ad61bb5322ee9cd453eebc55c284",
             RemainingFingerprints[5], "workspace-experience-select-result:v1", "{\"Experience\":1}");
@@ -250,7 +248,7 @@ public sealed class WorkspaceLegacyReceiptReplayCoverageTests : IAsyncLifetime
     {
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         var access = ActiveAccess();
         var authorization = new Mock<IWorkspaceAuthorizationEvaluator>();
         authorization.Setup(evaluator => evaluator.HasCapabilityAsync(
@@ -321,7 +319,7 @@ public sealed class WorkspaceLegacyReceiptReplayCoverageTests : IAsyncLifetime
     {
         await using var serviceScope = _services.CreateAsyncScope();
         var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         var scope = Scope();
         const string portfolioResult = "{\"Id\":1,\"Name\":\"Frozen stored portfolio\",\"Description\":null,\"ManagementCompanyName\":\"Rental Command\",\"TimeZone\":\"UTC\",\"Status\":1,\"Currency\":\"USD\",\"Settings\":null,\"IsSandbox\":false,\"CreatedAt\":\"2099-08-21T12:00:00Z\",\"UpdatedAt\":\"2099-08-21T12:00:00Z\"}";
         const string tenantResult = "[{\"Id\":9902,\"PortfolioId\":1,\"FirstName\":\"Frozen\",\"LastName\":\"Tenant\",\"Email\":null,\"Phone\":null,\"EmergencyContact\":null,\"DateOfBirth\":null,\"Notes\":null,\"CreatedAt\":\"2099-08-21T12:00:00Z\",\"UpdatedAt\":\"2099-08-21T12:00:00Z\"}]";

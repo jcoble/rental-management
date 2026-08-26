@@ -6,7 +6,6 @@ using System.Text;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Screening;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -75,7 +74,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
         var application = seeded.Application;
         var screening = seeded.Screening;
 
-        var writes = _services.GetRequiredService<IRequestWriteExecutor>();
+        var writes = _services.GetRequiredService<IWriteExecutor>();
         var prepareCommand = new PrepareAdverseActionNoticeCommand(
                 PortfolioId,
                 application.Id,
@@ -185,7 +184,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
     {
         var seeded = await SeedDeclinedCaseAsync("retry");
         var application = seeded.Application;
-        var writes = _services.GetRequiredService<IRequestWriteExecutor>();
+        var writes = _services.GetRequiredService<IWriteExecutor>();
         var prepareCommand = new PrepareAdverseActionNoticeCommand(
                 PortfolioId,
                 application.Id,
@@ -269,7 +268,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             new DisabledScreeningProvider(),
             _storage,
             new DeterministicAdverseActionPdfGenerator(),
-            _services.GetRequiredService<IRequestWriteExecutor>(),
+            _services.GetRequiredService<IWriteExecutor>(),
             _services.GetRequiredService<IPendingFileUploadStore>(),
             TimeProvider.System);
         var trackRequest = new TrackExternalScreeningRequest
@@ -326,7 +325,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
     {
         var application = await SeedReplayApplicationAsync("legacy-replay");
         var db = _services.GetRequiredService<RentalCommandDbContext>();
-        var writes = _services.GetRequiredService<IRequestWriteExecutor>();
+        var writes = _services.GetRequiredService<IWriteExecutor>();
         application.Id.Should().Be(LegacyApplicationId);
         _scope.UserId.Should().Be(LegacyActorUserId);
 
@@ -476,7 +475,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             new DisabledScreeningProvider(),
             _storage,
             new DeterministicAdverseActionPdfGenerator(),
-            _services.GetRequiredService<IRequestWriteExecutor>(),
+            _services.GetRequiredService<IWriteExecutor>(),
             _services.GetRequiredService<IPendingFileUploadStore>(),
             TimeProvider.System);
         _storage.BeforeUploadAsync = async _ =>
@@ -602,7 +601,7 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
 
     private static async Task ReplayLegacyReceiptAsync<TCommand, TResult>(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         string operation,
         string key,
         TCommand command,

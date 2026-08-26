@@ -3,7 +3,6 @@ using System.Text;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
@@ -47,13 +46,13 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
 {
     private readonly RentalCommandDbContext _db;
     private readonly UserManager<ApplicationUser> _users;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly byte[] _intentKey;
 
     public CanonicalAccountBootstrapService(
         RentalCommandDbContext db,
         UserManager<ApplicationUser> users,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IOptions<AtomicAuthSessionCredentialOptions> credentialOptions)
     {
         _db = db;

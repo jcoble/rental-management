@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -42,7 +41,7 @@ public class ExpenseServiceTests : IAsyncLifetime
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(ExpenseServiceTests));
 
         _sut = new ExpenseService(
-            _db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
+            _db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IWriteExecutor>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();
@@ -324,8 +323,8 @@ public class ExpenseServiceTests : IAsyncLifetime
     {
         var businessNowUtc = new DateTime(2027, 1, 31, 5, 0, 0, DateTimeKind.Utc);
         var captured = new List<AtomicMoneyMutationCommand>();
-        var writes = new Mock<IRequestWriteExecutor>(MockBehavior.Strict);
-        writes.Setup(service => service.ExecuteExactAsync<
+        var writes = new Mock<IWriteExecutor>(MockBehavior.Strict);
+        writes.Setup(service => service.ExecuteAsync<
                 AtomicMoneyMutationCommand, AtomicMoneyMutationResult>(
                 It.IsAny<string>(),
                 It.IsAny<TransactionalWrite<AtomicMoneyMutationCommand, AtomicMoneyMutationResult>>(),

@@ -9,7 +9,6 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -68,7 +67,6 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddGeneratedInfrastructureStores();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(provider));
@@ -200,7 +198,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             scope = await SeedAdministratorScopeAsync(setup, portfolio, actor, now);
             var service = new NotificationFoundationService(
                 setup, TimeProvider.System,
-                setupScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+                setupScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
             await service.SeedSuppliedTemplatesAsync(
                 scope, "seed-template-binding", CancellationToken.None);
             var original = await setup.TenantNoticePolicies.AsNoTracking().SingleAsync(row =>
@@ -215,7 +213,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             var command = commandScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var service = new NotificationFoundationService(
                 command, TimeProvider.System,
-                commandScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+                commandScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
             saved = await service.CreateTemplateVersionAsync(
                 scope,
                 "rent-reminder",
@@ -441,7 +439,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
             var foundation = new NotificationFoundationService(
                 setup, TimeProvider.System,
-                setupScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+                setupScope.ServiceProvider.GetRequiredService<IWriteExecutor>());
             await foundation.SeedSuppliedTemplatesAsync(
                 scope, "seed-candidate-generation", CancellationToken.None);
             portfolioId = portfolio.Id;
@@ -1256,7 +1254,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         return new RentalCommandDbContext(options);
     }
 
-    private IRequestWriteExecutor Writes => _services!.GetRequiredService<IRequestWriteExecutor>();
+    private IWriteExecutor Writes => _services!.GetRequiredService<IWriteExecutor>();
 
     private static async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(
         RentalCommandDbContext db,

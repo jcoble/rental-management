@@ -11,7 +11,6 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Documents;
@@ -326,14 +325,13 @@ public sealed class DocumentTemplateCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddPendingFileUploadStore();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<DocumentTemplateService>(provider => new DocumentTemplateService(
             provider.GetRequiredService<RentalCommandDbContext>(),
             provider.GetRequiredService<IDocumentTemplateFieldCatalog>(),
             provider.GetRequiredService<IFileStorage>(),
             provider.GetRequiredService<IPendingFileUploadStore>(),
             new FixedTimeProvider(BusinessNow),
-            provider.GetRequiredService<IRequestWriteExecutor>()));
+            provider.GetRequiredService<IWriteExecutor>()));
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString)
                 .UseAtomicPersistenceKernel(provider)

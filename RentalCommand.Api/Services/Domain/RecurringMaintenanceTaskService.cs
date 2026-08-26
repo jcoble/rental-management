@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -17,12 +16,12 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
 
     public RecurringMaintenanceTaskService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
@@ -132,7 +131,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
     {
         var command = RecurringMaintenanceCrudWriteSupport.Request(
             scope, RecurringMaintenanceWriteOperation.Create, 0, request, idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             RecurringMaintenanceCrudWriteSupport.IdempotencyKey(command),
             RecurringMaintenanceCrudWriteSupport.Write(
                 command, CreateRecurringMaintenanceAsync, AuthorizeReplayAsync), ct);
@@ -148,7 +147,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
     {
         var command = RecurringMaintenanceCrudWriteSupport.Request(
             scope, RecurringMaintenanceWriteOperation.Update, id, request, idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             RecurringMaintenanceCrudWriteSupport.IdempotencyKey(command),
             RecurringMaintenanceCrudWriteSupport.Write(
                 command, UpdateRecurringMaintenanceAsync, AuthorizeReplayAsync), ct);
@@ -165,7 +164,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         var request = new ToggleRecurringMaintenanceTaskActiveRequest { IsActive = isActive };
         var command = RecurringMaintenanceCrudWriteSupport.Request(
             scope, RecurringMaintenanceWriteOperation.SetActive, id, request, idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             RecurringMaintenanceCrudWriteSupport.IdempotencyKey(command),
             RecurringMaintenanceCrudWriteSupport.Write(
                 command, SetRecurringMaintenanceActiveAsync, AuthorizeReplayAsync), ct);
@@ -180,7 +179,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
     {
         var command = RecurringMaintenanceCrudWriteSupport.Request(
             scope, RecurringMaintenanceWriteOperation.Delete, id, new object(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             RecurringMaintenanceCrudWriteSupport.IdempotencyKey(command),
             RecurringMaintenanceCrudWriteSupport.Write(
                 command, DeleteRecurringMaintenanceAsync, AuthorizeReplayAsync), ct);
@@ -426,10 +425,6 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         entity.WorkerClaimLastFailureAtUtc = null;
         entity.WorkerClaimQuarantinedAtUtc = null;
     }
-
-    private IRequestWriteExecutor RequireWrites() =>
-        _writes ?? throw new InvalidOperationException(
-            "The shared request write executor is required for recurring maintenance changes.");
 
     private static RecurringMaintenanceWriteResult Missing(int entityId) =>
         new(false, false, entityId);

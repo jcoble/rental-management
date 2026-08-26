@@ -9,7 +9,6 @@ using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Tests;
 using RentalCommand.Api.Tests.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -259,7 +258,7 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         var controller = new ScanController(
             Mock.Of<IScanService>(),
             Mock.Of<IScanUploadService>(),
-            _serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
+            _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             Mock.Of<IScanConfirmationTargetWriter>(),
             _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             Mock.Of<IFileStorage>(),

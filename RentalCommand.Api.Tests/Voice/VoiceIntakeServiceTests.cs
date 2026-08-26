@@ -6,7 +6,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.Services.Voice;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
@@ -45,7 +44,6 @@ public class VoiceIntakeServiceTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(
                     _ctx.Db.Database.GetDbConnection(),
@@ -94,7 +92,7 @@ public class VoiceIntakeServiceTests : IAsyncLifetime
         await using var serviceScope = _services.CreateAsyncScope();
         var sut = new VoiceIntakeService(
             serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
+            serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             _llm.Object,
             _transcriber.Object,
             _storage.Object,
@@ -137,7 +135,7 @@ public class VoiceIntakeServiceTests : IAsyncLifetime
         await using var serviceScope = _services.CreateAsyncScope();
         var sut = new VoiceIntakeService(
             serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>(),
+            serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
             _llm.Object,
             _transcriber.Object,
             _storage.Object,

@@ -4,7 +4,6 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Documents;
@@ -33,7 +32,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
     private readonly IFileStorage _files;
     private readonly IPendingFileUploadStore _pendingUploads;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public DocumentTemplateService(
         RentalCommandDbContext db,
@@ -41,7 +40,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         IFileStorage files,
         IPendingFileUploadStore pendingUploads,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _catalog = catalog;

@@ -9,8 +9,8 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -46,7 +46,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         _service = new OwnerDistributionService(
             _serviceDb,
             TimeProvider.System,
-            _atomicServices.GetRequiredService<IRequestWriteExecutor>());
+            _atomicServices.GetRequiredService<IWriteExecutor>());
         SeedPortfolio();
         await new ChartOfAccountsSeedService(_ctx.Db).SeedAsync(_portfolioId);
         await _ctx.Db.SaveChangesAsync();
@@ -186,7 +186,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var service = new OwnerDistributionService(
             frozenServices.GetRequiredService<RentalCommandDbContext>(),
             clock,
-            frozenServices.GetRequiredService<IRequestWriteExecutor>());
+            frozenServices.GetRequiredService<IWriteExecutor>());
         var owner = SeedOwner("Frozen Lifecycle Owner");
         var property = SeedProperty(owner.Id, "Frozen Lifecycle Property");
         var scope = _ctx.Db.SeedAdministratorScope(
@@ -382,7 +382,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var service = new OwnerDistributionService(
             frozenServices.GetRequiredService<RentalCommandDbContext>(),
             clock,
-            frozenServices.GetRequiredService<IRequestWriteExecutor>());
+            frozenServices.GetRequiredService<IWriteExecutor>());
         var owner = SeedOwner("Rollback Owner");
         var property = SeedProperty(owner.Id, "Rollback Property");
         var scope = _ctx.Db.SeedAdministratorScope(
@@ -403,7 +403,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var failingService = new OwnerDistributionService(
             failingServices.GetRequiredService<RentalCommandDbContext>(),
             clock,
-            failingServices.GetRequiredService<IRequestWriteExecutor>());
+            failingServices.GetRequiredService<IWriteExecutor>());
 
         var approve = async () => await failingService.ApproveAsync(scope, draft!.Id,
             new ApproveOwnerDistributionRequest { BankReference = "DIST-202701-O02", ExportReference = "DIST-202701-O02" },

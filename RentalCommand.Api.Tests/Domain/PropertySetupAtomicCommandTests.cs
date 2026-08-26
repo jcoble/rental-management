@@ -5,7 +5,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -321,7 +320,7 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         var write = CoreCrudWriteSupport.Write(
             command, rules.RejectPropertyCreateAsync, rules.AuthorizeReplayAsync);
         Func<Task> act = async () => await _services
-            .GetRequiredService<IRequestWriteExecutor>()
+            .GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(CoreCrudWriteSupport.IdempotencyKey(command), write);
 
         await act.Should().ThrowAsync<DomainValidationException>()
@@ -398,7 +397,6 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddScoped<PropertyService>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>

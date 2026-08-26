@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -23,7 +22,7 @@ public class UnitService : IUnitService
 
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
     private readonly UnitCrudRule _crudRules;
 
     public UnitService(
@@ -31,7 +30,7 @@ public class UnitService : IUnitService
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         TimeProvider timeProvider,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
@@ -1189,7 +1188,7 @@ public class UnitService : IUnitService
             AtomicRentalMutationOperation.Create, 0, operationKey, request);
         var write = RentalCrudWriteSupport.Write(
             command, _crudRules.CreateAsync, _crudRules.AuthorizeReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             RentalCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found && outcome.Value.ResponseJson is { Length: > 0 } json
             ? JsonSerializer.Deserialize<UnitResponse>(json)
@@ -1207,7 +1206,7 @@ public class UnitService : IUnitService
         var command = RentalCrudWriteSupport.UnitUpdateRequest(scope, id, operationKey, request);
         var write = RentalCrudWriteSupport.Write(
             command, _crudRules.UpdateAsync, _crudRules.AuthorizeReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             RentalCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
     }
@@ -1222,12 +1221,9 @@ public class UnitService : IUnitService
             AtomicRentalMutationOperation.Delete, id, operationKey, new object());
         var write = RentalCrudWriteSupport.Write(
             command, _crudRules.DeleteAsync, _crudRules.AuthorizeReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             RentalCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found;
     }
-
-    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
-        "Unit changes must use the shared write executor.");
 
 }

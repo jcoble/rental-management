@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Identity;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
@@ -131,7 +130,7 @@ public class AuthService : IAuthService
     private readonly AtomicAuthSessionCredentialOptions _credentialOptions;
     private readonly IAuthEmailSender _emailSender;
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly ILogger<AuthService> _logger;
     private readonly IAuthSecurityClock _securityClock;
 
@@ -146,7 +145,7 @@ public class AuthService : IAuthService
         IOptions<AtomicAuthSessionCredentialOptions> credentialOptions,
         IAuthEmailSender emailSender,
         ICanonicalAccountBootstrapService accountBootstrap,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         ILogger<AuthService> logger,
         IAuthSecurityClock securityClock)
     {

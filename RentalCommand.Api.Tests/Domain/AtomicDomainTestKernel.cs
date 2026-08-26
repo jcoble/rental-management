@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Moq;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Interfaces;
@@ -31,7 +30,6 @@ internal static class AtomicDomainTestKernel
     internal static ServiceProvider CreateForWorkOrders(string connectionString)
     {
         var services = Core(connectionString);
-        AddWorkOrderHandlers(services);
         return services.BuildServiceProvider();
     }
 
@@ -41,7 +39,6 @@ internal static class AtomicDomainTestKernel
         IEnumerable<IInterceptor>? interceptors = null)
     {
         var services = Core(connectionString, timeProvider, interceptors);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
@@ -51,7 +48,6 @@ internal static class AtomicDomainTestKernel
         IEnumerable<IInterceptor>? interceptors = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
@@ -61,7 +57,6 @@ internal static class AtomicDomainTestKernel
         IEnumerable<IInterceptor>? interceptors = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
-        AddWorkOrderHandlers(services);
         return services.BuildServiceProvider();
     }
 
@@ -71,13 +66,7 @@ internal static class AtomicDomainTestKernel
         IEnumerable<IInterceptor>? interceptors = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
-    }
-
-    private static void AddWorkOrderHandlers(IServiceCollection services)
-    {
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
     }
 
     internal static ServiceProvider CreateForApplications(
@@ -88,14 +77,12 @@ internal static class AtomicDomainTestKernel
         services.AddScoped<RentalCommandDbContext>(provider =>
             new SqliteCompatibleRentalCommandDbContext(
                 provider.GetRequiredService<DbContextOptions<RentalCommandDbContext>>()));
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
     internal static ServiceProvider CreateForCoreCrud(string connectionString, TimeProvider? timeProvider = null)
     {
         var services = Core(connectionString, timeProvider);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddScoped<PropertyService>();
         services.AddScoped<TenantService>();
@@ -107,7 +94,6 @@ internal static class AtomicDomainTestKernel
         TimeProvider? timeProvider = null)
     {
         var services = Core(connectionString, timeProvider);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<RecurringMaintenanceTaskService>();
         return services.BuildServiceProvider();
     }
@@ -117,7 +103,6 @@ internal static class AtomicDomainTestKernel
         TimeProvider? timeProvider = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddScoped<PropertyService>();
         services.AddScoped<TenantService>();
@@ -130,7 +115,6 @@ internal static class AtomicDomainTestKernel
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddSingleton(Mock.Of<IAuditTrailService>());
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<UnitService>();
         return services.BuildServiceProvider();
     }
@@ -141,7 +125,6 @@ internal static class AtomicDomainTestKernel
         TimeProvider? timeProvider = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
@@ -151,7 +134,6 @@ internal static class AtomicDomainTestKernel
         TimeProvider? timeProvider = null)
     {
         var services = CorePostgreSql(connectionString, timeProvider, interceptors);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
@@ -161,7 +143,6 @@ internal static class AtomicDomainTestKernel
     {
         var services = CorePostgreSql(connectionString, interceptors: interceptors);
         services.AddPendingFileUploadStore();
-        AddWorkOrderHandlers(services);
         return services.BuildServiceProvider();
     }
 
@@ -169,28 +150,24 @@ internal static class AtomicDomainTestKernel
     {
         var services = CorePostgreSql(connectionString);
         services.AddPendingFileUploadStore();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
     internal static ServiceProvider CreateForAccountBootstrapPostgreSql(NpgsqlConnection connection)
     {
         var services = CorePostgreSql(connection);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
     internal static ServiceProvider CreateForPasswordResetPostgreSql(string connectionString)
     {
         var services = CorePostgreSql(connectionString);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 
     internal static ServiceProvider CreateForScanRetryPostgreSql(string connectionString)
     {
         var services = CorePostgreSql(connectionString);
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         return services.BuildServiceProvider();
     }
 

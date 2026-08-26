@@ -5,7 +5,6 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -30,7 +29,7 @@ public class BankingService : IBankingService
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
     private readonly IPlaidBankingProvider _plaid;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly PlaidOptions _plaidOptions;
     private readonly TimeProvider _timeProvider;
 
@@ -38,7 +37,7 @@ public class BankingService : IBankingService
         RentalCommandDbContext db,
         IDataProtectionProvider dataProtection,
         IPlaidBankingProvider plaid,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IOptions<PlaidOptions> plaidOptions,
         TimeProvider timeProvider)
     {
@@ -502,7 +501,7 @@ public class BankingService : IBankingService
                 scope.PortfolioId, transactionId, request.PropertyId, request.ExpectedUpdatedAtUtc,
                 _timeProvider.UtcNow(), scope.UserId, scope.SessionId, scope.AccessContextId,
                 scope.AccessRevision, request.OperationKey);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             $"{scope.PortfolioId}:{scope.AccessContextId}:{transactionId}:{request.OperationKey}",
             BankingWriteSupport.Write<RouteBankTransactionCommand, RouteBankTransactionResult>(
                 _db, command), ct);
@@ -989,7 +988,7 @@ public class BankingService : IBankingService
                 requiredCapability,
                 operationKey,
                 resolvedSuggestionTransferUpdatedAtUtc);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             $"{scope.PortfolioId}:{scope.AccessContextId}:{current.Id}:{operationKey}",
             BankingWriteSupport.Write<ReconcileBankTransactionCommand, ReconcileBankTransactionResult>(
                 _db, command), ct);

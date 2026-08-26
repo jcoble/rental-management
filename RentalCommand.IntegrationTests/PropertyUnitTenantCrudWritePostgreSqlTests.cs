@@ -5,7 +5,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -231,7 +230,6 @@ public sealed class PropertyUnitTenantCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddSingleton(Mock.Of<IAuditTrailService>());
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<PropertyService>();
         services.AddScoped<UnitService>();
         services.AddScoped<TenantService>();
