@@ -27,3 +27,18 @@
 
 - `flutter analyze` — exit 1; `23 issues found. (ran in 1.4s)`. This matches the stated main baseline. The only issue in a touched file is the pre-existing unused `_toast` at `tenant_detail_screen.dart:182` (verified by `git blame` as commit `250fbb587`, 2026-06-29); no issue is in a created file.
 - `flutter test` — exit 0; `00:38 +527: All tests passed!`
+
+## Rework round 1
+
+- Lane: `bug-c REWORK`
+- Started: `2026-08-25T20:41:39-04:00`
+- Finding `mobile/test/home_shell_regression_test.dart:26` — FIXED in `67dafa72`. The widget test now supplies a local-kind 21:00 value and expects `Good evening`. This is smaller than exposing or restructuring the private greeting function, while retaining the behavioral widget assertion.
+- Test: `local evening hour renders the evening greeting` — passed under both `TZ=UTC` and `TZ=America/New_York`.
+
+### Rework verification
+
+- Pre-fix `TZ=UTC flutter test test/home_shell_regression_test.dart` — exit 1; `00:01 +0 -1: Some tests failed.`
+- `flutter analyze` — exit 1; `23 issues found. (ran in 3.8s)`. All are the documented pre-existing baseline and none are in the touched test or receipt.
+- `flutter test` — exit 0; `00:55 +527: All tests passed!`
+- `TZ=UTC flutter test test/home_shell_regression_test.dart` — exit 0; `00:00 +1: All tests passed!`
+- `TZ=America/New_York flutter test test/home_shell_regression_test.dart` — exit 0; `00:00 +1: All tests passed!`
