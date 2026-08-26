@@ -336,15 +336,20 @@
 				<p class="mt-1 text-sm text-muted-foreground">{formatResidentName(deposit.primaryTenantName)}</p>
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
+				<Button size="sm" onclick={openRefund} disabled={deposit.heldBalance <= 0} data-testid="deposit-detail-return">Return the deposit</Button>
 				<Button size="sm" variant="ghost" href="/docs/security-deposits" data-testid="deposit-detail-help-link">How this works</Button>
-				<Button size="sm" onclick={openFund} disabled={deposit.status === 'Returned' || deposit.status === 'Withheld' || deposit.status === 'PartiallyReturned'}>Record funds</Button>
+				<Button size="sm" variant="outline" onclick={openFund} disabled={deposit.status === 'Returned' || deposit.status === 'Withheld' || deposit.status === 'PartiallyReturned'}>Record funds</Button>
 				<Button size="sm" variant="outline" onclick={openDeduction} disabled={deposit.heldBalance <= 0}>Add deduction</Button>
-				<Button size="sm" variant="outline" onclick={openRefund} disabled={deposit.heldBalance <= 0}>Record refund</Button>
 				<Button size="sm" variant="outline" onclick={handleStatementDownload} disabled={downloadingStatement}>
 					<FileText class="h-3.5 w-3.5" /> {downloadingStatement ? 'Preparing…' : 'Move-out statement'}
 				</Button>
 			</div>
 		</div>
+
+		<p class="mb-6 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground" data-testid="deposit-detail-deadline-note">
+			Most states require returning the deposit within 14–30 days of move-out.
+			<a href="/docs/security-deposits" class="font-medium underline underline-offset-2">Learn more</a>
+		</p>
 
 		<Card.Root class="mb-6">
 			<Card.Header><Card.Title class="text-base">Deposit summary</Card.Title></Card.Header>

@@ -211,9 +211,9 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(endingDispositionSource, /plannedMoveOutAtUtc/);
 		assert.match(endingDispositionSource, /decisionReason/);
 		assert.match(endingDispositionSource, /does not change the signed lease/i);
-		assert.match(endingDispositionSource, /Record lease ending plan/);
-		assert.match(endingDispositionSource, /Renew \/ continue with a new fixed term/);
-		assert.match(endingDispositionSource, /Move out \/ end the relationship/);
+		assert.match(endingDispositionSource, /Plan move-out/);
+		assert.match(endingDispositionSource, /Renewing instead/);
+		assert.match(endingDispositionSource, /Tenant is leaving/);
 		assert.match(detailPageSource, /<EndingDispositionDialog/);
 	});
 });
