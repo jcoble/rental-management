@@ -104,17 +104,9 @@ async function openTenantMoney(page: Page, request: Parameters<typeof findLeased
 	const token = await apiToken(request);
 	const unit = await findLeasedUnit(request, token);
 	await loginWithApi(page, request);
-	// Enter the unit through the hydrated list so the unit page's shallow tab state is initialized
-	// by SvelteKit before the money tab is selected. A direct first-load deep link races that
-	// initialization and leaves the page on its loading shell.
-	await page.goto('/', { waitUntil: 'networkidle' });
-	await expect(page.getByTestId('dashboard-summary')).toBeVisible();
-	await page.getByTestId('nav-units-picker').click();
-	await page.getByTestId('command-center-all').click();
-	await expect(page.getByTestId('units-page')).toBeVisible();
-	await page.getByTestId('datagrid-desktop').getByTestId(`unit-row-${unit.unit.id}`).click();
-	await expect(page.getByTestId('unit-page')).toBeVisible();
-	await page.getByTestId('tab-money').click();
+	await page.goto(`/units/${unit.unit.id}?tab=money&view=tenant-account`, {
+		waitUntil: 'domcontentloaded'
+	});
 	await expect(page.getByTestId('tenant-ledger-panel')).toBeVisible({ timeout: 15_000 });
 }
 
