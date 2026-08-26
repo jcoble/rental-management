@@ -78,7 +78,7 @@
 	// uses internally) so the colors flip correctly in dark/light — never raw Tailwind palette literals.
 	const stageMap: Record<string, { label?: string; class: string }> = {
 		Active: { class: 'm3-tone-chip border m3-tone--success' },
-		Renewal: { class: 'm3-tone-chip border m3-tone--warning' },
+		Renewal: { label: 'Renewal due', class: 'm3-tone-chip border m3-tone--warning' },
 		'Move-Out': { class: 'm3-tone-chip border m3-tone--error' },
 		Lease: { class: 'm3-tone-chip border m3-tone--info' },
 		Vacant: { class: 'm3-tone-chip border m3-tone--info' },
@@ -106,8 +106,8 @@
 {#snippet statusCell(unit: UnitHealth)}
 	<div class="flex flex-wrap items-center gap-1.5">
 		<StatusBadge status={unit.status} />
-		{#if unit.simpleStage && unit.simpleStage !== unit.status}
-			<span class="text-xs text-muted-foreground">Next: </span><StatusBadge status={unit.simpleStage} map={stageMap} />
+		{#if unit.simpleStage && unit.simpleStage !== unit.status && unit.simpleStage !== 'Active'}
+			<StatusBadge status={unit.simpleStage} map={stageMap} />
 		{/if}
 	</div>
 {/snippet}

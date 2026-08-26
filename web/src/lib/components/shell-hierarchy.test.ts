@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import { canAccessRoute } from '../auth/experience-policy.ts';
+import { isNavItemActive } from './nav-active.ts';
 
 const appShell = readFileSync(new URL('./AppShell.svelte', import.meta.url), 'utf8');
 const commandCenterNav = readFileSync(
@@ -101,11 +102,14 @@ describe('tenant shell hierarchy', () => {
 		assert.match(commandCenterNav, /enabled:\s*portfolioId > 0 && open && !collapsed/);
 		assert.doesNotMatch(commandCenterNav, /\.filter\(/);
 			assert.match(commandCenterNav, />Units</);
-			assert.match(appShell, /currentPath\.startsWith\('\/units\/'\)/);
+			assert.equal(isNavItemActive('/units/42', '/units', ['/units']), true);
 		assert.match(commandCenterNav, /staleTime:\s*5 \* 60 \* 1000/);
-		assert.match(
-			appShell,
-			/!currentPath\.startsWith\('\/settings\/notifications'\)/
+		assert.equal(
+			isNavItemActive('/settings/notifications', '/settings', [
+				'/settings',
+				'/settings/notifications'
+			]),
+			false
 		);
 	});
 
@@ -118,7 +122,7 @@ describe('tenant shell hierarchy', () => {
 		assert.equal(canAccessRoute('/units/42', 'Tenant', managementCapabilities), false);
 		assert.match(
 			appShell,
-				/const commandCenterTitleItem: NavItem = \{ href: '\/units\/', label: 'Units', icon: Home \}/
+				/const commandCenterTitleItem: NavItem = \{ href: '\/units', label: 'Units', icon: Home \}/
 		);
 	});
 });

@@ -38,7 +38,7 @@
 		{ value: 'Expense', label: 'Receipt / Bill', hint: 'Becomes an expense record' },
 		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' },
 		{ value: 'WorkOrder', label: 'Maintenance Request', hint: 'Becomes a work order' },
-		{ value: 'LeaseAgreement', label: 'Lease Agreement', hint: 'Becomes an agreement record' },
+		{ value: 'LeaseAgreement', label: 'Lease Agreement', hint: 'Becomes a lease record' },
 		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' },
 		{ value: 'Loan', label: 'Mortgage / Loan', hint: 'Becomes a loan on the property' },
 		{
