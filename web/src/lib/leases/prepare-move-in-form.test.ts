@@ -192,6 +192,42 @@ describe('Prepare move-in form contract', () => {
 	});
 });
 
+describe('manual move-in planned date', () => {
+	it('plans the move-in for the date the landlord typed when no other date was given', () => {
+		const form = completeForm();
+		form.applicationId = '';
+		form.plannedPossessionOn = '';
+		form.partyEffectiveFrom = '2026-10-05';
+
+		const result = buildPrepareMoveInRequest(form);
+
+		assert.deepEqual(result.errors, {});
+		assert.equal(result.request?.plannedPossessionAtUtc, '2026-10-05T00:00:00.000Z');
+		assert.equal(result.request?.partyEffectiveFrom, '2026-10-05');
+	});
+
+	it('keeps a planned move-in date the landlord set themselves', () => {
+		const form = completeForm();
+		form.plannedPossessionOn = '2026-09-15';
+		form.partyEffectiveFrom = '2026-10-05';
+
+		const result = buildPrepareMoveInRequest(form);
+
+		assert.equal(result.request?.plannedPossessionAtUtc, '2026-09-15T00:00:00.000Z');
+	});
+
+	it('asks for a move-in date rather than planning one out of nothing', () => {
+		const form = completeForm();
+		form.plannedPossessionOn = '';
+		form.partyEffectiveFrom = '';
+
+		const result = buildPrepareMoveInRequest(form);
+
+		assert.equal(result.request, null);
+		assert.match(result.errors.partyEffectiveFrom ?? '', /move-in date/);
+	});
+});
+
 describe('move-in unit picker choices', () => {
 	it('will not let the landlord choose a unit that already has a move-in prepared', () => {
 		const options = buildPrepareMoveInUnitOptions([
