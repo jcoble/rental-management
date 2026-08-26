@@ -360,7 +360,7 @@ class _DepositListItem extends StatelessWidget {
             child: Text(
               account.primaryTenantName?.trim().isNotEmpty == true
                   ? account.primaryTenantName!
-                  : account.relationshipNumber,
+                  : 'Tenancy #${account.relationshipNumber}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.titleSmall?.copyWith(
@@ -507,8 +507,8 @@ class _DepositDetailSheet extends ConsumerWidget {
           const SizedBox(height: 8),
           _InfoRow(label: 'Account number', value: account.accountNumber),
           _InfoRow(
-            label: 'Rental relationship',
-            value: account.relationshipNumber,
+            label: 'Tenancy',
+            value: 'Tenancy #${account.relationshipNumber}',
           ),
           _InfoRow(
             label: 'Created',
@@ -648,7 +648,7 @@ class _FundDepositSheetState extends ConsumerState<_FundDepositSheet> {
               (account) => DropdownMenuItem(
                 value: account.securityDepositAccountId,
                 child: Text(
-                  '${account.primaryTenantName ?? account.relationshipNumber} · ${_location(account)}',
+                  '${account.primaryTenantName ?? 'Tenancy #${account.relationshipNumber}'} · ${_location(account)}',
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -749,7 +749,7 @@ class _DeductDepositSheetState extends ConsumerState<_DeductDepositSheet> {
   Widget build(BuildContext context) => _MutationSheet(
     title: 'Record deduction',
     subtitle:
-        '${widget.account.primaryTenantName ?? widget.account.relationshipNumber} · '
+        '${widget.account.primaryTenantName ?? 'Tenancy #${widget.account.relationshipNumber}'} · '
         '${_fmtCurrency(widget.account.heldBalance, widget.account.currency)} held',
     formKey: _formKey,
     saving: _saving,
@@ -850,7 +850,7 @@ class _RefundDepositSheetState extends ConsumerState<_RefundDepositSheet> {
   Widget build(BuildContext context) => _MutationSheet(
     title: 'Record refund',
     subtitle:
-        '${widget.account.primaryTenantName ?? widget.account.relationshipNumber} · '
+        '${widget.account.primaryTenantName ?? 'Tenancy #${widget.account.relationshipNumber}'} · '
         '${_fmtCurrency(widget.account.heldBalance, widget.account.currency)} available',
     formKey: _formKey,
     saving: _saving,

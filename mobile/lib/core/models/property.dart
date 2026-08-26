@@ -6,6 +6,11 @@ enum RentalStructure {
 
   final String wireValue;
 
+  String get label => switch (this) {
+    RentalStructure.singleRental => 'One rental',
+    RentalStructure.multiRental => 'Building with units',
+  };
+
   static RentalStructure fromJson(Object? value) {
     for (final structure in values) {
       if (structure.wireValue == value) return structure;

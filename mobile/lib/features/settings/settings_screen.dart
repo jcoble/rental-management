@@ -121,7 +121,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: 10),
             _SettingsCard(
               icon: Icons.alt_route_outlined,
-              title: 'Team routing',
+              title: 'Who gets told what',
               subtitle:
                   'Name who is responsible for money, leasing, work, owners, '
                   'and account security.',

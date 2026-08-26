@@ -657,8 +657,8 @@ class _CaptureContextCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               context.hasBusinessContext
-                  ? 'This context came with you and will be checked again by the server.'
-                  : 'Choose an authorized property or rental account now, or keep this workspace-wide.',
+                  ? 'This context came with you and will be checked again.'
+                  : 'Choose an authorized property or tenant balance now, or keep this workspace-wide.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -774,7 +774,7 @@ class _ScanContextPickerSheetState
             ),
             const SizedBox(height: 6),
             Text(
-              'Only rentals and accounts the server authorizes for your current role are returned.',
+              'Only rentals and tenant balances available to you are shown.',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -791,7 +791,7 @@ class _ScanContextPickerSheetState
                   ),
                   ButtonSegment(
                     value: _ScanContextKind.rentalAccount,
-                    label: Text('Rental account'),
+                    label: Text('Tenant balance'),
                     icon: Icon(Icons.account_balance_wallet_outlined),
                   ),
                 ],
@@ -807,7 +807,7 @@ class _ScanContextPickerSheetState
               leading: const Icon(Icons.search),
               hintText: _kind == _ScanContextKind.property
                   ? 'Search properties'
-                  : 'Search tenant, property, unit, or account',
+                  : 'Search tenant, property, rental, or balance',
               onChanged: _onSearch,
               trailing: [
                 if (_searchController.text.isNotEmpty)
@@ -959,7 +959,7 @@ class _AccountContextResults extends ConsumerWidget {
             title: Text(
               account.primaryTenantName?.trim().isNotEmpty ?? false
                   ? account.primaryTenantName!.trim()
-                  : account.relationshipNumber,
+                  : 'Tenant balance #${account.relationshipNumber}',
             ),
             subtitle: Text(home),
             onTap: () => onSelected(account),

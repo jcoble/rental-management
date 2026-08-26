@@ -85,8 +85,8 @@ class VoiceCommand {
         return 'Showing overdue rent…';
       case VoiceAction.openWorkOrders:
         return unit != null && unit!.isNotEmpty
-            ? 'Opening work orders for unit $unit…'
-            : 'Opening work orders…';
+            ? 'Opening repairs for unit $unit…'
+            : 'Opening repairs…';
     }
   }
 

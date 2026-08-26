@@ -278,7 +278,7 @@ const rentalDestinations = <MobileDestination>[
     id: MobileDestinationId.units,
     icon: Symbols.home_work_rounded,
     label: 'Units',
-    subtitle: 'Command centers for each rental',
+    subtitle: "Today's summary for each rental",
     builder: _unitsBuilder,
     capabilityKeys: rentalReadCapabilityKeys,
   ),
@@ -331,7 +331,7 @@ const moneyHubDestinations = <MobileDestination>[
   MobileDestination(
     id: MobileDestinationId.insights,
     icon: Symbols.insights_rounded,
-    label: 'Portfolio',
+    label: 'Your rentals',
     subtitle: 'Occupancy, collections and trends',
     builder: _insightsBuilder,
     capabilityKeys: reportsCapabilityKeys,
@@ -375,7 +375,7 @@ const workHubDestinations = <MobileDestination>[
   MobileDestination(
     id: MobileDestinationId.workOrders,
     icon: Symbols.build_rounded,
-    label: 'Orders',
+    label: 'Repairs',
     subtitle: 'Open repairs and maintenance requests',
     builder: _workOrdersBuilder,
     capabilityKeys: workOrderCapabilityKeys,

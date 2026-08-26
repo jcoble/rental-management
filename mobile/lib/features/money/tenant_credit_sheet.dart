@@ -333,7 +333,7 @@ class _TenantCreditSheetState extends ConsumerState<_TenantCreditSheet> {
               if (selectedTarget != null && selectedTarget.openAmount > 0)
                 _CreditPreview(
                   note:
-                      'The remaining balance is re-read from the server after the credit is saved.',
+                      'The remaining balance is updated after the credit is saved.',
                   children: [
                     _PreviewValue(
                       label: 'Original charge',
@@ -341,7 +341,7 @@ class _TenantCreditSheetState extends ConsumerState<_TenantCreditSheet> {
                     ),
                     _PreviewValue(label: 'Credit', value: _enteredMoney),
                     _PreviewValue(
-                      label: 'Remaining charge (server)',
+                      label: 'Remaining charge',
                       value: moneyFmt(selectedTarget.openAmount),
                     ),
                   ],
@@ -349,7 +349,7 @@ class _TenantCreditSheetState extends ConsumerState<_TenantCreditSheet> {
               else if (selectedTarget != null)
                 _CreditPreview(
                   note:
-                      'This charge is already fully paid, so the server will keep the credit unapplied.',
+                      'This charge is already fully paid, so the credit will remain unapplied.',
                   children: [
                     _PreviewValue(label: 'Credit', value: _enteredMoney),
                     _PreviewValue(

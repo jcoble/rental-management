@@ -299,9 +299,7 @@ class _HouseholdManagementSheetState
                 if (!simpleAccess)
                   Step(
                     title: const Text('Review'),
-                    content: const Text(
-                      'The server will recheck the date, signed legal basis, primary handoff, property scope, current session, and capabilities in one atomic command.',
-                    ),
+                    content: const Text('Review the details before saving.'),
                   ),
               ],
             ),
@@ -429,7 +427,7 @@ class _HouseholdManagementSheetState
         const Padding(
           padding: EdgeInsets.only(bottom: 12),
           child: Text(
-            'A login is created from this member’s email if needed. It grants access only through this relationship and queues the invitation in the same transaction.',
+            'A login is created from this member’s email if needed. It grants access only through this tenancy and queues the invitation in the same transaction.',
           ),
         ),
       TextField(

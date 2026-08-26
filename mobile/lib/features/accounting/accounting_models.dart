@@ -174,7 +174,7 @@ class PastDueLease {
   String get displayName => tenantName?.trim().isNotEmpty == true
       ? tenantName!.trim()
       : relationshipNumber?.trim().isNotEmpty == true
-      ? relationshipNumber!.trim()
+      ? 'Tenancy #${relationshipNumber!.trim()}'
       : unitNumber?.trim().isNotEmpty == true
       ? 'Unit ${unitNumber!.trim()}'
       : 'Tenant account';

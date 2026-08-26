@@ -216,13 +216,13 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
         context,
         // A6: one professional term for the "things to fix" concept across the
         // app — "Work Orders" (the bottom-nav tab stays the short "Work").
-        title: const Text('Work Orders'),
+        title: const Text('Repairs'),
       ),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'work-orders-fab',
         primaryAction: canManageWork
             ? MobileQuickAction(
-                label: 'New work order',
+                label: 'New repair',
                 icon: Icons.add,
                 onPressed: () => _showCreateSheet(context),
               )
@@ -294,8 +294,8 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
                           totalCount: page.totalCount,
                           skip: page.skip,
                           itemCount: page.items.length,
-                          previousTooltip: 'Previous work orders page',
-                          nextTooltip: 'Next work orders page',
+                          previousTooltip: 'Previous repairs page',
+                          nextTooltip: 'Next repairs page',
                           onPrevious: page.hasPrevious
                               ? () => setState(() {
                                   _skip = (_skip - _pageSize).clamp(0, _skip);
@@ -359,12 +359,12 @@ class _WorkOrdersGridControls extends StatelessWidget {
       keyPrefix: 'work-orders',
       padding: EdgeInsets.zero,
       searchController: searchController,
-      searchLabel: 'Search work orders',
+      searchLabel: 'Search repairs',
       onSearch: onSearch,
       onClearSearch: onClearSearch,
       sort: sort,
       defaultSort: '-updatedAt',
-      sortLabel: 'Sort work orders',
+      sortLabel: 'Sort repairs',
       sortOptions: const [
         MobileGridControlOption(value: '-updatedAt', label: 'Updated recently'),
         MobileGridControlOption(
@@ -553,11 +553,11 @@ class _EmptyBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final msg = filter == WorkOrderFilter.open
-        ? 'No open work orders'
-        : 'No work orders yet';
+        ? 'No open repairs'
+        : 'No repairs yet';
     final sub = filter == WorkOrderFilter.open
         ? 'All caught up! Tap + to create one.'
-        : 'Tap + to create a work order.';
+        : 'Tap + to create a repair.';
     return SizedBox(
       height: 300,
       child: Center(

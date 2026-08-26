@@ -375,10 +375,10 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
         initialValue: _selectedWorkOrder?.id ?? 0,
         isExpanded: true,
         decoration: const InputDecoration(
-          labelText: 'Link work order (optional)',
+          labelText: 'Link repair (optional)',
         ),
         items: [
-          const DropdownMenuItem(value: 0, child: Text('No work order')),
+          const DropdownMenuItem(value: 0, child: Text('No repair')),
           for (final workOrder in workOrders)
             DropdownMenuItem(
               value: workOrder.id,
@@ -392,12 +392,12 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
         ),
       ),
       loading: () => const InputDecorator(
-        decoration: InputDecoration(labelText: 'Link work order (optional)'),
-        child: Text('Loading work orders...'),
+        decoration: InputDecoration(labelText: 'Link repair (optional)'),
+        child: Text('Loading repairs...'),
       ),
       error: (_, _) => const InputDecorator(
-        decoration: InputDecoration(labelText: 'Link work order (optional)'),
-        child: Text('Work orders could not be loaded.'),
+        decoration: InputDecoration(labelText: 'Link repair (optional)'),
+        child: Text('Repairs could not be loaded.'),
       ),
     );
   }

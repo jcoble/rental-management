@@ -20,7 +20,7 @@ class WorkOrderUnitAwareLoaderScreen extends ConsumerWidget {
     return detailAsync.when(
       loading: () => const _WorkOrderUnitAwareLoading(),
       error: (e, _) => Scaffold(
-        appBar: AppBar(title: const Text('Work order')),
+        appBar: AppBar(title: const Text('Repair')),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -64,7 +64,7 @@ class _WorkOrderUnitAwareLoading extends StatelessWidget {
     final colors = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Work order')),
+      appBar: AppBar(title: const Text('Repair')),
       body: ListView(
         key: const Key('work-order-unit-aware-loading'),
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -94,7 +94,7 @@ class _WorkOrderUnitAwareLoading extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Loading work order',
+                          'Loading repair',
                           style: theme.textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.w700,
                           ),
@@ -128,7 +128,7 @@ class _WorkOrderUnitAwareLoading extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Work order details',
+                    'Repair details',
                     style: theme.textTheme.labelLarge?.copyWith(
                       color: colors.onSurfaceVariant,
                     ),
@@ -190,11 +190,11 @@ class _WorkOrderShellTargetLoaderScreenState
 
     return detailAsync.when(
       loading: () => Scaffold(
-        appBar: AppBar(title: const Text('Work order')),
+        appBar: AppBar(title: const Text('Repair')),
         body: const Center(child: CircularProgressIndicator()),
       ),
       error: (e, _) => Scaffold(
-        appBar: AppBar(title: const Text('Work order')),
+        appBar: AppBar(title: const Text('Repair')),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -228,7 +228,7 @@ class _WorkOrderShellTargetLoaderScreenState
         }
 
         return Scaffold(
-          appBar: AppBar(title: const Text('Work order')),
+          appBar: AppBar(title: const Text('Repair')),
           body: const Center(child: CircularProgressIndicator()),
         );
       },

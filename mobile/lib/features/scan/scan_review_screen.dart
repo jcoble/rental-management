@@ -11,6 +11,7 @@ import '../home/mobile_quick_action_fab.dart';
 import '../leases/leases_repository.dart';
 import '../maintenance/work_order_unit_aware_loader.dart';
 import '../maintenance/work_orders_repository.dart';
+import '../money/expense_models.dart';
 import '../places/address_autocomplete_field.dart';
 import '../properties/properties_repository.dart';
 import '../properties/property_loans_repository.dart';
@@ -479,7 +480,7 @@ const _labelOverrides = <String, String>{
   'escrow_covers_taxes': 'Escrow covers taxes',
   'escrow_covers_insurance': 'Escrow covers insurance',
   // Lease-ending notices
-  'lease_management_id': 'Rental relationship',
+  'lease_management_id': 'Tenancy',
   'unit_id': 'Unit',
   'notice_type': 'Notice type',
   'notice_given_date': 'Notice date',
@@ -943,7 +944,7 @@ String? expenseScanReadinessMessage({
   }
 
   if (!_hasReviewedExpenseScope(draft, editedFields)) {
-    missing.add('property, unit, or work order');
+    missing.add('property, rental, or repair');
   }
 
   if (missing.isEmpty) return null;
@@ -972,7 +973,7 @@ bool _hasReviewedPaymentTargetIds(
 }
 
 const _paymentContextConflictCorrection =
-    'This scan appears to belong to a different rental account. Choose the matching rental account, or reject this scan and upload the document from the right Unit/account before creating the payment.';
+    'This scan appears to belong to a different tenant balance. Choose the matching tenant balance, or reject this scan and upload the document from the right rental or tenant balance before creating the payment.';
 
 bool _conflictsWithCapture({
   required int? capturedId,
@@ -1480,7 +1481,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
             draft.isPayment
                 ? 'Payment recorded!'
                 : draft.isWorkOrder
-                ? 'Work order created!'
+                ? 'Repair created!'
                 : draft.isLeaseEndingNotice
                 ? 'Move-out workflow started!'
                 : draft.isLease
@@ -1623,7 +1624,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       _showError(e.message);
     } catch (_) {
       if (!mounted) return;
-      const message = 'Could not save the rental account. Please try again.';
+      const message = 'Could not save the tenant balance. Please try again.';
       setState(() {
         _savingTenantAccountSelection = false;
         _tenantAccountSelectionError = message;
@@ -2052,7 +2053,7 @@ class _ReviewBody extends ConsumerWidget {
         : 'Review the statement principal, interest, escrow, opening balance, and effective date.';
     final leaseEndingNoticeReadinessMessage =
         !noticeLeaseManagementReady || !noticeUnitReady
-        ? 'Choose the existing rental relationship this notice belongs to.'
+        ? 'Choose the existing tenancy this notice belongs to.'
         : 'Review the notice date and planned move-out date.';
     final loanActionLabel = loanReviewMode == _LoanReviewMode.addNewLoan
         ? 'Create Loan'
@@ -2139,7 +2140,7 @@ class _ReviewBody extends ConsumerWidget {
                     color: colorScheme.surfaceContainerHighest,
                     borderColor: colorScheme.outlineVariant,
                     textColor: colorScheme.onSurfaceVariant,
-                    child: const Text('Saving rental account selection...'),
+                    child: const Text('Saving tenant balance selection...'),
                   ),
 
                 if (draft.isPayment &&
@@ -2315,7 +2316,7 @@ class _ReviewBody extends ConsumerWidget {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        'Select a rental account above to enable payment creation.',
+                        'Select a tenant balance above to enable payment creation.',
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.amber.shade700,
@@ -2329,7 +2330,7 @@ class _ReviewBody extends ConsumerWidget {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        'Saving rental account selection...',
+                        'Saving tenant balance selection...',
                         style: TextStyle(
                           fontSize: 12,
                           color: colorScheme.onSurfaceVariant,
@@ -2461,7 +2462,7 @@ class _ReviewBody extends ConsumerWidget {
                                 draft.isPayment
                                     ? 'Create Payment'
                                     : draft.isWorkOrder
-                                    ? 'Create Work Order'
+                                    ? 'Create Repair'
                                     : draft.isLease
                                     ? leaseActionLabel
                                     : draft.isApplication
@@ -2525,19 +2526,6 @@ class _ReviewCheckpointCard extends StatelessWidget {
 
   final ScanDraft draft;
 
-  String get _command {
-    if (draft.isPayment) return 'Record one payment';
-    if (draft.isWorkOrder && draft.captureContext?.workOrderId != null) {
-      return 'Update work order #${draft.captureContext!.workOrderId}';
-    }
-    if (draft.isWorkOrder) return 'Create one work order';
-    if (draft.isLease) return 'Create one lease agreement';
-    if (draft.isApplication) return 'Create one rental application';
-    if (draft.isLoan) return 'Create one property loan';
-    if (draft.isLeaseEndingNotice) return 'Record one move-out notice';
-    return 'Create one expense';
-  }
-
   String get _destination {
     if (draft.createdEntityType?.trim().isNotEmpty ?? false) {
       final id = draft.createdEntityId;
@@ -2549,10 +2537,10 @@ class _ReviewCheckpointCard extends StatelessWidget {
     if (capture?.userFacingParts.isNotEmpty ?? false) {
       return capture!.userFacingParts.join(' · ');
     }
-    if (draft.isPayment) return 'Rental account selected below';
+    if (draft.isPayment) return 'Tenant balance selected below';
     if (draft.isLease) return 'Property and unit selected below';
     if (draft.isLoan) return 'Property selected below';
-    if (draft.isLeaseEndingNotice) return 'Rental relationship selected below';
+    if (draft.isLeaseEndingNotice) return 'Tenancy selected below';
     return 'Current workspace';
   }
 
@@ -2607,13 +2595,11 @@ class _ReviewCheckpointCard extends StatelessWidget {
               warning: !isTerminal && lowConfidence > 0,
             ),
             _CheckpointRow(label: 'Destination', value: _destination),
-            if (!isTerminal)
-              _CheckpointRow(label: 'Save command', value: _command),
             const SizedBox(height: 8),
             Text(
               isTerminal
                   ? 'This result is final and read-only.'
-                  : 'Nothing is created until you use the save button below. The server rechecks your access and safely reuses a completed result if the same save is retried.',
+                  : 'Nothing is created until you use the save button below. Your access is checked and a completed result is reused if you retry the same save.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -2871,7 +2857,7 @@ class _TenantAccountSelectorState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Which rental account is this payment for?',
+            'Which tenant balance is this payment for?',
             style: theme.textTheme.labelLarge?.copyWith(
               fontWeight: FontWeight.w600,
             ),
@@ -2890,14 +2876,14 @@ class _TenantAccountSelectorState
             decoration: const InputDecoration(
               border: OutlineInputBorder(),
               prefixIcon: Icon(Icons.search),
-              hintText: 'Search tenant, property, unit, or relationship',
+              hintText: 'Search tenant, property, rental, or tenancy',
             ),
           ),
           const SizedBox(height: 8),
           accountsAsync.when(
             loading: () => const LinearProgressIndicator(),
             error: (e, _) => Text(
-              'Could not load rental accounts.',
+              'Could not load tenant balances.',
               style: TextStyle(color: colorScheme.error),
             ),
             data: (page) {
@@ -2961,7 +2947,7 @@ class _TenantAccountSelectorState
                 children: [
                   DropdownButtonFormField<int>(
                     initialValue: visibleSelectedId,
-                    hint: const Text('Select a rental account'),
+                    hint: const Text('Select a tenant balance'),
                     isExpanded: true,
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
@@ -2972,10 +2958,12 @@ class _TenantAccountSelectorState
                     ),
                     items: accounts.map((account) {
                       final tenant = account.primaryTenantName?.trim();
+                      final accountLabel = tenant == null || tenant.isEmpty
+                          ? 'Tenant balance #${account.relationshipNumber}'
+                          : tenant;
                       final label =
                           '${account.propertyName} · Unit ${account.unitNumber}'
-                          '${tenant == null || tenant.isEmpty ? '' : ' — $tenant'}'
-                          ' · ${account.relationshipNumber}';
+                          ' — $accountLabel';
                       return DropdownMenuItem(
                         value: account.tenantAccountId,
                         child: Text(label, overflow: TextOverflow.ellipsis),
@@ -2994,7 +2982,7 @@ class _TenantAccountSelectorState
                       Expanded(
                         child: Text(
                           page.totalCount == 0
-                              ? 'No matching rental accounts'
+                              ? 'No matching tenant balances'
                               : '${page.skip + 1}–${page.skip + page.items.length} of ${page.totalCount}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: colorScheme.onSurfaceVariant,
@@ -3836,7 +3824,7 @@ class _CreatePropertyFieldsState extends State<_CreatePropertyFields> {
             ),
             ButtonSegment<RentalStructure>(
               value: RentalStructure.multiRental,
-              label: Text('Multiple rentals'),
+              label: Text('Building with units'),
               icon: Icon(Icons.apartment_outlined),
             ),
           ],
@@ -3853,7 +3841,7 @@ class _CreatePropertyFieldsState extends State<_CreatePropertyFields> {
         Text(
           widget.rentalStructure == RentalStructure.multiRental
               ? 'Create the rental from this lease now; you can add the other units afterward.'
-              : 'Choose One rental for a house, condo, or other address rented as one space.',
+              : 'Choose One rental for a house, condo, or other address rented as one rental.',
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
@@ -5148,7 +5136,16 @@ class _FieldInputState extends State<_FieldInput> {
               ),
             ),
             items: widget.categoryOptions
-                .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                .map(
+                  (c) => DropdownMenuItem(
+                    value: c,
+                    child: Text(
+                      ScheduleECategory.values.any((item) => item.wire == c)
+                          ? ScheduleECategory.fromWire(c).label
+                          : c,
+                    ),
+                  ),
+                )
                 .toList(),
             onChanged: (v) {
               if (v != null) {
