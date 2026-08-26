@@ -21,6 +21,11 @@
 		formatRequestedProperty,
 		formatRequestedUnit,
 	} from '$lib/applications/application-display';
+	import {
+		screeningAction,
+		reportDetailsRequired,
+		type ScreeningDecision,
+	} from '$lib/applications/screening-mode';
 	import { prepareMoveInHrefForApprovedTenant } from '$lib/leases/prepare-move-in-prefill';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
@@ -31,6 +36,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import {
 		Mail,
 		Phone,
@@ -49,6 +55,7 @@
 		User,
 		Edit3,
 		DollarSign,
+		ChevronDown,
 	} from '@lucide/svelte';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
@@ -352,15 +359,82 @@
 		Failed: { label: 'Failed', class: 'm3-tone-chip border m3-tone--error' },
 		Cancelled: { label: 'Cancelled', class: 'm3-tone-chip border' },
 	};
-	let screeningMode = $state<'Integrated' | 'External'>('Integrated');
-	let externalProvider = $state('Zillow');
-	let externalReference = $state('');
+
+	// One screening action. A connected provider means Rental Command invites the applicant;
+	// otherwise the same button records a screening the landlord already ran somewhere else.
+	const providerConnected = $derived(screeningQuery.data?.integratedProvider.isConfigured === true);
+	const screeningActionKind = $derived(
+		screeningAction({
+			providerConnected,
+			consent: application?.consentGiven,
+			status: application?.status,
+		})
+	);
+	const screeningButtonLabel = $derived(
+		providerConnected ? 'Request screening' : 'Record a screening done elsewhere'
+	);
+
+	const RESULT_LABELS: Record<'InProgress' | ScreeningDecision, string> = {
+		InProgress: 'Still in progress',
+		Accept: 'Accept',
+		Conditional: 'Accept with conditions',
+		Decline: 'Decline',
+	};
+
+	let showRecordElsewhere = $state(false);
+	let externalProvider = $state('');
+	let externalResult = $state<'InProgress' | ScreeningDecision>('InProgress');
 	let externalUrl = $state('');
+	let externalReference = $state('');
 	let externalCraName = $state('');
 	let externalCraAddress = $state('');
 	let externalCraPhone = $state('');
-	let integratedScreeningOperationKey = $state<string | null>(null);
+	let externalReportUsed = $state(false);
+	let externalReason = $state('');
+	let reportDetailsOpen = $state(false);
 	let externalScreeningOperationKey = $state<string | null>(null);
+	let externalDecisionOperationKey = $state<string | null>(null);
+
+	const externalDecision = $derived<ScreeningDecision | null>(
+		externalResult === 'InProgress' ? null : externalResult
+	);
+	const externalReportDetailsRequired = $derived(
+		reportDetailsRequired({ decision: externalDecision, consumerReportUsed: externalReportUsed })
+	);
+	const canSaveExternal = $derived(
+		Boolean(externalProvider.trim()) &&
+			(!externalReportUsed || Boolean(externalReason.trim())) &&
+			(!externalReportDetailsRequired ||
+				Boolean(externalCraName.trim() && externalCraAddress.trim() && externalCraPhone.trim()))
+	);
+
+	// A decline that leans on the report cannot be saved without those details, so open them.
+	$effect(() => {
+		if (externalReportDetailsRequired) reportDetailsOpen = true;
+	});
+
+	function openRecordElsewhere() {
+		externalProvider = '';
+		externalResult = 'InProgress';
+		externalUrl = '';
+		externalReference = '';
+		externalCraName = '';
+		externalCraAddress = '';
+		externalCraPhone = '';
+		externalReportUsed = false;
+		externalReason = '';
+		reportDetailsOpen = false;
+		externalScreeningOperationKey = crypto.randomUUID();
+		externalDecisionOperationKey = crypto.randomUUID();
+		showRecordElsewhere = true;
+	}
+
+	function runScreeningAction() {
+		if (screeningActionKind === 'integrated') screenMutation.mutate();
+		else openRecordElsewhere();
+	}
+
+	let integratedScreeningOperationKey = $state<string | null>(null);
 	let completeExternalOperationKey = $state<string | null>(null);
 	let updateCraOperationKey = $state<string | null>(null);
 	let screeningDecisionOperationKey = $state<string | null>(null);
@@ -395,8 +469,9 @@
 	}));
 
 	const externalScreeningMutation = createMutation(() => ({
-		mutationFn: () =>
-			applications.trackExternalScreening(id, {
+		mutationFn: async () => {
+			const decision = externalDecision;
+			const created = await applications.trackExternalScreening(id, {
 				operationKey: (externalScreeningOperationKey ??= crypto.randomUUID()),
 				providerDisplayName: externalProvider.trim(),
 				providerReference: externalReference.trim() || null,
@@ -404,20 +479,25 @@
 				creditReportingAgencyName: externalCraName.trim() || null,
 				creditReportingAgencyAddress: externalCraAddress.trim() || null,
 				creditReportingAgencyPhone: externalCraPhone.trim() || null,
-				status: 'InProgress',
-			}),
+				status: decision ? 'Completed' : 'InProgress',
+			});
+			if (!decision) return created;
+			return applications.recordScreeningDecision(id, created.id, {
+				operationKey: (externalDecisionOperationKey ??= crypto.randomUUID()),
+				decision,
+				reason: externalReason.trim() || null,
+				consumerReportUsed: externalReportUsed,
+			});
+		},
 		onSuccess: () => {
-			showSuccess('External screening added.');
+			showSuccess('Screening saved.');
 			externalScreeningOperationKey = null;
-			externalReference = '';
-			externalUrl = '';
-			externalCraName = '';
-			externalCraAddress = '';
-			externalCraPhone = '';
+			externalDecisionOperationKey = null;
+			showRecordElsewhere = false;
 			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
 			invalidate();
 		},
-		onError: (err) => showError(apiErrorMessage(err, 'External screening could not be added.')),
+		onError: (err) => showError(apiErrorMessage(err, 'The screening could not be saved.')),
 	}));
 
 	const completeExternalScreeningMutation = createMutation(() => ({
@@ -772,89 +852,42 @@
 				<Card.Header>
 					<Card.Title class="flex items-center gap-2 text-base"><ScanSearch class="h-4 w-4" /> Applicant screening</Card.Title>
 					<p class="text-sm text-muted-foreground">
-						Invite through Rental Command once a provider is connected, or track a screening completed in Zillow or another service.
+						Check an applicant's rental, credit, and background history before you hand over keys.
 					</p>
 					<p class="text-xs text-muted-foreground">
-						Do not paste Social Security numbers, identity answers, or report contents here. Review those only in the provider's secure site.
+						Do not type Social Security numbers, identity answers, or anything from the report here. Read those only on the screening company's own secure site.
 					</p>
 				</Card.Header>
 				<Card.Content class="space-y-5">
-					<div class="grid gap-3 sm:grid-cols-2" data-testid="screening-mode-picker">
-						<button
-							type="button"
-							class="rounded-xl border p-4 text-left transition {screeningMode === 'Integrated' ? 'border-primary bg-primary/5' : 'border-border'}"
-							onclick={() => (screeningMode = 'Integrated')}
-						>
-							<p class="font-medium">Screen through Rental Command</p>
-							<p class="mt-1 text-xs text-muted-foreground">The applicant securely enters sensitive information on the screening provider's site.</p>
-						</button>
-						<button
-							type="button"
-							class="rounded-xl border p-4 text-left transition {screeningMode === 'External' ? 'border-primary bg-primary/5' : 'border-border'}"
-							onclick={() => (screeningMode = 'External')}
-						>
-							<p class="font-medium">Track an outside screening</p>
-							<p class="mt-1 text-xs text-muted-foreground">Use Zillow or any other checker. Rental Command records progress but does not claim to sync it.</p>
-						</button>
-					</div>
-
-					{#if screeningMode === 'Integrated'}
-						<div class="rounded-xl border border-border p-4">
-							<div class="flex flex-wrap items-center justify-between gap-3">
-								<div>
-									<p class="font-medium">{screeningQuery.data?.integratedProvider.displayName ?? 'Integrated screening'}</p>
-									<p class="text-xs text-muted-foreground">
-										{screeningQuery.data?.integratedProvider.isConfigured
-											? 'Ready to create a secure applicant invitation.'
-											: 'Provider selection is still being finalized. Outside screening remains available.'}
-									</p>
-								</div>
-								<Button
-									class="gap-2"
-									disabled={!canScreen || !screeningQuery.data?.integratedProvider.isConfigured || screenMutation.isPending}
-									onclick={() => screenMutation.mutate()}
-									data-testid="application-run-screening"
-								>
-									<ScanSearch class="h-4 w-4" />
-									{screenMutation.isPending ? 'Creating invitation…' : 'Invite applicant'}
-								</Button>
-							</div>
-							{#if !application?.consentGiven}
-								<p class="mt-3 text-xs text-muted-foreground">Applicant consent is required before an integrated screening can start.</p>
+					<div
+						class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-4"
+						data-testid="screening-action"
+					>
+						<div class="min-w-0 space-y-1">
+							<p class="font-medium">{screeningButtonLabel}</p>
+							<p class="text-xs text-muted-foreground">
+								{providerConnected
+									? `${screeningQuery.data?.integratedProvider.displayName ?? 'Your screening service'} emails the applicant a secure link. They enter their own details; you never handle them.`
+									: 'No screening service is connected yet, so add the screening you ran with Zillow, a local agency, or anywhere else.'}
+							</p>
+							{#if screeningActionKind === null}
+								<p class="text-xs text-muted-foreground" data-testid="screening-blocked-note">
+									{application?.consentGiven
+										? 'This application is closed, so no new screening can be added.'
+										: "You need the applicant's written OK before a screening can be run."}
+								</p>
 							{/if}
 						</div>
-					{:else}
-						<div class="grid gap-3 rounded-xl border border-border p-4 sm:grid-cols-2" data-testid="external-screening-form">
-							<label class="space-y-1 text-sm">
-								<span class="font-medium">Screening service</span>
-								<Input bind:value={externalProvider} placeholder="Zillow, another service, local agency…" />
-							</label>
-							<label class="space-y-1 text-sm">
-								<span class="font-medium">Reference (optional)</span>
-								<Input bind:value={externalReference} placeholder="Order or application number" />
-							</label>
-							<label class="space-y-1 text-sm sm:col-span-2">
-								<span class="font-medium">Provider link (optional)</span>
-								<Input bind:value={externalUrl} type="url" placeholder="https://…" />
-							</label>
-							<div class="space-y-3 rounded-lg bg-muted/40 p-3 sm:col-span-2">
-								<p class="text-xs text-muted-foreground">Add the consumer reporting agency name, mailing address, and phone if its report may influence your decision. These are not required when no consumer report is used.</p>
-								<div class="grid gap-3 sm:grid-cols-2">
-									<Input bind:value={externalCraName} placeholder="Credit reporting agency name" />
-									<Input bind:value={externalCraPhone} placeholder="Agency phone" />
-									<Input class="sm:col-span-2" bind:value={externalCraAddress} placeholder="Agency mailing address" />
-								</div>
-							</div>
-							<div class="sm:col-span-2">
-								<Button
-									disabled={!isOpen || !externalProvider.trim() || externalScreeningMutation.isPending}
-									onclick={() => externalScreeningMutation.mutate()}
-								>
-									{externalScreeningMutation.isPending ? 'Adding…' : 'Add outside screening'}
-								</Button>
-							</div>
-						</div>
-					{/if}
+						<Button
+							class="gap-2"
+							disabled={screeningActionKind === null || screenMutation.isPending}
+							onclick={runScreeningAction}
+							data-testid="application-request-screening"
+						>
+							<ScanSearch class="h-4 w-4" />
+							{screenMutation.isPending ? 'Sending invitation…' : screeningButtonLabel}
+						</Button>
+					</div>
 
 					{#if screeningQuery.isLoading}
 						<div class="flex items-center gap-2 text-sm text-muted-foreground">
@@ -865,7 +898,7 @@
 						<div class="space-y-4" data-testid="application-screening-result">
 							<div class="flex flex-wrap items-center gap-2">
 								<StatusBadge status={latestScreening.status} map={SCREEN_STATUS_MAP} />
-								<span class="m3-tone-chip border">{latestScreening.mode}</span>
+								<span class="m3-tone-chip border">{latestScreening.mode === 'Integrated' ? 'Through Rental Command' : 'Done elsewhere'}</span>
 								{#if latestScreening.decision}
 									<StatusBadge
 										status={latestScreening.decision}
@@ -922,7 +955,7 @@
 						</div>
 					{:else}
 						<p class="text-sm text-muted-foreground" data-testid="application-screening-empty">
-							No screening has been added yet. Choose either path above.
+							No screening yet. Use the button above to start one.
 						</p>
 					{/if}
 				</Card.Content>
@@ -1108,6 +1141,133 @@
 				data-testid="application-decline-confirm"
 			>
 				{declineMutation.isPending ? 'Declining…' : 'Decline'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Record a screening the landlord already ran somewhere else -->
+<Dialog.Root open={showRecordElsewhere} onOpenChange={(v) => { if (!v) showRecordElsewhere = false; }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Record a screening done elsewhere</Dialog.Title>
+			<Dialog.Description>
+				Note who ran the screening and how it came out. Keep the report itself with the company that produced it.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3" data-testid="screening-elsewhere-form">
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Who ran it?</span>
+				<Input
+					bind:value={externalProvider}
+					placeholder="Zillow, a local agency, another service…"
+					data-testid="screening-provider-input"
+				/>
+			</label>
+			<div class="space-y-1 text-sm">
+				<span class="font-medium">Result</span>
+				<Select.Root type="single" bind:value={externalResult}>
+					<Select.Trigger class="h-10 w-full" data-testid="screening-result-select">
+						{RESULT_LABELS[externalResult]}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="InProgress" label="Still in progress">Still in progress</Select.Item>
+						<Select.Item value="Accept" label="Accept">Accept</Select.Item>
+						<Select.Item value="Conditional" label="Accept with conditions">Accept with conditions</Select.Item>
+						<Select.Item value="Decline" label="Decline">Decline</Select.Item>
+					</Select.Content>
+				</Select.Root>
+			</div>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Link to it (optional)</span>
+				<Input
+					bind:value={externalUrl}
+					type="url"
+					placeholder="https://…"
+					data-testid="screening-link-input"
+				/>
+			</label>
+			{#if externalDecision}
+				<label class="flex items-start gap-3 rounded-lg border border-border p-3 text-sm">
+					<Checkbox bind:checked={externalReportUsed} data-testid="screening-report-used" />
+					<span>
+						<strong class="block">The report influenced this result</strong>
+						<span class="text-xs text-muted-foreground">Turn this on even if the report was only one of the reasons.</span>
+					</span>
+				</label>
+			{/if}
+			{#if externalDecision && externalReportUsed}
+				<label class="space-y-1 text-sm">
+					<span class="font-medium">Main reason</span>
+					<textarea
+						bind:value={externalReason}
+						rows="2"
+						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+						placeholder="The main reason for this result"
+						data-testid="screening-reason-input"
+					></textarea>
+				</label>
+			{/if}
+			<details
+				class="rounded-lg border border-border px-3 py-2"
+				bind:open={reportDetailsOpen}
+				data-testid="screening-report-details"
+			>
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-2">
+					<span class="text-sm font-semibold">Report details</span>
+					<ChevronDown class="h-4 w-4 text-muted-foreground" />
+				</summary>
+				<div class="mt-3 space-y-3">
+					{#if externalReportDetailsRequired}
+						<p class="text-xs text-destructive" data-testid="screening-report-details-note">
+							Required before declining based on this report.
+						</p>
+					{/if}
+					<label class="space-y-1 text-sm">
+						<span class="font-medium">Reference (optional)</span>
+						<Input
+							bind:value={externalReference}
+							placeholder="Order or file number"
+							data-testid="screening-reference-input"
+						/>
+					</label>
+					<div class="space-y-2 text-sm">
+						<span class="flex items-center gap-1 font-medium">
+							The company that ran the report
+							<HelpPopover
+								title="The company that ran the report"
+								summary="The company that produced the report (the consumer reporting agency)."
+								learnMoreUrl="/docs/tenants-and-applications"
+								testid="screening-report-company-help"
+							/>
+						</span>
+						<Input
+							bind:value={externalCraName}
+							placeholder="Company name"
+							data-testid="screening-report-company-name-input"
+						/>
+						<Input
+							bind:value={externalCraAddress}
+							placeholder="Mailing address"
+							data-testid="screening-report-company-address-input"
+						/>
+						<Input
+							bind:value={externalCraPhone}
+							placeholder="Phone"
+							data-testid="screening-report-company-phone-input"
+						/>
+					</div>
+				</div>
+			</details>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showRecordElsewhere = false)} data-testid="screening-elsewhere-cancel">Cancel</Button>
+			<Button
+				onclick={() => externalScreeningMutation.mutate()}
+				disabled={!canSaveExternal || externalScreeningMutation.isPending}
+				data-testid="screening-elsewhere-save"
+			>
+				{externalScreeningMutation.isPending ? 'Saving…' : 'Save screening'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
