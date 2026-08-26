@@ -325,6 +325,70 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
     }
 
     [Fact]
+    public async Task MoneyTotals_DashboardAndSummary_Agree()
+    {
+        await using var context = await postgres.CreateContextAsync();
+        var scope = context.Db.SeedAdministratorScope(
+            1,
+            nameof(MoneyTotals_DashboardAndSummary_Agree));
+        var now = DateTime.UtcNow;
+        var property = SeedProperty(context, "Money totals", now);
+        var unit = SeedUnit(context, property, "4D", now);
+        var account = SeedTenantAccount(context, property, unit, now);
+        SeedDashboardReceivables(context, account, now);
+        var nextMonth = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(1);
+        context.Db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = 1, PropertyId = property.Id, OperationalScope = ExpenseOperationalScope.Property,
+                Category = ScheduleECategory.Repairs, Description = "Next month's repair",
+                Status = ExpenseStatus.Paid, Amount = 100m, IncurredAt = nextMonth, PaidAt = nextMonth,
+                CreatedAt = now, UpdatedAt = now,
+            },
+            new Expense
+            {
+                PortfolioId = 1, OperationalScope = ExpenseOperationalScope.Portfolio,
+                Category = ScheduleECategory.Repairs, Description = "Portfolio expense",
+                Status = ExpenseStatus.Paid, Amount = 200m, IncurredAt = now, PaidAt = now,
+                CreatedAt = now, UpdatedAt = now,
+            });
+        var loan = new Loan
+        {
+            PortfolioId = 1, PropertyId = property.Id, Lender = "Test Bank",
+            OriginalAmount = 100_000m, CurrentBalance = 90_000m, AnnualInterestRatePct = 6m,
+            TermMonths = 360, StartDate = now.AddYears(-1), DayOfMonthDue = 1,
+            MonthlyPrincipalInterest = 15m, Status = LoanStatus.Active, CreatedAt = now, UpdatedAt = now,
+        };
+        context.Db.LoanPayments.Add(new LoanPayment
+        {
+            PortfolioId = 1, Loan = loan, PeriodKey = $"{now:yyyy-MM}", DueDate = now,
+            PaidDate = now, InterestAmount = 5m, PrincipalAmount = 10m, TotalAmount = 15m,
+            BalanceAfter = 89_990m, Status = LoanPaymentStatus.Paid, CreatedAt = now,
+        });
+        await context.Db.SaveChangesAsync();
+        context.Db.ChangeTracker.Clear();
+        await context.ActivateApiScopeAsync(scope);
+
+        var timeProvider = new FixedTimeProvider(now);
+        var dashboard = await new DashboardService(context.Db, new AuditDescriber(), timeProvider)
+            .GetDashboardAsync(scope);
+        var accounting = new AccountingService(
+            context.Db,
+            new ScheduleEService(context.Db),
+            new YearEndPacketPdfGenerator(),
+            timeProvider);
+        var summary = await accounting.GetSummaryAsync(scope);
+        var snapshot = await accounting.GetSnapshotAsync(scope);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.Accounting.OverdueAmount.Should().Be(60m)
+            .And.Be(summary.Payments.Overdue)
+            .And.Be(snapshot.PastDueAmount);
+        dashboard.Accounting.NetThisMonth.Should().Be(-175m)
+            .And.Be(snapshot.Net);
+    }
+
+    [Fact]
     public async Task FutureEffectiveReversal_AllLiveReadModelsMatchCanonicalViewsAcrossBoundary()
     {
         var commands = new ReadModelCommandRecorder();
