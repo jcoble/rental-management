@@ -194,7 +194,8 @@ describe('experience route policy', () => {
 
 		const dashboardPage = readFileSync(new URL('../../routes/(protected)/+page.svelte', import.meta.url), 'utf8');
 		assert.match(dashboardPage, /hasCapability\('security\.manage'\)/);
-		assert.match(dashboardPage, /\{#if canOpenGettingStarted\}[\s\S]*<GettingStartedCard \/>/);
+		// The card is now shown only until the first rental exists, but it stays capability-gated.
+		assert.match(dashboardPage, /\{#if canOpenGettingStarted[\s\S]*<GettingStartedCard \/>/);
 	});
 
 	it('splits operational reconciliation from bank administration', () => {

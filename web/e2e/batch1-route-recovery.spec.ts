@@ -412,7 +412,7 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		await expect(page.getByTestId('dashboard-error')).toBeVisible({ timeout: 15_000 });
 		retryClicked = true;
 		await page.getByTestId('dashboard-retry').click();
-		await expect(page.getByTestId('dashboard-hero')).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId('dashboard-summary')).toBeVisible({ timeout: 15_000 });
 		expect(dashboardRequests).toBeGreaterThan(1);
 	});
 
