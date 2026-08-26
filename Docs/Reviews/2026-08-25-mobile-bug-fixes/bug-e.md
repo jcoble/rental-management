@@ -14,3 +14,9 @@ Start time: 2026-08-25T20:36:44-04:00
 
 - `cd mobile && flutter analyze` — exit 1 with the repository's 23 pre-existing issues; no issue was reported in any touched file. Last line: `23 issues found. (ran in 11.3s)`.
 - `cd mobile && flutter test` — exit 0. Last line: `01:15 +532: All tests passed!`.
+
+## Review fix
+
+- #10 — FIXED in `83c9097d`. Restored automatic conversation loading when the provider rebuilds while preserving the detail screen's refresh-on-mount. Extended the existing test as `opening and invalidating message detail reloads conversation`; invalidation performed another repository load and rendered the loaded message instead of leaving the spinner active.
+- `cd mobile && flutter analyze` — exit 1 with the repository's 23 pre-existing issues; no issue was reported in either touched Dart file. Last line: `23 issues found. (ran in 2.1s)`.
+- `cd mobile && flutter test` — exit 0. Last line: `01:07 +532: All tests passed!`.
