@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Owners;
 using RentalCommand.Data;
@@ -24,14 +23,14 @@ public sealed class OwnerPortalController : AuthenticatedPortfolioControllerBase
     private readonly IOwnerStatementService _statements;
     private readonly TimeProvider _timeProvider;
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public OwnerPortalController(
         IOwnerPortalService portal,
         IOwnerStatementService statements,
         TimeProvider timeProvider,
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _portal = portal;
         _statements = statements;
@@ -140,7 +139,7 @@ public sealed class OwnerPortalController : AuthenticatedPortfolioControllerBase
         try
         {
             var command = createCommand(active, digest);
-            var outcome = await _writes.ExecuteExactAsync(
+            var outcome = await _writes.ExecuteAsync(
                 $"{active.PortfolioId}:{notificationId}:{digest}",
                 OwnerPortalWriteSupport.Write(_db, command), ct);
             return Ok(new OwnerPortalCommandResponse(

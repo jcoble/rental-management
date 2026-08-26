@@ -10,7 +10,6 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -55,7 +54,6 @@ public class VendorDispatchServiceTests : IAsyncLifetime
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_ctx.ConnectionString)
                 .AddInterceptors(new RequestGucConnectionInterceptor(_scope))
@@ -72,7 +70,7 @@ public class VendorDispatchServiceTests : IAsyncLifetime
     private VendorDispatchService CreateDispatchSut() => new(
         _services.GetRequiredService<RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
-        _services.GetRequiredService<IRequestWriteExecutor>(),
+        _services.GetRequiredService<IWriteExecutor>(),
         Mock.Of<ILogger<VendorDispatchService>>(),
         TimeProvider.System);
 
@@ -85,7 +83,7 @@ public class VendorDispatchServiceTests : IAsyncLifetime
     private SmsInboundVendorDoneService CreateDoneSut() => new(
         _services.GetRequiredService<RentalCommandDbContext>(),
         Mock.Of<IDataUpdateService>(),
-        _services.GetRequiredService<IRequestWriteExecutor>(),
+        _services.GetRequiredService<IWriteExecutor>(),
         Mock.Of<ILogger<SmsInboundVendorDoneService>>());
 
     [Fact]

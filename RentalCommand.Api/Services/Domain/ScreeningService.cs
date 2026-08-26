@@ -16,7 +16,6 @@ using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Documents;
 using RentalCommand.Data.Screening;
-using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -27,7 +26,7 @@ public sealed class ScreeningService : IScreeningService
     private readonly IScreeningProvider _provider;
     private readonly IFileStorage _storage;
     private readonly IAdverseActionNoticePdfGenerator _pdf;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IPendingFileUploadStore _pendingUploads;
     private readonly TimeProvider _timeProvider;
 
@@ -36,7 +35,7 @@ public sealed class ScreeningService : IScreeningService
         IScreeningProvider provider,
         IFileStorage storage,
         IAdverseActionNoticePdfGenerator pdf,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IPendingFileUploadStore pendingUploads,
         TimeProvider timeProvider)
     {

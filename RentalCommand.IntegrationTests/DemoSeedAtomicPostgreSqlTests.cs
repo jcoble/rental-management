@@ -4,7 +4,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Auth;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -83,7 +82,6 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddSingleton(_failure);
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(_context.ConnectionString)
@@ -249,8 +247,8 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
         if (command is SeedDemoPortfolioCommand seed)
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
-                .ExecuteExactAsync(identity.IdempotencyKey, DemoSeedCommandRule.Write(db, seed), ct);
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+                .ExecuteAsync(identity.IdempotencyKey, DemoSeedCommandRule.Write(db, seed), ct);
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }
         throw new InvalidOperationException($"No executor rule exists for {typeof(TCommand).Name}.");

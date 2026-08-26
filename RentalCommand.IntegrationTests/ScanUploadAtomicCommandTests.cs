@@ -8,7 +8,6 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Scanning;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
@@ -64,7 +63,6 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<AuditFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddPendingFileUploadStore();
         services.AddScoped<IScanUploadService, ScanUploadService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
@@ -736,7 +734,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
     {
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             identity.IdempotencyKey,
             ScanDraftWriteSupport.Write(
                 identity.CommandType, command, ScanDraftWriteSupport.FinalizeResultContract,

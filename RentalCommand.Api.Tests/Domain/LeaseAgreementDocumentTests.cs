@@ -181,7 +181,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         var templates = new DocumentTemplateService(
             _db, new DocumentTemplateFieldCatalog(), _storage,
             Mock.Of<RentalCommand.Data.Documents.IPendingFileUploadStore>(), TimeProvider.System,
-            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var sql = templates.BuildAgreementPreviewQuery(_scope, 123).ToQueryString();
 

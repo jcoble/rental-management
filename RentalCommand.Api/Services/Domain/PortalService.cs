@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -23,14 +22,14 @@ public class PortalService : IPortalService
     private readonly RentalCommandDbContext _db;
     private readonly ILeaseQaService _leaseQa;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
     private static readonly JsonSerializerOptions PortalHistoryJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter() },
     };
 
     public PortalService(RentalCommandDbContext db, ILeaseQaService leaseQa, TimeProvider timeProvider,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes)
     {
         _db = db;
         _leaseQa = leaseQa;
@@ -1233,7 +1232,7 @@ public class PortalService : IPortalService
         var command = new AddTenantWorkOrderCommentCommand(
             access.PortfolioId, access.UserId, access.SessionId, access.AccessContextId,
             access.AccessRevision, workOrderId, request.Body, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
             WorkOrderCrudWriteSupport.Write(command, AddTenantCommentAsync, AuthorizeReplayAsync), ct);
         return Receipt(outcome.Value);
@@ -1254,7 +1253,7 @@ public class PortalService : IPortalService
             request.ResidentMustBePresent, request.CallBeforeEntry, request.CallIfNotHome,
             request.PermissionToEnter, request.EntryNotes, request.PetWarnings,
             request.AccessWarnings, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
             WorkOrderCrudWriteSupport.Write(command, UpdateTenantWorkOrderAsync, AuthorizeReplayAsync), ct);
         return Receipt(outcome.Value);
@@ -1271,7 +1270,7 @@ public class PortalService : IPortalService
         var command = new CancelTenantWorkOrderCommand(
             access.PortfolioId, access.UserId, access.SessionId, access.AccessContextId,
             access.AccessRevision, workOrderId, request.Note, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
             WorkOrderCrudWriteSupport.Write(command, CancelTenantWorkOrderAsync, AuthorizeReplayAsync), ct);
         return Receipt(outcome.Value);
@@ -1291,7 +1290,7 @@ public class PortalService : IPortalService
             request.CallBeforeEntry, request.CallIfNotHome, request.PermissionToEnter,
             request.EntryNotes, request.PetWarnings, request.AccessWarnings,
             idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             WorkOrderCrudWriteSupport.IdempotencyKey(idempotencyKey),
             WorkOrderCrudWriteSupport.Write(command, CreateTenantWorkOrderAsync, AuthorizeReplayAsync), ct);
         return outcome.Value.Outcome == OperationMutationOutcome.NotFound || outcome.Value.Snapshot is null
@@ -1330,9 +1329,6 @@ public class PortalService : IPortalService
     private Task AuthorizeReplayAsync(
         CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         new CancelTenantWorkOrderRule(_db).AuthorizeReplayAsync(command, context, ct);
-
-    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
-        "The shared request write executor is required for tenant work-order changes.");
 
     private static WorkOrderMutationReceipt? Receipt(WorkOrderMutationResult result) =>
         result.Outcome == OperationMutationOutcome.NotFound || result.Receipt is null
@@ -1436,7 +1432,7 @@ public class PortalService : IPortalService
             access, tenantId, tenantAccountId, operationKey);
         var identity = AtomicTenantAutopayCancellation.Identity(command);
         var handler = new CancelTenantAutopayRule(_db);
-        var outcome = await RequireWrites().ExecuteAsync(identity.IdempotencyKey,
+        var outcome = await _writes.ExecuteAsync(identity.IdempotencyKey,
             AccountingWriteSupport.Write(command, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
         if (!outcome.Value.Found) return null;
 

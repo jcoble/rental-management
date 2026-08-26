@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -53,7 +52,7 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
         await using var services = Services(apiConnectionString, failure, requestScope);
         await using var atomicScope = services.CreateAsyncScope();
         var db = atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = atomicScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = atomicScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
         Task<AtomicCommandOutcome<RecoverHistoricalRentChargeResult>> Execute(
             RecoverHistoricalRentChargeCommand value)
@@ -255,7 +254,7 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
             requestScope);
         await using var atomicScope = services.CreateAsyncScope();
         var db = atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = atomicScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = atomicScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
         Task<AtomicCommandOutcome<RecoverRefundedTenantAllocationResult>> Execute(
             RecoverRefundedTenantAllocationCommand value)
@@ -356,7 +355,6 @@ public sealed class HistoricalRentRecoveryPostgreSqlTests
         services.AddSingleton(requestScope);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .AddInterceptors(

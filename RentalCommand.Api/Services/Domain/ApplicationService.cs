@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -24,7 +23,7 @@ public sealed class ApplicationService : IApplicationService
     private readonly IFileStorage _files;
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public ApplicationService(
         RentalCommandDbContext db,
@@ -32,7 +31,7 @@ public sealed class ApplicationService : IApplicationService
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _files = files;
@@ -146,7 +145,7 @@ public sealed class ApplicationService : IApplicationService
     {
         var command = new AtomicPublicApplicationSubmissionCommand(
             token, JsonSerializer.Serialize(request), ipAddress, operationKey);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             AtomicPublicApplicationSubmission.Identity(command).IdempotencyKey,
             AtomicPublicApplicationSubmission.Write(command, _db), ct);
         return outcome.Value.Found
@@ -440,7 +439,7 @@ public sealed class ApplicationService : IApplicationService
         var command = AtomicWorkspaceCoreMutation.Command(
             scope, AtomicWorkspaceCoreMutationOperation.RotateApplicationLink,
             operationKey, new { });
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             AtomicWorkspaceCoreMutation.Identity(command).IdempotencyKey,
             AtomicWorkspaceCoreMutation.Write(_db, command), ct);
         if (!outcome.Value.Found || outcome.Value.PublicApplicationToken is null)
@@ -520,7 +519,7 @@ public sealed class ApplicationService : IApplicationService
 
     private Task<AtomicCommandOutcome<AtomicRentalMutationResult>> ExecuteApplicationWriteAsync(
         AtomicRentalMutationCommand command,
-        CancellationToken ct) => _writes.ExecuteExactAsync(
+        CancellationToken ct) => _writes.ExecuteAsync(
             AtomicRentalMutation.Identity(command).IdempotencyKey,
             AtomicRentalMutation.Write(command, _db), ct);
 }

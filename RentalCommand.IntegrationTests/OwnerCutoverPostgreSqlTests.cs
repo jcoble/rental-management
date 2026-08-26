@@ -9,6 +9,7 @@ using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -79,7 +80,8 @@ public sealed class OwnerCutoverPostgreSqlTests : IAsyncLifetime
         var service = new PropertyService(
             _context.Db,
             Mock.Of<IDataUpdateService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
 
         var page = await service.ListPageAsync(scope, new PropertyListQuery

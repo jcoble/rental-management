@@ -6,7 +6,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -894,7 +893,6 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
         services.AddSingleton(timeProvider);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddSingleton(Mock.Of<IDataUpdateService>());
         services.AddScoped<PropertyService>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>

@@ -16,10 +16,16 @@ internal sealed class WriteExecutor(AtomicTransactionRunner runner) : IWriteExec
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        var normalizedKey = idempotencyKey?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
+        {
+            throw new ArgumentException(
+                "A request key is required and cannot exceed 200 characters.",
+                nameof(idempotencyKey));
+        }
         ArgumentNullException.ThrowIfNull(write);
 
-        var identity = new AtomicCommandIdentity(write.OperationName, idempotencyKey);
+        var identity = new AtomicCommandIdentity(write.OperationName, normalizedKey);
         return runner.ExecuteAsync(identity, write, ct);
     }
 }

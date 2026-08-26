@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Data;
@@ -22,13 +21,13 @@ namespace RentalCommand.Api.Controllers;
 public sealed class WorkspaceExperienceController : AuthenticatedPortfolioControllerBase
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly IAccessEnvelopeQuery _accessEnvelopes;
     private readonly TimeProvider _timeProvider;
 
     public WorkspaceExperienceController(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         IAccessEnvelopeQuery accessEnvelopes,
         TimeProvider timeProvider)
     {
@@ -70,7 +69,7 @@ public sealed class WorkspaceExperienceController : AuthenticatedPortfolioContro
             request.Experience);
         try
         {
-            await _writes.ExecuteExactAsync(
+            await _writes.ExecuteAsync(
                 $"{active.PortfolioId}:{active.AccessContextId}:{keyDigest}",
                 SelectWorkspaceExperienceRule.Write(_db, command), ct);
         }

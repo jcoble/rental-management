@@ -56,7 +56,7 @@ public sealed class WorkOrderMutationClockPostgreSqlTests : IAsyncLifetime
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
             new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-            _services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            _services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var updated = await service.UpdateAuthorizedAsync(
             _scope,

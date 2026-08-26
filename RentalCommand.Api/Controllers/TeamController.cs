@@ -5,7 +5,6 @@ using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Auth;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -25,14 +24,14 @@ namespace RentalCommand.Api.Controllers;
 public sealed class TeamController : AuthenticatedPortfolioControllerBase
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
     private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
     private readonly string _webBaseUrl;
 
     public TeamController(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         WorkspaceAccessRevisionGuard accessRevisionGuard,
         IMembershipAssignmentScopeValidator assignmentScopeValidator,
         IConfiguration configuration)
@@ -298,7 +297,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     {
         try
         {
-            var outcome = await _writes.ExecuteExactAsync(
+            var outcome = await _writes.ExecuteAsync(
                 $"{GetPortfolioId()}:{key}",
                 write, ct);
             return StatusCode(successStatus, new

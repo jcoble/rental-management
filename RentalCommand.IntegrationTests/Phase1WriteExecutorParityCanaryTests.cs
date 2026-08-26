@@ -1,7 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -49,7 +48,7 @@ public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixtu
                     702),
                 handler.ExecuteAsync,
                 handler.AuthorizeReplayAsync);
-            var writes = scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+            var writes = scope.ServiceProvider.GetRequiredService<IWriteExecutor>();
             outcome = await writes.ExecuteAsync(identity.IdempotencyKey, write);
             replay = await writes
                 .ExecuteAsync(identity.IdempotencyKey, write);
@@ -71,7 +70,6 @@ public sealed class Phase1WriteExecutorParityCanaryTests(MigratedPostgreSqlFixtu
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddScoped<CanaryHandler>();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider));

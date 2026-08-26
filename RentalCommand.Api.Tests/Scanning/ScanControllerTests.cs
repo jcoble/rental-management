@@ -11,7 +11,6 @@ using Microsoft.EntityFrameworkCore.Storage;
 using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
-using RentalCommand.Api.Writes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -733,7 +732,7 @@ public class ScanControllerTests : IAsyncLifetime
     private ScanController CreateController(
         IScanService scan,
         IFileStorage? files = null,
-        IRequestWriteExecutor? writes = null,
+        IWriteExecutor? writes = null,
         IScanUploadService? uploads = null)
     {
         var httpContext = new DefaultHttpContext();
@@ -742,7 +741,7 @@ public class ScanControllerTests : IAsyncLifetime
         var controller = new ScanController(
             scan,
             uploads ?? Mock.Of<IScanUploadService>(),
-            writes ?? Mock.Of<IRequestWriteExecutor>(),
+            writes ?? Mock.Of<IWriteExecutor>(),
             Mock.Of<IScanConfirmationTargetWriter>(),
             _db,
             files ?? Mock.Of<IFileStorage>(),
@@ -829,7 +828,7 @@ public class ScanControllerTests : IAsyncLifetime
     private static object? Property(object value, string name) =>
         value.GetType().GetProperty(name)!.GetValue(value);
 
-    private sealed class RecordingRequestWriteExecutor : IRequestWriteExecutor
+    private sealed class RecordingRequestWriteExecutor : IWriteExecutor
     {
         public object? Outcome { get; init; }
         public Exception? Exception { get; init; }

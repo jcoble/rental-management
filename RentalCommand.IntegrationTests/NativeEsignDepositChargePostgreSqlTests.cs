@@ -5,7 +5,6 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -52,7 +51,6 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .AddInterceptors(_commandCounter)
@@ -792,8 +790,8 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
             .AddInterceptors(_commandCounter)
             .Options);
 
-    private IRequestWriteExecutor Writes =>
-        _serviceScope!.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+    private IWriteExecutor Writes =>
+        _serviceScope!.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
     private RentalCommandDbContext ScopedDb =>
         _serviceScope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();

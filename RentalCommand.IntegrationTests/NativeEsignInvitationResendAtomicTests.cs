@@ -4,7 +4,6 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -49,7 +48,6 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .AddInterceptors(_locks)
@@ -207,7 +205,7 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
 
         await using var scope = _services!.CreateAsyncScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var replay = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        var replay = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(key, NativeEsignWriteSupport.Write<ResendNativeEsignInvitationCommand,
                 ResendNativeEsignInvitationResult>(scopedDb, command));
 
@@ -271,7 +269,7 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
 
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync("issue-addendum-executor",
                 NativeEsignWriteSupport.Write<IssueLeaseAddendumCommand,
                     IssueLeaseAddendumResult>(db, command));
@@ -290,7 +288,7 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
             });
             await receiptDb.SaveChangesAsync();
         }
-        var legacyReplay = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        var legacyReplay = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(legacyKey, NativeEsignWriteSupport.Write<IssueLeaseAddendumCommand,
                 IssueLeaseAddendumResult>(db, command));
         legacyReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -351,7 +349,7 @@ public sealed class NativeEsignInvitationResendAtomicTests : IAsyncLifetime
     {
         await using var scope = _services!.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey,
                 NativeEsignWriteSupport.Write<ResendNativeEsignInvitationCommand,
                     ResendNativeEsignInvitationResult>(db, command));

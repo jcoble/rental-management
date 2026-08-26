@@ -9,7 +9,6 @@ using RentalCommand.Core.Esign;
 using RentalCommand.Data;
 using RentalCommand.Data.Esign;
 using RentalCommand.Engine.Services;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Tests.Workers;
 
@@ -27,7 +26,7 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
             options.UseSqlite("DataSource=:memory:"));
         services.AddSingleton<INativeEsignExecutionService>(_execution);
         services.AddSingleton<INativeEsignExecutionClaimStore>(_claims);
-        services.AddSingleton<IJobStepWriteExecutor>(_writes);
+        services.AddSingleton<IWriteExecutor>(_writes);
         _provider = services.BuildServiceProvider();
     }
 
@@ -193,7 +192,7 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         }
     }
 
-    private sealed class StubJobStepWriteExecutor : IJobStepWriteExecutor
+    private sealed class StubJobStepWriteExecutor : IWriteExecutor
     {
         public int DepositChargeCount { get; set; }
         public int? LastBatchSize { get; private set; }

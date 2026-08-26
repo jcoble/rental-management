@@ -2,7 +2,6 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
@@ -61,7 +60,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
     private readonly GoogleAuthOptions _options;
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly IAuthService _authService;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly ILogger<GoogleAuthService> _logger;
 
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
@@ -74,7 +73,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
         IOptions<GoogleAuthOptions> options,
         ICanonicalAccountBootstrapService accountBootstrap,
         IAuthService authService,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         ILogger<GoogleAuthService> logger)
     {
         _db = db;

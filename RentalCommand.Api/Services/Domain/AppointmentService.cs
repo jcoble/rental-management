@@ -12,7 +12,6 @@ using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Operations;
-using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -25,10 +24,10 @@ public class AppointmentService : IAppointmentService
         [CapabilityKeys.WorkRead, CapabilityKeys.LeasingShowingsManage];
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
 
     public AppointmentService(RentalCommandDbContext db, IDataUpdateService dataUpdate,
-        TimeProvider timeProvider, IRequestWriteExecutor? writes = null)
+        TimeProvider timeProvider, IWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
@@ -244,7 +243,7 @@ public class AppointmentService : IAppointmentService
             request.Title, request.ProspectName, request.ProspectEmail, request.Type,
             request.Status, request.ScheduledStart.ToUtc(), request.ScheduledEnd.ToUtc(),
             request.AssignedTo, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             AppointmentCrudWriteSupport.IdempotencyKey(idempotencyKey),
             AppointmentCrudWriteSupport.Write(
                 command, CreateAppointmentAsync, AuthorizeReplayAsync), ct);
@@ -262,7 +261,7 @@ public class AppointmentService : IAppointmentService
             request.Title, request.ProspectName, request.ProspectEmail, request.Type,
             request.Status, request.ScheduledStart?.ToUtc(), request.ScheduledEnd.ToUtc(),
             request.AssignedTo, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             AppointmentCrudWriteSupport.IdempotencyKey(idempotencyKey),
             AppointmentCrudWriteSupport.Write(
                 command, UpdateAppointmentAsync, AuthorizeReplayAsync), ct);
@@ -275,7 +274,7 @@ public class AppointmentService : IAppointmentService
     {
         var command = new DeleteAppointmentCommand(
             scope.PortfolioId, Actor(scope), id, expectedPropertyId, _timeProvider.UtcNow(), idempotencyKey);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             AppointmentCrudWriteSupport.IdempotencyKey(idempotencyKey),
             AppointmentCrudWriteSupport.Write(
                 command, DeleteAppointmentAsync, AuthorizeReplayAsync), ct);
@@ -305,9 +304,6 @@ public class AppointmentService : IAppointmentService
     private Task AuthorizeReplayAsync(
         DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         AppointmentCrudWriteSupport.AuthorizeReplayAsync(_db, command, context, ct);
-
-    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
-        "The shared request write executor is required for appointment changes.");
 
     private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
         scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);

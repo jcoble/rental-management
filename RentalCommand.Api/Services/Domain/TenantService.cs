@@ -2,7 +2,6 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -24,7 +23,7 @@ public class TenantService : ITenantService
     private const int MaxSearchTokens = 8;
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
     private readonly PropertyTenantCrudRule _crudRules;
     private readonly TimeProvider _timeProvider;
 
@@ -32,7 +31,7 @@ public class TenantService : ITenantService
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes)
     {
         _db = db;
         _dataUpdate = dataUpdate;
@@ -51,7 +50,7 @@ public class TenantService : ITenantService
             createdAtUtc: _timeProvider.UtcNow());
         var write = CoreCrudWriteSupport.Write(
             command, _crudRules.CreateTenantAsync, _crudRules.AuthorizeReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return DeserializeSnapshot<TenantResponse>(outcome.Value);
     }
@@ -63,7 +62,7 @@ public class TenantService : ITenantService
         CancellationToken ct = default)
     {
         var command = AtomicGuidedTenantSetup.Command(scope, request, operationKey);
-        var outcome = await RequireWrites().ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             AtomicGuidedTenantSetup.Identity(command).IdempotencyKey,
             AtomicGuidedTenantSetup.Write(_db, command), ct);
         return JsonSerializer.Deserialize<List<TenantResponse>>(outcome.Value.TenantsJson) ?? [];
@@ -81,7 +80,7 @@ public class TenantService : ITenantService
             changedAtUtc: _timeProvider.UtcNow());
         var write = CoreCrudWriteSupport.Write(
             command, _crudRules.UpdateTenantAsync, _crudRules.AuthorizeReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return DeserializeSnapshot<TenantResponse>(outcome.Value);
     }
@@ -97,13 +96,10 @@ public class TenantService : ITenantService
             changedAtUtc: _timeProvider.UtcNow());
         var write = CoreCrudWriteSupport.Write(
             command, _crudRules.DeleteTenantAsync, _crudRules.AuthorizeReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found;
     }
-
-    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
-        "Tenant changes must use the shared write executor.");
 
     private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
         where TResponse : class =>

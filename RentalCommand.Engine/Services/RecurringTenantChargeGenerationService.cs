@@ -1,8 +1,8 @@
 using Microsoft.Extensions.Logging;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Data;
 using RentalCommand.Data.Payments;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -15,13 +15,13 @@ public sealed class RecurringTenantChargeGenerationService
 {
     private const int BatchSize = 200;
 
-    private readonly IJobStepWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<RecurringTenantChargeGenerationService> _logger;
 
     public RecurringTenantChargeGenerationService(
-        IJobStepWriteExecutor writes,
+        IWriteExecutor writes,
         RentalCommandDbContext db,
         TimeProvider timeProvider,
         ILogger<RecurringTenantChargeGenerationService> logger)

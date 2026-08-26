@@ -184,8 +184,6 @@ builder.Services.AddHttpContextAccessor();
 // Production persistence is fail-closed: auditable writes and raw DML must be admitted by the
 // atomic executor or by one exact infrastructure mutation lease.
 builder.Services.AddAtomicPersistenceKernel();
-builder.Services.AddScoped<RentalCommand.Api.Writes.IRequestWriteExecutor,
-    RentalCommand.Api.Writes.RequestWriteExecutor>();
 builder.Services.AddScoped<
     RentalCommand.Core.Import.IUnitCsvImportPreviewQuery,
     RentalCommand.Data.Import.AtomicUnitImportPersistence>();

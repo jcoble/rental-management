@@ -7,7 +7,6 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
-using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -19,12 +18,12 @@ public sealed class NoticeDraftService : INoticeDraftService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public NoticeDraftService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _timeProvider = timeProvider;
@@ -107,7 +106,7 @@ public sealed class NoticeDraftService : INoticeDraftService
     private Task<AtomicCommandOutcome<AtomicNoticeDraftMutationResult>> ExecuteAsync(
         AtomicNoticeDraftMutationCommand command,
         CancellationToken ct) =>
-        _writes.ExecuteExactAsync(
+        _writes.ExecuteAsync(
             AtomicNoticeDraftMutation.Identity(command).IdempotencyKey,
             AtomicNoticeDraftMutation.Write(_db, command), ct);
 

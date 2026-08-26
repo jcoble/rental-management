@@ -2,7 +2,6 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -76,7 +75,6 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider));
@@ -1336,11 +1334,11 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
                 _scenario.AccessContextId,
                 _scenario.AccessRevision);
             var db = _scope!.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var issued = await _scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var issued = await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(operationKey,
                     NativeEsignWriteSupport.Write<IssueLeaseAgreementCommand,
                         IssueLeaseAgreementResult>(db, command));
-            var replay = await _scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var replay = await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(operationKey,
                     NativeEsignWriteSupport.Write<IssueLeaseAgreementCommand,
                         IssueLeaseAgreementResult>(db, command));
@@ -1361,7 +1359,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
                 });
                 await receiptDb.SaveChangesAsync();
             }
-            var legacyReplay = await _scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var legacyReplay = await _scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(legacyKey,
                     NativeEsignWriteSupport.Write<IssueLeaseAgreementCommand,
                         IssueLeaseAgreementResult>(db, command));

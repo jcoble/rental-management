@@ -2,7 +2,6 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Payments;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Payments;
@@ -88,7 +87,7 @@ public class StripeCheckoutTests : IDisposable
                 : new UnexpectedRequestWriteExecutor());
     }
 
-    private sealed class CanonicalNotFoundRequestWriteExecutor : IRequestWriteExecutor
+    private sealed class CanonicalNotFoundRequestWriteExecutor : IWriteExecutor
     {
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey, TransactionalWrite<TCommand, TResult> write,
@@ -113,7 +112,7 @@ public class StripeCheckoutTests : IDisposable
         }
     }
 
-    private sealed class UnexpectedRequestWriteExecutor : IRequestWriteExecutor
+    private sealed class UnexpectedRequestWriteExecutor : IWriteExecutor
     {
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             string idempotencyKey, TransactionalWrite<TCommand, TResult> write,

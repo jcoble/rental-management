@@ -10,7 +10,6 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Esign;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Data;
 using RentalCommand.Data.Esign;
 using RentalCommand.Data.Leasing;
@@ -23,7 +22,7 @@ namespace RentalCommand.Api.Controllers;
 public sealed class LeaseAgreementController : ManagementControllerBase
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly ILeaseManagementQueryService _queryService;
     private readonly IFileStorage _files;
     private readonly ILegalDocumentIssuancePreparationService _issuancePreparations;
@@ -31,7 +30,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
 
     public LeaseAgreementController(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         ILeaseManagementQueryService queryService,
         IFileStorage files,
         ILegalDocumentIssuancePreparationService issuancePreparations,

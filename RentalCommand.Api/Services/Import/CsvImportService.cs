@@ -2,7 +2,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Text.Json;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Import;
 using RentalCommand.Core.Authorization;
@@ -15,7 +14,7 @@ namespace RentalCommand.Api.Services.Import;
 /// <inheritdoc cref="ICsvImportService"/>
 public sealed class CsvImportService : ICsvImportService
 {
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly AtomicCoreCsvImportRule _coreImport;
     private readonly AtomicUnitCsvImportRule _unitImport;
     private readonly AtomicPaymentCsvImportRule _paymentImport;
@@ -36,7 +35,7 @@ public sealed class CsvImportService : ICsvImportService
         ICoreCsvImportPreviewQuery corePreview,
         IPaymentCsvImportPreviewQuery paymentPreview,
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _writes = writes;
         _coreImport = new AtomicCoreCsvImportRule(db);

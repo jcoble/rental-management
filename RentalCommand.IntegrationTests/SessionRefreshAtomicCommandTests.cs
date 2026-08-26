@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Auth;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
@@ -73,7 +72,6 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, RefreshTestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddSingleton(new RefreshCredentialTokenFactory(SigningKey));
         services.AddSingleton<IAuthSecurityClock>(new FixedAuthSecurityClock(_now));
         services.Configure<AtomicAuthSessionCredentialOptions>(options =>
@@ -729,7 +727,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
             RevokeAuthSessionCommand value => Build(value, new RevokeAuthSessionRule(db)),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
-        return await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        return await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(identity.IdempotencyKey, (TransactionalWrite<TCommand, TResult>)write);
     }
 

@@ -12,7 +12,6 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.AiIntegrations;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -959,7 +958,7 @@ public sealed class PortfolioQaServiceTests : IAsyncLifetime
         }
     }
 
-    private sealed class CapturingPortfolioQaAtomicUnitOfWork : IRequestWriteExecutor
+    private sealed class CapturingPortfolioQaAtomicUnitOfWork : IWriteExecutor
     {
         private readonly object _result;
 
@@ -983,12 +982,6 @@ public sealed class PortfolioQaServiceTests : IAsyncLifetime
                 Guid.NewGuid()));
         }
 
-        public Task<AtomicCommandOutcome<TResult>> ExecuteExactAsync<TCommand, TResult>(
-            string idempotencyKey,
-            TransactionalWrite<TCommand, TResult> write,
-            CancellationToken ct = default)
-            where TCommand : notnull, IAtomicCommandData
-            where TResult : notnull => ExecuteAsync(idempotencyKey, write, ct);
     }
 
     private sealed class ThrowingAccountingService : IAccountingService

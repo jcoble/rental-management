@@ -2,7 +2,6 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Auth;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -29,7 +28,7 @@ public sealed class SandboxLifecyclePostgreSqlTests
         await using var services = BuildServices(setup.ConnectionString);
         await using var serviceScope = services.CreateAsyncScope();
         var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         var command = new SandboxLifecycleCommand(
             scope.PortfolioId,
             scope.UserId,
@@ -41,7 +40,7 @@ public sealed class SandboxLifecyclePostgreSqlTests
             DateTime.UtcNow,
             $"sandbox-onboarding-live:{Guid.NewGuid():N}");
 
-        var outcome = await writes.ExecuteExactAsync(
+        var outcome = await writes.ExecuteAsync(
             command.DeliveryIdempotencyKey, SandboxLifecycleWriteSupport.Write(db, command));
 
         outcome.Value.PortfolioFound.Should().BeTrue();
@@ -92,7 +91,7 @@ public sealed class SandboxLifecyclePostgreSqlTests
         await using var services = BuildServices(setup.ConnectionString);
         await using var serviceScope = services.CreateAsyncScope();
         var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         var command = new SandboxLifecycleCommand(
             scope.PortfolioId,
             scope.UserId,
@@ -104,7 +103,7 @@ public sealed class SandboxLifecyclePostgreSqlTests
             now,
             $"sandbox-go-live-bank-statements:{Guid.NewGuid():N}");
 
-        var outcome = await writes.ExecuteExactAsync(
+        var outcome = await writes.ExecuteAsync(
             command.DeliveryIdempotencyKey, SandboxLifecycleWriteSupport.Write(db, command));
 
         outcome.Value.IsSandbox.Should().BeFalse();
@@ -122,7 +121,6 @@ public sealed class SandboxLifecyclePostgreSqlTests
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider(new ServiceProviderOptions

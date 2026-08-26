@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -47,7 +46,8 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
         var service = new PropertyService(
             _context.Db,
             Mock.Of<IDataUpdateService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAsync(scope, SelectorQuery<PropertyListQuery>());
@@ -62,7 +62,8 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
         var service = new OwnerEntityService(
             _context.Db,
             Mock.Of<IDataUpdateService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAsync(scope, SelectorQuery<OwnerEntityListQuery>());
@@ -79,7 +80,7 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
         _commands.Clear();
 
         await service.ListWithHealthPageAsync(scope, SelectorQuery<UnitHealthListQuery>());
@@ -94,7 +95,8 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
         var service = new TenantService(
             _context.Db,
             Mock.Of<IDataUpdateService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAuthorizedAsync(scope, SelectorQuery<TenantListQuery>());
@@ -156,7 +158,8 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
         var service = new TenantService(
             _context.Db,
             Mock.Of<IDataUpdateService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
 
         var result = await service.ListPageAuthorizedAsync(
@@ -250,7 +253,7 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAuthorizedAsync(
@@ -268,7 +271,8 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
         var service = new AppointmentService(
             _context.Db,
             Mock.Of<IDataUpdateService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAuthorizedAsync(scope, SelectorQuery<AppointmentListQuery>());
@@ -284,7 +288,7 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
             _context.Db,
             Mock.Of<IFileStorage>(),
             TimeProvider.System,
-            Mock.Of<IRequestWriteExecutor>());
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAsync(
@@ -308,7 +312,8 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
             Mock.Of<IMessagePublisher>(),
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAuthorizedAsync(scope, SelectorQuery<WorkOrderListQuery>());
@@ -324,7 +329,7 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
             _context.Db,
             Mock.Of<IDataUpdateService>(),
             TimeProvider.System,
-            Mock.Of<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
         _commands.Clear();
 
         await service.ListPageAsync(scope, SelectorQuery<ListQuery>());

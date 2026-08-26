@@ -9,7 +9,6 @@ using System.Text;
 using System.Text.Json;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -379,7 +378,7 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
             scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
             scope.AccessContextId, scope.AccessRevision, target.Publication.Id,
             target.Listing.Id, target.Listing.ContentVersion, ConnectedListingIntentOperation.Publish);
-        await serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>().ExecuteAsync(
+        await serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
             admissionKey, ConnectedListingWriteSupport.Write(admission,
                 serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()));
 
@@ -797,7 +796,6 @@ public sealed class ListingMetadataCrudWritePostgreSqlTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddPendingFileUploadStore();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddScoped<ListingWorkspaceService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString)

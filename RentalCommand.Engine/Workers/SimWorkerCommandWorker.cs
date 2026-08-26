@@ -1,11 +1,11 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Simulation;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Workers;
 
@@ -41,7 +41,7 @@ public sealed class SimWorkerCommandWorker : EngineWorkerBase
     {
         var claimStore = scopedProvider.GetRequiredService<ISimWorkerCommandClaimStore>();
         var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = scopedProvider.GetRequiredService<IJobStepWriteExecutor>();
+        var writes = scopedProvider.GetRequiredService<IWriteExecutor>();
         var command = await claimStore.ClaimOldestAsync(_claimOwner, ClaimLease, cancellationToken);
         if (command is null)
             return 0;

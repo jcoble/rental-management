@@ -7,7 +7,6 @@ using Moq;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -65,7 +64,6 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
         services.AddSingleton<ExpenseAtomicFailureInterceptor>();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -683,7 +681,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
                    set_config('app.access_revision', '1', false);
             """);
         var service = new ExpenseService(
-            db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IRequestWriteExecutor>());
+            db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IWriteExecutor>());
         var page = await service.ListPageAsync(
             new WorkspaceReadScope(
                 _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 1),
@@ -981,8 +979,8 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             .UseNpgsql(_connectionString)
             .Options);
 
-    private IRequestWriteExecutor Writes =>
-        ServiceScope.GetRequiredService<IRequestWriteExecutor>();
+    private IWriteExecutor Writes =>
+        ServiceScope.GetRequiredService<IWriteExecutor>();
 
     private IServiceProvider ServiceScope =>
         _serviceScope?.ServiceProvider

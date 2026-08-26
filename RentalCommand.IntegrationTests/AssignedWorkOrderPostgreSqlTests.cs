@@ -12,7 +12,6 @@ using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -47,7 +46,6 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider(new ServiceProviderOptions
@@ -847,7 +845,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         var controller = new TechnicianController(
             null!,
             services.GetRequiredService<RentalCommandDbContext>(),
-            services.GetRequiredService<IRequestWriteExecutor>(),
+            services.GetRequiredService<IWriteExecutor>(),
             timeProvider);
         controller.ControllerContext = ControllerContextFor(new ActiveAccessContext(
             scenario.SessionId, scenario.UserId, scenario.AccessContextId, scenario.PortfolioId,
@@ -861,7 +859,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     {
         var controller = new WorkOrderResponsibilityController(
             services.GetRequiredService<RentalCommandDbContext>(),
-            services.GetRequiredService<IRequestWriteExecutor>(),
+            services.GetRequiredService<IWriteExecutor>(),
             services.GetRequiredService<WorkOrderResponsibilityAccessRevisionGuard>(),
             services.GetRequiredService<TimeProvider>());
         controller.ControllerContext = ControllerContextFor(new ActiveAccessContext(
@@ -954,7 +952,6 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(timeProvider);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(_context.ConnectionString)

@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -22,7 +21,7 @@ public class PropertyService : IPropertyService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IRequestWriteExecutor? _writes;
+    private readonly IWriteExecutor _writes;
     private readonly PropertyTenantCrudRule _crudRules;
     private readonly TimeProvider _timeProvider;
 
@@ -30,7 +29,7 @@ public class PropertyService : IPropertyService
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        IRequestWriteExecutor? writes = null)
+        IWriteExecutor writes)
     {
         _db = db;
         _dataUpdate = dataUpdate;
@@ -52,7 +51,7 @@ public class PropertyService : IPropertyService
             changedAtUtc: changedAtUtc);
         var write = CoreCrudWriteSupport.Write(
             command, _crudRules.UpdatePropertyAsync, _crudRules.AuthorizeReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return DeserializeSnapshot<PropertyResponse>(outcome.Value);
     }
@@ -70,7 +69,7 @@ public class PropertyService : IPropertyService
             changedAtUtc: setupAtUtc);
         var write = CoreCrudWriteSupport.Write(
             command, _crudRules.SetupPropertyAsync, _crudRules.AuthorizeReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return DeserializeSnapshot<PropertySetupResponse>(outcome.Value);
     }
@@ -85,13 +84,10 @@ public class PropertyService : IPropertyService
             AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object());
         var write = CoreCrudWriteSupport.Write(
             command, _crudRules.DeletePropertyAsync, _crudRules.AuthorizeReplayAsync);
-        var outcome = await RequireWrites().ExecuteAsync(
+        var outcome = await _writes.ExecuteAsync(
             CoreCrudWriteSupport.IdempotencyKey(command), write, ct);
         return outcome.Value.Found;
     }
-
-    private IRequestWriteExecutor RequireWrites() => _writes ?? throw new InvalidOperationException(
-        "Property changes must use the shared write executor.");
 
     private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
         where TResponse : class =>

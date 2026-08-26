@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Applications;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -25,7 +24,7 @@ public class ApplicationsController : ManagementControllerBase
 {
     private readonly IApplicationService _service;
     private readonly IScreeningService _screening;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly IWorkspaceAuthorizationEvaluator _authorization;
@@ -34,7 +33,7 @@ public class ApplicationsController : ManagementControllerBase
     public ApplicationsController(
         IApplicationService service,
         IScreeningService screening,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         RentalCommandDbContext db,
         IFileStorage files,
         IWorkspaceAuthorizationEvaluator authorization,

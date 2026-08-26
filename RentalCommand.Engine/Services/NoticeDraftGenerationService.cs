@@ -6,7 +6,6 @@ using RentalCommand.Core.Automation;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Data;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -14,7 +13,7 @@ namespace RentalCommand.Engine.Services;
 public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
 {
     private readonly ITenantNoticeWorkClaimStore _claims;
-    private readonly IJobStepWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly INotificationFoundationService _foundation;
     private readonly ILogger<NoticeDraftGenerationService> _logger;
@@ -22,7 +21,7 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
 
     public NoticeDraftGenerationService(
         ITenantNoticeWorkClaimStore claims,
-        IJobStepWriteExecutor writes,
+        IWriteExecutor writes,
         RentalCommandDbContext db,
         INotificationFoundationService foundation,
         ILogger<NoticeDraftGenerationService> logger,

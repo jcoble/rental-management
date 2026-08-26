@@ -3,7 +3,6 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -54,7 +53,7 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
         await using var services = Services(setup.ConnectionString, failure, commands);
         await using var atomicScope = services.CreateAsyncScope();
         var db = atomicScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = atomicScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = atomicScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
         Task<AtomicCommandOutcome<RecoverOpeningSecurityDepositsResult>> Execute(
             RecoverOpeningSecurityDepositsCommand value)
@@ -230,7 +229,6 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
         services.AddSingleton(commands);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .AddInterceptors(provider.GetRequiredService<OutboxFailureInterceptor>())

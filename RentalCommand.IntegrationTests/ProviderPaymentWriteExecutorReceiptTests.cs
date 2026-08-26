@@ -8,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Payments;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -20,7 +19,6 @@ using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Payments;
 using RentalCommand.Engine.Services;
-using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
@@ -312,7 +310,7 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
         var provider = scope.ServiceProvider;
         return await new InteractivePaymentReconciliationService(
             provider.GetRequiredService<RentalCommandDbContext>(),
-            provider.GetRequiredService<IJobStepWriteExecutor>(),
+            provider.GetRequiredService<IWriteExecutor>(),
             provider.GetRequiredService<IInteractivePaymentProviderClient>(),
             new FixedTimeProvider(now),
             Options.Create(new InteractivePaymentReconciliationOptions
@@ -333,7 +331,7 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
             provider.GetRequiredService<RentalCommandDbContext>(),
             Options.Create(new StripeConfig { SecretKey = "sk_test_legacy_replay" }),
             new FixedTimeProvider(now),
-            provider.GetRequiredService<IJobStepWriteExecutor>(),
+            provider.GetRequiredService<IWriteExecutor>(),
             NullLogger<AutopayChargeService>.Instance,
             provider.GetRequiredService<IAutopayProviderClient>()).ChargeDueAsync();
     }
@@ -345,7 +343,7 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
         return await new ProviderInboxReconciliationService(
             provider.GetRequiredService<IProviderInboxClaimStore>(),
             provider.GetRequiredService<RentalCommandDbContext>(),
-            provider.GetRequiredService<IJobStepWriteExecutor>(),
+            provider.GetRequiredService<IWriteExecutor>(),
             new FixedTimeProvider(now),
             NullLogger<ProviderInboxReconciliationService>.Instance).ReconcileAsync();
     }
@@ -361,7 +359,7 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
         NullLogger<StripePaymentService>.Instance,
         new FixedTimeProvider(now),
         provider.GetRequiredService<RentalCommandDbContext>(),
-        provider.GetRequiredService<IRequestWriteExecutor>(),
+        provider.GetRequiredService<IWriteExecutor>(),
         provider.GetRequiredService<IInteractivePaymentProviderClient>());
 
     private static async Task SeedAuthorityAndReceiptsAsync(RentalCommandDbContext db)
@@ -548,8 +546,6 @@ public sealed class ProviderPaymentWriteExecutorReceiptTests(MigratedPostgreSqlF
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddSingleton<ISandboxGuard, NeverSandboxGuard>();
         services.AddSingleton<IInteractivePaymentProviderClient>(interactiveProvider);
         services.AddSingleton<IAutopayProviderClient>(autopayProvider);

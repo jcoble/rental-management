@@ -4,7 +4,6 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Atomic;
@@ -26,14 +25,14 @@ public class VendorDispatchService : IVendorDispatchService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly ILogger<VendorDispatchService> _logger;
     private readonly TimeProvider _timeProvider;
 
     public VendorDispatchService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         ILogger<VendorDispatchService> logger,
         TimeProvider timeProvider)
     {

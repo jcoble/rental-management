@@ -4,7 +4,6 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Auth;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using Microsoft.EntityFrameworkCore;
@@ -36,11 +35,11 @@ public sealed class DevWorkersController : AuthenticatedPortfolioControllerBase
     private static readonly TimeSpan LongPollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public DevWorkersController(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _writes = writes;
@@ -102,7 +101,7 @@ public sealed class DevWorkersController : AuthenticatedPortfolioControllerBase
         EnqueueSimulationWorkerResult enqueue;
         try
         {
-            var outcome = await _writes.ExecuteExactAsync(
+            var outcome = await _writes.ExecuteAsync(
                 BuildIdentityKey(access, deliveryKey),
                 SimulationWriteSupport.Write<EnqueueSimulationWorkerCommand, EnqueueSimulationWorkerResult>(
                     _db, command), ct);

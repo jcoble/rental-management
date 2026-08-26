@@ -1,7 +1,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Auth;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
@@ -183,7 +182,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
     }
 
     private static AtomicAuthSessionCredentialService CreateService(
-        IRequestWriteExecutor atomic,
+        IWriteExecutor atomic,
         RefreshCredentialTokenFactory tokens,
         IAuthSecurityClock? securityClock = null) =>
         new(
@@ -211,7 +210,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
         }
     }
 
-    private sealed class CapturingWriteExecutor : IRequestWriteExecutor
+    private sealed class CapturingWriteExecutor : IWriteExecutor
     {
         private readonly Func<object, Type, object> _resultFactory;
         private readonly AtomicCommandDisposition _disposition;

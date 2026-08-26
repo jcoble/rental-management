@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
@@ -83,14 +82,14 @@ public sealed record AtomicAuthSessionRotationOutcome(
 public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCredentialService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RefreshCredentialTokenFactory _tokens;
     private readonly AtomicAuthSessionCredentialOptions _options;
     private readonly IAuthSecurityClock _securityClock;
 
     public AtomicAuthSessionCredentialService(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         RefreshCredentialTokenFactory tokens,
         IOptions<AtomicAuthSessionCredentialOptions> options,
         IAuthSecurityClock securityClock)

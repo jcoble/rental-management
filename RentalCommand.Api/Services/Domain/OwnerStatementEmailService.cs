@@ -9,7 +9,6 @@ using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Api.Services;
-using RentalCommand.Api.Writes;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -20,14 +19,14 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
     private readonly IOwnerStatementService _statements;
     private readonly ILogger<OwnerStatementEmailService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public OwnerStatementEmailService(
         RentalCommandDbContext db,
         IOwnerStatementService statements,
         ILogger<OwnerStatementEmailService> logger,
         TimeProvider timeProvider,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _db = db;
         _statements = statements;
@@ -74,7 +73,7 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
             $"Your {year} owner statement",
             RenderStatementText(report),
             idempotencyKey);
-        var outcome = await _writes.ExecuteExactAsync(
+        var outcome = await _writes.ExecuteAsync(
             QueueOwnerStatementEmail.Identity(command).IdempotencyKey,
             QueueOwnerStatementEmail.Write(_db, command), ct);
         if (outcome.Value.Queued)

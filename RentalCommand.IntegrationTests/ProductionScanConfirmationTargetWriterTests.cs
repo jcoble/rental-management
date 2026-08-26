@@ -6,7 +6,6 @@ using Moq;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -79,7 +78,6 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider));
@@ -3619,7 +3617,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var writer = scope.ServiceProvider.GetRequiredService<IScanConfirmationTargetWriter>();
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey,
                     ScanDraftWriteSupport.Write(
                         identity.CommandType, confirm, ScanDraftWriteSupport.ConfirmResultContract,
@@ -3633,7 +3631,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var writer = scope.ServiceProvider.GetRequiredService<IScanConfirmationTargetWriter>();
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey,
                     ScanDraftWriteSupport.Write(
                         identity.CommandType, manualLease, ScanDraftWriteSupport.ConfirmResultContract,
@@ -3647,7 +3645,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
             var handler = new RefundTenantPaymentRule(db);
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey,
                     TenantMoneyWriteSupport.Write(
                         refund, handler.ExecuteAsync, handler.AuthorizeAsync), ct);
@@ -3656,7 +3654,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         if (command is AtomicMoneyMutationCommand money)
         {
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            var outcome = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
                 .ExecuteAsync(identity.IdempotencyKey, AtomicMoneyMutation.Write(money, db), ct);
             return (AtomicCommandOutcome<TResult>)(object)outcome;
         }

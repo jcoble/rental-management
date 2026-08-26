@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Api.Auth;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Time;
@@ -33,14 +32,14 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
     private readonly TimeProvider _timeProvider;
     private readonly IClockStateProvider _clockState;
     private readonly IAppTimeZoneProvider _timeZoneProvider;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
 
     public DevClockController(
         TimeProvider timeProvider,
         IClockStateProvider clockState,
         IAppTimeZoneProvider timeZoneProvider,
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         _timeProvider = timeProvider;
         _clockState = clockState;
@@ -211,7 +210,7 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
     {
         try
         {
-            var outcome = await _writes.ExecuteExactAsync(
+            var outcome = await _writes.ExecuteAsync(
                 BuildIdentityKey(access, deliveryKey),
                 SimulationWriteSupport.Write<TCommand, SimulationClockMutationResult>(_db, command), ct);
             await _clockState.RefreshAsync(ct);

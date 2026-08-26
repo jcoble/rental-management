@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -25,7 +26,9 @@ public sealed class PortalServiceLeaseTests : IDisposable
 
     public PortalServiceLeaseTests()
     {
-        _sut = new PortalService(_db, new NoopLeaseQaService(), TimeProvider.System);
+        _sut = new PortalService(
+            _db, new NoopLeaseQaService(), TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public void Dispose() => _db.Dispose();
@@ -272,7 +275,8 @@ public sealed class PortalServiceLeasePostgreSqlTests : IAsyncLifetime
     }
 
     private PortalService NewService() =>
-        new(_ctx.Db, new NoopLeaseQaService(), TimeProvider.System);
+        new(_ctx.Db, new NoopLeaseQaService(), TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
 
     private async Task<LeaseScenario> SeedLeaseScenarioAsync(
         string suffix,

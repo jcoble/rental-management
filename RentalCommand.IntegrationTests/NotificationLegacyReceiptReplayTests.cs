@@ -2,7 +2,6 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Automation;
@@ -14,7 +13,6 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
-using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
@@ -49,8 +47,6 @@ public sealed class NotificationLegacyReceiptReplayTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_context.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
@@ -68,8 +64,8 @@ public sealed class NotificationLegacyReceiptReplayTests : IAsyncLifetime
         await SeedReplayAuthorityAsync();
         await using var serviceScope = _services.CreateAsyncScope();
         var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var requests = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
-        var jobs = serviceScope.ServiceProvider.GetRequiredService<IJobStepWriteExecutor>();
+        var requests = serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
+        var jobs = serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
         var notification = new AtomicNotificationMutationCommand(
             1, 1, SessionId, 9, 1, AtomicNotificationMutationDomain.Broadcast, 0, string.Empty,
@@ -137,14 +133,14 @@ public sealed class NotificationLegacyReceiptReplayTests : IAsyncLifetime
         await SeedReceiptAsync("rental.notification.broadcast", key, ForbiddenNotificationFingerprint,
             "rental.notification-mutation.v1",
             "{\"Found\":true,\"Applied\":true,\"EntityId\":72,\"AffectedCount\":1,\"ResponseJson\":null}");
-        var action = () => scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
-            .ExecuteExactAsync(key, ReplayOnly(AtomicNotificationMutation.Write(db, command)));
+        var action = () => scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
+            .ExecuteAsync(key, ReplayOnly(AtomicNotificationMutation.Write(db, command)));
 
         await action.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
     private async Task ReplayRequestAsync<TCommand, TResult>(
-        IRequestWriteExecutor executor, string operation, string key, TCommand command,
+        IWriteExecutor executor, string operation, string key, TCommand command,
         string fingerprint, string resultJson, TResult stored, string contract,
         TransactionalWrite<TCommand, TResult> productionWrite)
         where TCommand : notnull, IAtomicCommandData where TResult : notnull
@@ -152,13 +148,13 @@ public sealed class NotificationLegacyReceiptReplayTests : IAsyncLifetime
         await SeedReceiptAsync(operation, key, fingerprint, contract, resultJson);
         productionWrite.OperationName.Should().Be(operation);
         productionWrite.ResultContract.Should().Be(contract);
-        var replay = await executor.ExecuteExactAsync(key, ReplayOnly(productionWrite));
+        var replay = await executor.ExecuteAsync(key, ReplayOnly(productionWrite));
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().BeEquivalentTo(stored);
     }
 
     private async Task ReplayJobAsync<TCommand, TResult>(
-        IJobStepWriteExecutor executor, string operation, string key, TCommand command,
+        IWriteExecutor executor, string operation, string key, TCommand command,
         string fingerprint, string resultJson, TResult stored, string contract,
         TransactionalWrite<TCommand, TResult> productionWrite)
         where TCommand : notnull, IAtomicCommandData where TResult : notnull

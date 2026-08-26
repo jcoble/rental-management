@@ -35,7 +35,9 @@ public class PropertyServiceTests : IAsyncLifetime
     {
         _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = SeedAdministratorScope();
-        _sut = new PropertyService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
+        _sut = new PropertyService(
+            _ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     private WorkspaceReadScope SeedAdministratorScope()

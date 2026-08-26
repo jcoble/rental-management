@@ -480,7 +480,8 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
             Mock.Of<IFileStorage>(),
             Mock.Of<IInspectionReportPdfGenerator>(),
             NullLogger<InspectionService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
         _commands.Clear();
         var page = await service.ListPageAuthorizedAsync(
             scope,
@@ -524,7 +525,8 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
             Recurring(decoy, "Target HVAC decoy", Now.AddDays(3)));
         await _context.Db.SaveChangesAsync();
 
-        var service = new RecurringMaintenanceTaskService(_context.Db, TimeProvider.System);
+        var service = new RecurringMaintenanceTaskService(
+            _context.Db, TimeProvider.System, Mock.Of<IWriteExecutor>());
         _commands.Clear();
         var page = await service.ListPageAuthorizedAsync(
             scope,

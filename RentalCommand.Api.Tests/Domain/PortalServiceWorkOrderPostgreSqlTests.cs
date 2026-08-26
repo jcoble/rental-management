@@ -49,7 +49,8 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
         var page = await new PortalService(
                 _context.Db,
                 Mock.Of<ILeaseQaService>(),
-                TimeProvider.System)
+                TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .ListWorkOrdersPageAsync(
                 scenario.Scope,
                 scenario.TenantId,
@@ -117,7 +118,8 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
         var detail = await new PortalService(
                 _context.Db,
                 Mock.Of<ILeaseQaService>(),
-                TimeProvider.System)
+                TimeProvider.System,
+                Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>())
             .GetWorkOrderDetailAsync(scenario.Scope, scenario.TenantId, scenario.StartBoundaryId);
 
         detail.Should().NotBeNull();
@@ -172,7 +174,7 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
             services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
             Mock.Of<ILeaseQaService>(),
             clock,
-            services.GetRequiredService<RentalCommand.Api.Writes.IRequestWriteExecutor>());
+            services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
 
         var created = await service.CreateTenantWorkOrderAsync(
             new ActiveAccessContext(

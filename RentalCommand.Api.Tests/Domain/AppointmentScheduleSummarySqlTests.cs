@@ -28,7 +28,8 @@ public sealed class AppointmentScheduleSummarySqlTests
         var service = new AppointmentService(
             db,
             Mock.Of<IDataUpdateService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
         var windowStartUtc = new DateTime(2026, 7, 13, 12, 0, 0, DateTimeKind.Utc);
         var windowEndUtc = windowStartUtc.AddDays(7);
 

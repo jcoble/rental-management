@@ -32,7 +32,9 @@ public class AppointmentServiceListTests : IAsyncLifetime
     {
         _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(AppointmentServiceListTests));
-        _sut = new AppointmentService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
+        _sut = new AppointmentService(
+            _ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();

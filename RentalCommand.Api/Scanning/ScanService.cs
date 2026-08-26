@@ -5,7 +5,6 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -44,7 +43,7 @@ public sealed class ScanService : IScanService
         CapabilityKeys.LeasingAgreementsPrepare,
     ];
     private readonly RentalCommandDbContext _db;
-    private readonly IRequestWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly ILogger<ScanService> _logger;
     private readonly TimeProvider _timeProvider;
     private static readonly Regex ExpenseUnitReferenceRegex = new(
@@ -58,7 +57,7 @@ public sealed class ScanService : IScanService
 
     public ScanService(
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes,
+        IWriteExecutor writes,
         ILogger<ScanService> logger,
         TimeProvider timeProvider)
     {

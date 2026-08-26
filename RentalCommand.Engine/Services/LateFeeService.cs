@@ -1,11 +1,11 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Data;
 using RentalCommand.Data.Payments;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
@@ -17,14 +17,14 @@ public sealed class LateFeeService : ILateFeeService
 {
     private const int BatchSize = 200;
 
-    private readonly IJobStepWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly NotificationsConfig _defaults;
     private readonly ILogger<LateFeeService> _logger;
 
     public LateFeeService(
-        IJobStepWriteExecutor writes,
+        IWriteExecutor writes,
         RentalCommandDbContext db,
         TimeProvider timeProvider,
         IOptions<NotificationsConfig> options,

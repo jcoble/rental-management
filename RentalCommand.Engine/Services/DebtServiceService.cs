@@ -1,15 +1,15 @@
 using Microsoft.Extensions.Logging;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Automation;
-using RentalCommand.Engine.Writes;
 
 namespace RentalCommand.Engine.Services;
 
 public sealed class DebtServiceService : IDebtServiceService
 {
-    private readonly IJobStepWriteExecutor _writes;
+    private readonly IWriteExecutor _writes;
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IAppTimeZoneProvider _tz;
@@ -17,7 +17,7 @@ public sealed class DebtServiceService : IDebtServiceService
     private readonly ILogger<DebtServiceService> _logger;
 
     public DebtServiceService(
-        IJobStepWriteExecutor writes,
+        IWriteExecutor writes,
         RentalCommandDbContext db,
         TimeProvider timeProvider,
         IAppTimeZoneProvider tz,

@@ -7,7 +7,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -604,7 +603,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
         using var appointmentScope = appointmentServices.CreateScope();
         var workOrderAtomic = new WorkOrderCrudTestExecutor(workOrderScope.ServiceProvider);
         var appointmentDb = appointmentScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var appointmentWrites = appointmentScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var appointmentWrites = appointmentScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
         var cancelIdentity = Identity(
             "portal.work-order.cancel",
@@ -784,7 +783,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
     private sealed class WorkOrderCrudTestExecutor(IServiceProvider services)
     {
         private RentalCommandDbContext Db => services.GetRequiredService<RentalCommandDbContext>();
-        private IRequestWriteExecutor Writes => services.GetRequiredService<IRequestWriteExecutor>();
+        private IWriteExecutor Writes => services.GetRequiredService<IWriteExecutor>();
 
         public Task<AtomicCommandOutcome<WorkOrderMutationResult>> ExecuteAsync(
             AtomicCommandIdentity identity, AddStaffWorkOrderCommentCommand command,
@@ -989,7 +988,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
         _context.Db,
         Mock.Of<ILeaseQaService>(),
         new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-        _services.GetRequiredService<IRequestWriteExecutor>());
+        _services.GetRequiredService<IWriteExecutor>());
 
     private WorkOrderService WorkOrderService() => new(
         _context.Db,
@@ -998,7 +997,7 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
         Mock.Of<IFileStorage>(),
         NullLogger<WorkOrderService>.Instance,
         new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-        _services.GetRequiredService<IRequestWriteExecutor>());
+        _services.GetRequiredService<IWriteExecutor>());
 
     private async Task<WorkOrderDetailResponse?> GetAuthorizedWorkOrderAsAsync(
         WorkspaceReadScope scope,

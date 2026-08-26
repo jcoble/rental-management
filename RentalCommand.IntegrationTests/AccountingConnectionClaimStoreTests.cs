@@ -8,7 +8,6 @@ using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -812,7 +811,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     private sealed class AccountingImportHarness(
         AccountingImportService import,
         RentalCommandDbContext db,
-        IRequestWriteExecutor writes)
+        IWriteExecutor writes)
     {
         public async Task<AccountingImportService.ImportSummary> ImportAsync(
             AccountingConnection connection,
@@ -878,14 +877,13 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         return new RentalCommandDbContext(options);
     }
 
-    private (RentalCommandDbContext Db, IRequestWriteExecutor Writes) CreateWriteExecution(
+    private (RentalCommandDbContext Db, IWriteExecutor Writes) CreateWriteExecution(
         List<string>? applyCommands = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
         services.AddDbContext<RentalCommandDbContext>((sp, options) =>
         {
             options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(sp);
@@ -894,7 +892,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         var scope = services.BuildServiceProvider().CreateScope();
         return (
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
-            scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>());
+            scope.ServiceProvider.GetRequiredService<IWriteExecutor>());
     }
 
     private sealed class AccountingApplyCommandInterceptor(List<string> commands) : DbCommandInterceptor

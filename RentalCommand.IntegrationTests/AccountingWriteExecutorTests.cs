@@ -12,7 +12,6 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Writes;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -25,7 +24,6 @@ using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Engine.Workers;
-using RentalCommand.Engine.Writes;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.IntegrationTests;
@@ -157,7 +155,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
 
         await using var callerScope = services.CreateAsyncScope();
         var db = callerScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = callerScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = callerScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
         var controller = CreateAccountingController(db, writes);
         InstallAccessContext(controller);
         var created = await controller.CreateChartOfAccounts(
@@ -265,9 +263,9 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
             command, handler.ExecuteAsync, handler.AuthorizeAsync);
         const string key = "1:8:11:autopay-cancel";
 
-        var first = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        var first = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(key, write);
-        var replay = await scope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>()
+        var replay = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>()
             .ExecuteAsync(key, write);
 
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -398,7 +396,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
         await using var services = BuildServices(database.ConnectionString);
         await using var serviceScope = services.CreateAsyncScope();
         var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var writes = serviceScope.ServiceProvider.GetRequiredService<IRequestWriteExecutor>();
+        var writes = serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>();
 
         var connect = AtomicAccountingConnect.Command(
             scope, AccountingProvider.QuickBooks, "https://example.test/callback", "connect-replay");
@@ -571,7 +569,7 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
     }
 
     private static AccountingController CreateAccountingController(
-        RentalCommandDbContext db, IRequestWriteExecutor writes) => new(
+        RentalCommandDbContext db, IWriteExecutor writes) => new(
         Mock.Of<IAccountingService>(),
         Mock.Of<IScheduleEService>(),
         Mock.Of<IOwnerStatementService>(),
@@ -924,8 +922,6 @@ public sealed class AccountingWriteExecutorTests(MigratedPostgreSqlFixture fixtu
         services.AddSingleton<AccountingAppSettingsResolver>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IRequestWriteExecutor, RequestWriteExecutor>();
-        services.AddScoped<IJobStepWriteExecutor, JobStepWriteExecutor>();
         services.AddScoped<IAccountingConnectionClaimStore, FrozenClaimStore>();
         services.AddScoped<AccountingTokenService>();
         services.AddScoped<AccountingImportService>();
