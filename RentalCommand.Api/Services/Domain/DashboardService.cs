@@ -468,8 +468,10 @@ public class DashboardService : IDashboardService
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         var monthStartOn = DateOnly.FromDateTime(monthStart);
         var nextMonthStartOn = DateOnly.FromDateTime(nextMonthStart);
+        var nextBusinessDate = DateOnly.FromDateTime(utcNow).AddDays(1)
+            .ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
 
-        var cashFlowTo = nextMonthStart.AddTicks(-1);
+        var cashFlowTo = nextBusinessDate.AddTicks(-1);
         var accountingIncomeQuery = FinancialReportProjections.BuildAuthorizedCashFlowIncomeProjection(
             _db,
             scope,
@@ -478,15 +480,20 @@ public class DashboardService : IDashboardService
             monthStart,
             cashFlowTo,
             []);
-        var accountingExpenseQuery = FinancialReportProjections.BuildAuthorizedCashFlowExpenseProjection(
-            _db,
-            scope,
-            CapabilityKeys.MoneyBalancesRead,
-            utcNow,
-            monthStart,
-            cashFlowTo,
-            []);
         var authorizedMoneyProperties = AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead);
+        var accountingExpenseQuery = _db.Expenses
+            .AsNoTracking()
+            .Where(expense =>
+                expense.PortfolioId == scope.PortfolioId &&
+                expense.PropertyId != null &&
+                expense.Status == ExpenseStatus.Paid &&
+                (expense.PaidAt ?? expense.IncurredAt) >= monthStart &&
+                (expense.PaidAt ?? expense.IncurredAt) < nextBusinessDate)
+            .Join(
+                authorizedMoneyProperties,
+                expense => expense.PropertyId!.Value,
+                property => property.Id,
+                (expense, _) => expense.Amount);
         var accountingDebtServiceQuery =
             from payment in LoanPaymentEffectiveQuery.From(_db)
             join loan in _db.Loans.AsNoTracking()
@@ -495,7 +502,7 @@ public class DashboardService : IDashboardService
             where payment.PortfolioId == scope.PortfolioId
                 && payment.Status == LoanPaymentStatus.Paid
                 && payment.PaidDate >= monthStart
-                && payment.PaidDate < nextMonthStart
+                && payment.PaidDate < nextBusinessDate
                 && authorizedMoneyProperties.Any(property => property.Id == loan.PropertyId)
             select payment.TotalAmount;
         var accountingAnchor = FinancialReportProjections.BuildAuthorizedCashFlowAnchor(
@@ -524,7 +531,7 @@ public class DashboardService : IDashboardService
                 Overdue = receivables.Overdue ?? 0m,
                 DueThisMonth = receivables.DueThisMonth ?? 0m,
                 Income = accountingIncomeQuery.Sum(row => (decimal?)row.Amount) ?? 0m,
-                Expense = (accountingExpenseQuery.Sum(expense => (decimal?)expense.Amount) ?? 0m)
+                Expense = (accountingExpenseQuery.Sum(amount => (decimal?)amount) ?? 0m)
                     + (accountingDebtServiceQuery.Sum(amount => (decimal?)amount) ?? 0m),
             })
             .SingleOrDefaultAsync(ct);
