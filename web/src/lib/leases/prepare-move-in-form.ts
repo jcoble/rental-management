@@ -125,7 +125,7 @@ export function buildPrepareMoveInRequest(
 		if (!form.newTenantEmail.trim()) errors.newTenantEmail = 'Enter the tenant email for signing.';
 	}
 	if (!form.partyEffectiveFrom)
-		errors.partyEffectiveFrom = 'Choose when this household relationship begins.';
+		errors.partyEffectiveFrom = 'Choose the move-in date.';
 	if (!form.termStartOn) errors.termStartOn = 'Choose the agreement start date.';
 	if (form.termType === 'FixedTerm' && !form.termEndOn) {
 		errors.termEndOn = 'Choose the fixed-term end date.';

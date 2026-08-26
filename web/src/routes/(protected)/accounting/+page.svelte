@@ -1377,7 +1377,7 @@
 						</div>
 						<label class="flex items-center gap-2 text-sm">
 							<Checkbox bind:checked={expenseForm.billableToOwner} data-testid="expense-billable-input" />
-							Billable to owner
+							Charge this to the owner
 					</label>
 					<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Notes</span>

@@ -612,8 +612,8 @@
 					{#if canManageTeamRouting}<a class="group rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/50" href="/settings/notifications/team-routing">
 						<div class="flex items-start justify-between gap-3">
 							<div>
-								<h2 class="font-semibold">Team routing</h2>
-								<p class="mt-2 text-sm text-muted-foreground">Set which named team members handle money, leasing, work orders, owner decisions, and security.</p>
+								<h2 class="font-semibold">Who gets told what</h2>
+								<p class="mt-2 text-sm text-muted-foreground">Set which named team members handle money, leasing, repairs, owner decisions, and security.</p>
 							</div>
 							<ArrowRight class="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
 						</div>

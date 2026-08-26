@@ -183,7 +183,7 @@ import { formatStatusLabel } from '$lib/utils/status-labels';
 	const createMut = createMutation(() => ({
 		mutationFn: (data: Record<string, unknown>) => workOrdersApi.create(data),
 		onSuccess: () => {
-			showSuccess('Work order created.');
+			showSuccess('Repair created.');
 			closeCreate();
 			invalidate();
 		},
@@ -243,7 +243,7 @@ import { formatStatusLabel } from '$lib/utils/status-labels';
 {#if selectedWo}
 	<!-- Folded work-order detail: the same <WorkOrderDetail> the generic /maintenance/[id] page mounts. -->
 	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="wo-back-to-list">
-		<ArrowLeft class="h-4 w-4" /> Back to work orders
+		<ArrowLeft class="h-4 w-4" /> Back to repairs
 	</Button>
 	<WorkOrderDetail
 		workOrderId={selectedWo}
@@ -254,14 +254,14 @@ import { formatStatusLabel } from '$lib/utils/status-labels';
 {:else}
 	<div class="flex flex-wrap justify-end gap-2">
 		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="maintenance-create">
-			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> New work order{/if}
+			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> New repair{/if}
 		</Button>
 	</div>
 
 	<!-- Inline new-ticket form. -->
 	{#if showCreate}
 		<div class="rounded-xl border border-border bg-muted/20 p-4" data-testid="maintenance-create-form">
-			<h3 class="mb-3 text-sm font-semibold">New work order</h3>
+			<h3 class="mb-3 text-sm font-semibold">New repair</h3>
 				<FormStepper steps={createSteps} bind:currentStep={createStep} completedSteps={completedCreateSteps} testid="maintenance-create-stepper">
 					<div class="space-y-3">
 						{#if createStep === 0}
@@ -317,14 +317,14 @@ import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	<!-- Work orders as compact cards; the full edit/assign/close lives on the WO detail page. -->
 	{#if workOrdersQuery.isLoading}
-		<LoadingState label="Loading work orders" testid="unit-work-orders-loading" />
+		<LoadingState label="Loading repairs" testid="unit-work-orders-loading" />
 	{:else if workOrdersQuery.isError}
 		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-work-orders-error">
-			<p class="text-sm font-medium text-destructive">Work orders could not be loaded.</p>
+			<p class="text-sm font-medium text-destructive">Repairs could not be loaded.</p>
 			<Button class="mt-3" variant="outline" size="sm" onclick={() => workOrdersQuery.refetch()}>Try again</Button>
 		</div>
 	{:else if workOrderList.length === 0}
-		<DetailCard title="No work orders" icon={Wrench} accent="muted" testid="maintenance-empty">
+		<DetailCard title="No repairs" icon={Wrench} accent="muted" testid="maintenance-empty">
 			<p class="text-sm text-muted-foreground">Create a ticket when something needs fixing, or scan a vendor invoice.</p>
 		</DetailCard>
 	{:else}
@@ -352,7 +352,7 @@ import { formatStatusLabel } from '$lib/utils/status-labels';
 								Scan receipt
 							</Button>
 							<Button variant="outline" size="sm" class="gap-1" onclick={() => openWorkOrder(w.id)} data-testid="maintenance-open-{w.id}">
-								Open work order <ExternalLink class="h-3 w-3" />
+								Open repair <ExternalLink class="h-3 w-3" />
 							</Button>
 						</div>
 					</div>

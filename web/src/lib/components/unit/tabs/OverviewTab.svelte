@@ -45,7 +45,7 @@
 		<dl class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
 			<div data-testid="condition-occupancy-possession"><dt class="text-muted-foreground">Move-in status</dt><dd class="font-medium">{formatStatusLabel(dashboard.occupancyPossession.status)}</dd></div>
 			<div data-testid="condition-marketing-availability"><dt class="text-muted-foreground">Listing status</dt><dd class="font-medium">{formatStatusLabel(dashboard.marketingAvailability.status)}</dd></div>
-			<div data-testid="condition-tenant-account"><dt class="text-muted-foreground">Rent account</dt><dd class="font-medium">{formatStatusLabel(dashboard.tenantAccountCondition.status)}</dd></div>
+			<div data-testid="condition-tenant-account"><dt class="text-muted-foreground">Rent ledger</dt><dd class="font-medium">{formatStatusLabel(dashboard.tenantAccountCondition.status)}</dd></div>
 			<div data-testid="condition-legal-notice"><dt class="text-muted-foreground">Notices</dt><dd class="font-medium">{formatStatusLabel(dashboard.legalNoticeCondition.status)}</dd></div>
 			<div data-testid="condition-maintenance-turnover"><dt class="text-muted-foreground">Repairs &amp; turnover</dt><dd class="font-medium">{formatStatusLabel(dashboard.maintenanceTurnover.status)}</dd></div>
 		</dl>
@@ -121,7 +121,7 @@
 	<!-- Open repairs -->
 	<DetailCard title="Open repairs" icon={Wrench} accent="destructive" testid="overview-repairs">
 		{#if o.openWorkOrders.length === 0}
-			<p class="text-sm text-muted-foreground">No open work orders.</p>
+			<p class="text-sm text-muted-foreground">No open repairs.</p>
 		{:else}
 			<ul class="divide-y text-sm">
 				{#each o.openWorkOrders as w (w.id)}

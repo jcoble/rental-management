@@ -28,7 +28,7 @@ const EXTRA_CAPTIONS: Record<string, string> = {
 		'Type your tenant’s name here. Use “Add another tenant” for each additional one.',
 	'onboarding-lease': 'Start by picking which tenant this lease is for.',
 	'onboarding-notifications':
-		'Choose how alerts reach your own account. Team routing and tenant notices are configured separately.',
+		'Choose how alerts reach your own account. Team alerts and tenant notices are configured separately.',
 };
 
 /** Resolve the callout caption for a coach key. */

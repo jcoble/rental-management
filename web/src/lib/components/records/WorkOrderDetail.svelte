@@ -238,7 +238,7 @@
 	const saveMutation = createMutation(() => ({
 		mutationFn: (data: Record<string, unknown>) => workOrders.update(workOrderId, data),
 		onSuccess: () => {
-			showSuccess('Work order updated.');
+			showSuccess('Repair updated.');
 			editing = false;
 			selectedPropertyLabel = null;
 			invalidate();
@@ -284,7 +284,7 @@
 	const deleteMutation = createMutation(() => ({
 		mutationFn: (woId: number) => workOrders.delete(woId),
 		onSuccess: () => {
-			showSuccess('Work order deleted.');
+			showSuccess('Repair deleted.');
 			onDeleted();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -563,20 +563,20 @@
 {/snippet}
 
 <svelte:head>
-	<title>{wo?.title ?? 'Work Order'} - Rental Command</title>
+	<title>{wo?.title ?? 'Repair'} - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="work-order-detail-page">
 	{#if workOrderQuery.isLoading}
-		<LoadingState label="Loading work order details" variant="page" testid="work-order-detail-loading" />
+		<LoadingState label="Loading repair details" variant="page" testid="work-order-detail-loading" />
 	{:else if workOrderQuery.isError}
 		<div class="rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="work-order-detail-error">
-			<p class="font-medium text-destructive">Could not load this work order.</p>
-			<p class="mt-1 text-sm text-muted-foreground">Try again. No work-order changes have been made.</p>
+			<p class="font-medium text-destructive">Could not load this repair.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. No repair changes have been made.</p>
 			<Button class="mt-4" variant="outline" onclick={() => workOrderQuery.refetch()}>Try again</Button>
 		</div>
 	{:else if !wo}
-		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="work-order-detail-not-found">Work order not found.</p>
+		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="work-order-detail-not-found">Repair not found.</p>
 	{:else}
 		<!-- Header -->
 		<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -683,7 +683,7 @@
 			<Card.Header>
 				<Card.Title>Who is handling this?</Card.Title>
 				<Card.Description>
-					{currentPrimary ? `${currentPrimary.memberDisplayName} is assigned to this work order.` : 'No technician is assigned yet.'}
+					{currentPrimary ? `${currentPrimary.memberDisplayName} is assigned to this repair.` : 'No technician is assigned yet.'}
 				</Card.Description>
 			</Card.Header>
 			{#if caps.canAssign}
@@ -742,7 +742,7 @@
 					{:else}
 						The vendor has the job.
 					{/if}
-					When they text back <span class="font-medium">DONE</span>, this work order closes automatically.
+					When they text back <span class="font-medium">DONE</span>, this repair closes automatically.
 				</p>
 			</div>
 		{/if}
@@ -958,7 +958,7 @@
 		{#if caps.canViewPrivateNotes}
 			<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="work-order-history-section">
 				<h2 class="mb-1 text-base font-semibold">History</h2>
-				<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this work order — who, what, and when.</p>
+				<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this repair — who, what, and when.</p>
 				<RecordHistory entityType="WorkOrder" entityId={workOrderId} />
 			</div>
 		{/if}
@@ -1007,7 +1007,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Text a vendor the job</Dialog.Title>
 			<Dialog.Description>
-				Pick a vendor and we'll text them the work order. They reply <span class="font-medium">DONE</span> when
+				Pick a vendor and we'll text them the repair. They reply <span class="font-medium">DONE</span> when
 				finished and it closes itself.
 			</Dialog.Description>
 		</Dialog.Header>
@@ -1115,7 +1115,7 @@
 
 <ConfirmDialog
 	open={showDeleteConfirm}
-	title="Delete work order"
+	title="Delete repair"
 	message={wo ? `Delete "${wo.title}"?` : ''}
 	busy={deleteMutation.isPending}
 	testid="work-order-delete"

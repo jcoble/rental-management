@@ -355,7 +355,7 @@
 			{#if isRenewal}
 				<section class="space-y-3" aria-labelledby="addendum-decisions-heading">
 					<div>
-						<h3 id="addendum-decisions-heading" class="text-sm font-semibold">What should happen to existing lease changes?</h3>
+						<h3 id="addendum-decisions-heading" class="text-sm font-semibold">What to do with this add-on</h3>
 						<p class="mt-1 text-sm text-muted-foreground">
 							Choose whether each current addendum ends, becomes part of the new lease, or is copied into a new addendum draft.
 						</p>
@@ -405,7 +405,7 @@
 								{/if}
 
 								<label class="block space-y-1.5">
-									<span class="text-sm font-medium">What should happen in the new lease?</span>
+									<span class="text-sm font-medium">What to do with this add-on</span>
 									<Select.Root
 										type="single"
 										value={selectedAddendumDecisions[series.seriesPublicId] ?? ''}

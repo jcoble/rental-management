@@ -434,7 +434,7 @@
 
 	<section class="mt-8 space-y-4" aria-labelledby="lease-template-fields-heading" data-testid="lease-template-field-catalog">
 		<div>
-			<h2 id="lease-template-fields-heading" class="text-lg font-semibold tracking-tight">Dynamic Fields</h2>
+			<h2 id="lease-template-fields-heading" class="text-lg font-semibold tracking-tight">Information we fill in</h2>
 			<p class="text-sm text-muted-foreground">
 				These are the merge and signature fields available for lease templates.
 			</p>

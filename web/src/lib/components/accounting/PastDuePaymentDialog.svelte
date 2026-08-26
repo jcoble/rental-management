@@ -137,7 +137,7 @@
 			<Dialog.Title data-testid="past-due-mark-paid-title">Record payment</Dialog.Title>
 			{#if target}
 				<Dialog.Description data-testid="past-due-mark-paid-summary">
-					{target.tenantName || target.relationshipNumber || 'Tenant account'} · {formatAccountingCurrency(totalOpenAmount)} open
+					{target.tenantName || target.relationshipNumber || 'Tenant account'} · {formatAccountingCurrency(totalOpenAmount)} unpaid
 					{#if target.overduePaymentCount > 1} · {target.overduePaymentCount} charges{/if}
 				</Dialog.Description>
 			{/if}
@@ -161,12 +161,12 @@
 			<div data-testid="past-due-allocation-preview">
 				<div class="flex items-center justify-between gap-3">
 					<p class="text-sm font-medium" data-testid="past-due-allocation-preview-label">Allocation preview</p>
-					<span class="text-xs text-muted-foreground" data-testid="past-due-allocation-preview-order">Oldest open charges first</span>
+					<span class="text-xs text-muted-foreground" data-testid="past-due-allocation-preview-order">Oldest unpaid charges first</span>
 				</div>
 				{#if openChargesLoading}
-					<p class="mt-2 text-xs text-muted-foreground" data-testid="past-due-allocation-preview-loading">Loading open charges…</p>
+					<p class="mt-2 text-xs text-muted-foreground" data-testid="past-due-allocation-preview-loading">Loading unpaid charges…</p>
 				{:else if openChargesError}
-					<p class="mt-2 text-xs text-destructive" data-testid="past-due-allocation-preview-error">Couldn't load every open charge. Try again before recording this payment.</p>
+					<p class="mt-2 text-xs text-destructive" data-testid="past-due-allocation-preview-error">Couldn't load every unpaid charge. Try again before recording this payment.</p>
 				{:else if allocationPreview.length === 0}
 					<p class="mt-2 text-xs text-muted-foreground" data-testid="past-due-allocation-preview-empty">Enter a positive amount to preview the charges it will cover.</p>
 				{:else}

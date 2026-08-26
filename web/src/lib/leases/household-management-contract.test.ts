@@ -45,8 +45,8 @@ describe('relationship-scoped household management', () => {
 	it('uses explicit household membership and resident-login action labels', () => {
 		assert.match(page, />Add person</);
 		assert.match(page, />End membership</);
-		assert.match(page, />Create resident login</);
-		assert.match(page, />Revoke resident login</);
+		assert.match(page, />Create tenant app access</);
+		assert.match(page, />Remove tenant app access</);
 		assert.doesNotMatch(page, />End<|>Create login<|>Revoke login</);
 	});
 });
