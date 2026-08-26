@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/api/dio_client.dart';
 import 'package:rental_command/core/models/appointment.dart';
 import 'package:rental_command/features/appointments/appointments_screen.dart';
+import 'package:rental_command/features/money/tenant_ledger_view.dart';
 
 void main() {
   test('appointment response exposes scheduled instants in local time', () {
@@ -57,6 +58,13 @@ void main() {
 
     expect(find.text('End time must be after start time.'), findsOneWidget);
     expect(adapter.savedBody, isNull);
+  });
+
+  test('tenant ledger month range uses the UTC business date', () {
+    final range = tenantLedgerPeriodRange(DateTime.utc(2026, 9, 1, 1), 3);
+
+    expect(range.from, DateTime(2026, 7, 1));
+    expect(range.to, DateTime(2026, 9, 30));
   });
 }
 
