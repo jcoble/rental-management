@@ -591,9 +591,14 @@ class _ErrorBody extends StatelessWidget {
 
 // ── Compose New Conversation Sheet ────────────────────────────────────────────
 
-/// Bottom sheet to start a new conversation: pick a tenant, enter a subject and
-/// first message, choose channels (Portal on by default). On success pops with
-/// the created [Conversation].
+/// The new-conversation sheet, for widget tests that pump it directly.
+@visibleForTesting
+Widget newConversationSheetForTest() => const _ComposeConversationSheet();
+
+/// Bottom sheet to start a new conversation: pick a tenant and write the first
+/// message. It goes out in the tenant app unless the landlord taps "Change".
+/// The subject the server needs comes from the start of the message. On success
+/// pops with the created [Conversation].
 class _ComposeConversationSheet extends ConsumerStatefulWidget {
   const _ComposeConversationSheet();
 
@@ -605,16 +610,16 @@ class _ComposeConversationSheet extends ConsumerStatefulWidget {
 class _ComposeConversationSheetState
     extends ConsumerState<_ComposeConversationSheet> {
   final _formKey = GlobalKey<FormState>();
-  final _subjectCtrl = TextEditingController();
   final _bodyCtrl = TextEditingController();
 
   int? _selectedTenantId;
 
-  // Channel toggles. Portal is the always-on base channel; Email/SMS default
-  // off (portfolio messaging defaults aren't loaded on mobile yet).
+  // Channel toggles, hidden behind "Change". Portal is the default; Email/SMS
+  // default off (portfolio messaging defaults aren't loaded on mobile yet).
   bool _portal = true;
   bool _email = false;
   bool _sms = false;
+  bool _channelsRevealed = false;
 
   bool _saving = false;
   String? _error;
@@ -622,24 +627,12 @@ class _ComposeConversationSheetState
 
   @override
   void dispose() {
-    _subjectCtrl.dispose();
     _bodyCtrl.dispose();
     super.dispose();
   }
 
   List<String> _selectedChannels() {
     return [if (_portal) 'Portal', if (_email) 'Email', if (_sms) 'Sms'];
-  }
-
-  bool _validateChannelsStep() {
-    if (_selectedChannels().isEmpty) {
-      setState(() => _error = 'Choose at least one channel.');
-      return false;
-    }
-    if (_error == 'Choose at least one channel.') {
-      setState(() => _error = null);
-    }
-    return true;
   }
 
   Future<void> _submit() async {
@@ -654,6 +647,11 @@ class _ComposeConversationSheetState
       return;
     }
 
+    final body = _bodyCtrl.text.trim();
+    // The server needs a subject; the landlord shouldn't have to write one, so
+    // it comes from the start of the message.
+    final subject = body.length > 60 ? body.substring(0, 60) : body;
+
     setState(() {
       _saving = true;
       _error = null;
@@ -665,8 +663,8 @@ class _ComposeConversationSheetState
           .read(messagesRepositoryProvider)
           .startConversation(
             tenantId: _selectedTenantId!,
-            subject: _subjectCtrl.text.trim(),
-            body: _bodyCtrl.text.trim(),
+            subject: subject,
+            body: body,
             channels: channels,
             operationKey: _operationKey,
           );
@@ -734,15 +732,6 @@ class _ComposeConversationSheetState
                 ),
                 gap,
                 TextFormField(
-                  controller: _subjectCtrl,
-                  textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(labelText: 'Subject'),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Subject is required'
-                      : null,
-                ),
-                gap,
-                TextFormField(
                   controller: _bodyCtrl,
                   maxLines: 4,
                   minLines: 2,
@@ -755,30 +744,23 @@ class _ComposeConversationSheetState
                       ? 'Message is required'
                       : null,
                 ),
-              ],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Channels',
-            validate: _validateChannelsStep,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Send via',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                _ChannelChips(
-                  portal: _portal,
-                  email: _email,
-                  sms: _sms,
-                  onPortal: (v) => setState(() => _portal = v),
-                  onEmail: (v) => setState(() => _email = v),
-                  onSms: (v) => setState(() => _sms = v),
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: _channelsRevealed
+                      ? _ChannelChips(
+                          portal: _portal,
+                          email: _email,
+                          sms: _sms,
+                          onPortal: (v) => setState(() => _portal = v),
+                          onEmail: (v) => setState(() => _email = v),
+                          onSms: (v) => setState(() => _sms = v),
+                        )
+                      : SendingChannelsLine(
+                          channels: _selectedChannels(),
+                          onChange: () =>
+                              setState(() => _channelsRevealed = true),
+                        ),
                 ),
               ],
             ),
