@@ -18,11 +18,8 @@ Future<Unit?> showUnitFormSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
-    builder: (_) => UnitFormSheet(
-      propertyId: propertyId,
-      unit: unit,
-      onSaved: onSaved,
-    ),
+    builder: (_) =>
+        UnitFormSheet(propertyId: propertyId, unit: unit, onSaved: onSaved),
   );
 }
 
@@ -148,7 +145,7 @@ class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
         onSave: _submit,
         tabs: [
           TabbedFormStepSpec(
-            label: 'Details',
+            label: 'Unit',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -159,12 +156,6 @@ class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
                   validator: (v) => (v == null || v.trim().isEmpty)
                       ? 'Unit number is required'
                       : null,
-                ),
-                gap,
-                TextFormField(
-                  controller: _floorPlanCtrl,
-                  textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(labelText: 'Floor plan'),
                 ),
                 gap,
                 Row(
@@ -199,24 +190,6 @@ class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
                 ),
                 gap,
                 TextFormField(
-                  controller: _squareFeetCtrl,
-                  keyboardType: TextInputType.number,
-                  textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(labelText: 'Square feet'),
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return null;
-                    return int.tryParse(v) == null ? 'Enter a number' : null;
-                  },
-                ),
-              ],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Rent',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextFormField(
                   controller: _rentCtrl,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
@@ -229,16 +202,41 @@ class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
                       ? 'Enter an amount'
                       : null,
                 ),
+                const SizedBox(height: 8),
+                MoreDetailsSection(
+                  children: [
+                    TextFormField(
+                      controller: _squareFeetCtrl,
+                      keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.next,
+                      decoration: const InputDecoration(
+                        labelText: 'Square feet',
+                      ),
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) return null;
+                        return int.tryParse(v) == null
+                            ? 'Enter a number'
+                            : null;
+                      },
+                    ),
+                    gap,
+                    TextFormField(
+                      controller: _floorPlanCtrl,
+                      textInputAction: TextInputAction.next,
+                      decoration: const InputDecoration(
+                        labelText: 'Floor plan',
+                      ),
+                    ),
+                    gap,
+                    TextFormField(
+                      controller: _notesCtrl,
+                      minLines: 3,
+                      maxLines: 6,
+                      decoration: const InputDecoration(labelText: 'Notes'),
+                    ),
+                  ],
+                ),
               ],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Notes',
-            child: TextFormField(
-              controller: _notesCtrl,
-              minLines: 4,
-              maxLines: 8,
-              decoration: const InputDecoration(labelText: 'Notes'),
             ),
           ),
         ],

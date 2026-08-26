@@ -64,7 +64,7 @@ void main() {
 
     await tester.tap(find.text('Add unit'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Next'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Add Unit'));
     await tester.pumpAndSettle();
     expect(find.text('Unit number is required'), findsOneWidget);
     expect(repository.createCalls, 0);
@@ -162,10 +162,6 @@ Future<_PropertyDetailHarness> _pumpPropertyDetail(
 }
 
 Future<void> _completeUnitForm(WidgetTester tester) async {
-  await tester.tap(find.widgetWithText(FilledButton, 'Next'));
-  await tester.pumpAndSettle();
-  await tester.tap(find.widgetWithText(FilledButton, 'Next'));
-  await tester.pumpAndSettle();
   await tester.tap(find.widgetWithText(FilledButton, 'Add Unit'));
   await tester.pumpAndSettle();
 }
