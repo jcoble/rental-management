@@ -131,6 +131,25 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
 
   bool get _isLastStep => _currentIndex == widget.tabs.length - 1;
 
+  /// True when nothing after the current step is still outstanding, so the
+  /// sheet can be saved from here instead of walking through steps that have
+  /// nothing left to fill in.
+  ///
+  /// A later step counts as settled only when its own `isComplete` says so.
+  /// `validate` is not consulted here: it is the "show the errors" callback and
+  /// several forms flip error state inside it, which cannot run during a build.
+  /// A step that declares no `isComplete` may still hold required fields that
+  /// were never filled in, so it keeps the Next button.
+  bool get _canSaveFromHere {
+    if (_isLastStep) return true;
+
+    for (var i = _currentIndex + 1; i < widget.tabs.length; i++) {
+      final isComplete = widget.tabs[i].isComplete;
+      if (isComplete == null || !isComplete()) return false;
+    }
+    return true;
+  }
+
   bool get _isBusy => widget.saving || _actionInFlight;
 
   void _selectTab(int nextIndex) {
@@ -140,11 +159,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
       return;
     }
 
-    _completeCurrentStep(
-      nextIndex: _isComplete(nextIndex) || nextIndex == _currentIndex + 1
-          ? nextIndex
-          : (_currentIndex + 1).clamp(0, widget.tabs.length - 1),
-    );
+    _completeCurrentStep(nextIndex: nextIndex);
   }
 
   void _moveToStep(int nextIndex) {
@@ -313,6 +328,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
     final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
     final height = MediaQuery.sizeOf(context).height * widget.heightFactor;
     final isCelebrating = _celebratingIndex == _currentIndex;
+    final showsSave = _canSaveFromHere;
 
     return SafeArea(
       top: false,
@@ -414,7 +430,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                       ),
                       onPressed: _isBusy
                           ? null
-                          : _isLastStep
+                          : showsSave
                           ? _save
                           : () => _completeCurrentStep(
                               nextIndex: _currentIndex + 1,
@@ -441,19 +457,19 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                               child: Icon(
                                 isCelebrating
                                     ? Icons.check
-                                    : _isLastStep
+                                    : showsSave
                                     ? Icons.check_circle_outline
                                     : Icons.arrow_forward,
                                 key: ValueKey(
                                   isCelebrating
                                       ? 'complete'
-                                      : _isLastStep
+                                      : showsSave
                                       ? 'save'
                                       : 'next',
                                 ),
                               ),
                             ),
-                      label: Text(_isLastStep ? widget.saveLabel : 'Next'),
+                      label: Text(showsSave ? widget.saveLabel : 'Next'),
                     ),
                   ),
                 ],

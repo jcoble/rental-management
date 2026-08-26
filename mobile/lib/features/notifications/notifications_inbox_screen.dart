@@ -6,6 +6,8 @@ import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'notification_models.dart';
 import 'notifications_repository.dart';
 
@@ -79,6 +81,12 @@ class _NotificationsInboxScreenState
         context,
         title: const Text('Notifications'),
         actions: [markAllReadButton],
+      ),
+      floatingActionButton: MobileQuickActionFab(
+        heroTag: 'notifications-fab',
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: Column(
         children: [
