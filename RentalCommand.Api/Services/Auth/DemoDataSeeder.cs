@@ -287,6 +287,36 @@ public class DemoDataSeeder
                     $"Demo seeding refused populated non-demo portfolio {portfolioId}.");
             }
 
+            var existingDemoPrimaryOwner = await db.OwnerEntities.SingleAsync(owner =>
+                owner.PortfolioId == portfolioId && owner.IsPrimary, ct);
+            var personOwner = await db.OwnerEntities.SingleAsync(owner =>
+                owner.PortfolioId == portfolioId && owner.Name == "Robert J. Caldwell", ct);
+            var propertiesWithoutOwnership = await db.Properties
+                .Where(property => property.PortfolioId == portfolioId
+                    && !db.PropertyOwnerships.Any(ownership =>
+                        ownership.PortfolioId == portfolioId
+                        && ownership.PropertyId == property.Id))
+                .ToListAsync(ct);
+            db.PropertyOwnerships.AddRange(propertiesWithoutOwnership.Select(property =>
+            {
+                var owner = property.Name is "Gahanna Single Family"
+                    or "Clintonville Townhome"
+                    or "Dublin Single Family"
+                    ? personOwner
+                    : existingDemoPrimaryOwner;
+                return new PropertyOwnership
+                {
+                    PortfolioId = portfolioId,
+                    PropertyId = property.Id,
+                    OwnerEntityId = owner.Id,
+                    OwnershipSharePercent = 100m,
+                    EffectiveFromUtc = new DateTime(now.Year - 2, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    StatementRecipientName = owner.Name,
+                    StatementRecipientEmail = owner.Email,
+                    PayeeName = owner.Name,
+                };
+            }));
+
             var reconciled = await CanonicalDemoLeaseSeeder.ReconcileAsync(
                 db, attempt, portfolioId, actorUserId, now, ct);
             await attempt.FlushBusinessAsync(ct);
