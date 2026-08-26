@@ -11,6 +11,9 @@
 
 	export const ACCOUNTING_DETAIL_MODE_CONTEXT = Symbol('rc.accounting.detail-mode.v1');
 
+	/** Where the chosen detail level is remembered, so pages without the context can read it too. */
+	export const ACCOUNTING_DETAIL_MODE_STORAGE_KEY = 'rc.accounting.detail-mode.v1';
+
 	export function getAccountingDetailMode(): AccountingDetailModeContext | null {
 		return getContext<AccountingDetailModeContext | null>(ACCOUNTING_DETAIL_MODE_CONTEXT) ?? null;
 	}
@@ -23,21 +26,19 @@
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 
-	const STORAGE_KEY = 'rc.accounting.detail-mode.v1';
-
 	let {
 		children,
 		class: className,
 		testid = 'accounting-detail-mode',
-		showControl = true
+		showControl = true,
+		mode = $bindable('simple')
 	}: {
 		children?: Snippet;
 		class?: string;
 		testid?: string;
 		showControl?: boolean;
+		mode?: AccountingDetailMode;
 	} = $props();
-
-	let mode = $state<AccountingDetailMode>('simple');
 
 	function isAccountingDetailMode(value: string | null): value is AccountingDetailMode {
 		return value === 'simple' || value === 'advanced';
@@ -46,7 +47,7 @@
 	function setMode(next: AccountingDetailMode): void {
 		mode = next;
 		if (typeof window !== 'undefined') {
-			window.localStorage.setItem(STORAGE_KEY, next);
+			window.localStorage.setItem(ACCOUNTING_DETAIL_MODE_STORAGE_KEY, next);
 		}
 	}
 
@@ -64,7 +65,7 @@
 
 	$effect(() => {
 		if (typeof window === 'undefined') return;
-		const stored = window.localStorage.getItem(STORAGE_KEY);
+		const stored = window.localStorage.getItem(ACCOUNTING_DETAIL_MODE_STORAGE_KEY);
 		if (isAccountingDetailMode(stored)) mode = stored;
 	});
 </script>

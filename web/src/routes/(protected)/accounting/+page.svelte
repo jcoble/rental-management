@@ -39,7 +39,12 @@
 		formatMoneyCategoryLabel,
 		formatMoneyEntryLabel
 	} from '$lib/accounting/money-display';
-	import { normalizeMoneyTab } from '$lib/accounting/global-money-state';
+	import { normalizeMoneyTab, type MoneyTab } from '$lib/accounting/global-money-state';
+	import {
+		defaultTabForMode,
+		resolveAccountingTab,
+		visibleAccountingTabs
+	} from '$lib/accounting/simple-mode-surface';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -86,16 +91,16 @@
 		queryFn: () => accounting.snapshot()
 	}));
 	const moneySnapshot = $derived(moneySnapshotQuery.data);
-	const accountingTabs = [
-		{ value: 'overview', label: 'Overview' },
-		{ value: 'cash-flow', label: 'Cash flow' },
-		{ value: 'activity', label: 'Activity' },
-		{ value: 'rent-payments', label: 'Rent & payments' },
-		{ value: 'general-ledger', label: 'General ledger' },
-		{ value: 'reports', label: 'Reports' },
-	];
-	const initialTab = normalizeMoneyTab(page.url.searchParams.get('tab'));
-	let activeTab = $state<string>(initialTab);
+	// Simple hides the bookkeeping tabs and lands on Rent & payments; Advanced shows all of them.
+	// The chosen tab is derived so a link to a hidden tab (or a change of detail level) can never
+	// leave the tab strip with nothing selected.
+	let detailMode = $state<'simple' | 'advanced'>('simple');
+	const accountingTabs = $derived(visibleAccountingTabs(detailMode));
+	const requestedTabParam = page.url.searchParams.get('tab');
+	let requestedTab = $state<MoneyTab | null>(
+		requestedTabParam ? normalizeMoneyTab(requestedTabParam) : null
+	);
+	const activeTab = $derived(resolveAccountingTab(requestedTab, detailMode));
 	const PAGE_SIZE = 20;
 
 	// --- Ledger grid state, persisted in the URL query string -------------------
@@ -156,8 +161,7 @@
 	// Mirror the current Money tab into the URL query string. syncGridUrl uses a
 	// replaceState goto so tab changes do not add noisy history entries.
 	$effect(() => {
-		activeTab;
-		syncGridUrl({ tab: activeTab }, { tab: 'overview' });
+		syncGridUrl({ tab: activeTab }, { tab: defaultTabForMode(detailMode) });
 	});
 
 	// Mirror the Activity grid state into the URL only while Activity is visible. The General Ledger
@@ -841,7 +845,7 @@
 	<title>Money - Rental Command</title>
 </svelte:head>
 
-<AccountingDetailMode showControl={false} testid="accounting-detail-mode">
+<AccountingDetailMode showControl={false} testid="accounting-detail-mode" bind:mode={detailMode}>
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="accounting-page">
 	<PageHeader
 		class="mb-4"
@@ -854,7 +858,11 @@
 	>
 	</PageHeader>
 
-	<Tabs.Root bind:value={activeTab} class="w-full">
+	<Tabs.Root
+		value={activeTab}
+		onValueChange={(value) => { if (value) requestedTab = normalizeMoneyTab(value); }}
+		class="w-full"
+	>
 		<Tabs.List class="mb-5" data-testid="accounting-tabs">
 			{#each accountingTabs as t}
 				<Tabs.Trigger value={t.value} data-testid="accounting-tab-{t.value}">{t.label}</Tabs.Trigger>
