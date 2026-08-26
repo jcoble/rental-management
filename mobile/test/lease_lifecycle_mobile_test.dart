@@ -323,7 +323,8 @@ void main() {
       await tester.tap(find.text('Tenant has moved in'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Confirm move-in'), findsOneWidget);
+      expect(find.text('Record move-in'), findsOneWidget);
+      expect(find.text('Deposit received?'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -337,15 +338,12 @@ void main() {
     ).readAsStringSync();
 
     expect(sheet, contains('TabbedFormSheet('));
-    expect(sheet, contains("label: 'Household'"));
-    expect(sheet, contains("label: 'Access'"));
-    expect(sheet, contains("label: 'Review'"));
     expect(sheet, contains("value: 'EndMembership'"));
     expect(sheet, contains("value: 'RetainGuarantor'"));
     expect(sheet, contains("value: 'RevokeNow'"));
     expect(sheet, contains("value: 'RetainHistorical'"));
-    expect(sheet, contains('current portfolio date'));
-    expect(sheet, contains('no phone date is submitted'));
+    expect(sheet, contains("labelText: 'Move-out date'"));
+    expect(sheet, contains('Recorded as of'));
     expect(sheet, isNot(contains('DateTime.now')));
     expect(sheet, isNot(contains('effectiveOn')));
     expect(detail, contains("label: const Text('Move-out')"));

@@ -588,6 +588,30 @@ class GivePossessionResult {
       );
 }
 
+class ConfirmMoveInResult {
+  const ConfirmMoveInResult({
+    required this.leaseManagementId,
+    required this.unitId,
+    required this.possessionGivenAt,
+    required this.replayed,
+  });
+
+  final int leaseManagementId;
+  final int unitId;
+  final DateTime possessionGivenAt;
+  final bool replayed;
+
+  factory ConfirmMoveInResult.fromJson(Map<String, dynamic> json) =>
+      ConfirmMoveInResult(
+        leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+        unitId: (json['unitId'] as num?)?.toInt() ?? 0,
+        possessionGivenAt:
+            DateTime.tryParse(json['possessionGivenAtUtc'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        replayed: json['replayed'] as bool? ?? false,
+      );
+}
+
 class RecordLeaseEndingDispositionResult {
   const RecordLeaseEndingDispositionResult({
     required this.leaseManagementId,
@@ -1226,6 +1250,31 @@ class LeaseManagementsRepository {
         options: Options(headers: {'Idempotency-Key': operationKey}),
       );
       return GivePossessionResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<ConfirmMoveInResult> confirmMoveIn({
+    required int leaseManagementId,
+    required int unitId,
+    required String operationKey,
+    DateTime? depositEffectiveOn,
+    String? depositPaymentMethodSummary,
+  }) async {
+    final method = depositPaymentMethodSummary?.trim() ?? '';
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/confirm-move-in',
+        data: {
+          'unitId': unitId,
+          if (depositEffectiveOn != null)
+            'depositEffectiveOn': _dateOnly(depositEffectiveOn),
+          if (method.isNotEmpty) 'depositPaymentMethodSummary': method,
+        },
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return ConfirmMoveInResult.fromJson(_required(response.data));
     } on DioException catch (error) {
       throw ApiException.fromDioException(error);
     }
