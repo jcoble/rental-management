@@ -5,6 +5,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/lease.dart';
+import '../inspections/new_inspection_screen.dart';
 import '../tenants/tenant_detail_screen.dart';
 import 'addendum_action_sheets.dart';
 import 'agreement_draft_action_sheets.dart';
@@ -13,6 +14,7 @@ import 'household_management_sheet.dart';
 import 'issued_agreement_recovery_sheet.dart';
 import 'lease_ledger_view.dart';
 import 'leases_repository.dart';
+import 'move_in_sheet.dart';
 import 'return_possession_sheet.dart';
 import 'successor_agreement_sheet.dart';
 import '../../core/presentation/formatting.dart';
@@ -223,69 +225,23 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
     LeaseManagementDetail management,
   ) async {
     final summary = management.summary;
-    final confirmed = await showModalBottomSheet<bool>(
-      context: context,
-      useSafeArea: true,
-      useRootNavigator: true,
-      builder: (sheetContext) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Tenant has moved in',
-              style: Theme.of(sheetContext).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 12),
-            Text('${summary.propertyName} · Unit ${summary.unitNumber}'),
-            const SizedBox(height: 8),
-            const Text('Record that the tenant has moved in?'),
-            const SizedBox(height: 20),
-            FilledButton.icon(
-              onPressed: () =>
-                  Navigator.of(sheetContext, rootNavigator: true).pop(true),
-              icon: const Icon(Icons.key_outlined),
-              label: const Text('Confirm move-in'),
-            ),
-            TextButton(
-              onPressed: () =>
-                  Navigator.of(sheetContext, rootNavigator: true).pop(false),
-              child: const Text('Cancel'),
-            ),
-          ],
-        ),
+    final outcome = await showMoveInSheet(context, summary: summary);
+    if (outcome == null || !context.mounted) return;
+
+    final _ = await ref.refresh(
+      leaseManagementDetailProvider(summary.id).future,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Tenant has moved into Unit ${summary.unitNumber}.'),
       ),
     );
-    if (confirmed != true || !context.mounted) return;
 
-    final operationKey = LeaseManagementsRepository.newOperationKey();
-    try {
-      final result = await _runWithStableRetry(
-        context,
-        actionLabel: 'record move-in',
-        action: () => ref
-            .read(leaseManagementsRepositoryProvider)
-            .givePossession(
-              leaseManagementId: summary.id,
-              unitId: summary.unitId,
-              operationKey: operationKey,
-            ),
-      );
-      if (result == null || !context.mounted) return;
-      await ref.refresh(leaseManagementDetailProvider(summary.id).future);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Tenant has moved into Unit ${summary.unitNumber}.',
-            ),
-          ),
-        );
-      }
-    } catch (error) {
-      if (context.mounted) _showError(context, error);
-    }
+    if (!outcome.startInspection) return;
+    await Navigator.of(context).push<int>(
+      MaterialPageRoute<int>(builder: (_) => const NewInspectionScreen()),
+    );
   }
 
   Future<void> _returnPossession(
