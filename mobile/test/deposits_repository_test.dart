@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/api/api_exception.dart';
 import 'package:rental_command/core/widgets/mobile_m3_list.dart';
 import 'package:rental_command/features/deposits/deposits_screen.dart';
 import 'package:rental_command/features/deposits/deposits_repository.dart';
@@ -173,6 +174,35 @@ void main() {
     pending.complete(_depositPage(items: const [], totalCount: 0));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('deposits-loading')), findsNothing);
+  });
+
+  test('deposit load more surfaces API failures', () async {
+    final repository = _ControlledDepositsRepository();
+    repository.queue(
+      Future.value(_depositPage(items: [_depositAccount(1)], totalCount: 2)),
+    );
+    repository.queue(
+      Future<TenantAccountDepositPage>.error(
+        const ApiException(statusCode: 503, message: 'Deposits unavailable'),
+      ),
+    );
+    final container = ProviderContainer(
+      overrides: [depositsRepositoryProvider.overrideWithValue(repository)],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(depositsProvider.notifier).load();
+    await container.read(depositsProvider.notifier).loadMore();
+
+    expect(container.read(depositsProvider), isA<AsyncError>());
+    expect(
+      container.read(depositsProvider).error,
+      isA<ApiException>().having(
+        (error) => error.message,
+        'message',
+        'Deposits unavailable',
+      ),
+    );
   });
 
   test('detail is resolved by the exact tenant account id', () async {

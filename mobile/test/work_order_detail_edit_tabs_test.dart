@@ -138,6 +138,54 @@ void main() {
       expect(repo.updatedData?['estimatedCost'], 185.75);
     },
   );
+
+  testWidgets('missing current assignee candidate shows an error', (
+    tester,
+  ) async {
+    final repo = _FakeWorkOrdersRepository(canAssignTechnician: true)
+      ..responsibilities = [
+        {
+          'id': 'responsibility-1',
+          'kind': 'Primary',
+          'effectiveToUtc': null,
+          'memberDisplayName': 'Former technician',
+          'accessContextId': 99,
+        },
+      ]
+      ..candidates = [
+        {
+          'membershipRoleAssignmentId': 7,
+          'workspaceMembershipId': 8,
+          'memberDisplayName': 'Available technician',
+          'accessContextId': 1,
+          'accessRevision': 2,
+        },
+      ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authControllerProvider.overrideWith(
+            () => _StaticAuthController(_managementAuthority(const {})),
+          ),
+          workOrdersRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: const MaterialApp(home: WorkOrderDetailScreen(workOrderId: 17)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Assign technician'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Unassign'));
+    await tester.pump();
+
+    expect(
+      find.text('That technician assignment is no longer available.'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
 }
 
 AuthStateAuthenticated _managementAuthority(Set<String> capabilities) {
@@ -259,7 +307,11 @@ vendors.Vendor _vendor() {
 }
 
 class _FakeWorkOrdersRepository extends WorkOrdersRepository {
-  _FakeWorkOrdersRepository() : super(Dio());
+  _FakeWorkOrdersRepository({this.canAssignTechnician = false}) : super(Dio());
+
+  final bool canAssignTechnician;
+  List<Map<String, dynamic>> responsibilities = [];
+  List<Map<String, dynamic>> candidates = [];
 
   Map<String, dynamic>? updatedData;
 
@@ -269,7 +321,7 @@ class _FakeWorkOrdersRepository extends WorkOrdersRepository {
       workOrder: _workOrder(),
       timeline: const [],
       detailRole: 'Management',
-      capabilities: const WorkOrderDetailCapabilities(
+      capabilities: WorkOrderDetailCapabilities(
         canViewTenantContact: false,
         canViewResidents: false,
         canViewAccessInstructions: false,
@@ -282,7 +334,7 @@ class _FakeWorkOrdersRepository extends WorkOrdersRepository {
         canCancel: false,
         canEditRequestFields: false,
         canEditManagementFields: true,
-        canAssignTechnician: false,
+        canAssignTechnician: canAssignTechnician,
         canDispatchVendor: false,
         allowedStatusTransitions: [],
       ),
@@ -306,6 +358,16 @@ class _FakeWorkOrdersRepository extends WorkOrdersRepository {
 
   @override
   Future<List<Property>> listProperties() async => [_property()];
+
+  @override
+  Future<List<Map<String, dynamic>>> listResponsibilities(
+    int workOrderId,
+  ) async => responsibilities;
+
+  @override
+  Future<List<Map<String, dynamic>>> listResponsibilityCandidates(
+    int workOrderId,
+  ) async => candidates;
 }
 
 class _PendingWorkOrdersRepository extends WorkOrdersRepository {

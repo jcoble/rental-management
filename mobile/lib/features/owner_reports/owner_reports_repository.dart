@@ -370,7 +370,7 @@ class OwnerReportsRepository {
     required int year,
   }) async {
     try {
-      final response = await _dio.get<Map<String, dynamic>>(
+      final response = await _dio.get<List<dynamic>>(
         '/owner-distributions',
         queryParameters: {
           'ownerEntityId': ownerEntityId,
@@ -379,9 +379,7 @@ class OwnerReportsRepository {
           'sort': '-date',
         },
       );
-      final rawItems = response.data?['items'];
-      final items = rawItems is List ? rawItems : const [];
-      return items
+      return (response.data ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(OwnerDistribution.fromJson)
           .toList();
