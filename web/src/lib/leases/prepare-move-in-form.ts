@@ -224,12 +224,16 @@ export function buildPrepareMoveInRequest(
 		return { request: null, errors };
 	}
 
+	const plannedPossessionOn = form.plannedPossessionOn || form.partyEffectiveFrom;
+
 	return {
 		request: {
 			applicationId,
 			unitId,
-			plannedPossessionAtUtc: form.plannedPossessionOn
-				? `${form.plannedPossessionOn}T00:00:00.000Z`
+			// Without a planned move-in date the unit still looks empty everywhere else, so fall
+			// back to the move-in date the landlord already typed.
+			plannedPossessionAtUtc: plannedPossessionOn
+				? `${plannedPossessionOn}T00:00:00.000Z`
 				: null,
 			partyEffectiveFrom: form.partyEffectiveFrom,
 			parties: [
