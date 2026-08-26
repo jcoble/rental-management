@@ -555,9 +555,7 @@ class _EmptyBody extends StatelessWidget {
     final msg = filter == WorkOrderFilter.open
         ? 'No open repairs'
         : 'No repairs yet';
-    final sub = filter == WorkOrderFilter.open
-        ? 'All caught up! Tap + to create one.'
-        : 'Tap + to create a repair.';
+    const sub = 'Tap + to report one.';
     return SizedBox(
       height: 300,
       child: Center(
