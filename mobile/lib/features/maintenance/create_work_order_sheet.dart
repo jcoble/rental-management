@@ -194,6 +194,31 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
     });
   }
 
+  Future<void> _pickPhotoSource() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('Take a photo'),
+              onTap: () => Navigator.of(sheetContext).pop(ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose from my photos'),
+              onTap: () => Navigator.of(sheetContext).pop(ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+    await _pickPhoto(source);
+  }
+
   String _mimeFromExtension(String filename) {
     final lower = filename.toLowerCase();
     if (lower.endsWith('.png')) return 'image/png';
@@ -484,9 +509,15 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       ),
       data: (vendors) => DropdownButtonFormField<int?>(
         initialValue: _selectedVendorId,
-        decoration: const InputDecoration(labelText: 'Vendor (optional)'),
+        decoration: const InputDecoration(
+          labelText: "Who's fixing it?",
+          helperText: 'Leave this for later if you have not decided.',
+        ),
         items: [
-          const DropdownMenuItem<int?>(value: null, child: Text('No vendor')),
+          const DropdownMenuItem<int?>(
+            value: null,
+            child: Text('Not decided yet'),
+          ),
           ...vendors.map(
             (v) => DropdownMenuItem<int?>(
               value: v.id,
@@ -496,6 +527,173 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
         ],
         onChanged: (v) => setState(() => _selectedVendorId = v),
       ),
+    );
+
+    final photoField = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_photoBytes != null) ...[
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.memory(
+              _photoBytes!,
+              height: 120,
+              fit: BoxFit.cover,
+              width: double.infinity,
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: _saving ? null : _pickPhotoSource,
+            icon: const Icon(Icons.photo_camera_outlined),
+            label: Text(_photoBytes == null ? 'Add a photo' : 'Replace photo'),
+          ),
+        ),
+      ],
+    );
+
+    final moreDetails = ExpansionTile(
+      key: const Key('work-order-more-details'),
+      title: const Text('More details'),
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(top: 4, bottom: 8),
+      expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _priority,
+                decoration: const InputDecoration(labelText: 'Priority'),
+                items: _priorities
+                    .map((p) => DropdownMenuItem(value: p, child: Text(p)))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) setState(() => _priority = v);
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _category,
+                decoration: const InputDecoration(labelText: 'Category'),
+                items: _categories
+                    .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) setState(() => _category = v);
+                },
+              ),
+            ),
+          ],
+        ),
+        gap,
+        InkWell(
+          onTap: _pickScheduledDate,
+          child: InputDecorator(
+            decoration: const InputDecoration(
+              labelText: 'Scheduled date (optional)',
+              suffixIcon: Icon(Icons.calendar_today_outlined),
+            ),
+            child: Text(
+              _scheduledDate == null ? 'Not scheduled' : dateFmt(_scheduledDate!),
+              style: TextStyle(
+                color: _scheduledDate == null
+                    ? colorScheme.onSurfaceVariant
+                    : colorScheme.onSurface,
+              ),
+            ),
+          ),
+        ),
+        gap,
+        Row(
+          children: [
+            Expanded(
+              child: InkWell(
+                onTap: _scheduledDate == null
+                    ? null
+                    : () => _pickTime(isStart: true),
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Start time',
+                    suffixIcon: Icon(Icons.schedule_outlined),
+                  ),
+                  child: Text(
+                    _startTime == null ? '--:--' : _startTime!.format(context),
+                    style: TextStyle(
+                      color: _startTime == null
+                          ? colorScheme.onSurfaceVariant
+                          : colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: InkWell(
+                onTap: _scheduledDate == null
+                    ? null
+                    : () => _pickTime(isStart: false),
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Arrival window end',
+                    suffixIcon: Icon(Icons.schedule_outlined),
+                  ),
+                  child: Text(
+                    _windowEndTime == null
+                        ? '--:--'
+                        : _windowEndTime!.format(context),
+                    style: TextStyle(
+                      color: _windowEndTime == null
+                          ? colorScheme.onSurfaceVariant
+                          : colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        gap,
+        TextFormField(
+          key: const Key('work-order-technician-access-field'),
+          controller: _technicianAccessCtrl,
+          maxLines: 3,
+          maxLength: 2000,
+          textInputAction: TextInputAction.newline,
+          decoration: const InputDecoration(
+            labelText: 'How to get in (optional)',
+            helperText:
+                'Entry, lockbox, pet, or contact notes that are safe to share '
+                'with whoever does the work.',
+          ),
+        ),
+        gap,
+        tenantField,
+        gap,
+        TextFormField(
+          key: const Key('work-order-estimated-cost-field'),
+          controller: _estCostCtrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            labelText: 'Estimated cost (optional)',
+            prefixText: '\$ ',
+          ),
+          validator: (v) {
+            final t = v?.trim() ?? '';
+            if (t.isEmpty) return null;
+            final parsed = double.tryParse(t);
+            if (parsed == null) return 'Enter a valid amount';
+            if (parsed < 0) return 'Cannot be negative';
+            return null;
+          },
+        ),
+      ],
     );
 
     return Form(
@@ -508,24 +706,25 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
         onSave: _submit,
         tabs: [
           TabbedFormStepSpec(
-            label: 'Location',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [propertyField, gap, unitField],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Issue',
+            label: 'Repair',
+            validate: _validateArrivalWindow,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                propertyField,
+                gap,
+                unitField,
+                gap,
                 TextFormField(
                   key: const Key('work-order-title-field'),
                   controller: _titleCtrl,
                   textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(labelText: 'Title'),
+                  decoration: const InputDecoration(
+                    labelText: 'What happened?',
+                    hintText: 'Kitchen sink is leaking',
+                  ),
                   validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Title is required'
+                      ? 'Tell us what happened'
                       : null,
                 ),
                 gap,
@@ -534,225 +733,17 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
                   controller: _descCtrl,
                   maxLines: 3,
                   textInputAction: TextInputAction.newline,
-                  decoration: const InputDecoration(labelText: 'Description'),
+                  decoration: const InputDecoration(labelText: 'Details'),
                   validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Description is required'
+                      ? 'Add a few details'
                       : null,
                 ),
                 gap,
-                TextFormField(
-                  key: const Key('work-order-technician-access-field'),
-                  controller: _technicianAccessCtrl,
-                  maxLines: 3,
-                  maxLength: 2000,
-                  textInputAction: TextInputAction.newline,
-                  decoration: const InputDecoration(
-                    labelText: 'Safe technician access (optional)',
-                    helperText:
-                        'Entry, lockbox, pet, or contact guidance safe for the assigned technician.',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Schedule',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _priority,
-                        decoration: const InputDecoration(
-                          labelText: 'Priority',
-                        ),
-                        items: _priorities
-                            .map(
-                              (p) => DropdownMenuItem(value: p, child: Text(p)),
-                            )
-                            .toList(),
-                        onChanged: (v) {
-                          if (v != null) setState(() => _priority = v);
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _category,
-                        decoration: const InputDecoration(
-                          labelText: 'Category',
-                        ),
-                        items: _categories
-                            .map(
-                              (c) => DropdownMenuItem(value: c, child: Text(c)),
-                            )
-                            .toList(),
-                        onChanged: (v) {
-                          if (v != null) setState(() => _category = v);
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                gap,
-                InkWell(
-                  onTap: _pickScheduledDate,
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'Scheduled date (optional)',
-                      suffixIcon: Icon(Icons.calendar_today_outlined),
-                    ),
-                    child: Text(
-                      _scheduledDate == null
-                          ? 'Not scheduled'
-                          : dateFmt(_scheduledDate!),
-                      style: TextStyle(
-                        color: _scheduledDate == null
-                            ? colorScheme.onSurfaceVariant
-                            : colorScheme.onSurface,
-                      ),
-                    ),
-                  ),
-                ),
-                gap,
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: _scheduledDate == null
-                            ? null
-                            : () => _pickTime(isStart: true),
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'Start time',
-                            suffixIcon: Icon(Icons.schedule_outlined),
-                          ),
-                          child: Text(
-                            _startTime == null
-                                ? '--:--'
-                                : _startTime!.format(context),
-                            style: TextStyle(
-                              color: _startTime == null
-                                  ? colorScheme.onSurfaceVariant
-                                  : colorScheme.onSurface,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Assign',
-            validate: _validateArrivalWindow,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: _scheduledDate == null
-                            ? null
-                            : () => _pickTime(isStart: false),
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'Arrival window end',
-                            suffixIcon: Icon(Icons.schedule_outlined),
-                          ),
-                          child: Text(
-                            _windowEndTime == null
-                                ? '--:--'
-                                : _windowEndTime!.format(context),
-                            style: TextStyle(
-                              color: _windowEndTime == null
-                                  ? colorScheme.onSurfaceVariant
-                                  : colorScheme.onSurface,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextFormField(
-                        key: const Key('work-order-estimated-cost-field'),
-                        controller: _estCostCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        decoration: const InputDecoration(
-                          labelText: 'Estimated cost (optional)',
-                          prefixText: '\$ ',
-                        ),
-                        validator: (v) {
-                          final t = v?.trim() ?? '';
-                          if (t.isEmpty) return null;
-                          final parsed = double.tryParse(t);
-                          if (parsed == null) return 'Enter a valid amount';
-                          if (parsed < 0) return 'Cannot be negative';
-                          return null;
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                gap,
-                tenantField,
+                photoField,
                 gap,
                 vendorField,
-              ],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Attach',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (_photoBytes != null) ...[
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.memory(
-                      _photoBytes!,
-                      height: 140,
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _saving
-                            ? null
-                            : () => _pickPhoto(ImageSource.camera),
-                        icon: const Icon(Icons.camera_alt_outlined),
-                        label: Text(
-                          _photoBytes == null ? 'Take photo' : 'Retake',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _saving
-                            ? null
-                            : () => _pickPhoto(ImageSource.gallery),
-                        icon: const Icon(Icons.photo_library_outlined),
-                        label: const Text('Choose'),
-                      ),
-                    ),
-                  ],
-                ),
+                gap,
+                moreDetails,
               ],
             ),
           ),

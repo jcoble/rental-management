@@ -180,7 +180,8 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
 
   Widget _buildStepper(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    if (widget.tabs.isEmpty) return const SizedBox.shrink();
+    // A single card is one screen, not a journey — draw no step rail for it.
+    if (widget.tabs.length < 2) return const SizedBox.shrink();
 
     return SizedBox(
       height: 56,

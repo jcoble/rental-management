@@ -55,16 +55,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('New repair'), findsOneWidget);
-      expect(find.text('Location'), findsOneWidget);
-      expect(find.text('Issue'), findsOneWidget);
-      expect(find.text('Schedule'), findsOneWidget);
-      expect(find.text('Assign'), findsOneWidget);
-      expect(find.text('Attach'), findsOneWidget);
+      expect(find.text('What happened?'), findsOneWidget);
+      expect(find.text('Details'), findsOneWidget);
       expect(find.text('Maple Ridge'), findsAtLeastNWidgets(1));
       expect(find.text('Unit 4B'), findsAtLeastNWidgets(1));
-
-      await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
 
       await tester.enterText(
         find.byKey(const Key('work-order-title-field')),
@@ -74,11 +68,6 @@ void main() {
         find.byKey(const Key('work-order-description-field')),
         'Water is dripping under the kitchen sink.',
       );
-      await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
 
       await tester.ensureVisible(find.text('Save repair'));
