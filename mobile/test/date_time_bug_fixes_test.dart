@@ -8,8 +8,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/api/dio_client.dart';
 import 'package:rental_command/core/models/appointment.dart';
 import 'package:rental_command/core/models/lease.dart';
+import 'package:rental_command/features/accounting/accounting_book_models.dart';
+import 'package:rental_command/features/accounting/accounting_books_repository.dart';
+import 'package:rental_command/features/accounting/accounting_repository.dart';
 import 'package:rental_command/features/appointments/appointments_screen.dart';
 import 'package:rental_command/features/leases/successor_agreement_sheet.dart';
+import 'package:rental_command/features/money/money_repository.dart';
+import 'package:rental_command/features/money/money_screen.dart';
 import 'package:rental_command/features/money/tenant_ledger_view.dart';
 
 void main() {
@@ -93,6 +98,56 @@ void main() {
 
     expect(renewal.termStart, DateTime(2026, 11, 2));
   });
+
+  testWidgets('money periods use the UTC business calendar', (tester) async {
+    final books = _MoneyBooksRepository();
+    await _pumpMoneyScreen(tester, books);
+
+    expect(books.lastFrom, DateTime.utc(books.lastTo!.year, books.lastTo!.month));
+    expect(books.lastTo!.isUtc, isTrue);
+  });
+
+  testWidgets('cancelling custom money period restores prior selection', (
+    tester,
+  ) async {
+    final books = _MoneyBooksRepository();
+    await _pumpMoneyScreen(tester, books);
+
+    await tester.drag(find.byType(ListView), const Offset(0, -600));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('This month'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Custom').last);
+    await tester.pumpAndSettle();
+    final picker = find.byType(DateRangePickerDialog);
+    expect(picker, findsOneWidget);
+    Navigator.of(tester.element(picker)).pop();
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView), const Offset(0, -600));
+    await tester.pumpAndSettle();
+
+    expect(find.text('This month'), findsOneWidget);
+  });
+}
+
+Future<void> _pumpMoneyScreen(
+  WidgetTester tester,
+  _MoneyBooksRepository books,
+) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        accountingBooksRepositoryProvider.overrideWithValue(books),
+        moneySnapshotProvider.overrideWith(
+          (ref) async => throw StateError('legacy snapshot is not used'),
+        ),
+      ],
+      child: const MaterialApp(
+        home: MoneyScreen(initialView: MoneyScreenView.overview),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
 }
 
 Future<void> _pumpAppointmentSheet(
@@ -181,4 +236,35 @@ class _AppointmentAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+}
+
+class _MoneyBooksRepository extends AccountingBooksRepository {
+  _MoneyBooksRepository() : super(Dio());
+
+  DateTime? lastFrom;
+  DateTime? lastTo;
+
+  @override
+  Future<MoneyPositionResponse> moneyPosition({
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    lastFrom = from;
+    lastTo = to;
+    return MoneyPositionResponse(
+      asOfUtc: DateTime.utc(2027, 3, 1, 1),
+      fromUtc: from ?? DateTime.utc(2027, 3, 1),
+      toUtc: to ?? DateTime.utc(2027, 3, 1, 1),
+      totalCashOnHand: 1000,
+      tenantDepositsHeld: 100,
+      cashAfterTenantDeposits: 900,
+      rentStillOwed: 0,
+      loanBalance: 0,
+      bookEquity: 900,
+      cashReceived: 1000,
+      cashPaid: 100,
+      netCashMovement: 900,
+      profitOrLoss: 900,
+    );
+  }
 }
