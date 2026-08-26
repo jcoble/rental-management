@@ -29,16 +29,21 @@
 		AlertTriangle,
 		ExternalLink,
 		ChevronRight,
+		ChevronDown,
 		Lightbulb
 	} from '@lucide/svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import {
-		reportCategoryTitle,
 		reportDescription,
 		reportTitle
 	} from '$lib/reports/report-display';
+	import { groupReports } from '$lib/accounting/simple-mode-surface';
+	import {
+		ACCOUNTING_DETAIL_MODE_STORAGE_KEY,
+		getAccountingDetailMode
+	} from '$lib/components/accounting/AccountingDetailMode.svelte';
 
 	const catalogQuery = createQuery(() => ({
 		queryKey: ['reports-catalog'],
@@ -83,6 +88,28 @@
 	function iconFor(entry: ReportCatalogEntry, categoryKey: string): IconType {
 		return reportIcons[entry.key] ?? categoryIcons[categoryKey] ?? BarChart3;
 	}
+
+	// Two groups instead of four category headings: the three reports a landlord opens week to
+	// week, then everything an accountant asks for behind a disclosure. Advanced already wants the
+	// accountant reports, so that group starts open there — the toggle wins once it is used.
+	type GroupedEntry = ReportCatalogEntry & { categoryKey: string };
+	const detailModeContext = getAccountingDetailMode();
+	let storedDetailMode = $state<'simple' | 'advanced'>('simple');
+	$effect(() => {
+		if (detailModeContext || typeof window === 'undefined') return;
+		const stored = window.localStorage.getItem(ACCOUNTING_DETAIL_MODE_STORAGE_KEY);
+		if (stored === 'simple' || stored === 'advanced') storedDetailMode = stored;
+	});
+	const detailMode = $derived(detailModeContext?.mode ?? storedDetailMode);
+	const groupedReports = $derived(
+		groupReports<GroupedEntry>({
+			categories: (catalogQuery.data?.categories ?? []).map((category) => ({
+				reports: category.reports.map((entry) => ({ ...entry, categoryKey: category.key }))
+			}))
+		})
+	);
+	let accountantOpenChoice = $state<boolean | null>(null);
+	const accountantOpen = $derived(accountantOpenChoice ?? detailMode === 'advanced');
 
 	// External reports deep-link to their existing pages (the hub references, never reimplements).
 	const externalLinks: Record<string, string> = {
@@ -191,45 +218,42 @@
 		</Card.Root>
 	{:else}
 		<div class="space-y-8" data-testid="reports-catalog">
-			{#each catalogQuery.data?.categories ?? [] as category (category.key)}
-				{@const CategoryIcon = categoryIcons[category.key] ?? BarChart3}
-				<section>
-					<div class="mb-3 flex items-center gap-2">
-						<CategoryIcon class="h-4 w-4 text-muted-foreground" />
-						<h2 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-							{reportCategoryTitle(category.key, category.title)}
-						</h2>
-					</div>
-					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-						{#each category.reports as entry (entry.key)}
-							{@const Icon = iconFor(entry, category.key)}
-							<button
-								type="button"
-								onclick={() => openReport(entry, category.key)}
-								class="group flex h-full flex-col rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-								data-testid="report-card-{entry.key}"
-							>
-								<div class="mb-2 flex items-center justify-between">
-									<span class="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
-										<Icon class="h-4 w-4" />
-									</span>
-									{#if entry.external}
-										<span class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-											<ExternalLink class="h-3 w-3" /> Opens another report page
-										</span>
-									{:else}
-										<ChevronRight class="h-4 w-4 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
-									{/if}
-								</div>
-								<h3 class="font-semibold leading-tight">{reportTitle(entry.key, entry.title)}</h3>
-								<p class="mt-1 text-sm text-muted-foreground">
-									{reportDescription(entry.key, entry.description)}
-								</p>
-							</button>
+			<section data-testid="reports-everyday">
+				<div class="mb-3 flex items-center gap-2">
+					<ClipboardList class="h-4 w-4 text-muted-foreground" />
+					<h2 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Everyday</h2>
+				</div>
+				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+					{#each groupedReports.everyday as entry (entry.key)}
+						{@render reportCard(entry)}
+					{/each}
+				</div>
+			</section>
+
+			<section data-testid="reports-accountant">
+				<button
+					type="button"
+					class="mb-3 flex w-full items-center gap-2 rounded-lg border bg-card px-4 py-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					aria-expanded={accountantOpen}
+					onclick={() => (accountantOpenChoice = !accountantOpen)}
+					data-testid="reports-accountant-toggle"
+				>
+					{#if accountantOpen}
+						<ChevronDown class="h-4 w-4 text-muted-foreground" />
+					{:else}
+						<ChevronRight class="h-4 w-4 text-muted-foreground" />
+					{/if}
+					<span class="text-sm font-semibold">For your accountant</span>
+					<span class="text-sm text-muted-foreground">{groupedReports.accountant.length} reports</span>
+				</button>
+				{#if accountantOpen}
+					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="reports-accountant-list">
+						{#each groupedReports.accountant as entry (entry.key)}
+							{@render reportCard(entry)}
 						{/each}
 					</div>
-				</section>
-			{/each}
+				{/if}
+			</section>
 
 			<!-- Custom report request CTA -->
 			<section>
@@ -263,3 +287,30 @@
 		</div>
 	{/if}
 </div>
+
+{#snippet reportCard(entry: GroupedEntry)}
+	{@const Icon = iconFor(entry, entry.categoryKey)}
+	<button
+		type="button"
+		onclick={() => openReport(entry, entry.categoryKey)}
+		class="group flex h-full flex-col rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+		data-testid="report-card-{entry.key}"
+	>
+		<div class="mb-2 flex items-center justify-between">
+			<span class="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
+				<Icon class="h-4 w-4" />
+			</span>
+			{#if entry.external}
+				<span class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+					<ExternalLink class="h-3 w-3" /> Opens another report page
+				</span>
+			{:else}
+				<ChevronRight class="h-4 w-4 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+			{/if}
+		</div>
+		<h3 class="font-semibold leading-tight">{reportTitle(entry.key, entry.title)}</h3>
+		<p class="mt-1 text-sm text-muted-foreground">
+			{reportDescription(entry.key, entry.description)}
+		</p>
+	</button>
+{/snippet}
