@@ -7,7 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/api/dio_client.dart';
 import 'package:rental_command/core/models/appointment.dart';
+import 'package:rental_command/core/models/lease.dart';
 import 'package:rental_command/features/appointments/appointments_screen.dart';
+import 'package:rental_command/features/leases/successor_agreement_sheet.dart';
 import 'package:rental_command/features/money/tenant_ledger_view.dart';
 
 void main() {
@@ -65,6 +67,31 @@ void main() {
 
     expect(range.from, DateTime(2026, 7, 1));
     expect(range.to, DateTime(2026, 9, 30));
+  });
+
+  test('lease renewal starts on local midnight after DST fall-back', () {
+    final source = LeaseAgreementHistory.fromJson({
+      'leaseAgreementId': 1,
+      'versionNumber': 1,
+      'agreementNumber': 'L-1',
+      'changeType': 'New',
+      'termType': 'FixedTerm',
+      'termStartOn': '2025-11-02',
+      'termEndOn': '2026-11-01',
+      'governingFromOn': '2025-11-02',
+      'baseRentAmount': 1000,
+      'agreementStatus': 'Active',
+      'isGoverning': true,
+      'hasLiveReissue': false,
+    });
+
+    final renewal = initialLeaseSuccessorDates(
+      source,
+      LeaseSuccessorOperation.renewal,
+      businessDate: DateTime(2026, 8, 25),
+    );
+
+    expect(renewal.termStart, DateTime(2026, 11, 2));
   });
 }
 

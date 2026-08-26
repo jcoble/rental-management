@@ -58,14 +58,17 @@ LeaseSuccessorDates initialLeaseSuccessorDates(
   required DateTime businessDate,
 }) {
   final businessToday = DateUtils.dateOnly(businessDate);
-  final dayAfterSourceStart = source.governingFromOn.add(
-    const Duration(days: 1),
+  final dayAfterSourceStart = DateUtils.addDaysToDate(
+    source.governingFromOn,
+    1,
   );
-  final dayAfterTerm = source.termEndOn?.add(const Duration(days: 1));
+  final dayAfterTerm = source.termEndOn == null
+      ? null
+      : DateUtils.addDaysToDate(source.termEndOn!, 1);
   final nextStart =
       dayAfterTerm ??
       (businessToday.isAfter(dayAfterSourceStart)
-          ? businessToday.add(const Duration(days: 1))
+          ? DateUtils.addDaysToDate(businessToday, 1)
           : dayAfterSourceStart);
 
   if (operation == LeaseSuccessorOperation.correction ||
@@ -90,11 +93,10 @@ LeaseSuccessorDates initialLeaseSuccessorDates(
 
   final sourceEnd = source.termEndOn;
   final termEnd = sourceEnd == null
-      ? DateTime(
-          nextStart.year + 1,
-          nextStart.month,
-          nextStart.day,
-        ).subtract(const Duration(days: 1))
+      ? DateUtils.addDaysToDate(
+          DateTime(nextStart.year + 1, nextStart.month, nextStart.day),
+          -1,
+        )
       : nextStart.add(sourceEnd.difference(source.termStartOn));
   return LeaseSuccessorDates(
     termStart: nextStart,
