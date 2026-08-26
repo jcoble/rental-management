@@ -59,3 +59,11 @@
 
 - `cd /home/blackcolours/dev/work/worktrees/rental-management/bugs-d/mobile && flutter analyze` — exit 1; 23 pre-existing issues, with none in touched files.
 - `cd /home/blackcolours/dev/work/worktrees/rental-management/bugs-d/mobile && flutter test` — exit 0; `00:58 +524: All tests passed!`
+
+## Review fix
+
+### #27
+
+- Commit: `a3dcfefd`
+- Test added: none; the 180-second timer behavior requires advancing a fake clock, which the rework specification excludes.
+- Result: `flutter analyze` reported only the same 23 pre-existing issues and none in the touched file; `flutter test` passed all 524 tests.
