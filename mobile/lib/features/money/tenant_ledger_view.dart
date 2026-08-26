@@ -10,8 +10,8 @@ import '../accounting/accounting_help_tip.dart';
 import '../deposits/deposits_repository.dart';
 import '../units/units_repository.dart';
 import '../../core/presentation/formatting.dart';
+import '../payments/payments_screen.dart';
 import 'one_time_charge_sheet.dart';
-import 'record_payment_sheet.dart';
 import 'recurring_charge_sheet.dart';
 import 'tenant_credit_sheet.dart';
 import 'tenant_ledger_models.dart';
@@ -241,11 +241,13 @@ class _TenantLedgerViewState extends ConsumerState<TenantLedgerView> {
 
   Future<void> _recordPayment() async {
     final accountId = _tenantAccountId;
-    if (accountId == null) return;
-    final result = await showRecordPaymentSheet(
+    final leaseManagementId = widget.dashboard.leaseManagementId;
+    if (accountId == null || leaseManagementId == null) return;
+    final result = await showRecordTenantReceiptSheet(
       context,
       ref,
       tenantAccountId: accountId,
+      leaseManagementId: leaseManagementId,
       tenantName: widget.dashboard.header.currentTenantName,
       rentalLabel: _rentalLabel,
     );
