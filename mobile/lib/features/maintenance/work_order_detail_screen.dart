@@ -254,12 +254,21 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
                   onPressed: selectedAssignmentId == null
                       ? null
                       : () async {
-                          final selected = candidates.firstWhere(
-                            (candidate) =>
-                                (candidate['membershipRoleAssignmentId'] as num)
-                                    .toInt() ==
-                                selectedAssignmentId,
-                          );
+                          final selected = candidates
+                              .where(
+                                (candidate) =>
+                                    (candidate['membershipRoleAssignmentId']
+                                            as num)
+                                        .toInt() ==
+                                    selectedAssignmentId,
+                              )
+                              .firstOrNull;
+                          if (selected == null) {
+                            _showError(
+                              'That technician is no longer available.',
+                            );
+                            return;
+                          }
                           final contextIds = <int>{
                             (selected['accessContextId'] as num).toInt(),
                           };
@@ -267,22 +276,28 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
                               case final num currentId) {
                             contextIds.add(currentId.toInt());
                           }
-                          final expectations = contextIds
-                              .map((contextId) {
-                                final candidate = candidates.firstWhere(
+                          final expectations = <Map<String, dynamic>>[];
+                          for (final contextId in contextIds) {
+                            final candidate = candidates
+                                .where(
                                   (item) =>
                                       (item['accessContextId'] as num)
                                           .toInt() ==
                                       contextId,
-                                );
-                                return {
-                                  'accessContextId': contextId,
-                                  'expectedRevision':
-                                      (candidate['accessRevision'] as num)
-                                          .toInt(),
-                                };
-                              })
-                              .toList(growable: false);
+                                )
+                                .firstOrNull;
+                            if (candidate == null) {
+                              _showError(
+                                'That technician assignment is no longer available.',
+                              );
+                              return;
+                            }
+                            expectations.add({
+                              'accessContextId': contextId,
+                              'expectedRevision':
+                                  (candidate['accessRevision'] as num).toInt(),
+                            });
+                          }
                           await repository
                               .assignResponsibility(widget.workOrderId, {
                                 'workspaceMembershipId':
@@ -307,11 +322,19 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
                     onPressed: () async {
                       final contextId = (current['accessContextId'] as num)
                           .toInt();
-                      final candidate = candidates.firstWhere(
-                        (item) =>
-                            (item['accessContextId'] as num).toInt() ==
-                            contextId,
-                      );
+                      final candidate = candidates
+                          .where(
+                            (item) =>
+                                (item['accessContextId'] as num).toInt() ==
+                                contextId,
+                          )
+                          .firstOrNull;
+                      if (candidate == null) {
+                        _showError(
+                          'That technician assignment is no longer available.',
+                        );
+                        return;
+                      }
                       await repository.closeResponsibility(
                         widget.workOrderId,
                         current['id'] as String,
@@ -860,6 +883,7 @@ class _DetailBody extends StatelessWidget {
             // Dispatch is hidden once the job is closed out.
             if (capabilities.canDispatchVendor &&
                 !isCompleted &&
+                !hasActiveDispatch &&
                 workOrder.status.toLowerCase() != 'cancelled')
               FilledButton.icon(
                 onPressed: onDispatchVendor,
