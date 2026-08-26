@@ -15,13 +15,29 @@ enum _LiveSetupNextStep { scanLease, continueManually, finish }
 /// real portfolio).
 ///
 /// Web routes Live users into a multi-step setup wizard; mobile previously
-/// dropped them on a bare dashboard with no next step (I8). This screen restores
-/// parity at the most important step: a prominent "Add your first property"
-/// entry that reuses the existing add-property flow, plus an escape hatch to the
-/// dashboard. It is shown once, immediately after the Live choice; the dashboard
-/// is always reachable afterwards.
-class OnboardingLiveSetupScreen extends ConsumerWidget {
+/// dropped them on a bare dashboard with no next step (I8). This screen IS the
+/// add-rental step: it opens the add-rental sheet on its first frame, then walks
+/// through scan-lease / manual / finish. If the landlord backs out of the sheet,
+/// the screen underneath offers the same step again plus an escape hatch to the
+/// dashboard, which is always reachable afterwards.
+class OnboardingLiveSetupScreen extends ConsumerStatefulWidget {
   const OnboardingLiveSetupScreen({super.key});
+
+  @override
+  ConsumerState<OnboardingLiveSetupScreen> createState() =>
+      _OnboardingLiveSetupScreenState();
+}
+
+class _OnboardingLiveSetupScreenState
+    extends ConsumerState<OnboardingLiveSetupScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // No intermediate page with a button — go straight into adding the rental.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _addFirstProperty(context);
+    });
+  }
 
   Future<void> _addFirstProperty(BuildContext context) async {
     final setup = await showAddPropertySheet(context);
@@ -96,7 +112,7 @@ class OnboardingLiveSetupScreen extends ConsumerWidget {
             Text(
               setup.units.length == 1
                   ? 'The property and its rental were saved together. What would you like to do next?'
-                  : 'The property and ${setup.units.length} units were saved together. What would you like to do next?',
+                  : 'The property and its ${setup.units.length} rentals were saved together. What would you like to do next?',
               style: Theme.of(
                 sheetContext,
               ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
@@ -150,7 +166,7 @@ class OnboardingLiveSetupScreen extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
             child: Text(
-              'Choose a unit to continue',
+              'Choose a rental to continue',
               style: Theme.of(sheetContext).textTheme.titleLarge,
             ),
           ),
@@ -160,7 +176,7 @@ class OnboardingLiveSetupScreen extends ConsumerWidget {
               title: Text(
                 unit.unitNumber.trim().isEmpty
                     ? 'Rental'
-                    : 'Unit ${unit.unitNumber}',
+                    : 'Rental ${unit.unitNumber}',
               ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(sheetContext).pop(unit),
@@ -171,7 +187,7 @@ class OnboardingLiveSetupScreen extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
@@ -213,8 +229,8 @@ class OnboardingLiveSetupScreen extends ConsumerWidget {
                     // A1: don't claim "all set up" on a deliberately-empty
                     // account — invite the first real step instead.
                     firstName.isEmpty
-                        ? "You're in — let's add your first property"
-                        : "You're in — let's add your first property, $firstName",
+                        ? "You're in — let's add your first rental"
+                        : "You're in — let's add your first rental, $firstName",
                     style: theme.textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: scheme.onSurface,
@@ -223,9 +239,9 @@ class OnboardingLiveSetupScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    "Your account is empty and ready for your real portfolio. "
+                    "Your account is empty and ready for your real rentals. "
                     "Start by choosing whether the address is one rental or a "
-                    "building with units. Rental Command saves the property and "
+                    "building with several. Rental Command saves the address and "
                     "its rentals together.",
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
