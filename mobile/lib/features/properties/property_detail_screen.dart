@@ -10,6 +10,7 @@ import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
 import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_impact_card.dart';
+import '../accounting/journal_detail_sheet.dart';
 import '../activity/activity_history_screen.dart';
 import '../../core/presentation/formatting.dart' as money;
 import '../scan/scan_capture.dart';
@@ -1698,7 +1699,7 @@ class _CapitalAssetTile extends StatelessWidget {
 
 // ── Property disposition tile ────────────────────────────────────────────────
 
-class _DispositionTile extends StatelessWidget {
+class _DispositionTile extends ConsumerWidget {
   const _DispositionTile({
     required this.disposition,
     required this.onEdit,
@@ -1710,7 +1711,7 @@ class _DispositionTile extends StatelessWidget {
   final VoidCallback? onDelete;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final gainIsPositive = disposition.gainLoss >= 0;
@@ -1794,12 +1795,14 @@ class _DispositionTile extends StatelessWidget {
                     label: 'Total depreciation',
                     value: money.moneyFmt(disposition.totalDepreciation),
                   ),
-                  _ScheduleMetric(
-                    label: 'Section 1250 est.',
-                    value: money.moneyFmt(
-                      disposition.unrecapturedSection1250Gain,
+                  if (ref.watch(accountingDetailModeProvider) ==
+                      AccountingDetailMode.advanced)
+                    _ScheduleMetric(
+                      label: 'Section 1250 est.',
+                      value: money.moneyFmt(
+                        disposition.unrecapturedSection1250Gain,
+                      ),
                     ),
-                  ),
                   if (disposition.sellingCosts > 0)
                     _ScheduleMetric(
                       label: 'Selling costs',

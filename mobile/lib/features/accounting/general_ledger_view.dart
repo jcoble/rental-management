@@ -620,16 +620,16 @@ class _LedgerError extends StatelessWidget {
   );
 }
 
-class _LedgerFilterSheet extends StatefulWidget {
+class _LedgerFilterSheet extends ConsumerStatefulWidget {
   const _LedgerFilterSheet({required this.initial});
 
   final GeneralLedgerFilterState initial;
 
   @override
-  State<_LedgerFilterSheet> createState() => _LedgerFilterSheetState();
+  ConsumerState<_LedgerFilterSheet> createState() => _LedgerFilterSheetState();
 }
 
-class _LedgerFilterSheetState extends State<_LedgerFilterSheet> {
+class _LedgerFilterSheetState extends ConsumerState<_LedgerFilterSheet> {
   late final TextEditingController _propertyController;
   late final TextEditingController _unitController;
   late JournalSourceType? _sourceType;
@@ -669,15 +669,18 @@ class _LedgerFilterSheetState extends State<_LedgerFilterSheet> {
         children: [
           Text('Filter ledger', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 16),
-          TextField(
-            controller: _propertyController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'Property ID',
-              prefixIcon: Icon(Icons.home_work_outlined),
+          if (ref.watch(accountingDetailModeProvider) ==
+              AccountingDetailMode.advanced) ...[
+            TextField(
+              controller: _propertyController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Property ID',
+                prefixIcon: Icon(Icons.home_work_outlined),
+              ),
             ),
-          ),
-          const SizedBox(height: 10),
+            const SizedBox(height: 10),
+          ],
           TextField(
             controller: _unitController,
             keyboardType: TextInputType.number,
