@@ -12,6 +12,7 @@ import 'package:rental_command/core/time/app_clock.dart';
 import 'package:rental_command/features/accounting/accounting_book_models.dart';
 import 'package:rental_command/features/accounting/accounting_books_repository.dart';
 import 'package:rental_command/features/accounting/accounting_repository.dart';
+import 'package:rental_command/features/appointments/appointments_shared.dart';
 import 'package:rental_command/features/appointments/appointments_screen.dart';
 import 'package:rental_command/features/leases/successor_agreement_sheet.dart';
 import 'package:rental_command/features/money/money_screen.dart';
@@ -22,6 +23,8 @@ import 'package:rental_command/features/scan/scan_repository.dart';
 
 void main() {
   test('appointment response exposes scheduled instants in local time', () {
+    final expectedStart = DateTime.utc(2026, 8, 25, 14).toLocal();
+    final expectedEnd = DateTime.utc(2026, 8, 25, 15).toLocal();
     final appointment = Appointment.fromJson(
       _appointmentJson(
         scheduledStart: '2026-08-25T14:00:00Z',
@@ -29,8 +32,14 @@ void main() {
       ),
     );
 
-    expect(appointment.scheduledStart, DateTime.utc(2026, 8, 25, 14).toLocal());
-    expect(appointment.scheduledEnd, DateTime.utc(2026, 8, 25, 15).toLocal());
+    expect(appointment.scheduledStart.isUtc, isFalse);
+    expect(appointment.scheduledEnd?.isUtc, isFalse);
+    expect(appointment.scheduledStart, expectedStart);
+    expect(appointment.scheduledEnd, expectedEnd);
+    expect(
+      formatAppointmentTime(appointment.scheduledStart),
+      formatAppointmentTime(expectedStart),
+    );
   });
 
   testWidgets('appointment request includes the local UTC offset', (
@@ -75,8 +84,11 @@ void main() {
   ) async {
     final adapter = _AppointmentAdapter();
     final dio = Dio()..httpClientAdapter = adapter;
-    final instant = DateTime.utc(2026, 8, 26, 1);
-    expect(instant.toLocal().day, 25);
+    final instant = DateTime.utc(2026, 8, 26, 0, 30);
+    final localInstant = instant.toLocal();
+    if (localInstant.timeZoneOffset <= const Duration(hours: -1)) {
+      expect(localInstant.day, isNot(instant.day));
+    }
 
     await tester.pumpWidget(
       ProviderScope(
@@ -103,7 +115,7 @@ void main() {
     final picker = tester.widget<CalendarDatePicker>(
       find.byType(CalendarDatePicker),
     );
-    expect(picker.initialDate, DateUtils.dateOnly(instant.toLocal()));
+    expect(picker.initialDate, DateUtils.dateOnly(localInstant));
   });
 
   test('tenant ledger month range uses the UTC business date', () {
@@ -197,27 +209,27 @@ void main() {
   });
 
   testWidgets('scan list renders the local calendar day', (tester) async {
-    final instant = DateTime.utc(2026, 8, 26, 2, 30);
+    final instant = DateTime.utc(2026, 8, 26, 0, 30);
+    final localInstant = instant.toLocal();
     final draft = ScanDraft.fromJson({
       'id': 1,
       'portfolioId': 1,
       'createdAt': instant.toIso8601String(),
     });
 
-    expect(instant.toLocal().timeZoneOffset, const Duration(hours: -4));
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          scanListFamilyProvider.overrideWith(
-            (ref, status) async => [draft],
-          ),
+          scanListFamilyProvider.overrideWith((ref, status) async => [draft]),
         ],
         child: const MaterialApp(home: ScanListScreen()),
       ),
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('8/25/2026'), findsOneWidget);
+    final expectedDate =
+        '${localInstant.month}/${localInstant.day}/${localInstant.year}';
+    expect(find.text(expectedDate), findsOneWidget);
   });
 }
 
