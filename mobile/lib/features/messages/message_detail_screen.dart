@@ -39,6 +39,63 @@ String _channelLabel(String channel) {
   }
 }
 
+/// The quiet line above a compose box: "Sending in the tenant app and by text".
+String sendingChannelsLine(List<String> channels) {
+  final parts = [
+    for (final channel in channels)
+      switch (channel) {
+        'Portal' => 'in the tenant app',
+        'Email' => 'by email',
+        'Sms' => 'by text',
+        _ => channel,
+      },
+  ];
+  if (parts.isEmpty) return 'Choose how to send this';
+  if (parts.length == 1) return 'Sending ${parts.first}';
+  final lead = parts.sublist(0, parts.length - 1).join(', ');
+  return 'Sending $lead and ${parts.last}';
+}
+
+/// The quiet "Sending …" line plus a "Change" button that reveals the chips.
+class SendingChannelsLine extends StatelessWidget {
+  const SendingChannelsLine({
+    super.key,
+    required this.channels,
+    required this.onChange,
+  });
+
+  final List<String> channels;
+  final VoidCallback onChange;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(
+          child: Text(
+            sendingChannelsLine(channels),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        TextButton(
+          onPressed: onChange,
+          style: TextButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            minimumSize: const Size(0, 32),
+          ),
+          child: const Text('Change'),
+        ),
+      ],
+    );
+  }
+}
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 /// Conversation thread screen — chat bubbles plus a pinned compose bar.
@@ -70,11 +127,14 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   final _quickActionHiddenOwner = Object();
   MobileShellNavigator? _shellNavigator;
 
-  // Inline channel toggles for the NEXT send only. Portal on by default;
-  // Email/SMS off (portfolio messaging defaults aren't loaded on mobile yet).
+  // Inline channel toggles for the NEXT send only. They start as the way the
+  // last reply in this thread went out, and are hidden behind "Change" until
+  // the landlord wants something different.
   bool _portal = true;
   bool _email = false;
   bool _sms = false;
+  bool _channelsRevealed = false;
+  bool _channelsSeeded = false;
 
   bool _sending = false;
   String? _sendOperationKey;
@@ -152,6 +212,26 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     _sendOperationPayload = null;
   }
 
+  /// Start the reply on the same channels the last reply in this thread used.
+  void _seedChannelsFromThread(Conversation conversation) {
+    if (_channelsSeeded || conversation.messages.isEmpty) return;
+    _channelsSeeded = true;
+    List<String>? lastSent;
+    for (final message in conversation.messages) {
+      if (message.isFromLandlord && message.channels.isNotEmpty) {
+        lastSent = message.channels;
+      }
+    }
+    if (lastSent == null) return;
+    final channels = lastSent;
+    setState(() {
+      _portal = channels.contains('Portal');
+      _email = channels.contains('Email');
+      _sms = channels.contains('Sms');
+      _invalidateSendOperation();
+    });
+  }
+
   void _setChannel(void Function() update) {
     setState(() {
       update();
@@ -210,6 +290,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       conversationProvider(widget.conversationId),
       (prev, next) {
         next.whenData((convo) {
+          _seedChannelsFromThread(convo);
           if (convo.messages.isNotEmpty) _scrollToBottom();
         });
       },
@@ -272,6 +353,9 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
           _ComposeBar(
             controller: _composeCtrl,
             sending: _sending,
+            channelsRevealed: _channelsRevealed,
+            channels: _selectedChannels(),
+            onRevealChannels: () => setState(() => _channelsRevealed = true),
             portal: _portal,
             email: _email,
             sms: _sms,
@@ -429,6 +513,9 @@ class _ComposeBar extends StatelessWidget {
   const _ComposeBar({
     required this.controller,
     required this.sending,
+    required this.channelsRevealed,
+    required this.channels,
+    required this.onRevealChannels,
     required this.portal,
     required this.email,
     required this.sms,
@@ -440,6 +527,9 @@ class _ComposeBar extends StatelessWidget {
 
   final TextEditingController controller;
   final bool sending;
+  final bool channelsRevealed;
+  final List<String> channels;
+  final VoidCallback onRevealChannels;
   final bool portal;
   final bool email;
   final bool sms;
@@ -464,32 +554,38 @@ class _ComposeBar extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Channel picker
+            // How this reply goes out. Quiet line by default; the chips only
+            // appear once the landlord taps "Change".
             Align(
               alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 6,
-                children: [
-                  _MiniChannelChip(
-                    icon: Icons.forum_outlined,
-                    label: 'Portal',
-                    selected: portal,
-                    onChanged: onPortal,
-                  ),
-                  _MiniChannelChip(
-                    icon: Icons.email_outlined,
-                    label: 'Email',
-                    selected: email,
-                    onChanged: onEmail,
-                  ),
-                  _MiniChannelChip(
-                    icon: Icons.sms_outlined,
-                    label: 'Text',
-                    selected: sms,
-                    onChanged: onSms,
-                  ),
-                ],
-              ),
+              child: channelsRevealed
+                  ? Wrap(
+                      spacing: 6,
+                      children: [
+                        _MiniChannelChip(
+                          icon: Icons.forum_outlined,
+                          label: 'Portal',
+                          selected: portal,
+                          onChanged: onPortal,
+                        ),
+                        _MiniChannelChip(
+                          icon: Icons.email_outlined,
+                          label: 'Email',
+                          selected: email,
+                          onChanged: onEmail,
+                        ),
+                        _MiniChannelChip(
+                          icon: Icons.sms_outlined,
+                          label: 'Text',
+                          selected: sms,
+                          onChanged: onSms,
+                        ),
+                      ],
+                    )
+                  : SendingChannelsLine(
+                      channels: channels,
+                      onChange: onRevealChannels,
+                    ),
             ),
             const SizedBox(height: 6),
             TextField(
