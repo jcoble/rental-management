@@ -44,14 +44,18 @@ test('all five experience shells keep personal alerts discoverable without expos
 	for (const nav of [
 		source.slice(ownerNavStart, ownerNavEnd),
 		source.slice(leasingNavStart, leasingNavEnd),
-		source.slice(technicianNavStart, technicianNavEnd),
-		source.slice(settingsGroupStart, settingsGroupEnd)
+		source.slice(technicianNavStart, technicianNavEnd)
 	]) {
 		assert.match(
 			nav,
 			/\{ href: '\/settings\/notifications\/my-alerts', label: 'My alerts', icon: BellRing \}/
 		);
 	}
+	// Staff get every notification area on one page; the other shells keep the personal alerts link.
+	assert.match(
+		source.slice(settingsGroupStart, settingsGroupEnd),
+		/\{ href: '\/settings\/notifications', label: 'Notifications', icon: BellRing \}/
+	);
 	assert.match(source, /\{ href: '\/settings\/notifications\/my-alerts', label: 'Profile', icon: BellRing \}/);
 
 	for (const relationshipNav of [
@@ -62,6 +66,11 @@ test('all five experience shells keep personal alerts discoverable without expos
 	}
 
 	assert.match(source.slice(leasingNavStart, leasingNavEnd), /href: '\/notices', label: 'Tenant notices'/);
+	// One "Notifications" entry in the staff Settings rail, and no duplicate tenant-notices label.
+	assert.doesNotMatch(
+		source.slice(settingsGroupStart, settingsGroupEnd),
+		/team-routing|settings\/notifications\/tenant-notices/
+	);
 	assert.doesNotMatch(source.slice(leasingNavStart, leasingNavEnd), /team-routing|settings\/notifications\/tenant-notices/);
 	assert.doesNotMatch(source.slice(technicianNavStart, technicianNavEnd), /team-routing|tenant-notices/);
 });

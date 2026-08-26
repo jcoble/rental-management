@@ -10,8 +10,8 @@ const previewSource = readFileSync(
   new URL("./NoticePreview.svelte", import.meta.url),
   "utf8"
 );
-const journeySource = readFileSync(
-  new URL("./NotificationSetupJourney.svelte", import.meta.url),
+const pageSource = readFileSync(
+  new URL("../../../routes/(protected)/settings/notifications/+page.svelte", import.meta.url),
   "utf8"
 );
 const accordionSource = readFileSync(
@@ -22,8 +22,16 @@ const endpointSource = readFileSync(
   new URL("../../api/endpoints/notifications.ts", import.meta.url),
   "utf8"
 );
-const myAlertsRouteSource = readFileSync(
-  new URL("../../../routes/(protected)/settings/notifications/my-alerts/+page.svelte", import.meta.url),
+const myAlertsSectionSource = readFileSync(
+  new URL("./MyAlertsSection.svelte", import.meta.url),
+  "utf8"
+);
+const teamRoutingSectionSource = readFileSync(
+  new URL("./TeamRoutingSection.svelte", import.meta.url),
+  "utf8"
+);
+const tenantNoticesSectionSource = readFileSync(
+  new URL("./TenantNoticesSection.svelte", import.meta.url),
   "utf8"
 );
 
@@ -39,26 +47,28 @@ describe("notification settings contract", () => {
     assert.match(helpSource, /\/docs\/settings-and-notifications/);
   });
 
-  it("provides one route-backed, navigation-safe three-step journey", () => {
-    for (const route of [
-      "/settings/notifications/my-alerts",
-      "/settings/notifications/team-routing",
-      "/settings/notifications/tenant-notices"
-    ]) {
-      assert.match(journeySource, new RegExp(route));
+  it("puts every notification section on one navigation-safe page", () => {
+    for (const section of ["MyAlertsSection", "TenantNoticesSection", "TeamRoutingSection"]) {
+      assert.match(pageSource, new RegExp(section));
     }
-    assert.match(journeySource, /How should Rental Command reach you/);
-    assert.match(journeySource, /Who should handle each kind of work/);
-    assert.match(journeySource, /Which tenant messages should Rental Command prepare/);
-    assert.match(journeySource, /beforeNavigate/);
-    assert.match(journeySource, /hasUnsavedChanges/);
-    assert.match(journeySource, /aria-current/);
-    assert.match(journeySource, /Saved summary/);
+    assert.match(pageSource, /Appears when you add a team member\./);
+    assert.match(myAlertsSectionSource, /id="my-alerts"/);
+    assert.match(tenantNoticesSectionSource, /id="tenant-notices"/);
+    assert.match(teamRoutingSectionSource, /id="team-routing"/);
+    for (const section of [
+      myAlertsSectionSource,
+      teamRoutingSectionSource,
+      tenantNoticesSectionSource
+    ]) {
+      assert.match(section, /beforeNavigate/);
+      assert.match(section, /hasUnsavedChanges/);
+      assert.match(section, /Saved summary/);
+    }
   });
 
-  it("keeps notification setup pages padded and their step content spaced", () => {
-    assert.match(journeySource, /mx-auto box-border h-full w-full max-w-5xl space-y-6 overflow-y-auto p-4 pb-20 sm:p-6/);
-    assert.match(myAlertsRouteSource, /<div class="space-y-5" data-testid="my-alerts-page">/);
+  it("keeps the notifications page padded and its section content spaced", () => {
+    assert.match(pageSource, /mx-auto box-border h-full w-full max-w-5xl space-y-6 overflow-y-auto p-4 pb-20 sm:p-6/);
+    assert.match(myAlertsSectionSource, /<div class="space-y-5" data-testid="my-alerts-page">/);
   });
 
   it("uses an accessible single-panel disclosure pattern", () => {
