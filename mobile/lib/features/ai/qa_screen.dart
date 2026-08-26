@@ -110,7 +110,11 @@ class _QaNotifier extends Notifier<_QaState> {
   }
 
   Future<void> ask(String question) async {
-    if (question.trim().isEmpty || state.pending) return;
+    if (question.trim().isEmpty ||
+        state.pending ||
+        state.executingAction) {
+      return;
+    }
 
     final userTurn = QaTurn(role: 'user', content: question.trim());
     final historyForRequest = List<QaTurn>.from(state.history);
@@ -184,6 +188,7 @@ class _QaNotifier extends Notifier<_QaState> {
     if (draft == null || state.pending || state.executingAction) {
       return;
     }
+    final targetTurnIndex = state.history.length - 1;
 
     state = state.copyWith(executingAction: true, clearActionNote: true);
 
@@ -192,9 +197,10 @@ class _QaNotifier extends Notifier<_QaState> {
           .read(aiRepositoryProvider)
           .executeAction(draft, state.writeModeEnabled);
       final updatedHistory = List<QaTurn>.from(state.history);
-      if (updatedHistory.isNotEmpty &&
-          updatedHistory.last.role == 'assistant') {
-        updatedHistory[updatedHistory.length - 1] = QaTurn(
+      if (targetTurnIndex >= 0 &&
+          targetTurnIndex < updatedHistory.length &&
+          updatedHistory[targetTurnIndex].role == 'assistant') {
+        updatedHistory[targetTurnIndex] = QaTurn(
           role: 'assistant',
           content: response.message,
         );
@@ -203,7 +209,7 @@ class _QaNotifier extends Notifier<_QaState> {
         history: updatedHistory,
         executingAction: false,
         actionStatus: response.status,
-        actionDraft: response.status == 'Created' ? null : draft,
+        clearAction: response.status != 'Created',
         actionNote: response.detailHref != null
             ? 'Open: ${response.detailHref}'
             : null,
@@ -405,7 +411,7 @@ class _QaScreenState extends ConsumerState<QaScreen> {
         _InputRow(
           controller: _inputController,
           focusNode: _focusNode,
-          pending: qa.pending,
+          pending: qa.pending || qa.executingAction,
           onSubmit: _submit,
         ),
       ],
