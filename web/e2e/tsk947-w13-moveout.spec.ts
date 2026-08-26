@@ -53,6 +53,8 @@ test.describe('TSK-947 W13 — plan move-out and keys returned', () => {
 		await expect(page.getByTestId('plan-move-out-reason')).toBeVisible();
 
 		// The dates only matter when someone is actually leaving.
+		await page.getByTestId('plan-move-out-what').click();
+		await page.getByTestId('plan-move-out-what-option-Undecided').click();
 		await expect(page.getByTestId('plan-move-out-date')).toHaveCount(0);
 		await page.getByTestId('plan-move-out-what').click();
 		await page.getByTestId('plan-move-out-what-option-NonRenewalMoveOut').click();

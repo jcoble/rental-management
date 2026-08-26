@@ -154,19 +154,19 @@ async function assertUnitEntry(page: Page, unitCase: UnitCase, phase: string): P
 }
 
 test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => {
-	test('cold-loads and refreshes valid, encoded, unknown, tab, money, unknown-view, and work-order unit URLs', async ({ page }) => {
-		test.setTimeout(120_000);
-		const failures: string[] = [];
-		const consoleErrors: string[] = [];
-		const pageErrors: string[] = [];
+	for (const unitCase of UNIT_CASES) {
+		test(`cold-loads and refreshes ${unitCase.name}`, async ({ page }) => {
+			test.setTimeout(75_000);
+			const failures: string[] = [];
+			const consoleErrors: string[] = [];
+			const pageErrors: string[] = [];
 
-		page.on('console', (message) => {
-			if (message.type() === 'error') consoleErrors.push(message.text());
-		});
-		page.on('pageerror', (error) => pageErrors.push(error.stack ?? String(error)));
+			page.on('console', (message) => {
+				if (message.type() === 'error') consoleErrors.push(message.text());
+			});
+			page.on('pageerror', (error) => pageErrors.push(error.stack ?? String(error)));
 
-		await login(page);
-		for (const unitCase of UNIT_CASES) {
+			await login(page);
 			for (const phase of ['cold', 'refresh']) {
 				try {
 					await page.goto(unitCase.path, { waitUntil: 'domcontentloaded' });
@@ -176,13 +176,13 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 					failures.push(`${unitCase.name} (${phase}): ${error instanceof Error ? error.message : String(error)}`);
 				}
 			}
-		}
 
-		const lifecycleErrors = routeLifecycleErrors([...consoleErrors, ...pageErrors]);
-		console.log(JSON.stringify({ UNIT_CASES, failures, lifecycleErrors }, null, 2));
-		expect(lifecycleErrors, 'unit cold-load lifecycle errors').toEqual([]);
-		expect(failures, 'unit cold-load/refresh failures').toEqual([]);
-	});
+			const lifecycleErrors = routeLifecycleErrors([...consoleErrors, ...pageErrors]);
+			console.log(JSON.stringify({ unitCase, failures, lifecycleErrors }, null, 2));
+			expect(lifecycleErrors, 'unit cold-load lifecycle errors').toEqual([]);
+			expect(failures, 'unit cold-load/refresh failures').toEqual([]);
+		});
+	}
 
 	test('lets every primary tab leave a lease-management deep link', async ({ page }) => {
 		test.setTimeout(180_000);

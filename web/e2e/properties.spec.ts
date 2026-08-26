@@ -47,6 +47,7 @@ test.describe('Properties', () => {
 		await page.getByTestId('property-create-address-input').fill('123 Test Street');
 		await page.getByTestId('property-create-city-input').fill('Austin');
 		await page.getByTestId('property-create-rent-input').fill('0');
+		await page.getByTestId('property-more-details-toggle').click();
 		await page.getByTestId('property-create-beds-input').fill('2');
 		await page.getByTestId('property-create-baths-input').fill('1');
 		// State is a searchable StateSelect combobox that live-filters its option list on every
