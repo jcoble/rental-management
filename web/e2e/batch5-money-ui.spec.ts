@@ -173,7 +173,8 @@ test.describe('Batch 5 money overlay behavior', () => {
 		await loginWithApi(page, request);
 		await page.goto('/accounting', { waitUntil: 'networkidle' });
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
-		await expect(page.getByTestId('accounting-tab-overview')).toHaveAttribute('aria-selected', 'true');
+		// Simple detail level lands on Rent & payments (TSK-947 W6).
+		await expect(page.getByTestId('accounting-tab-rent-payments')).toHaveAttribute('aria-selected', 'true');
 		await page.getByRole('tab', { name: 'Activity', exact: true }).click();
 		await expect(page.getByTestId('accounting-tab-activity')).toHaveAttribute('aria-selected', 'true');
 		await page.getByTestId('transaction-kind-filter').click();
@@ -238,6 +239,10 @@ test.describe('Batch 5 rendered zero-balance disclosures', () => {
 		});
 
 		await loginWithApi(page, request);
+		// The general ledger is an Advanced-only tab (TSK-947 W6).
+		await page.addInitScript(() => {
+			window.localStorage.setItem('rc.accounting.detail-mode.v1', 'advanced');
+		});
 		await page.goto('/accounting?tab=general-ledger');
 		await expect(page.getByTestId('general-ledger-panel')).toBeVisible();
 		await expect(page.getByTestId('company-balance-row-9101')).toBeVisible();
