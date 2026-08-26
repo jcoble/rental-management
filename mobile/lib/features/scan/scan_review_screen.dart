@@ -1455,6 +1455,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       if (draft.isWorkOrder) {
         ref.invalidate(workOrdersPageProvider);
         await ref.read(workOrdersProvider.notifier).refresh();
+        if (!mounted) return;
         if (unitId != null) {
           ref.invalidate(unitDashboardProvider(unitId));
         }

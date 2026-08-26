@@ -103,6 +103,7 @@ class ScanListScreen extends ConsumerWidget {
         builder: (_) => ScanReviewScreen(draftId: draftId),
       ),
     );
+    if (!context.mounted) return;
 
     // Refresh list after returning from the review screen.
     final status = _serverStatusFor(ref.read(_scanFilterProvider));
@@ -192,6 +193,7 @@ class ScanListScreen extends ConsumerWidget {
                                         ScanReviewScreen(draftId: draft.id),
                                   ),
                                 );
+                                if (!context.mounted) return;
                                 ref.invalidate(_scanListProvider(status));
                               },
                             );
