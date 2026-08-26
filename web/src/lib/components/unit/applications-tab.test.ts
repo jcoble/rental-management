@@ -13,6 +13,14 @@ describe('unit applications tab', () => {
 		);
 	});
 
+	it('labels the link action Share application and offers Copy link', () => {
+		assert.match(source, /Share application/);
+		assert.doesNotMatch(source, /Create application link/);
+		assert.match(source, /Copy link/);
+		assert.match(source, /data-testid="unit-application-share"/);
+		assert.match(source, /linkMutation\.mutate\(\{ propertyId, unitId \}\)/);
+	});
+
 	it('queries the selected Unit with server search, sort, and page state', () => {
 		assert.match(source, /unitId,/);
 		assert.match(source, /retry: false/);

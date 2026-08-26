@@ -27,6 +27,8 @@
 	const propertyId = $derived(dashboard.unit.propertyId);
 	const unitLabel = $derived(`${dashboard.propertyName} · Unit ${dashboard.unit.unitNumber}`);
 	const canCreateApplicationLink = $derived(propertyId > 0 && unitId > 0);
+	// A vacant unit is the one being marketed, so the share action leads the tab there.
+	const isVacant = $derived(!(dashboard.occupancyPossession?.isOccupied ?? false));
 
 	// A selected application folds its full detail inline (?app=<id> on the unit URL); otherwise the list shows.
 	const selectedApp = $derived(Number(page.url.searchParams.get('app')) || null);
@@ -75,7 +77,7 @@
 			applyUrl = buildApplicationLinkUrl(origin, result.applyPath, context);
 			copied = false;
 			showLinkDialog = true;
-			showSuccess('Application link created.');
+			showSuccess('Application link ready to share.');
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -176,7 +178,7 @@
 			data-testid="unit-application-create-link"
 		>
 			<Link2 class="h-4 w-4" />
-			{linkMutation.isPending ? 'Creating…' : 'Create application link'}
+			{linkMutation.isPending ? 'Getting the link…' : 'Share application'}
 		</Button>
 	</div>
 	<ApplicationDetail
@@ -187,6 +189,21 @@
 		prepareMoveInBasePath={listUrl({ app: selectedApp })}
 	/>
 {:else}
+	{#if isVacant}
+		<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4" data-testid="unit-applications-share-banner">
+			<p class="text-sm text-muted-foreground">This unit is empty. Send someone the application form for {unitLabel}.</p>
+			<Button
+				class="gap-2"
+				onclick={createApplicationLink}
+				disabled={!canCreateApplicationLink || linkMutation.isPending}
+				data-testid="unit-application-share"
+			>
+				<Link2 class="h-4 w-4" />
+				{linkMutation.isPending ? 'Getting the link…' : 'Share application'}
+			</Button>
+		</div>
+	{/if}
+
 	<form class="flex flex-wrap items-end gap-2" onsubmit={(event) => { event.preventDefault(); submitSearch(); }} data-testid="unit-applications-controls">
 		<label class="min-w-56 flex-1 space-y-1 text-sm">
 			<span class="font-medium">Search applications</span>
@@ -210,17 +227,19 @@
 	</form>
 
 	{#if !applicationsQuery.isLoading && appList.length > 0}
-		<div class="flex flex-wrap justify-end gap-2">
-			<Button
-				class="gap-2"
-				onclick={createApplicationLink}
-				disabled={!canCreateApplicationLink || linkMutation.isPending}
-				data-testid="unit-application-create-link"
-			>
-				<Link2 class="h-4 w-4" />
-				{linkMutation.isPending ? 'Creating…' : 'Create application link'}
-			</Button>
-		</div>
+		{#if !isVacant}
+			<div class="flex flex-wrap justify-end gap-2">
+				<Button
+					class="gap-2"
+					onclick={createApplicationLink}
+					disabled={!canCreateApplicationLink || linkMutation.isPending}
+					data-testid="unit-application-create-link"
+				>
+					<Link2 class="h-4 w-4" />
+					{linkMutation.isPending ? 'Getting the link…' : 'Share application'}
+				</Button>
+			</div>
+		{/if}
 	{/if}
 
 	{#if applicationsQuery.isLoading}
@@ -243,7 +262,7 @@
 					data-testid="unit-application-empty-create-link"
 				>
 					<Link2 class="h-4 w-4" />
-					{linkMutation.isPending ? 'Creating…' : 'Create application link'}
+					{linkMutation.isPending ? 'Getting the link…' : 'Share application'}
 				</Button>
 			</div>
 		</DetailCard>
@@ -278,7 +297,7 @@
 <Dialog.Root open={showLinkDialog} onOpenChange={(v) => (showLinkDialog = v)}>
 	<Dialog.Content class="max-w-lg">
 		<Dialog.Header>
-			<Dialog.Title>Application link for Unit {dashboard.unit.unitNumber}</Dialog.Title>
+			<Dialog.Title>Share the application for Unit {dashboard.unit.unitNumber}</Dialog.Title>
 			<Dialog.Description>
 				Share this link with prospects for {unitLabel}. The public application opens with this property and unit preselected.
 			</Dialog.Description>
@@ -301,7 +320,7 @@
 					{#if copied}
 						<Check class="h-4 w-4 text-[var(--success)]" /> Copied
 					{:else}
-						<Copy class="h-4 w-4" /> Copy
+						<Copy class="h-4 w-4" /> Copy link
 					{/if}
 				</Button>
 			</div>
