@@ -30,6 +30,7 @@ void main() {
 
     final now = await container.read(appNowProvider.future);
 
+    expect(now.isUtc, isTrue);
     expect(now.isBefore(before), isFalse);
     expect(
       now.isAfter(DateTime.now().add(const Duration(seconds: 1))),

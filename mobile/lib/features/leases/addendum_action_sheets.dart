@@ -1060,8 +1060,9 @@ class _CorrectAddendumSheetState extends ConsumerState<_CorrectAddendumSheet> {
   @override
   void initState() {
     super.initState();
-    final firstEligible = widget.source.effectiveFromOn.add(
-      const Duration(days: 1),
+    final firstEligible = DateUtils.addDaysToDate(
+      widget.source.effectiveFromOn,
+      1,
     );
     _effectiveOn = widget.businessDate.isAfter(firstEligible)
         ? DateUtils.dateOnly(widget.businessDate)

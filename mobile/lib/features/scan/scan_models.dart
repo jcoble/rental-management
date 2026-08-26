@@ -318,7 +318,8 @@ class ScanDraft {
       costUsd: (json['costUsd'] as num?)?.toDouble(),
       failureReason: json['failureReason'] as String?,
       createdAt:
-          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
+          (DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0))
+              .toLocal(),
       reviewedAt: json['reviewedAt'] != null
           ? DateTime.tryParse(json['reviewedAt'] as String)
           : null,

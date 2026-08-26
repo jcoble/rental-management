@@ -1846,7 +1846,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
     if (!mounted) return;
     final picked = await showDatePicker(
       context: context,
-      initialDate: _scheduledDate ?? now,
+      initialDate: _scheduledDate ?? now.toLocal(),
       firstDate: DateTime(now.year - 1),
       lastDate: DateTime(now.year + 5),
     );

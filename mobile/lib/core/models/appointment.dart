@@ -56,15 +56,22 @@ class Appointment {
       prospectEmail: json['prospectEmail'] as String?,
       type: json['type'] as String? ?? '',
       status: json['status'] as String? ?? '',
-      scheduledStart: DateTime.tryParse(json['scheduledStart'] as String? ?? '') ?? DateTime(0),
-      scheduledEnd: DateTime.tryParse(json['scheduledEnd'] as String? ?? ''),
+      scheduledStart:
+          (DateTime.tryParse(json['scheduledStart'] as String? ?? '') ??
+                  DateTime(0))
+              .toLocal(),
+      scheduledEnd: DateTime.tryParse(
+        json['scheduledEnd'] as String? ?? '',
+      )?.toLocal(),
       assignedTo: json['assignedTo'] as String?,
       notes: json['notes'] as String?,
       propertyName: json['propertyName'] as String?,
       unitNumber: json['unitNumber'] as String?,
       tenantName: json['tenantName'] as String?,
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
-      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
     );
   }
 

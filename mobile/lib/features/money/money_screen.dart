@@ -454,6 +454,7 @@ class _OverviewTab extends ConsumerStatefulWidget {
 
 class _OverviewTabState extends ConsumerState<_OverviewTab> {
   late MoneyPositionRequest _request;
+  final _periodFieldKey = GlobalKey<FormFieldState<String>>();
 
   @override
   void initState() {
@@ -481,6 +482,7 @@ class _OverviewTabState extends ConsumerState<_OverviewTab> {
             _PeriodFacts(
               position: position,
               request: _request,
+              fieldKey: _periodFieldKey,
               onRequestChanged: (request) => setState(() => _request = request),
             ),
           ],
@@ -723,11 +725,13 @@ class _PeriodFacts extends StatelessWidget {
   const _PeriodFacts({
     required this.position,
     required this.request,
+    required this.fieldKey,
     required this.onRequestChanged,
   });
 
   final MoneyPositionResponse position;
   final MoneyPositionRequest request;
+  final GlobalKey<FormFieldState<String>> fieldKey;
   final ValueChanged<MoneyPositionRequest> onRequestChanged;
 
   @override
@@ -740,7 +744,7 @@ class _PeriodFacts extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             DropdownButtonFormField<String>(
-              key: const Key('money-overview-period'),
+              key: fieldKey,
               initialValue: request.label,
               decoration: const InputDecoration(
                 labelText: 'Period facts',
@@ -783,15 +787,25 @@ class _PeriodFacts extends StatelessWidget {
                         ? DateTimeRange(start: request.from!, end: request.to!)
                         : null,
                   );
-                  if (range != null) {
-                    onRequestChanged(
-                      MoneyPositionRequest(
-                        label: 'Custom',
-                        from: range.start,
-                        to: range.end,
-                      ),
-                    );
+                  if (range == null) {
+                    fieldKey.currentState?.didChange(request.label);
+                    return;
                   }
+                  onRequestChanged(
+                    MoneyPositionRequest(
+                      label: 'Custom',
+                      from: DateTime.utc(
+                        range.start.year,
+                        range.start.month,
+                        range.start.day,
+                      ),
+                      to: DateTime.utc(
+                        range.end.year,
+                        range.end.month,
+                        range.end.day,
+                      ),
+                    ),
+                  );
                 }
               },
             ),
