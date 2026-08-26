@@ -16,7 +16,9 @@ import 'package:rental_command/features/appointments/appointments_screen.dart';
 import 'package:rental_command/features/leases/successor_agreement_sheet.dart';
 import 'package:rental_command/features/money/money_screen.dart';
 import 'package:rental_command/features/money/tenant_ledger_view.dart';
+import 'package:rental_command/features/scan/scan_list_screen.dart';
 import 'package:rental_command/features/scan/scan_models.dart';
+import 'package:rental_command/features/scan/scan_repository.dart';
 
 void main() {
   test('appointment response exposes scheduled instants in local time', () {
@@ -194,18 +196,28 @@ void main() {
     expect(find.text('This month'), findsOneWidget);
   });
 
-  test('scan response exposes created time in the device timezone', () {
+  testWidgets('scan list renders the local calendar day', (tester) async {
+    final instant = DateTime.utc(2026, 8, 26, 2, 30);
     final draft = ScanDraft.fromJson({
       'id': 1,
       'portfolioId': 1,
-      'createdAt': '2026-08-25T23:30:00Z',
+      'createdAt': instant.toIso8601String(),
     });
-    final instant = DateTime.utc(2026, 8, 25, 23, 30);
-    final fixedWest = instant.subtract(const Duration(hours: 4));
 
-    expect(draft.createdAt.isUtc, isFalse);
-    expect(draft.createdAt, instant.toLocal());
-    expect((fixedWest.month, fixedWest.day), (8, 25));
+    expect(instant.toLocal().timeZoneOffset, const Duration(hours: -4));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          scanListFamilyProvider.overrideWith(
+            (ref, status) async => [draft],
+          ),
+        ],
+        child: const MaterialApp(home: ScanListScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('8/25/2026'), findsOneWidget);
   });
 }
 
