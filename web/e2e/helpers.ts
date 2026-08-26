@@ -140,9 +140,9 @@ export interface UnitDashboardLite {
 /**
  * Find a unit (in the caller's portfolio) that has a current tenant account — required for the Rent
  * tab, which only shows the receipt/charge affordances and ledger when an account exists. Selects
- * one account from the canonical DB-paged account surface, then loads that unit's dashboard. Throws
- * if the linked dashboard does not carry the same account so the test fails loudly rather than
- * silently exercising unrelated seed data.
+ * an occupied account from the canonical DB-paged account surface, then loads that unit's lease
+ * summary. This avoids serially loading every unit dashboard when earlier tests leave prepared or
+ * ending accounts at the top of the shared list.
  */
 export async function findLeasedUnit(
 	request: APIRequestContext,
@@ -153,21 +153,40 @@ export async function findLeasedUnit(
 	});
 	expect(accountsRes.ok(), `tenant-account page failed: ${accountsRes.status()}`).toBeTruthy();
 	const accounts = (await accountsRes.json()) as {
-		items: Array<{ tenantAccountId: number; unitId: number }>;
+		items: Array<{
+			tenantAccountId: number;
+			leaseManagementId: number;
+			propertyId: number;
+			unitId: number;
+			unitNumber: string;
+			lifecycle: string;
+		}>;
 	};
-	expect(accounts.items.length, 'No tenant account found in the seeded data').toBeGreaterThan(0);
-
-	// Some shared verification seeds retain a closed/reserved account in the first
-	// sorted slot. Walk the bounded page and return the first account whose unit
-	// dashboard still carries the same current lease identity.
-	for (const account of accounts.items) {
-		const dashboardRes = await request.get(`/api/v1/units/${account.unitId}/dashboard`, {
-			headers: bearer(token)
-		});
-		if (!dashboardRes.ok()) continue;
-		const dashboard = (await dashboardRes.json()) as UnitDashboardLite;
-		if (dashboard.currentLease?.tenantAccountId === account.tenantAccountId) return dashboard;
-	}
-
-	expect.fail('No leased tenant account found in the bounded seeded page');
+	const account = accounts.items.find((item) => item.lifecycle === 'Occupied');
+	if (!account) expect.fail('No occupied tenant account found in the seeded data');
+	const leasesRes = await request.get(
+		`/api/v1/lease-managements/page?unitId=${account.unitId}&take=50&sort=-updatedAtUtc`,
+		{ headers: bearer(token) }
+	);
+	expect(leasesRes.ok(), `lease-management page failed: ${leasesRes.status()}`).toBeTruthy();
+	const leases = (await leasesRes.json()) as {
+		items: Array<{
+			leaseManagementId: number;
+			tenantAccountId?: number | null;
+			agreementNumber?: string | null;
+			baseRentAmount?: number | null;
+		}>;
+	};
+	const lease = leases.items.find((item) => item.leaseManagementId === account.leaseManagementId);
+	if (!lease) expect.fail('Occupied tenant account has no matching lease');
+	return {
+		unit: { id: account.unitId, propertyId: account.propertyId, unitNumber: account.unitNumber },
+		currentLease: {
+			id: lease.leaseManagementId,
+			leaseManagementId: lease.leaseManagementId,
+			tenantAccountId: lease.tenantAccountId,
+			leaseNumber: lease.agreementNumber ?? '',
+			monthlyRent: lease.baseRentAmount ?? 0
+		}
+	};
 }
