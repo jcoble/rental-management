@@ -44,14 +44,17 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
-	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
-	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
-	import { Pencil, Plus, Download, FileBarChart, Landmark, Check, Sparkles } from '@lucide/svelte';
+	import {
+		hasMoreDetailValues,
+		readLastExpenseProperty,
+		rememberLastExpenseProperty
+	} from '$lib/accounting/expense-form';
+	import { Pencil, Plus, Download, FileBarChart, Landmark, Check, Sparkles, ScanLine } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -301,8 +304,10 @@
 	let editingExpenseId = $state<number | null>(null);
 	let expenseForm = $state({ ...emptyExpense });
 	let expenseErrors = $state<Record<string, string>>({});
-	let expenseStep = $state(0);
-	let completedExpenseSteps = $state<number[]>([]);
+	let expenseMoreOpen = $state(false);
+	// The date and rental a new expense opens with are only suggestions, so picking a repair is still
+	// allowed to replace them; anything the landlord typed themselves is never overwritten.
+	let expenseDefaults = $state<Record<string, string>>({});
 	let expenseDeleteTarget = $state<Expense | null>(null);
 	let lastExpenseVendorAutofillId = $state('');
 	let lastExpenseWorkOrderAutofillId = $state('');
@@ -314,24 +319,11 @@
 	// Holds the parsed ReceiptData of the expense being edited, so line items / extra survive a re-save.
 	let editingReceipt = $state<Record<string, any> | null>(null);
 	const expensePropertyId = $derived(expenseForm.propertyId ? Number(expenseForm.propertyId) : null);
-	const expenseSteps: FormStepperStep[] = [
-		{ id: 'source', label: 'Source', description: 'Links and defaults' },
-		{ id: 'details', label: 'Details', description: 'Description and amount' },
-		{ id: 'dates', label: 'Dates', description: 'Incurred and paid' },
-		{ id: 'context', label: 'Context', description: 'Category and notes' },
-		{ id: 'vendor', label: 'Vendor', description: 'Receipt contact' },
-		{ id: 'receipt', label: 'Receipt', description: 'Payment proof' },
-		{ id: 'adjustments', label: 'Adjustments', description: 'Tax and extras' }
-	];
-	const expenseStepFields = [
-		['workOrderId', 'propertyId', 'unitId', 'vendorId'],
-		['description', 'amount', 'subtotal', 'taxAmount'],
-		['incurredAt', 'dueDate', 'paidAt'],
-		['category', 'status', 'billableToOwner', 'notes'],
-		['vendorAddress', 'vendorPhone', 'vendorWebsite', 'vendorTaxId'],
-		['receiptNumber', 'paymentMethod', 'cardLast4'],
-		['taxRate', 'tip', 'discount', 'shipping']
-	] as const;
+	/** Today, as the yyyy-MM-dd string the date picker and the API both expect. */
+	function todayIso() {
+		const now = new Date();
+		return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+	}
 
 	function clearExpenseError(field: string) {
 		const next = clearFieldError(expenseErrors, field);
@@ -388,13 +380,18 @@
 	function openCreateExpense() {
 		editingExpenseId = null;
 		editingReceipt = null;
-		expenseForm = { ...emptyExpense };
+		// Start on the rental this landlord filed the last expense against, dated today: two
+		// answers ("what" and "how much") is all a routine spend needs.
+		const lastProperty = readLastExpenseProperty(
+			typeof localStorage === 'undefined' ? null : localStorage
+		);
+		expenseForm = { ...emptyExpense, incurredAt: todayIso(), propertyId: lastProperty.id };
+		expenseDefaults = { incurredAt: expenseForm.incurredAt, propertyId: expenseForm.propertyId };
 		expenseErrors = {};
-		expenseStep = 0;
-		completedExpenseSteps = [];
+		expenseMoreOpen = false;
 		lastExpenseVendorAutofillId = '';
 		lastExpenseWorkOrderAutofillId = '';
-		selectedPropertyLabel = null;
+		selectedPropertyLabel = lastProperty.label;
 		selectedVendorLabel = null;
 		selectedUnitLabel = null;
 		selectedWorkOrderLabel = null;
@@ -431,9 +428,10 @@
 			discount: rd?.discount != null ? String(rd.discount) : '',
 			shipping: rd?.shipping != null ? String(rd.shipping) : ''
 		};
+		expenseDefaults = {};
 		expenseErrors = {};
-		expenseStep = 0;
-		completedExpenseSteps = [];
+		// An expense that already carries anything beyond the essentials opens with More details showing.
+		expenseMoreOpen = hasMoreDetailValues(expenseForm);
 		lastExpenseVendorAutofillId = '';
 		lastExpenseWorkOrderAutofillId = '';
 		selectedPropertyLabel = e.propertyName ?? null;
@@ -450,7 +448,8 @@
 	function fillExpenseTextField(field: keyof typeof emptyExpense, value: string | number | null | undefined) {
 		if (value == null || value === '') return;
 		if (typeof expenseForm[field] === 'boolean') return;
-		if (String(expenseForm[field] ?? '').trim()) return;
+		const current = String(expenseForm[field] ?? '').trim();
+		if (current && current !== expenseDefaults[field]) return;
 		(expenseForm as Record<string, string | boolean>)[field] = String(value);
 	}
 	function autofillExpenseFromVendor(vendor: Vendor | undefined) {
@@ -506,8 +505,7 @@
 		showExpenseForm = false;
 		editingExpenseId = null;
 		expenseErrors = {};
-		expenseStep = 0;
-		completedExpenseSteps = [];
+		expenseMoreOpen = false;
 		lastExpenseVendorAutofillId = '';
 		lastExpenseWorkOrderAutofillId = '';
 		selectedPropertyLabel = null;
@@ -515,46 +513,12 @@
 		selectedUnitLabel = null;
 		selectedWorkOrderLabel = null;
 	}
-	function expenseStepErrorFields(step: number, errors: Record<string, string>) {
-		const visibleFields = new Set<string>(expenseStepFields[step] ?? []);
-		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
-	}
-	function firstExpenseErrorStep(errors: Record<string, string>) {
-		return expenseStepFields.findIndex((fields) => fields.some((field) => errors[field]));
-	}
-	function markExpenseStepInvalid(step: number) {
-		completedExpenseSteps = completedExpenseSteps.filter((completedStep) => completedStep < step);
-	}
-	function validateExpenseStep(step: number) {
-		const result = parseForm(expenseSchema, expenseForm);
-		const currentErrors = result.errors ? Object.fromEntries(expenseStepErrorFields(step, result.errors)) : {};
-		const currentFields = new Set<string>(expenseStepFields[step] ?? []);
-		const nextErrors = Object.fromEntries(Object.entries(expenseErrors).filter(([field]) => !currentFields.has(field)));
-		expenseErrors = { ...nextErrors, ...currentErrors };
-		const isValid = Object.keys(currentErrors).length === 0;
-		if (!isValid) markExpenseStepInvalid(step);
-		return isValid;
-	}
-	function nextExpenseStep() {
-		if (!validateExpenseStep(expenseStep)) return;
-		if (completedExpenseSteps.includes(expenseStep)) {
-			expenseStep = Math.min(expenseStep + 1, expenseSteps.length - 1);
-			return;
-		}
-		completedExpenseSteps = [...completedExpenseSteps, expenseStep];
-		window.setTimeout(() => {
-			expenseStep = Math.min(expenseStep + 1, expenseSteps.length - 1);
-		}, 260);
-	}
 	function submitExpense() {
 		const result = parseForm(expenseSchema, expenseForm);
 		if (result.errors) {
 			expenseErrors = result.errors;
-			const firstErrorStep = firstExpenseErrorStep(result.errors);
-			if (firstErrorStep >= 0) {
-				expenseStep = firstErrorStep;
-				markExpenseStepInvalid(firstErrorStep);
-			}
+			// A problem hiding under More details would otherwise look like nothing happened.
+			if (hasMoreDetailValues(result.errors)) expenseMoreOpen = true;
 			return;
 		}
 		expenseErrors = {};
@@ -591,6 +555,11 @@
 			billableToOwner: d.billableToOwner, notes: d.notes
 		};
 		if (receiptData != null) data.receiptData = receiptData;
+		rememberLastExpenseProperty(
+			typeof localStorage === 'undefined' ? null : localStorage,
+			expenseForm.propertyId,
+			selectedPropertyLabel
+		);
 		saveExpenseMutation.mutate({ id: editingExpenseId, data });
 	}
 
@@ -1230,58 +1199,103 @@
 	open={showExpenseForm}
 	onOpenChange={(v) => { if (!v) closeExpenseForm(); }}
 >
-	<Dialog.Content class="max-h-[85vh] max-w-3xl overflow-y-auto">
+	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
 		<Dialog.Header>
-			<Dialog.Title>{editingExpenseId == null ? 'New Expense' : 'Edit Expense'}</Dialog.Title>
+			<Dialog.Title>{editingExpenseId == null ? 'Add an expense' : 'Edit expense'}</Dialog.Title>
 		</Dialog.Header>
-		<FormStepper
-			steps={expenseSteps}
-			bind:currentStep={expenseStep}
-			completedSteps={completedExpenseSteps}
-			testid="expense-stepper"
-		>
-				<div class="space-y-4" data-testid="expense-form">
-					{#if expenseStep === 0}
+		<div class="space-y-4" data-testid="expense-form">
+			{#if editingExpenseId == null}
+				<a
+					href="/scan"
+					data-testid="expense-scan-link"
+					class="flex items-center gap-3 rounded-lg border border-dashed border-primary/50 bg-primary/5 px-4 py-3 text-left text-sm font-medium text-primary hover:bg-primary/10"
+				>
+					<ScanLine class="h-5 w-5 shrink-0" />
+					<span class="min-w-0">
+						<span class="block">Scan the receipt instead</span>
+						<span class="block text-xs font-normal text-muted-foreground">Take a photo and we fill this in for you.</span>
+					</span>
+				</a>
+			{/if}
+			<div class="space-y-4" data-testid="expense-essentials">
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">What did you spend on?</span>
+					<Input data-testid="expense-description-input" bind:value={expenseForm.description} placeholder="New water heater" />
+					{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
+				</div>
+				<div class="grid gap-3 sm:grid-cols-2">
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">How much?</span>
+						<Input data-testid="expense-amount-input" bind:value={expenseForm.amount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
+						{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">When?</span>
+						<DatePicker testid="expense-incurred-input" bind:value={expenseForm.incurredAt} placeholder="Date of the spend" />
+						{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
+					</div>
+				</div>
+				<div class="grid gap-3 sm:grid-cols-2">
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Which rental?</span>
 						<RemoteRecordSelect
-							queryKey={['expense-work-order', portfolioId]}
-							label="Work order"
-							bind:value={expenseForm.workOrderId}
-							selectedLabel={selectedWorkOrderLabel}
-							placeholder="No work order"
-							clearLabel="No work order"
-							searchPlaceholder="Search work orders…"
-							emptyLabel="No matching work orders"
-							loadPage={loadWorkOrderOptions}
-							onValueChange={(value, option) => {
-								selectedWorkOrderLabel = option?.label ?? null;
-								if (value) autofillExpenseFromWorkOrderId(value);
+							queryKey={['expense-property', portfolioId]}
+							label="Which rental?"
+							hideLabel
+							bind:value={expenseForm.propertyId}
+							selectedLabel={selectedPropertyLabel}
+							placeholder="No property"
+							clearLabel="No property"
+							searchPlaceholder="Search properties…"
+							emptyLabel="No matching properties"
+							loadPage={loadPropertyOptions}
+							onValueChange={(_value, option) => {
+								selectedPropertyLabel = option?.label ?? null;
+								expenseForm.unitId = '';
+								selectedUnitLabel = null;
 							}}
-							testid="expense-workorder-input"
+							testid="expense-property-input"
 						/>
-						<div class="grid gap-3 sm:grid-cols-3">
-							<RemoteRecordSelect
-								queryKey={['expense-property', portfolioId]}
-								label="Property"
-								bind:value={expenseForm.propertyId}
-								selectedLabel={selectedPropertyLabel}
-								placeholder="No property"
-								clearLabel="No property"
-								searchPlaceholder="Search properties…"
-								emptyLabel="No matching properties"
-								loadPage={loadPropertyOptions}
-								onValueChange={(_value, option) => {
-									selectedPropertyLabel = option?.label ?? null;
-									expenseForm.unitId = '';
-									selectedUnitLabel = null;
-								}}
-								testid="expense-property-input"
-							/>
+					</div>
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Category</span>
+						<Select.Root type="single" bind:value={expenseForm.category}>
+							<Select.Trigger class="w-full" data-testid="expense-category-input">
+								{expenseForm.category ? formatExpenseCategory(expenseForm.category) : 'Select category'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each EXPENSE_CATEGORY_OPTIONS as option}
+									<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+				</div>
+			</div>
+			<details
+				class="group rounded-lg border bg-card"
+				bind:open={expenseMoreOpen}
+				data-testid="expense-more-details"
+			>
+				<summary
+					class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold"
+					data-testid="expense-more-details-summary"
+				>
+					<span>More details</span>
+					<span class="text-xs font-normal text-muted-foreground group-open:hidden">Show</span>
+					<span class="hidden text-xs font-normal text-muted-foreground group-open:inline">Hide</span>
+				</summary>
+				<div class="space-y-4 border-t px-4 py-4">
+					<div class="grid gap-3 sm:grid-cols-2">
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Unit</span>
 							<RemoteRecordSelect
 								queryKey={['expense-unit', portfolioId, expensePropertyId]}
 								label="Unit"
+								hideLabel
 								bind:value={expenseForm.unitId}
 								selectedLabel={selectedUnitLabel}
-								placeholder={expenseForm.propertyId ? 'No unit' : 'Select property first'}
+								placeholder={expenseForm.propertyId ? 'No unit' : 'Choose a rental first'}
 								clearLabel="No unit"
 								searchPlaceholder="Search units…"
 								emptyLabel="No matching units"
@@ -1290,9 +1304,13 @@
 								onValueChange={(_value, option) => (selectedUnitLabel = option?.label ?? null)}
 								testid="expense-unit-input"
 							/>
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Who you paid</span>
 							<RemoteRecordSelect
 								queryKey={['expense-vendor', portfolioId]}
-								label="Vendor"
+								label="Who you paid"
+								hideLabel
 								bind:value={expenseForm.vendorId}
 								selectedLabel={selectedVendorLabel}
 								placeholder="No vendor"
@@ -1307,121 +1325,74 @@
 								testid="expense-vendor-input"
 							/>
 						</div>
-					{:else if expenseStep === 1}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Repair this paid for</span>
+						<RemoteRecordSelect
+							queryKey={['expense-work-order', portfolioId]}
+							label="Repair this paid for"
+							hideLabel
+							bind:value={expenseForm.workOrderId}
+							selectedLabel={selectedWorkOrderLabel}
+							placeholder="No repair"
+							clearLabel="No repair"
+							searchPlaceholder="Search repairs…"
+							emptyLabel="No matching repairs"
+							loadPage={loadWorkOrderOptions}
+							onValueChange={(value, option) => {
+								selectedWorkOrderLabel = option?.label ?? null;
+								if (value) autofillExpenseFromWorkOrderId(value);
+							}}
+							testid="expense-workorder-input"
+						/>
+					</div>
+					<div class="grid gap-3 sm:grid-cols-3">
 						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Description</span>
-							<Input data-testid="expense-description-input" bind:value={expenseForm.description} placeholder="Description" />
-							{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
+							<span class="mb-1 block text-xs text-muted-foreground">Paid or still owing</span>
+							<Select.Root type="single" bind:value={expenseForm.status}>
+								<Select.Trigger class="w-full" data-testid="expense-status-input">
+									{expenseForm.status ? formatStatusLabel(expenseForm.status) : 'Select status'}
+								</Select.Trigger>
+								<Select.Content>
+									{#each EXPENSE_STATUSES as s}
+										<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>
+									{/each}
+								</Select.Content>
+							</Select.Root>
 						</div>
-						<div class="grid gap-3 sm:grid-cols-3">
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
-								<Input data-testid="expense-amount-input" bind:value={expenseForm.amount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
-								{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Subtotal</span>
-								<Input data-testid="expense-subtotal-input" bind:value={expenseForm.subtotal} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
-								{#if expenseErrors.subtotal}<p class="mt-1 text-xs text-destructive">{expenseErrors.subtotal}</p>{/if}
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Tax</span>
-								<Input data-testid="expense-tax-input" bind:value={expenseForm.taxAmount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
-								{#if expenseErrors.taxAmount}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxAmount}</p>{/if}
-							</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Due date</span>
+							<DatePicker testid="expense-due-input" bind:value={expenseForm.dueDate} placeholder="Due date" />
 						</div>
-					{:else if expenseStep === 2}
-						<div class="grid gap-3 sm:grid-cols-3">
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Incurred</span>
-								<DatePicker testid="expense-incurred-input" bind:value={expenseForm.incurredAt} placeholder="Incurred date" />
-								{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Due date</span>
-								<DatePicker testid="expense-due-input" bind:value={expenseForm.dueDate} placeholder="Due date" />
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Paid date</span>
-								<DatePicker testid="expense-paid-input" bind:value={expenseForm.paidAt} placeholder="Paid date" />
-							</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Paid date</span>
+							<DatePicker testid="expense-paid-input" bind:value={expenseForm.paidAt} placeholder="Paid date" />
 						</div>
-					{:else if expenseStep === 3}
-						<div class="grid gap-3 sm:grid-cols-2">
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Category</span>
-								<Select.Root type="single" bind:value={expenseForm.category}>
-									<Select.Trigger class="w-full" data-testid="expense-category-input">
-										{expenseForm.category ? formatExpenseCategory(expenseForm.category) : 'Select category'}
-									</Select.Trigger>
-									<Select.Content>
-										{#each EXPENSE_CATEGORY_OPTIONS as option}
-											<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Status</span>
-								<Select.Root type="single" bind:value={expenseForm.status}>
-									<Select.Trigger class="w-full" data-testid="expense-status-input">
-										{expenseForm.status ? formatStatusLabel(expenseForm.status) : 'Select status'}
-									</Select.Trigger>
-									<Select.Content>
-										{#each EXPENSE_STATUSES as s}
-											<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-						</div>
-						<label class="flex items-center gap-2 text-sm">
-							<Checkbox bind:checked={expenseForm.billableToOwner} data-testid="expense-billable-input" />
-							Charge this to the owner
+					</div>
+					<label class="flex items-center gap-2 text-sm">
+						<Checkbox bind:checked={expenseForm.billableToOwner} data-testid="expense-billable-input" />
+						Charge this to the owner
 					</label>
 					<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
-							<textarea data-testid="expense-notes-input" bind:value={expenseForm.notes} rows="3" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"></textarea>
-						</div>
-					{:else if expenseStep === 4}
+						<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
+						<textarea data-testid="expense-notes-input" bind:value={expenseForm.notes} rows="3" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"></textarea>
+					</div>
+					<div class="grid gap-3 sm:grid-cols-2">
 						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Vendor address</span>
-							<Input data-testid="expense-vendor-address-input" bind:value={expenseForm.vendorAddress} />
-						</div>
-						<div class="grid gap-3 sm:grid-cols-3">
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Vendor phone</span>
-								<Input data-testid="expense-vendor-phone-input" bind:value={expenseForm.vendorPhone} type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+							<span class="mb-1 block text-xs text-muted-foreground">Amount before tax</span>
+							<Input data-testid="expense-subtotal-input" bind:value={expenseForm.subtotal} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
+							{#if expenseErrors.subtotal}<p class="mt-1 text-xs text-destructive">{expenseErrors.subtotal}</p>{/if}
 						</div>
 						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Vendor website</span>
-							<Input data-testid="expense-vendor-website-input" bind:value={expenseForm.vendorWebsite} type="url" autocomplete="url" />
+							<span class="mb-1 block text-xs text-muted-foreground">Sales tax</span>
+							<Input data-testid="expense-tax-input" bind:value={expenseForm.taxAmount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
+							{#if expenseErrors.taxAmount}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxAmount}</p>{/if}
 						</div>
+					</div>
+					<div class="grid gap-3 sm:grid-cols-4">
 						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Vendor tax ID</span>
-								<Input data-testid="expense-vendor-taxid-input" bind:value={expenseForm.vendorTaxId} />
-							</div>
-						</div>
-					{:else if expenseStep === 5}
-						<div class="grid gap-3 sm:grid-cols-3">
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Receipt #</span>
-								<Input data-testid="expense-receipt-number-input" bind:value={expenseForm.receiptNumber} />
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Payment method</span>
-							<Input data-testid="expense-payment-method-input" bind:value={expenseForm.paymentMethod} />
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Card last 4</span>
-								<Input data-testid="expense-card-last4-input" bind:value={expenseForm.cardLast4} inputmode="numeric" maxlength={4} mask="cardLast4" />
-							</div>
-						</div>
-					{:else}
-						<div class="grid gap-3 sm:grid-cols-4">
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Tax rate</span>
-								<Input data-testid="expense-tax-rate-input" bind:value={expenseForm.taxRate} inputmode="decimal" mask="percentage" />
+							<span class="mb-1 block text-xs text-muted-foreground">Tax rate</span>
+							<Input data-testid="expense-tax-rate-input" bind:value={expenseForm.taxRate} inputmode="decimal" mask="percentage" />
 							{#if expenseErrors.taxRate}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxRate}</p>{/if}
 						</div>
 						<div>
@@ -1437,23 +1408,44 @@
 							<Input data-testid="expense-shipping-input" bind:value={expenseForm.shipping} inputmode="decimal" mask="currency" />
 						</div>
 					</div>
-				{/if}
-			</div>
-		</FormStepper>
+					<div class="grid gap-3 sm:grid-cols-3">
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Receipt #</span>
+							<Input data-testid="expense-receipt-number-input" bind:value={expenseForm.receiptNumber} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">How you paid</span>
+							<Input data-testid="expense-payment-method-input" bind:value={expenseForm.paymentMethod} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Card last 4</span>
+							<Input data-testid="expense-card-last4-input" bind:value={expenseForm.cardLast4} inputmode="numeric" maxlength={4} mask="cardLast4" />
+						</div>
+					</div>
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Vendor address</span>
+						<Input data-testid="expense-vendor-address-input" bind:value={expenseForm.vendorAddress} />
+					</div>
+					<div class="grid gap-3 sm:grid-cols-3">
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor phone</span>
+							<Input data-testid="expense-vendor-phone-input" bind:value={expenseForm.vendorPhone} type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor website</span>
+							<Input data-testid="expense-vendor-website-input" bind:value={expenseForm.vendorWebsite} type="url" autocomplete="url" />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor tax ID</span>
+							<Input data-testid="expense-vendor-taxid-input" bind:value={expenseForm.vendorTaxId} />
+						</div>
+					</div>
+				</div>
+			</details>
+		</div>
 		<Dialog.Footer>
 			<Button data-testid="expense-form-cancel" variant="outline" onclick={closeExpenseForm}>Cancel</Button>
-			{#if expenseStep > 0}
-				<Button data-testid="expense-step-back" variant="outline" onclick={() => (expenseStep = Math.max(expenseStep - 1, 0))}>Back</Button>
-				{/if}
-				{#if expenseStep < expenseSteps.length - 1}
-					<StepperNextButton
-						testid="expense-step-next"
-						onclick={nextExpenseStep}
-						complete={completedExpenseSteps.includes(expenseStep)}
-					/>
-				{:else}
-				<Button data-testid="expense-form-save" onclick={submitExpense} disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save expense'}</Button>
-			{/if}
+			<Button data-testid="expense-form-save" onclick={submitExpense} disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save expense'}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
