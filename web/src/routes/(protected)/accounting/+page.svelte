@@ -466,7 +466,17 @@
 	}
 	function autofillExpenseFromVendorId(vendorId: string) {
 		if (!vendorId) return false;
-		return autofillExpenseFromVendor(vendorOptionCache[vendorId]);
+		const cached = vendorOptionCache[vendorId];
+		if (!cached) {
+			// The vendor came in with a repair rather than from the vendor list, so its details
+			// are not loaded yet. Fetch them once; the fill runs again as soon as they arrive.
+			vendors
+				.get(Number(vendorId))
+				.then((vendor) => (vendorOptionCache[vendorId] = vendor))
+				.catch(() => {});
+			return false;
+		}
+		return autofillExpenseFromVendor(cached);
 	}
 	function dateOnly(value: string | null | undefined) {
 		return value?.slice(0, 10);
@@ -475,11 +485,20 @@
 		if (!workOrder) return false;
 		fillExpenseTextField('propertyId', workOrder.propertyId);
 		fillExpenseTextField('unitId', workOrder.unitId);
+		// The pickers show a name, not an id, so the names have to follow whatever was just filled in —
+		// otherwise the rental keeps reading "No property" even though one is chosen.
+		if (expenseForm.propertyId === String(workOrder.propertyId)) {
+			selectedPropertyLabel = workOrder.propertyName ?? null;
+		}
+		if (workOrder.unitId != null && expenseForm.unitId === String(workOrder.unitId)) {
+			selectedUnitLabel = workOrder.unitNumber ? `Unit ${workOrder.unitNumber}` : null;
+		}
 		fillExpenseTextField('description', workOrder.title);
 		fillExpenseTextField('amount', workOrder.actualCost ?? workOrder.estimatedCost);
 		fillExpenseTextField('incurredAt', dateOnly(workOrder.completedAt ?? workOrder.scheduledFor ?? workOrder.requestedAt));
 		if (workOrder.vendorId && !expenseForm.vendorId) {
 			expenseForm.vendorId = String(workOrder.vendorId);
+			selectedVendorLabel = workOrder.vendorName ?? null;
 		}
 		return true;
 	}
