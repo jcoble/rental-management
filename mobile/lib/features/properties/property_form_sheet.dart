@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
@@ -422,7 +423,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
     if (_rentalStructure == RentalStructure.singleRental) {
       return [
         {
-          'unitNumber': _canonicalUnitNumber(_nameCtrl.text),
+          'unitNumber': '1',
           'bedrooms': int.tryParse(_bedroomsCtrl.text.trim()) ?? 0,
           'bathrooms': double.tryParse(_bathroomsCtrl.text.trim()) ?? 0,
           'marketRent': double.tryParse(_marketRentCtrl.text.trim()) ?? 0,
@@ -441,15 +442,6 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
     Map<String, dynamic> payload,
   ) async {
     return repo.setupProperty(property: payload, units: _initialUnitsPayload());
-  }
-
-  String _canonicalUnitNumber(String propertyName) {
-    final value = propertyName.trim().isEmpty
-        ? 'Property'
-        : propertyName.trim();
-    return value.length <= _unitNumberMaxLength
-        ? value
-        : value.substring(0, _unitNumberMaxLength);
   }
 
   Future<void> _submit() async {
@@ -482,13 +474,434 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    const gap = SizedBox(height: 12);
+  bool _validateCreateSheet() {
+    final addressValid = _validateAddressStep();
+    final rentalsValid = _validateRentalsStep();
+    return addressValid && rentalsValid;
+  }
 
+  static const _gap = SizedBox(height: 12);
+
+  Widget _nameField() {
+    return TextFormField(
+      key: const Key('property-name-field'),
+      controller: _nameCtrl,
+      textInputAction: TextInputAction.next,
+      decoration: const InputDecoration(labelText: 'Property name'),
+      validator: (v) => _required('Name', v),
+    );
+  }
+
+  Widget _typeField() {
+    return DropdownButtonFormField<String>(
+      key: const Key('property-type-field'),
+      initialValue: _selectedType,
+      decoration: const InputDecoration(labelText: 'Type'),
+      items: _propertyTypes
+          .map(
+            (option) => DropdownMenuItem(
+              value: option.value,
+              child: Text(option.label),
+            ),
+          )
+          .toList(),
+      onChanged: (value) {
+        if (value != null) setState(() => _selectedType = value);
+      },
+    );
+  }
+
+  Widget _statusField() {
+    return DropdownButtonFormField<String>(
+      key: const Key('property-status-field'),
+      initialValue: _selectedStatus,
+      decoration: const InputDecoration(labelText: 'Status'),
+      items: _propertyStatuses
+          .map(
+            (option) => DropdownMenuItem(
+              value: option.value,
+              child: Text(option.label),
+            ),
+          )
+          .toList(),
+      onChanged: (value) {
+        if (value != null) setState(() => _selectedStatus = value);
+      },
+    );
+  }
+
+  Widget _ownerRow() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<int?>(
+            key: const Key('property-owner-field'),
+            initialValue: _selectedOwnerEntityId,
+            isExpanded: true,
+            decoration: InputDecoration(
+              labelText: 'Owner',
+              helperText: _ownersLoading ? 'Loading owners...' : null,
+            ),
+            items: [
+              const DropdownMenuItem<int?>(
+                value: null,
+                child: Text('No owner assigned'),
+              ),
+              for (final owner in _ownerItems)
+                DropdownMenuItem<int?>(
+                  value: owner.id,
+                  child: Text(
+                    owner.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: _ownersLoading
+                ? null
+                : (value) => setState(() => _selectedOwnerEntityId = value),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: IconButton.filledTonal(
+            key: const Key('property-owner-add-button'),
+            tooltip: 'Add owner',
+            icon: const Icon(Icons.person_add_alt_1_outlined),
+            onPressed: _ownersLoading || _ownerActionLoading
+                ? null
+                : () => _showOwnerForm(),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: IconButton.outlined(
+            key: const Key('property-owner-edit-button'),
+            tooltip: 'Edit selected owner',
+            icon: _ownerActionLoading
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.edit_outlined),
+            onPressed:
+                _ownersLoading ||
+                    _ownerActionLoading ||
+                    _selectedOwnerEntityId == null
+                ? null
+                : _editSelectedOwner,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _addressField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        AddressAutocompleteField(
+          controller: _addressCtrl,
+          label: 'Address',
+          testKey: 'property-address-field',
+          onResolved: (a) {
+            if (a.city.isNotEmpty) _cityCtrl.text = a.city;
+            if (a.state.isNotEmpty) _stateCtrl.text = a.state;
+            if (a.zip.isNotEmpty) _zipCtrl.text = a.zip;
+          },
+        ),
+        if (_addressError != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            _addressError!,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.error,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _address2Field() {
+    return TextFormField(
+      key: const Key('property-address2-field'),
+      controller: _address2Ctrl,
+      textInputAction: TextInputAction.next,
+      decoration: const InputDecoration(labelText: 'Apt / Suite / Unit #'),
+    );
+  }
+
+  Widget _cityField() {
+    return TextFormField(
+      key: const Key('property-city-field'),
+      controller: _cityCtrl,
+      textInputAction: TextInputAction.next,
+      decoration: const InputDecoration(labelText: 'City'),
+      validator: (v) => _required('City', v),
+    );
+  }
+
+  Widget _stateZipRow() {
+    return Row(
+      children: [
+        Expanded(
+          child: TextFormField(
+            key: const Key('property-state-field'),
+            controller: _stateCtrl,
+            textInputAction: TextInputAction.next,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(labelText: 'State'),
+            validator: (v) => _required('State', v),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: TextFormField(
+            key: const Key('property-zip-field'),
+            controller: _zipCtrl,
+            textInputAction: TextInputAction.done,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'ZIP'),
+            validator: (v) => _required('ZIP', v),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _monthlyRentField() {
+    return TextFormField(
+      key: const Key('property-rental-market-rent-field'),
+      controller: _marketRentCtrl,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: const InputDecoration(
+        labelText: 'Monthly rent',
+        prefixText: r'$ ',
+      ),
+      validator: (value) => _optionalNonNegative('Monthly rent', value),
+    );
+  }
+
+  Widget _bedsBathsRow() {
+    return Row(
+      children: [
+        Expanded(
+          child: TextFormField(
+            key: const Key('property-rental-bedrooms-field'),
+            controller: _bedroomsCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'Bedrooms'),
+            validator: (value) =>
+                _optionalIntRange('Bedrooms', value, min: 0, max: 100),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: TextFormField(
+            key: const Key('property-rental-bathrooms-field'),
+            controller: _bathroomsCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(labelText: 'Bathrooms'),
+            validator: (value) =>
+                _optionalNumberRange('Bathrooms', value, min: 0, max: 100),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _unitNumbersField() {
+    return TextFormField(
+      key: const Key('property-unit-numbers-field'),
+      controller: _unitNumbersCtrl,
+      minLines: 4,
+      maxLines: 8,
+      decoration: InputDecoration(
+        labelText: 'Unit names or numbers',
+        hintText: '1A\n1B\n2A\n2B',
+        helperText: 'One per line. You can add the remaining units later.',
+        errorText: _rentalsError,
+        alignLabelWithHint: true,
+      ),
+    );
+  }
+
+  Widget _multiRentalQuestion() {
+    return SwitchListTile(
+      key: const Key('property-multi-rental-field'),
+      contentPadding: EdgeInsets.zero,
+      value: _rentalStructure == RentalStructure.multiRental,
+      title: Text(
+        'Does this address have more than one rental?',
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+      ),
+      onChanged: (isMulti) => setState(() {
+        _rentalStructure = isMulti
+            ? RentalStructure.multiRental
+            : RentalStructure.singleRental;
+        _rentalsError = null;
+      }),
+    );
+  }
+
+  Widget _yearBuiltField() {
+    return TextFormField(
+      key: const Key('property-year-built-field'),
+      controller: _yearBuiltCtrl,
+      textInputAction: TextInputAction.next,
+      keyboardType: TextInputType.number,
+      decoration: const InputDecoration(labelText: 'Year built'),
+      validator: (v) =>
+          _optionalIntRange('Year built', v, min: 1800, max: 2200),
+    );
+  }
+
+  Widget _managementFeeRow() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: TextFormField(
+            key: const Key('property-management-fee-field'),
+            controller: _managementFeeCtrl,
+            textInputAction: TextInputAction.next,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(labelText: 'Management fee %'),
+            validator: (v) =>
+                _optionalNumberRange('Management fee', v, min: 0, max: 100),
+          ),
+        ),
+        const SizedBox(width: 4),
+        const Padding(
+          padding: EdgeInsets.only(top: 4),
+          child: _ManagementFeeHelpButton(),
+        ),
+      ],
+    );
+  }
+
+  Widget _notesField() {
+    return TextFormField(
+      key: const Key('property-notes-field'),
+      controller: _notesCtrl,
+      minLines: 3,
+      maxLines: 5,
+      decoration: const InputDecoration(labelText: 'Notes'),
+    );
+  }
+
+  List<Widget> _taxBasisFields() {
+    return [
+      TextFormField(
+        key: const Key('property-purchase-price-field'),
+        controller: _purchasePriceCtrl,
+        textInputAction: TextInputAction.next,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: const InputDecoration(labelText: 'Purchase price'),
+        validator: (v) => _optionalNonNegative('Purchase price', v),
+      ),
+      _gap,
+      TextFormField(
+        key: const Key('property-land-value-field'),
+        controller: _landValueCtrl,
+        textInputAction: TextInputAction.next,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: const InputDecoration(labelText: 'Land value'),
+        validator: _landValueValidator,
+      ),
+      _gap,
+      TextFormField(
+        key: const Key('property-in-service-date-field'),
+        controller: _inServiceDateCtrl,
+        textInputAction: TextInputAction.next,
+        keyboardType: TextInputType.datetime,
+        decoration: const InputDecoration(
+          labelText: 'In-service date',
+          hintText: 'YYYY-MM-DD',
+        ),
+        validator: (v) => _optionalDate('In-service date', v),
+      ),
+      _gap,
+      TextFormField(
+        key: const Key('property-manual-depreciation-field'),
+        controller: _manualDepreciationCtrl,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: const InputDecoration(
+          labelText: 'Manual annual depreciation',
+        ),
+        validator: (v) => _optionalNonNegative('Manual annual depreciation', v),
+      ),
+    ];
+  }
+
+  Widget _buildCreateSheet() {
     return TabbedFormSheet(
-      title: _isEditing ? 'Edit Property' : 'New Property',
-      saveLabel: _isEditing ? 'Save Property' : 'Save Property',
+      title: 'Add a rental',
+      saveLabel: 'Add rental',
+      saving: _saving,
+      error: _error,
+      onSave: _submit,
+      tabs: [
+        TabbedFormStepSpec(
+          label: 'Rental',
+          validate: _validateCreateSheet,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _nameField(),
+              _gap,
+              _addressField(),
+              _gap,
+              _cityField(),
+              _gap,
+              _stateZipRow(),
+              _gap,
+              if (_rentalStructure == RentalStructure.singleRental) ...[
+                _monthlyRentField(),
+                _gap,
+                _bedsBathsRow(),
+              ] else
+                _unitNumbersField(),
+              const SizedBox(height: 4),
+              _multiRentalQuestion(),
+              const SizedBox(height: 4),
+              MoreDetailsSection(
+                children: [
+                  _address2Field(),
+                  _gap,
+                  _typeField(),
+                  _gap,
+                  _statusField(),
+                  _gap,
+                  _ownerRow(),
+                  _gap,
+                  _yearBuiltField(),
+                  _gap,
+                  _managementFeeRow(),
+                  _gap,
+                  _notesField(),
+                  _gap,
+                  ..._taxBasisFields(),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEditSheet() {
+    return TabbedFormSheet(
+      title: 'Edit Property',
+      saveLabel: 'Save Property',
       saving: _saving,
       error: _error,
       onSave: _submit,
@@ -498,31 +911,10 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              TextFormField(
-                key: const Key('property-name-field'),
-                controller: _nameCtrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'Property name'),
-                validator: (v) => _required('Name', v),
-              ),
-              gap,
-              DropdownButtonFormField<String>(
-                key: const Key('property-type-field'),
-                initialValue: _selectedType,
-                decoration: const InputDecoration(labelText: 'Type'),
-                items: _propertyTypes
-                    .map(
-                      (option) => DropdownMenuItem(
-                        value: option.value,
-                        child: Text(option.label),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) setState(() => _selectedType = value);
-                },
-              ),
-              gap,
+              _nameField(),
+              _gap,
+              _typeField(),
+              _gap,
               Text(
                 'How is this address rented?',
                 style: Theme.of(
@@ -531,9 +923,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
               ),
               const SizedBox(height: 4),
               Text(
-                _isEditing
-                    ? 'Rental structure is set when the property is created.'
-                    : 'This changes how the rental is presented. Both choices use the same Property and Unit records underneath.',
+                'Rental structure is set when the property is created.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -554,251 +944,28 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
                   ),
                 ],
                 selected: {_rentalStructure},
-                onSelectionChanged: _isEditing
-                    ? null
-                    : (selection) => setState(() {
-                        _rentalStructure = selection.single;
-                        _rentalsError = null;
-                      }),
+                onSelectionChanged: null,
               ),
-              gap,
-              DropdownButtonFormField<String>(
-                key: const Key('property-status-field'),
-                initialValue: _selectedStatus,
-                decoration: const InputDecoration(labelText: 'Status'),
-                items: _propertyStatuses
-                    .map(
-                      (option) => DropdownMenuItem(
-                        value: option.value,
-                        child: Text(option.label),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) setState(() => _selectedStatus = value);
-                },
-              ),
-              gap,
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<int?>(
-                      key: const Key('property-owner-field'),
-                      initialValue: _selectedOwnerEntityId,
-                      isExpanded: true,
-                      decoration: InputDecoration(
-                        labelText: 'Owner',
-                        helperText: _ownersLoading ? 'Loading owners...' : null,
-                      ),
-                      items: [
-                        const DropdownMenuItem<int?>(
-                          value: null,
-                          child: Text('No owner assigned'),
-                        ),
-                        for (final owner in _ownerItems)
-                          DropdownMenuItem<int?>(
-                            value: owner.id,
-                            child: Text(
-                              owner.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: _ownersLoading
-                          ? null
-                          : (value) =>
-                                setState(() => _selectedOwnerEntityId = value),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: IconButton.filledTonal(
-                      key: const Key('property-owner-add-button'),
-                      tooltip: 'Add owner',
-                      icon: const Icon(Icons.person_add_alt_1_outlined),
-                      onPressed: _ownersLoading || _ownerActionLoading
-                          ? null
-                          : () => _showOwnerForm(),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: IconButton.outlined(
-                      key: const Key('property-owner-edit-button'),
-                      tooltip: 'Edit selected owner',
-                      icon: _ownerActionLoading
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.edit_outlined),
-                      onPressed:
-                          _ownersLoading ||
-                              _ownerActionLoading ||
-                              _selectedOwnerEntityId == null
-                          ? null
-                          : _editSelectedOwner,
-                    ),
-                  ),
-                ],
-              ),
+              _gap,
+              _statusField(),
+              _gap,
+              _ownerRow(),
             ],
           ),
         ),
-        if (!_isEditing)
-          TabbedFormStepSpec(
-            label: 'Rentals',
-            validate: _validateRentalsStep,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  _rentalStructure == RentalStructure.singleRental
-                      ? 'Rental details'
-                      : 'Initial units',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _rentalStructure == RentalStructure.singleRental
-                      ? 'The home is shown as one rental. Rental Command still creates one underlying Unit so leases, payments, work and listings use the same model as every other rental.'
-                      : 'Enter one unit name or number per line. You can fill in each unit’s bedrooms, rent and other details after setup.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                if (_rentalStructure == RentalStructure.singleRental) ...[
-                  TextFormField(
-                    key: const Key('property-rental-bedrooms-field'),
-                    controller: _bedroomsCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Bedrooms'),
-                    validator: (value) =>
-                        _optionalIntRange('Bedrooms', value, min: 0, max: 100),
-                  ),
-                  gap,
-                  TextFormField(
-                    key: const Key('property-rental-bathrooms-field'),
-                    controller: _bathroomsCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(labelText: 'Bathrooms'),
-                    validator: (value) => _optionalNumberRange(
-                      'Bathrooms',
-                      value,
-                      min: 0,
-                      max: 100,
-                    ),
-                  ),
-                  gap,
-                  TextFormField(
-                    key: const Key('property-rental-market-rent-field'),
-                    controller: _marketRentCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Market rent',
-                      prefixText: r'$ ',
-                    ),
-                    validator: (value) =>
-                        _optionalNonNegative('Market rent', value),
-                  ),
-                ] else
-                  TextFormField(
-                    key: const Key('property-unit-numbers-field'),
-                    controller: _unitNumbersCtrl,
-                    minLines: 5,
-                    maxLines: 10,
-                    decoration: InputDecoration(
-                      labelText: 'Unit names or numbers',
-                      hintText: '1A\n1B\n2A\n2B',
-                      helperText:
-                          'One per line. You can add the remaining units later.',
-                      errorText: _rentalsError,
-                      alignLabelWithHint: true,
-                    ),
-                  ),
-              ],
-            ),
-          ),
         TabbedFormStepSpec(
           label: 'Address',
           validate: _validateAddressStep,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              AddressAutocompleteField(
-                controller: _addressCtrl,
-                label: 'Address',
-                testKey: 'property-address-field',
-                onResolved: (a) {
-                  if (a.city.isNotEmpty) _cityCtrl.text = a.city;
-                  if (a.state.isNotEmpty) _stateCtrl.text = a.state;
-                  if (a.zip.isNotEmpty) _zipCtrl.text = a.zip;
-                },
-              ),
-              if (_addressError != null) ...[
-                const SizedBox(height: 6),
-                Text(
-                  _addressError!,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.error,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-              gap,
-              TextFormField(
-                key: const Key('property-address2-field'),
-                controller: _address2Ctrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(
-                  labelText: 'Apt / Suite / Unit #',
-                ),
-              ),
-              gap,
-              TextFormField(
-                key: const Key('property-city-field'),
-                controller: _cityCtrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'City'),
-                validator: (v) => _required('City', v),
-              ),
-              gap,
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      key: const Key('property-state-field'),
-                      controller: _stateCtrl,
-                      textInputAction: TextInputAction.next,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: const InputDecoration(labelText: 'State'),
-                      validator: (v) => _required('State', v),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      key: const Key('property-zip-field'),
-                      controller: _zipCtrl,
-                      textInputAction: TextInputAction.done,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'ZIP'),
-                      validator: (v) => _required('ZIP', v),
-                    ),
-                  ),
-                ],
-              ),
+              _addressField(),
+              _gap,
+              _address2Field(),
+              _gap,
+              _cityField(),
+              _gap,
+              _stateZipRow(),
             ],
           ),
         ),
@@ -807,37 +974,11 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              TextFormField(
-                key: const Key('property-year-built-field'),
-                controller: _yearBuiltCtrl,
-                textInputAction: TextInputAction.next,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Year built'),
-                validator: (v) =>
-                    _optionalIntRange('Year built', v, min: 1800, max: 2200),
-              ),
-              gap,
-              TextFormField(
-                key: const Key('property-management-fee-field'),
-                controller: _managementFeeCtrl,
-                textInputAction: TextInputAction.next,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: const InputDecoration(
-                  labelText: 'Management fee %',
-                ),
-                validator: (v) =>
-                    _optionalNumberRange('Management fee', v, min: 0, max: 100),
-              ),
-              gap,
-              TextFormField(
-                key: const Key('property-notes-field'),
-                controller: _notesCtrl,
-                minLines: 3,
-                maxLines: 5,
-                decoration: const InputDecoration(labelText: 'Notes'),
-              ),
+              _yearBuiltField(),
+              _gap,
+              _managementFeeRow(),
+              _gap,
+              _notesField(),
             ],
           ),
         ),
@@ -845,57 +986,86 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
           label: 'Tax Basis',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextFormField(
-                key: const Key('property-purchase-price-field'),
-                controller: _purchasePriceCtrl,
-                textInputAction: TextInputAction.next,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: const InputDecoration(labelText: 'Purchase price'),
-                validator: (v) => _optionalNonNegative('Purchase price', v),
-              ),
-              gap,
-              TextFormField(
-                key: const Key('property-land-value-field'),
-                controller: _landValueCtrl,
-                textInputAction: TextInputAction.next,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: const InputDecoration(labelText: 'Land value'),
-                validator: _landValueValidator,
-              ),
-              gap,
-              TextFormField(
-                key: const Key('property-in-service-date-field'),
-                controller: _inServiceDateCtrl,
-                textInputAction: TextInputAction.next,
-                keyboardType: TextInputType.datetime,
-                decoration: const InputDecoration(
-                  labelText: 'In-service date',
-                  hintText: 'YYYY-MM-DD',
-                ),
-                validator: (v) => _optionalDate('In-service date', v),
-              ),
-              gap,
-              TextFormField(
-                key: const Key('property-manual-depreciation-field'),
-                controller: _manualDepreciationCtrl,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: const InputDecoration(
-                  labelText: 'Manual annual depreciation',
-                ),
-                validator: (v) =>
-                    _optionalNonNegative('Manual annual depreciation', v),
-              ),
-            ],
+            children: _taxBasisFields(),
           ),
         ),
       ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _isEditing ? _buildEditSheet() : _buildCreateSheet();
+  }
+}
+
+const _managementFeeHelpUri = 'https://rentalcommand.net/docs/properties';
+
+class _ManagementFeeHelpButton extends StatelessWidget {
+  const _ManagementFeeHelpButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      key: const Key('property-management-fee-help'),
+      tooltip: 'What is a management fee?',
+      visualDensity: VisualDensity.compact,
+      icon: const Icon(Icons.help_outline, size: 20),
+      onPressed: () => _showTip(context),
+    );
+  }
+
+  Future<void> _showTip(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      useSafeArea: true,
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Management fee',
+              style: Theme.of(
+                sheetContext,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Only used if a management company takes a cut of the rent. '
+              'Leave it blank when you manage this rental yourself.',
+            ),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.tonalIcon(
+                key: const Key('property-management-fee-learn-more'),
+                icon: const Icon(Icons.open_in_new, size: 18),
+                label: const Text('Learn more'),
+                onPressed: () => _openGuide(sheetContext),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openGuide(BuildContext context) async {
+    var opened = false;
+    try {
+      opened = await launchUrl(
+        Uri.parse(_managementFeeHelpUri),
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (_) {
+      opened = false;
+    }
+    if (opened || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Could not open the properties guide.')),
     );
   }
 }

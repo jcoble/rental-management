@@ -10,226 +10,153 @@ import 'package:rental_command/features/properties/properties_repository.dart';
 import 'package:rental_command/features/properties/property_form_sheet.dart';
 
 void main() {
-  testWidgets(
-    'property stepper includes web property fields in create payload',
-    (tester) async {
-      final repo = _FakePropertiesRepository();
-      final ownersRepo = _FakeOwnersRepository();
+  testWidgets('property create sheet includes web property fields in payload', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(420, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            propertiesRepositoryProvider.overrideWithValue(repo),
-            ownersRepositoryProvider.overrideWithValue(ownersRepo),
-          ],
-          child: MaterialApp(
-            home: Scaffold(
-              body: Builder(
-                builder: (context) => FilledButton(
-                  onPressed: () => showAddPropertySheet(context),
-                  child: const Text('Add property'),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
+    final repo = _FakePropertiesRepository();
+    final ownersRepo = _FakeOwnersRepository();
 
-      await tester.tap(find.text('Add property'));
-      await tester.pumpAndSettle();
+    await _pumpAddProperty(tester, repo, ownersRepo);
 
-      expect(find.text('Status'), findsOneWidget);
-      expect(find.text('Owner'), findsOneWidget);
-      expect(
-        find.byKey(const Key('property-owner-add-button')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('property-owner-edit-button')),
-        findsOneWidget,
-      );
+    await tester.enterText(
+      find.byKey(const Key('property-name-field')),
+      'Vineyard Flats',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-address-field')),
+      '401 Market St',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-city-field')),
+      'Akron',
+    );
+    await tester.enterText(find.byKey(const Key('property-state-field')), 'OH');
+    await tester.enterText(
+      find.byKey(const Key('property-zip-field')),
+      '44308',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-rental-market-rent-field')),
+      '1875',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-rental-bedrooms-field')),
+      '3',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-rental-bathrooms-field')),
+      '2.5',
+    );
 
-      await tester.enterText(
-        find.byKey(const Key('property-name-field')),
-        'Vineyard Flats',
-      );
-      await tester.tap(find.byKey(const Key('property-status-field')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Under maintenance').last);
-      await tester.pumpAndSettle();
-      final ownerField = find.byKey(const Key('property-owner-field'));
-      await tester.ensureVisible(ownerField);
-      await tester.pumpAndSettle();
-      await tester.tap(ownerField);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('North Coast Holdings').last);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
+    await _openMoreDetails(tester);
 
-      expect(find.text('Rental details'), findsOneWidget);
-      await tester.enterText(
-        find.byKey(const Key('property-rental-bedrooms-field')),
-        '3',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-rental-bathrooms-field')),
-        '2.5',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-rental-market-rent-field')),
-        '1875',
-      );
-      await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
+    expect(find.text('Status'), findsOneWidget);
+    expect(find.text('Owner'), findsOneWidget);
+    expect(find.byKey(const Key('property-owner-add-button')), findsOneWidget);
+    expect(find.byKey(const Key('property-owner-edit-button')), findsOneWidget);
+    expect(find.text('Apt / Suite / Unit #'), findsOneWidget);
+    expect(find.text('Year built'), findsOneWidget);
+    expect(find.text('Management fee %'), findsOneWidget);
+    expect(find.text('Notes'), findsOneWidget);
+    expect(find.text('Purchase price'), findsOneWidget);
+    expect(find.text('Land value'), findsOneWidget);
+    expect(find.text('In-service date'), findsOneWidget);
+    expect(find.text('Manual annual depreciation'), findsOneWidget);
 
-      expect(find.text('Apt / Suite / Unit #'), findsOneWidget);
-      await tester.enterText(
-        find.byKey(const Key('property-address-field')),
-        '401 Market St',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-address2-field')),
-        'Suite 12',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-city-field')),
-        'Akron',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-state-field')),
-        'OH',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-zip-field')),
-        '44308',
-      );
-      await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
+    await _tapField(tester, const Key('property-status-field'));
+    await tester.tap(find.text('Under maintenance').last);
+    await tester.pumpAndSettle();
 
-      expect(find.text('Year built'), findsOneWidget);
-      expect(find.text('Management fee %'), findsOneWidget);
-      expect(find.text('Notes'), findsOneWidget);
-      await tester.enterText(
-        find.byKey(const Key('property-year-built-field')),
-        '1998',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-management-fee-field')),
-        '8.5',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-notes-field')),
-        'North building has separate utility meters.',
-      );
-      await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
+    await _tapField(tester, const Key('property-owner-field'));
+    await tester.tap(find.text('North Coast Holdings').last);
+    await tester.pumpAndSettle();
 
-      expect(find.text('Purchase price'), findsOneWidget);
-      expect(find.text('Land value'), findsOneWidget);
-      expect(find.text('In-service date'), findsOneWidget);
-      expect(find.text('Manual annual depreciation'), findsOneWidget);
-      await tester.enterText(
-        find.byKey(const Key('property-purchase-price-field')),
-        '350000',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-land-value-field')),
-        '50000',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-in-service-date-field')),
-        '2024-01-15',
-      );
-      await tester.enterText(
-        find.byKey(const Key('property-manual-depreciation-field')),
-        '10909',
-      );
+    await tester.enterText(
+      find.byKey(const Key('property-address2-field')),
+      'Suite 12',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-year-built-field')),
+      '1998',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-management-fee-field')),
+      '8.5',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-notes-field')),
+      'North building has separate utility meters.',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-purchase-price-field')),
+      '350000',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-land-value-field')),
+      '50000',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-in-service-date-field')),
+      '2024-01-15',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-manual-depreciation-field')),
+      '10909',
+    );
 
-      await tester.tap(find.text('Save Property'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('Add rental'));
+    await tester.pumpAndSettle();
 
-      expect(repo.createdPayload, containsPair('name', 'Vineyard Flats'));
-      expect(repo.createdPayload, containsPair('type', 'SingleFamily'));
-      expect(
-        repo.createdPayload,
-        containsPair('rentalStructure', 'SingleRental'),
-      );
-      expect(repo.createdPayload, containsPair('status', 'UnderMaintenance'));
-      final ownerships = repo.createdPayload!['ownerships'] as List<dynamic>;
-      expect(ownerships, hasLength(1));
-      final ownership = ownerships.single as Map<String, dynamic>;
-      expect(ownership, containsPair('ownerEntityId', 42));
-      expect(ownership, containsPair('ownershipSharePercent', 100));
-      expect(repo.createdPayload, containsPair('clearOwnership', false));
-      expect(repo.createdPayload, containsPair('addressLine2', 'Suite 12'));
-      expect(repo.createdPayload, containsPair('yearBuilt', 1998));
-      expect(repo.createdPayload, containsPair('managementFeePercent', 8.5));
-      expect(
-        repo.createdPayload,
-        containsPair('notes', 'North building has separate utility meters.'),
-      );
-      expect(repo.createdPayload, containsPair('purchasePrice', 350000.0));
-      expect(repo.createdPayload, containsPair('landValue', 50000.0));
-      expect(repo.createdPayload, containsPair('inServiceDate', '2024-01-15'));
-      expect(
-        repo.createdPayload,
-        containsPair('manualAnnualDepreciation', 10909.0),
-      );
-      expect(repo.setupUnits, hasLength(1));
-      expect(
-        repo.setupUnits.single,
-        containsPair('unitNumber', 'Vineyard Flats'),
-      );
-      expect(repo.setupUnits.single, containsPair('bedrooms', 3));
-      expect(repo.setupUnits.single, containsPair('bathrooms', 2.5));
-      expect(repo.setupUnits.single, containsPair('marketRent', 1875.0));
-    },
-  );
+    expect(repo.createdPayload, containsPair('name', 'Vineyard Flats'));
+    expect(repo.createdPayload, containsPair('type', 'SingleFamily'));
+    expect(
+      repo.createdPayload,
+      containsPair('rentalStructure', 'SingleRental'),
+    );
+    expect(repo.createdPayload, containsPair('status', 'UnderMaintenance'));
+    final ownerships = repo.createdPayload!['ownerships'] as List<dynamic>;
+    expect(ownerships, hasLength(1));
+    final ownership = ownerships.single as Map<String, dynamic>;
+    expect(ownership, containsPair('ownerEntityId', 42));
+    expect(ownership, containsPair('ownershipSharePercent', 100));
+    expect(repo.createdPayload, containsPair('clearOwnership', false));
+    expect(repo.createdPayload, containsPair('addressLine2', 'Suite 12'));
+    expect(repo.createdPayload, containsPair('yearBuilt', 1998));
+    expect(repo.createdPayload, containsPair('managementFeePercent', 8.5));
+    expect(
+      repo.createdPayload,
+      containsPair('notes', 'North building has separate utility meters.'),
+    );
+    expect(repo.createdPayload, containsPair('purchasePrice', 350000.0));
+    expect(repo.createdPayload, containsPair('landValue', 50000.0));
+    expect(repo.createdPayload, containsPair('inServiceDate', '2024-01-15'));
+    expect(
+      repo.createdPayload,
+      containsPair('manualAnnualDepreciation', 10909.0),
+    );
+    expect(repo.setupUnits, hasLength(1));
+    expect(repo.setupUnits.single, containsPair('unitNumber', '1'));
+    expect(repo.setupUnits.single, containsPair('bedrooms', 3));
+    expect(repo.setupUnits.single, containsPair('bathrooms', 2.5));
+    expect(repo.setupUnits.single, containsPair('marketRent', 1875.0));
+  });
 
   testWidgets('multi-rental setup accepts one initial unit atomically', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(420, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
     final repo = _FakePropertiesRepository();
+    await _pumpAddProperty(tester, repo, null);
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [propertiesRepositoryProvider.overrideWithValue(repo)],
-        child: MaterialApp(
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => FilledButton(
-                onPressed: () => showAddPropertySheet(context),
-                child: const Text('Add property'),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-
-    await tester.tap(find.text('Add property'));
-    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('property-name-field')),
       'Maple Court',
     );
-    await tester.tap(find.byKey(const Key('property-type-field')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Multi-family').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Building with units'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Next'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Initial units'), findsOneWidget);
-    await tester.enterText(
-      find.byKey(const Key('property-unit-numbers-field')),
-      '1A',
-    );
-    await tester.tap(find.text('Next'));
-    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('property-address-field')),
       '1200 Maple Avenue',
@@ -243,11 +170,19 @@ void main() {
       find.byKey(const Key('property-zip-field')),
       '43215',
     );
-    await tester.tap(find.text('Next'));
+
+    await _tapField(tester, const Key('property-multi-rental-field'));
+    await tester.enterText(
+      find.byKey(const Key('property-unit-numbers-field')),
+      '1A',
+    );
+
+    await _openMoreDetails(tester);
+    await _tapField(tester, const Key('property-type-field'));
+    await tester.tap(find.text('Multi-family').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Next'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Save Property'));
+
+    await tester.tap(find.text('Add rental'));
     await tester.pumpAndSettle();
 
     expect(repo.createdPayload, containsPair('rentalStructure', 'MultiRental'));
@@ -258,30 +193,14 @@ void main() {
   testWidgets('property owner picker can add and edit owners in place', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(420, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
     final repo = _FakePropertiesRepository();
     final ownersRepo = _FakeOwnersRepository();
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          propertiesRepositoryProvider.overrideWithValue(repo),
-          ownersRepositoryProvider.overrideWithValue(ownersRepo),
-        ],
-        child: MaterialApp(
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => FilledButton(
-                onPressed: () => showAddPropertySheet(context),
-                child: const Text('Add property'),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-
-    await tester.tap(find.text('Add property'));
-    await tester.pumpAndSettle();
+    await _pumpAddProperty(tester, repo, ownersRepo);
+    await _openMoreDetails(tester);
 
     final addOwnerButton = find.byKey(const Key('property-owner-add-button'));
     await tester.ensureVisible(addOwnerButton);
@@ -424,6 +343,51 @@ void main() {
     expect(repo.updatedPayload, isNotNull);
     expect(repo.updatedPayload, isNot(contains('rentalStructure')));
   });
+}
+
+Future<void> _pumpAddProperty(
+  WidgetTester tester,
+  _FakePropertiesRepository repo,
+  _FakeOwnersRepository? ownersRepo,
+) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        propertiesRepositoryProvider.overrideWithValue(repo),
+        if (ownersRepo != null)
+          ownersRepositoryProvider.overrideWithValue(ownersRepo),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => FilledButton(
+              onPressed: () => showAddPropertySheet(context),
+              child: const Text('Add property'),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  await tester.tap(find.text('Add property'));
+  await tester.pumpAndSettle();
+}
+
+Future<void> _openMoreDetails(WidgetTester tester) async {
+  final disclosure = find.text('More details');
+  await tester.ensureVisible(disclosure);
+  await tester.pumpAndSettle();
+  await tester.tap(disclosure);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _tapField(WidgetTester tester, Key key) async {
+  final field = find.byKey(key);
+  await tester.ensureVisible(field);
+  await tester.pumpAndSettle();
+  await tester.tap(field);
+  await tester.pumpAndSettle();
 }
 
 class _FakePropertiesRepository extends PropertiesRepository {
