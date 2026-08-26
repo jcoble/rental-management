@@ -68,8 +68,10 @@ class Appointment {
       propertyName: json['propertyName'] as String?,
       unitNumber: json['unitNumber'] as String?,
       tenantName: json['tenantName'] as String?,
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
-      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
     );
   }
 

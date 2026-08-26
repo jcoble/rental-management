@@ -13,7 +13,6 @@ import 'package:rental_command/features/accounting/accounting_books_repository.d
 import 'package:rental_command/features/accounting/accounting_repository.dart';
 import 'package:rental_command/features/appointments/appointments_screen.dart';
 import 'package:rental_command/features/leases/successor_agreement_sheet.dart';
-import 'package:rental_command/features/money/money_repository.dart';
 import 'package:rental_command/features/money/money_screen.dart';
 import 'package:rental_command/features/money/tenant_ledger_view.dart';
 import 'package:rental_command/features/scan/scan_models.dart';
@@ -104,7 +103,10 @@ void main() {
     final books = _MoneyBooksRepository();
     await _pumpMoneyScreen(tester, books);
 
-    expect(books.lastFrom, DateTime.utc(books.lastTo!.year, books.lastTo!.month));
+    expect(
+      books.lastFrom,
+      DateTime.utc(books.lastTo!.year, books.lastTo!.month),
+    );
     expect(books.lastTo!.isUtc, isTrue);
   });
 
