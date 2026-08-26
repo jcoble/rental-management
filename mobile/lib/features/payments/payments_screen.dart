@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/time/app_clock.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../../core/presentation/formatting.dart';
 import 'payment_detail_screen.dart';
 import 'payments_repository.dart';
+import 'tenant_account_receipt_flow.dart';
 
 Future<RecordTenantReceiptResult?> showRecordTenantReceiptSheet(
   BuildContext context,
@@ -70,9 +74,25 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
     });
   }
 
+  Future<void> _addPayment() async {
+    final result = await showGlobalRecordTenantReceiptFlow(context, ref);
+    if (result != null && mounted) {
+      ref.invalidate(tenantLedgerEntriesPageProvider);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final pageAsync = ref.watch(tenantLedgerEntriesPageProvider(_query));
+    final auth = ref.watch(authControllerProvider);
+    final canAddPayment =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.payments.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
     final body = RefreshIndicator(
       onRefresh: () async =>
           ref.invalidate(tenantLedgerEntriesPageProvider(_query)),
@@ -159,6 +179,13 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
       appBar: AppBar(title: const Text('Receipts')),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'receipts-fab',
+        primaryAction: canAddPayment
+            ? MobileQuickAction(
+                label: 'Add payment',
+                icon: Icons.add_card_outlined,
+                onPressed: _addPayment,
+              )
+            : null,
         onChat: () => openMobileAssistant(context),
         onRecord: () => openMobileRecord(context),
         onScan: () => openMobileScan(context),

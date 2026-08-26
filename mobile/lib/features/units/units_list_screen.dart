@@ -3,10 +3,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/router/mobile_restoration_state.dart';
 import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
+import '../properties/properties_list_screen.dart';
 import 'unit_navigation.dart';
 import 'unit_command_center_tabs.dart';
 import 'units_repository.dart';
@@ -145,12 +150,39 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
     openUnitCommandCenter(context, unitId: unit.id);
   }
 
+  Future<void> _addRental() async {
+    await showAddPropertySheet(
+      context,
+      onSaved: () => ref.invalidate(unitHealthPageProvider),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final unitsAsync = ref.watch(unitHealthPageProvider(_listQuery));
+    final auth = ref.watch(authControllerProvider);
+    final canAddRental =
+        auth is AuthStateAuthenticated &&
+        hasAllPropertiesRentalsManageAuthority(
+          access: auth.access,
+          activeExperience: auth.activeExperience,
+        );
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Units')),
+      floatingActionButton: MobileQuickActionFab(
+        heroTag: 'units-fab',
+        primaryAction: canAddRental
+            ? MobileQuickAction(
+                label: 'Add rental',
+                icon: Icons.add,
+                onPressed: _addRental,
+              )
+            : null,
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
+      ),
       body: Column(
         children: [
           MobileGridControlsBar(
