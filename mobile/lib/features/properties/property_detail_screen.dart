@@ -8,11 +8,13 @@ import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
+import '../../core/auth/solo_landlord.dart';
 import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_impact_card.dart';
 import '../accounting/journal_detail_sheet.dart';
 import '../activity/activity_history_screen.dart';
 import '../../core/presentation/formatting.dart' as money;
+import '../owners/owner_form_sheet.dart';
 import '../scan/scan_capture.dart';
 import '../scan/scan_review_screen.dart';
 import '../units/unit_command_center_screen.dart';
@@ -165,6 +167,20 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
         break;
     }
     await Future.wait(refreshes);
+  }
+
+  Future<void> _showAddOwnerSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      useRootNavigator: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => OwnerFormSheet(onSaved: () {}),
+    );
+    if (mounted) ref.invalidate(soloLandlordProvider);
   }
 
   Future<void> _showAddUnitSheet(BuildContext context) async {
@@ -660,6 +676,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
         _section == PropertyWorkspaceSection.propertyFinances
         ? ref.watch(propertyDispositionsProvider(property.id))
         : null;
+    final soloLandlord = isSoloLandlord(ref);
     final auth = ref.watch(authControllerProvider);
     final canManageRentals =
         auth is AuthStateAuthenticated &&
@@ -709,6 +726,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
               property: property,
               theme: theme,
               colorScheme: colorScheme,
+              showOwner: !soloLandlord,
             ),
             const SizedBox(height: 12),
             _PropertyWorkspaceSectionBar(
@@ -731,7 +749,10 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
             if (_section == PropertyWorkspaceSection.summary)
               _PropertySummaryCard(property: property),
             if (_section == PropertyWorkspaceSection.ownershipManagement)
-              _PropertyOwnershipCard(property: property),
+              if (soloLandlord)
+                _SoloOwnershipCard(onAddOwner: _showAddOwnerSheet)
+              else
+                _PropertyOwnershipCard(property: property),
             if (_section == PropertyWorkspaceSection.propertyWork)
               ..._propertyWorkWidgets(context, workOrdersAsync!, colorScheme),
             if (_section == PropertyWorkspaceSection.documentsHistory)
@@ -1273,6 +1294,38 @@ class _PropertySummaryCard extends StatelessWidget {
   }
 }
 
+/// Solo landlords see a single line instead of the ownership and management
+/// card. The button opens the same owner form used elsewhere.
+class _SoloOwnershipCard extends StatelessWidget {
+  const _SoloOwnershipCard({required this.onAddOwner});
+
+  final VoidCallback onAddOwner;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Owned by you',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            TextButton(
+              key: const Key('property-add-another-owner'),
+              onPressed: onAddOwner,
+              child: const Text('Add another owner'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _PropertyOwnershipCard extends StatelessWidget {
   const _PropertyOwnershipCard({required this.property});
 
@@ -1392,11 +1445,13 @@ class _PropertyHeader extends StatelessWidget {
     required this.property,
     required this.theme,
     required this.colorScheme,
+    required this.showOwner,
   });
 
   final Property property;
   final ThemeData theme;
   final ColorScheme colorScheme;
+  final bool showOwner;
 
   @override
   Widget build(BuildContext context) {
@@ -1448,7 +1503,7 @@ class _PropertyHeader extends StatelessWidget {
                   label: 'Occupied',
                   value: '${property.occupiedUnits ?? 0}',
                 ),
-                if (property.ownerships.isNotEmpty)
+                if (showOwner && property.ownerships.isNotEmpty)
                   _KeyValue(label: 'Owner', value: _formatOwnerships(property)),
               ],
             ),
