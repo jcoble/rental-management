@@ -35,28 +35,34 @@
 		return `${value}T12:00:00.000Z`;
 	}
 
+	/** Blank notice date means "they told me today" — or on the move-out day if that already passed. */
+	function effectiveNoticeDate() {
+		if (noticeDate) return noticeDate;
+		return moveOutDate && moveOutDate < summary.businessDate ? moveOutDate : summary.businessDate;
+	}
+
 	function buildRequest(): RecordLeaseEndingDispositionRequest | null {
 		validationError = '';
 		if (!decisionReason.trim()) {
-			validationError = 'Explain why this ending decision is being recorded.';
+			validationError = 'Say in a few words why this is happening.';
 			return null;
 		}
 		if (decisionReason.trim().length > 1000) {
-			validationError = 'The decision reason cannot exceed 1,000 characters.';
+			validationError = 'Keep the reason under 1,000 characters.';
 			return null;
 		}
-		if (isMoveOut && (!noticeDate || !moveOutDate)) {
-			validationError = 'Move-out requires both the notice date and effective move-out date.';
+		if (isMoveOut && !moveOutDate) {
+			validationError = 'Pick the move-out date.';
 			return null;
 		}
-		if (isMoveOut && moveOutDate < noticeDate) {
+		if (isMoveOut && moveOutDate < effectiveNoticeDate()) {
 			validationError = 'The move-out date cannot be before the notice date.';
 			return null;
 		}
 		return {
 			unitId: summary.unitId,
 			disposition,
-			noticeGivenAtUtc: isMoveOut ? utcDate(noticeDate) : null,
+			noticeGivenAtUtc: isMoveOut ? utcDate(effectiveNoticeDate()) : null,
 			plannedMoveOutAtUtc: isMoveOut ? utcDate(moveOutDate) : null,
 			decisionReason: decisionReason.trim()
 		};
@@ -81,11 +87,11 @@
 			);
 		},
 		onSuccess: async () => {
-			showSuccess('Lease ending plan recorded.');
+			showSuccess('Move-out plan saved.');
 			await onrecorded();
 			onclose();
 		},
-		onError: (error) => showError(apiErrorMessage(error, 'Ending plan could not be recorded.'))
+		onError: (error) => showError(apiErrorMessage(error, 'The move-out plan could not be saved.'))
 	}));
 
 	function submit() {
@@ -94,47 +100,46 @@
 </script>
 
 <Dialog.Root open onOpenChange={(open) => { if (!open && !mutation.isPending) onclose(); }}>
-	<Dialog.Content class="max-w-lg">
+	<Dialog.Content class="max-w-lg" data-testid="plan-move-out-dialog">
 		<Dialog.Header>
-			<Dialog.Title>Record lease ending plan</Dialog.Title>
-			<Dialog.Description>Choose whether the tenants will renew, continue month to month, or move out. This plan does not change the signed lease.</Dialog.Description>
+			<Dialog.Title>Plan move-out</Dialog.Title>
+			<Dialog.Description>Write down what happens when this lease ends. Saving this plan does not change the signed lease.</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="space-y-4 py-2">
 			<label class="space-y-1 text-sm">
-				<span class="font-medium">Decision</span>
-				<SimpleSelect bind:value={disposition} options={[
+				<span class="font-medium">What is happening?</span>
+				<SimpleSelect bind:value={disposition} testid="plan-move-out-what" options={[
 					{ value: 'Undecided', label: 'Not decided yet' },
-					{ value: 'OfferRenewal', label: 'Renew / continue with a new fixed term' },
-					{ value: 'OfferMonthToMonth', label: 'Continue month to month' },
-					{ value: 'NonRenewalMoveOut', label: 'Move out / end the relationship' }
+					{ value: 'OfferRenewal', label: 'Renewing instead' },
+					{ value: 'OfferMonthToMonth', label: 'Month to month' },
+					{ value: 'NonRenewalMoveOut', label: 'Tenant is leaving' }
 				]} />
 			</label>
 
 			{#if isMoveOut}
-				<p class="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
-					Use this for non-renewal, notice to move out, or an early termination. Returning possession remains a separate final action.
-				</p>
 				<div class="grid gap-3 sm:grid-cols-2">
 					<label class="space-y-1 text-sm">
-						<span class="font-medium">Notice date</span>
-						<DatePicker bind:value={noticeDate} />
+						<span class="font-medium">Move-out date</span>
+						<DatePicker bind:value={moveOutDate} testid="plan-move-out-date" />
 					</label>
 					<label class="space-y-1 text-sm">
-						<span class="font-medium">Effective move-out date</span>
-						<DatePicker bind:value={moveOutDate} />
+						<span class="font-medium">Notice date <span class="font-normal text-muted-foreground">(optional)</span></span>
+						<DatePicker bind:value={noticeDate} testid="plan-move-out-notice" />
+						<span class="block text-xs text-muted-foreground">Leave blank if they told you today.</span>
 					</label>
 				</div>
 			{/if}
 
 			<label class="space-y-1 text-sm">
-				<span class="font-medium">Decision reason</span>
+				<span class="font-medium">Reason</span>
 				<textarea
 					bind:value={decisionReason}
 					rows="3"
 					maxlength="1000"
 					class="w-full rounded-md border bg-background px-3 py-2"
-					placeholder={isMoveOut ? 'Example: tenant gave notice, non-renewal, or agreed early termination' : 'Why this continuation path was chosen'}
+					data-testid="plan-move-out-reason"
+					placeholder={isMoveOut ? 'Example: gave notice, not renewing, or agreed to leave early' : 'Example: they want to stay another year'}
 				></textarea>
 			</label>
 			{#if validationError}<p class="text-sm text-destructive">{validationError}</p>{/if}
@@ -142,9 +147,9 @@
 
 		<Dialog.Footer>
 			<Button variant="outline" onclick={onclose} disabled={mutation.isPending}>Cancel</Button>
-			<Button onclick={submit} disabled={mutation.isPending}>
+			<Button onclick={submit} disabled={mutation.isPending} data-testid="plan-move-out-save">
 				{#if mutation.isPending}<Loader2 class="mr-2 h-4 w-4 animate-spin" />{/if}
-				Record ending plan
+				Save
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

@@ -74,7 +74,7 @@ describe('historical possession reconciliation web contract', () => {
 		);
 		assert.match(
 			possessionActionsSource,
-			/Given \{formatBusinessDate\(summary\.possessionGivenAtUtc\)\}/
+			/Handed over \{formatBusinessDate\(summary\.possessionGivenAtUtc\)\}/
 		);
 	});
 
