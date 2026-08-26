@@ -51,7 +51,7 @@ void main() {
     );
     final subscription = container.listen<AsyncValue<MyAlerts>>(
       myAlertsProvider,
-      (_, __) {},
+      (_, _) {},
     );
     var disposed = false;
     void disposeContainer() {
