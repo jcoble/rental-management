@@ -315,15 +315,13 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Money')),
-      floatingActionButton: _tab == MoneyTab.overview
-          ? null
-          : MobileQuickActionFab(
-              heroTag: 'money-ledger-actions-fab',
-              primaryActions: manualActions,
-              onChat: () => openMobileAssistant(context),
-              onRecord: () => openMobileRecord(context),
-              onScan: () => openMobileScan(context),
-            ),
+      floatingActionButton: MobileQuickActionFab(
+        heroTag: 'money-ledger-actions-fab',
+        primaryActions: manualActions,
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
+      ),
       body: legacyActivityEntry
           ? Column(
               children: [

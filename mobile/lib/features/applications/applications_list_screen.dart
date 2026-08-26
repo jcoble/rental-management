@@ -6,6 +6,8 @@ import '../../core/api/api_exception.dart';
 import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'application_detail_screen.dart';
@@ -142,6 +144,17 @@ class _ApplicationsListScreenState
       appBar: mobileDomainRootAppBar(
         context,
         title: const Text('Applications'),
+      ),
+      floatingActionButton: MobileQuickActionFab(
+        heroTag: 'applications-fab',
+        primaryAction: MobileQuickAction(
+          label: 'Share application form',
+          icon: Icons.ios_share,
+          onPressed: _shareLink,
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: Column(
         children: [
