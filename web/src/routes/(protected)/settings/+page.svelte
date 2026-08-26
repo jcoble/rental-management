@@ -398,8 +398,8 @@
 		<SandboxBanner variant="card" />
 	</div>
 
-	<Tabs.Root bind:value={activeTab} class="w-full max-w-4xl">
-		<Tabs.List class="mb-5 flex flex-wrap" data-testid="settings-tabs">
+	<Tabs.Root bind:value={activeTab} class="w-full">
+		<Tabs.List class="mb-5 flex flex-nowrap overflow-x-auto whitespace-nowrap" data-testid="settings-tabs">
 			{#each SETTINGS_SECTIONS as section (section.key)}
 				<Tabs.Trigger
 					value={section.key}

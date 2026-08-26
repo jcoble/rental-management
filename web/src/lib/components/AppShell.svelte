@@ -56,6 +56,7 @@
 	import NotificationBell from '$lib/components/notifications/NotificationBell.svelte';
 	import M3NavGroup from '$lib/components/m3/NavGroup.svelte';
 	import M3NavItem from '$lib/components/m3/NavItem.svelte';
+	import { isNavItemActive } from '$lib/components/nav-active';
 	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
 	import { clearAuthState, getAuthState } from '$lib/stores/auth.svelte';
 	import type { WorkspaceExperience } from '$lib/types/user';
@@ -166,7 +167,7 @@
 			icon: MessageSquare,
 			items: [
 				{ href: '/messages', label: 'Messages', icon: MessageSquare },
-				{ href: '/notices', label: 'Sent notices', icon: BellRing }
+				{ href: '/notices', label: 'Tenant notices', icon: BellRing }
 			]
 		}
 	];
@@ -190,7 +191,7 @@
 		items: [
 			{ href: '/settings/notifications', label: 'Notifications', icon: BellRing },
 			{ href: '/settings/lease-templates', label: 'Lease settings', icon: Upload },
-			{ href: '/settings', label: 'Settings', icon: Settings },
+			{ href: '/settings', label: 'General', icon: Settings },
 			{ href: '/admin/users', label: 'Team', icon: Shield },
 			{ href: '/audit', label: 'Activity history', icon: History }
 		]
@@ -334,7 +335,7 @@
 		{ href: '/assignment-inbox', label: 'Inbox', icon: MessageSquare },
 		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
 	];
-	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Units', icon: Home };
+	const commandCenterTitleItem: NavItem = { href: '/units', label: 'Units', icon: Home };
 
 	function itemVisible(item: NavItem): boolean {
 		return canAccessRoute(item.href, activeExperience, activeCapabilities);
@@ -386,23 +387,11 @@
 					]
 	);
 
+	// Every visible link's address, so the matcher can let the more specific link win.
+	let allHrefs = $derived(allItems.map((item) => item.href));
+
 	function isActive(href: string): boolean {
-		const currentPath = page.url.pathname;
-		if (href === '/') return currentPath === '/';
-		if (href === '/owner') return currentPath === '/owner';
-		if (href === '/leasing') return currentPath === '/leasing';
-		if (href === '/units') return currentPath === '/units' || currentPath.startsWith('/units/');
-		if (href === '/reports') {
-			return currentPath === '/reports'
-				|| currentPath.startsWith('/reports/')
-				|| currentPath.startsWith('/owners-report');
-		}
-		if (href === '/settings') {
-			return currentPath === '/settings'
-				|| (currentPath.startsWith('/settings/')
-					&& !currentPath.startsWith('/settings/notifications'));
-		}
-		return currentPath.startsWith(href);
+		return isNavItemActive(page.url.pathname, href, allHrefs);
 	}
 
 	function groupHasActive(group: NavGroup): boolean {

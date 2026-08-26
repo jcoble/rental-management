@@ -171,9 +171,8 @@
 	<div class="mb-4 flex items-start gap-3 rounded-lg border border-[color-mix(in_srgb,var(--info)_38%,transparent)] bg-[color-mix(in_srgb,var(--info)_8%,var(--card))] p-3 text-sm" data-testid="deposits-explainer">
 		<Info class="mt-0.5 h-4 w-4 shrink-0 text-[var(--info)]" />
 		<p class="text-foreground">
-			A deposit account is prepared with the move-in agreement. Record money when it is actually
-			received; do not create another holding. Deposits remain the tenant's money and are separate
-			from rental income.
+			A deposit record is set up when you move a tenant in. Record the money when you actually
+			receive it. Deposits are the tenant's money and stay separate from rent.
 		</p>
 	</div>
 

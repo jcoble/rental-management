@@ -406,9 +406,6 @@
 							New conversation
 						</Button>
 					</div>
-					<p class="border-t border-border px-3 py-2 text-xs text-muted-foreground" data-testid="conversation-list-range">
-						Showing 0 of 0 conversations
-					</p>
 				{:else}
 					<ul>
 						{#each conversations as c (c.id)}
