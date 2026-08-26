@@ -1251,5 +1251,5 @@ String _entryTypeLabel(TenantLedgerEntryType type) => switch (type) {
   TenantLedgerEntryType.transferIn => 'Transfer in',
   TenantLedgerEntryType.transferOut => 'Transfer out',
   TenantLedgerEntryType.reversal => 'Reversal',
-  TenantLedgerEntryType.unknown => 'Ledger entry',
+  TenantLedgerEntryType.unknown => 'Charge or payment',
 };

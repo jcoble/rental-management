@@ -105,7 +105,7 @@ class _TimelineRow extends StatelessWidget {
     final isEditEvent =
         event.fromStatus != null && event.fromStatus == event.toStatus;
     final transition = isEditEvent
-        ? 'Work order updated'
+        ? 'Repair updated'
         : event.fromStatus == null
         ? 'Created as ${workOrderStatusLabel(event.toStatus)}'
         : '${workOrderStatusLabel(event.fromStatus!)} → '

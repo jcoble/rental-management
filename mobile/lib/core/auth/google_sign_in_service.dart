@@ -46,7 +46,7 @@ class GoogleSignInService {
       final String? idToken = account.authentication.idToken;
       if (idToken == null || idToken.isEmpty) {
         throw const GoogleSignInUnavailable(
-          'Google did not return an ID token. Check the server client ID '
+          'Google did not return an ID token. Check the sign-in client ID '
           'configuration.',
         );
       }

@@ -139,7 +139,7 @@ class _TechnicianAssignmentPickerSheetState
                 final page = snapshot.data!;
                 if (page.items.isEmpty) {
                   return const Center(
-                    child: Text('No matching assigned work orders.'),
+                    child: Text('No matching assigned repairs.'),
                   );
                 }
                 return ListView(

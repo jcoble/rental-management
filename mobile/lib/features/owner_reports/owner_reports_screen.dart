@@ -1548,7 +1548,7 @@ class _OwnerContributionsSection extends StatelessWidget {
               ExpansionTile(
                 title: Text(moneyFmt(item.amount)),
                 subtitle: Text(
-                  '${_fmtDate(item.date)} • ${item.propertyName ?? 'Portfolio'}',
+                  '${_fmtDate(item.date)} • ${item.propertyName ?? 'Your rentals'}',
                 ),
                 children: [
                   Padding(

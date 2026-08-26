@@ -253,14 +253,14 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) {
-      throw StateError('Work order form validation failed.');
+      throw StateError('Repair form validation failed.');
     }
 
     final scheduledFor = _scheduledStart(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
 
     if (!_validateArrivalWindow()) {
-      throw StateError('Work order arrival window validation failed.');
+      throw StateError('Repair arrival window validation failed.');
     }
 
     setState(() {
@@ -501,8 +501,8 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
     return Form(
       key: _formKey,
       child: TabbedFormSheet(
-        title: 'New Work Order',
-        saveLabel: 'Save Work Order',
+        title: 'New repair',
+        saveLabel: 'Save repair',
         saving: _saving,
         error: _error,
         onSave: _submit,

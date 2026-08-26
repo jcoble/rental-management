@@ -119,7 +119,7 @@ class _OnboardingChoiceScreenState
                   const SizedBox(height: 8),
                   Text(
                     'How would you like to begin? You can switch from the sample '
-                    'data to your real portfolio at any time.',
+                    'data to your real rentals at any time.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),
@@ -137,8 +137,8 @@ class _OnboardingChoiceScreenState
                     title: 'Explore with sample data',
                     badge: 'Example data',
                     body:
-                        "Jump into a fully loaded demo portfolio — properties, "
-                        "tenants, leases, payments and work orders — so you can try "
+                        "Jump into a fully loaded sample portfolio — properties, "
+                        "tenants, leases, payments and repairs — so you can try "
                         "everything risk-free. It's all sample data; nothing sends "
                         "real emails or texts, or charges any cards.",
                     cta: 'Start exploring',
@@ -156,13 +156,13 @@ class _OnboardingChoiceScreenState
                     accent: scheme.primary,
                     accentContainer: scheme.primaryContainer,
                     onAccentContainer: scheme.onPrimaryContainer,
-                    title: 'Set up my real portfolio',
+                    title: 'Set up my real rentals',
                     badge: 'My real rentals',
                     body:
                         'Start with a clean, empty account and add your own '
                         'properties, tenants and leases. No sample data — this is '
                         'the real thing.',
-                    cta: 'Set up my portfolio',
+                    cta: 'Set up my rentals',
                     selected: _selected == OnboardingMode.live,
                     busy: _selected == OnboardingMode.live && _submitting,
                     enabled: !_submitting,

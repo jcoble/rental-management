@@ -188,9 +188,9 @@ class _InspectionRunScreenState extends ConsumerState<InspectionRunScreen> {
         content: Text(
           pending > 0
               ? '$pending item${pending == 1 ? '' : 's'} are still pending. '
-                    'Completing now generates the report and creates a work order '
+                    'Completing now generates the report and creates a repair '
                     'for each failed item. You can\'t edit afterward.'
-              : 'This generates the PDF report and creates a work order for each '
+              : 'This generates the PDF report and creates a repair for each '
                     'failed item. You can\'t edit afterward.',
         ),
         actions: [
@@ -642,7 +642,7 @@ class _ItemCard extends StatelessWidget {
                   Icon(Icons.build_outlined, size: 14, color: cs.error),
                   const SizedBox(width: 4),
                   Text(
-                    'Created work order #${item.spawnedWorkOrderId}',
+                    'Created repair #${item.spawnedWorkOrderId}',
                     style: theme.textTheme.bodySmall?.copyWith(color: cs.error),
                   ),
                 ],
@@ -850,7 +850,7 @@ class _CompleteSummaryDialog extends ConsumerWidget {
           if (created.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(
-              'Created ${created.length} work order'
+              'Created ${created.length} repair'
               '${created.length == 1 ? '' : 's'}:',
               style: theme.textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.w600,
@@ -866,7 +866,7 @@ class _CompleteSummaryDialog extends ConsumerWidget {
           ] else ...[
             const SizedBox(height: 16),
             Text(
-              'No failed items — no work orders created.',
+              'No failed items — no repairs created.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: cs.onSurfaceVariant,
               ),

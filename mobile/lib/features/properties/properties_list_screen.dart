@@ -392,7 +392,7 @@ class _PropertyCard extends StatelessWidget {
       actions: [
         if (onOpenUnitCommand != null)
           IconButton(
-            tooltip: 'Open unit command center',
+            tooltip: "Open today's summary",
             icon: const Icon(Icons.home_work_outlined),
             onPressed: onOpenUnitCommand,
           ),

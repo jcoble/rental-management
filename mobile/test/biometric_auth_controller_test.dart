@@ -113,7 +113,7 @@ void main() {
     ),
     const ApiException(
       statusCode: 503,
-      message: 'The server encountered an error. Please try again.',
+      message: 'Something went wrong. Please try again.',
     ),
   ]) {
     test(
@@ -141,7 +141,7 @@ void main() {
       final harness = _Harness(
         currentAccessError: const ApiException(
           statusCode: 503,
-          message: 'The server encountered an error. Please try again.',
+          message: 'Something went wrong. Please try again.',
         ),
       );
       addTearDown(harness.dispose);
@@ -167,7 +167,7 @@ void main() {
         biometricEnabled: false,
         currentUserError: const ApiException(
           statusCode: 503,
-          message: 'The server encountered an error. Please try again.',
+          message: 'Something went wrong. Please try again.',
         ),
       );
       addTearDown(harness.dispose);

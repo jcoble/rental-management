@@ -51,10 +51,10 @@ void main() {
 
       await tester.tap(find.byTooltip('Scan / Add'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('New work order'));
+      await tester.tap(find.text('New repair'));
       await tester.pumpAndSettle();
 
-      expect(find.text('New Work Order'), findsOneWidget);
+      expect(find.text('New repair'), findsOneWidget);
       expect(find.text('Location'), findsOneWidget);
       expect(find.text('Issue'), findsOneWidget);
       expect(find.text('Schedule'), findsOneWidget);
@@ -81,8 +81,8 @@ void main() {
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
 
-      await tester.ensureVisible(find.text('Save Work Order'));
-      await tester.tap(find.text('Save Work Order'));
+      await tester.ensureVisible(find.text('Save repair'));
+      await tester.tap(find.text('Save repair'));
       await tester.pumpAndSettle();
 
       expect(workOrdersRepo.createdData?['propertyId'], 7);

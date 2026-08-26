@@ -649,8 +649,8 @@ class _LeasingMoveInDetailScreenState
                 title: 'Move-in readiness',
                 children: [
                   _LeasingDetailRow(
-                    label: 'Relationship',
-                    value: moveIn.relationshipNumber,
+                    label: 'Tenancy',
+                    value: 'Tenancy #${moveIn.relationshipNumber}',
                   ),
                   _LeasingDetailRow(
                     label: 'Agreement',

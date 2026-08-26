@@ -1205,7 +1205,7 @@ class LeaseManagementsRepository {
       if (value == null) {
         throw const ApiException(
           statusCode: 0,
-          message: 'The server did not return its canonical business date.',
+          message: 'The current business date was not available.',
         );
       }
       return value;

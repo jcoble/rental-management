@@ -343,7 +343,7 @@ void main() {
       expect(message, contains('transaction date'));
       expect(message, contains('positive total or subtotal'));
       expect(message, contains('category'));
-      expect(message, contains('property, unit, or work order'));
+      expect(message, contains('property, rental, or repair'));
       expect(message, isNot(contains('payment method')));
       expect(message, isNot(contains('card last 4')));
       expect(message, isNot(contains('due date')));

@@ -62,7 +62,7 @@ class _TeamRoutingScreenState extends ConsumerState<TeamRoutingScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Team routing'),
+        title: const Text('Who gets told what'),
         actions: const [NotificationHelpAction()],
       ),
       body: FutureBuilder<List<TeamRoutingRule>>(
@@ -642,7 +642,7 @@ class _TeamRoutingEditorSheetState
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.save_outlined),
-                label: const Text('Save team routing'),
+                label: const Text('Save assignments'),
               ),
             ],
           ),
@@ -652,7 +652,7 @@ class _TeamRoutingEditorSheetState
   }
 
   void _showError(Object error) => _showMessage(
-    error is ApiException ? error.message : 'We couldn\'t save team routing.',
+    error is ApiException ? error.message : 'We couldn\'t save those assignments.',
   );
 
   void _showMessage(String message) {
@@ -762,7 +762,7 @@ class _RoutingError extends StatelessWidget {
           Text(
             error is ApiException
                 ? (error as ApiException).message
-                : 'We couldn\'t load team routing.',
+                : 'We couldn\'t load those assignments.',
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 12),
@@ -806,7 +806,7 @@ String _teamRecipientChannelSummary(TeamRoutingRecipientPreview recipient) {
 String _topicLabel(String topic) => switch (topic) {
   'RentAndMoney' => 'Rent and money',
   'ApplicationsAndLeasing' => 'Applications and leasing',
-  'WorkOrders' => 'Work orders',
+  'WorkOrders' => 'Repairs',
   'OwnerStatementsAndDecisions' => 'Owner statements and decisions',
   'AccountAndSecurity' => 'Account and security',
   'MorningBriefing' => 'Morning Briefing',

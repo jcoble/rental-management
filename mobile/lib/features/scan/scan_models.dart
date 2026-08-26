@@ -178,11 +178,11 @@ class ScanCaptureContext {
   List<String> get userFacingParts => [
     if (propertyId != null) 'Property #$propertyId',
     if (unitId != null) 'Unit #$unitId',
-    if (leaseManagementId != null) 'Rental #$leaseManagementId',
-    if (leaseAgreementId != null) 'Agreement #$leaseAgreementId',
-    if (tenantAccountId != null) 'Account #$tenantAccountId',
-    if (tenantLedgerEntryId != null) 'Ledger entry #$tenantLedgerEntryId',
-    if (workOrderId != null) 'Work order #$workOrderId',
+    if (leaseManagementId != null) 'Tenancy #$leaseManagementId',
+    if (leaseAgreementId != null) 'Current lease #$leaseAgreementId',
+    if (tenantAccountId != null) 'Tenant balance #$tenantAccountId',
+    if (tenantLedgerEntryId != null) 'Charge or payment #$tenantLedgerEntryId',
+    if (workOrderId != null) 'Repair #$workOrderId',
     if (applicationId != null) 'Application #$applicationId',
     if (rentalListingId != null) 'Listing #$rentalListingId',
   ];

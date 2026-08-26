@@ -2252,7 +2252,7 @@ class _HomeTab extends ConsumerWidget {
                       ),
                       title:
                           '$greeting${_displayName.isNotEmpty ? ", $_displayName" : ""}!',
-                      subtitle: "Here's your command center for today.",
+                      subtitle: "Here's today's summary.",
                     ),
                     const SizedBox(height: 24),
 
@@ -2340,9 +2340,7 @@ class _HomeTab extends ConsumerWidget {
                   _LatestMessagesSection(messagesAsync: messagesAsync),
                   const SizedBox(height: 24),
                   _HomeSectionHeader(
-                    // A6: one professional term — "Work Orders" — for the
-                    // "things to fix" concept (was "Field queue").
-                    title: 'Work Orders',
+                    title: 'Repairs',
                     actionLabel: 'View all',
                     onAction: () => onSwitchToTab(_workTabIndex),
                   ),
@@ -2459,16 +2457,16 @@ class _FieldQueueSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return queueAsync.when(
-      loading: () => const _LoadingCard(label: 'Loading work orders...'),
+      loading: () => const _LoadingCard(label: 'Loading repairs...'),
       error: (_, _) => const _EmptyInlineCard(
         icon: Icons.build_outlined,
-        text: "Couldn't load work orders.",
+        text: "Couldn't load repairs.",
       ),
       data: (queue) {
         if (queue.isEmpty) {
           return const _EmptyInlineCard(
             icon: Icons.check_circle_outline,
-            text: 'No open work orders right now.',
+            text: 'No open repairs right now.',
           );
         }
 

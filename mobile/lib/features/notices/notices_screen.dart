@@ -313,7 +313,7 @@ class _EmptyBody extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.all(24),
         child: Text(
-          'No draft notices. Tap refresh to generate lease lifecycle drafts.',
+          'No draft notices. Tap refresh to generate lease notice drafts.',
         ),
       ),
     );

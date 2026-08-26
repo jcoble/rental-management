@@ -36,14 +36,14 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.text('Work Order'), findsOneWidget);
+      expect(find.text('Repair'), findsOneWidget);
       expect(
         find.byKey(const Key('work-order-detail-loading')),
         findsOneWidget,
       );
-      expect(find.text('Loading work order'), findsOneWidget);
+      expect(find.text('Loading repair'), findsOneWidget);
       expect(find.text('Details, schedule, and activity'), findsOneWidget);
-      expect(find.text('Work order details'), findsOneWidget);
+      expect(find.text('Repair details'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
     },
   );
@@ -80,7 +80,7 @@ void main() {
       await tester.tap(find.byTooltip('Edit'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Edit Work Order'), findsOneWidget);
+      expect(find.text('Edit repair'), findsOneWidget);
       expect(
         find.descendant(
           of: find.byKey(const Key('tabbed-form-step-0')),
