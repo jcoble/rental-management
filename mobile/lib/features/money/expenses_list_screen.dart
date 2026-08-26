@@ -2,10 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'expense_detail_screen.dart';
+import 'expense_form_sheet.dart';
 import 'expense_models.dart';
 import '../../core/presentation/formatting.dart';
 import 'money_repository.dart';
@@ -80,12 +86,38 @@ class _ExpensesListScreenState extends ConsumerState<ExpensesListScreen> {
     });
   }
 
+  void _addExpense() {
+    showCreateExpenseSheet(context, ref, onSaved: _refresh);
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(expensesPageProvider(_query));
+    final auth = ref.watch(authControllerProvider);
+    final canAddExpense =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.expenses.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Expenses')),
+      floatingActionButton: MobileQuickActionFab(
+        heroTag: 'expenses-fab',
+        primaryAction: canAddExpense
+            ? MobileQuickAction(
+                label: 'Add expense',
+                icon: Icons.receipt_long_outlined,
+                onPressed: _addExpense,
+              )
+            : null,
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
+      ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: async.when(
