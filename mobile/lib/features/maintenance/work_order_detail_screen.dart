@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/solo_landlord.dart';
 import '../../core/models/models.dart';
 import '../../core/time/app_clock.dart';
 import '../../core/utils/date_wire.dart';
@@ -611,7 +612,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
       appBar: AppBar(
         title: const Text('Repair'),
         actions: [
-          if (capabilities.canAssignTechnician)
+          if (capabilities.canAssignTechnician && !isSoloLandlord(ref))
             IconButton(
               icon: const Icon(Icons.engineering_outlined),
               tooltip: 'Assign technician',
