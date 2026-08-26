@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../accounting/journal_detail_sheet.dart';
 import 'capital_assets_repository.dart';
 
 Future<bool> showPropertyCapitalAssetFormSheet(
@@ -121,6 +122,9 @@ class _PropertyCapitalAssetFormSheetState
   @override
   Widget build(BuildContext context) {
     const gap = SizedBox(height: 12);
+    final showAdvanced =
+        ref.watch(accountingDetailModeProvider) ==
+        AccountingDetailMode.advanced;
     return TabbedFormSheet(
       title: widget.asset == null ? 'Add Capital Asset' : 'Edit Capital Asset',
       saveLabel: widget.asset == null ? 'Add Asset' : 'Save Asset',
@@ -211,27 +215,29 @@ class _PropertyCapitalAssetFormSheetState
                   label: 'Recovery life',
                 ),
               ),
-              gap,
-              DropdownButtonFormField<DepreciationConvention>(
-                key: const Key('capital-asset-convention-field'),
-                initialValue: _convention,
-                decoration: const InputDecoration(labelText: 'Convention'),
-                items:
-                    const [
-                          DepreciationConvention.midMonth,
-                          DepreciationConvention.halfYear,
-                        ]
-                        .map(
-                          (convention) => DropdownMenuItem(
-                            value: convention,
-                            child: Text(convention.label),
-                          ),
-                        )
-                        .toList(),
-                onChanged: (value) {
-                  if (value != null) setState(() => _convention = value);
-                },
-              ),
+              if (showAdvanced) ...[
+                gap,
+                DropdownButtonFormField<DepreciationConvention>(
+                  key: const Key('capital-asset-convention-field'),
+                  initialValue: _convention,
+                  decoration: const InputDecoration(labelText: 'Convention'),
+                  items:
+                      const [
+                            DepreciationConvention.midMonth,
+                            DepreciationConvention.halfYear,
+                          ]
+                          .map(
+                            (convention) => DropdownMenuItem(
+                              value: convention,
+                              child: Text(convention.label),
+                            ),
+                          )
+                          .toList(),
+                  onChanged: (value) {
+                    if (value != null) setState(() => _convention = value);
+                  },
+                ),
+              ],
               gap,
               _MoneyField(
                 keyName: 'capital-asset-accumulated-field',

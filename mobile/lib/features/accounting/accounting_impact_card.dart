@@ -8,14 +8,7 @@ import 'accounting_help.dart';
 import 'accounting_help_tip.dart';
 import 'accounting_book_models.dart';
 import 'accounting_books_repository.dart';
-
-/// Shared-preferences key used by the web and mobile accounting detail mode.
-///
-/// The preference is intentionally read by the owning shell/settings lane and
-/// passed to this presentational widget as [AccountingDetailMode].
-const accountingDetailModePreferenceKey = 'rc.accounting.detail-mode.v1';
-
-enum AccountingDetailMode { simple, advanced }
+import 'journal_detail_sheet.dart';
 
 /// Read-only, source-backed accounting context for a business detail surface.
 ///
@@ -28,7 +21,6 @@ class AccountingImpactCard extends ConsumerStatefulWidget {
     required this.sourceId,
     this.sourceType,
     this.sourceTypes = const <JournalSourceType>[],
-    this.detailMode = AccountingDetailMode.simple,
     this.authorized,
   }) : assert(
          sourceType != null || sourceTypes.length > 0,
@@ -38,7 +30,6 @@ class AccountingImpactCard extends ConsumerStatefulWidget {
   final int sourceId;
   final JournalSourceType? sourceType;
   final List<JournalSourceType> sourceTypes;
-  final AccountingDetailMode detailMode;
 
   /// A null value follows the authenticated session capability. Tests and a
   /// parent that already resolved authorization may provide an explicit value.
@@ -67,6 +58,13 @@ class _AccountingImpactCardState extends ConsumerState<AccountingImpactCard> {
 
   @override
   Widget build(BuildContext context) {
+    final detailMode = ref.watch(accountingDetailModeProvider);
+    // Bookkeeping detail only belongs on a business screen when the landlord
+    // has asked for the advanced view.
+    if (detailMode != AccountingDetailMode.advanced) {
+      return const SizedBox.shrink();
+    }
+
     final auth = ref.watch(authControllerProvider);
     final canView = widget.authorized ?? _canViewAccounting(auth);
     if (!canView) return const SizedBox.shrink();
@@ -86,7 +84,7 @@ class _AccountingImpactCardState extends ConsumerState<AccountingImpactCard> {
         }
         return _AccountingImpactCardContent(
           journals: journals,
-          detailMode: widget.detailMode,
+          detailMode: detailMode,
           onOpenJournal: (journal) => _openJournal(context, journal),
         );
       },
@@ -149,7 +147,7 @@ class _AccountingImpactCardState extends ConsumerState<AccountingImpactCard> {
       useSafeArea: true,
       builder: (_) => _AccountingJournalDetailSheet(
         journal: journal,
-        detailMode: widget.detailMode,
+        detailMode: ref.read(accountingDetailModeProvider),
       ),
     );
   }
