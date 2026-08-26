@@ -2213,7 +2213,8 @@ class _HomeTab extends ConsumerWidget {
     final fieldQueueAsync = ref.watch(homeFieldQueueProvider);
     final moneyAsync = ref.watch(moneySnapshotProvider);
     final appNowAsync = ref.watch(appNowProvider);
-    final greeting = switch (appNowAsync) {
+    final localNowAsync = appNowAsync.whenData((now) => now.toLocal());
+    final greeting = switch (localNowAsync) {
       AsyncData(:final value) => _greeting(value),
       _ => 'Hello',
     };
@@ -2226,8 +2227,11 @@ class _HomeTab extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(homeBriefingProvider);
+          ref.invalidate(homeLatestMessagesProvider);
+          ref.invalidate(homeFieldQueueProvider);
           ref.invalidate(moneySnapshotProvider);
           ref.invalidate(appNowProvider);
+          await ref.read(homeBriefingProvider.future);
         },
         child: CustomScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -2241,7 +2245,7 @@ class _HomeTab extends ConsumerWidget {
                     // ── Greeting (art band header, §7.7) ──────────────────
                     M3ArtBand(
                       pattern: 6,
-                      eyebrow: appNowAsync.when(
+                      eyebrow: localNowAsync.when(
                         data: _formattedDate,
                         loading: () => 'Loading date…',
                         error: (_, _) => 'Date unavailable',
