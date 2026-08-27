@@ -44,6 +44,7 @@ void main() {
     expect(plainEnglishLabel('NotAvailable'), 'Not available');
     expect(plainEnglishLabel('NoAccount'), 'No tenant account');
     expect(plainEnglishLabel('NoGoverningAgreement'), 'No signed lease');
+    expect(plainEnglishLabel('NoNotices'), 'No notices');
     expect(plainEnglishLabel('RentReady'), 'Ready to rent');
     expect(plainEnglishLabel('AwaitingVacancy'), 'Waiting for move-out');
     expect(plainEnglishLabel('PossessionScheduled'), 'Move-in scheduled');

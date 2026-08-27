@@ -5,6 +5,7 @@ const _plainEnglishOverrides = <String, String>{
   'PastDue': 'Past due',
   'NoticeOpen': 'Open notice',
   'NoGoverningAgreement': 'No signed lease',
+  'NoNotices': 'No notices',
   'AgreementOnFile': 'Signed lease on file',
   'AwaitingVacancy': 'Waiting for move-out',
   'MoveOut': 'Move-out',
