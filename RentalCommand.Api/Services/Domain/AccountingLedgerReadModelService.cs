@@ -409,6 +409,15 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         var authorizedProperties = _db.Properties.AsNoTracking()
             .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, asOfUtc);
         var throughAsOf = authorized.Where(line => line.JournalEntry!.EffectiveOn <= to);
+        var positiveTenantReceivables = throughAsOf
+            .Where(line => line.LedgerAccount!.IsSystem &&
+                line.LedgerAccount.SystemKey == "tenant-accounts-receivable" &&
+                line.TenantAccountId.HasValue)
+            .GroupBy(line => line.TenantAccountId)
+            .Select(group => group.Sum(line => line.LedgerAccount!.NormalBalance == NormalBalance.Debit
+                ? line.DebitAmount - line.CreditAmount
+                : line.CreditAmount - line.DebitAmount))
+            .Where(balance => balance > 0m);
         var position = await throughAsOf.GroupBy(_ => 1)
             .Select(group => new MoneyPositionSqlRow
             {
@@ -426,12 +435,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                             ? line.DebitAmount - line.CreditAmount
                             : line.CreditAmount - line.DebitAmount
                         : 0m),
-                RentStillOwed = group.Sum(line => line.LedgerAccount!.IsSystem &&
-                    line.LedgerAccount.SystemKey == "tenant-accounts-receivable"
-                        ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
-                            ? line.DebitAmount - line.CreditAmount
-                            : line.CreditAmount - line.DebitAmount
-                        : 0m),
+                RentStillOwed = positiveTenantReceivables.Sum(balance => (decimal?)balance) ?? 0m,
                 LoanBalance = group.Sum(line => line.LedgerAccount!.IsSystem &&
                     line.LedgerAccount.SystemKey == "mortgage-payable"
                         ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
