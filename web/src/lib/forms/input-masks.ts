@@ -60,7 +60,8 @@ export function maskDecimalInput(value: string, options: DecimalOptions = {}): s
 }
 
 export function maskCurrencyInput(value: string): string {
-	return maskDecimalInput(value, { maxDecimals: 2 });
+	const sign = value.startsWith('-') ? '-' : '';
+	return `${sign}${maskDecimalInput(value, { maxDecimals: 2 })}`;
 }
 
 export function maskPercentageInput(value: string, options: DecimalOptions = {}): string {
