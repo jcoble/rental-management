@@ -789,6 +789,28 @@ public class UnitDashboardServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LegalNotice_NoOpenNotices_ReportsNoNotices()
+    {
+        var now = DateTime.UtcNow;
+        var graph = SeedCanonicalRelationship("Notice View", "1A", "Nora", "Tenant", 1000m, now,
+            possessionGivenAtUtc: now.AddMonths(-1));
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
+
+        dashboard!.LegalNoticeCondition.Status.Should().Be("NoNotices");
+        dashboard.LegalNoticeCondition.AgreementStatus.Should().Be("Active");
+
+        var party = _db.LeaseManagementParties.Single(row => row.LeaseManagementId == graph.Relationship.Id);
+        _db.NoticeDrafts.Add(NoticeDraftFor(
+            graph.Relationship, graph.Account, party, graph.Agreement, graph.Property, now, "open"));
+        _db.SaveChanges();
+
+        dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
+
+        dashboard!.LegalNoticeCondition.Status.Should().Be("NoticeOpen");
+    }
+
+    [Fact]
     public async Task GetDashboardAsync_DoesNotPromoteEndedRelationshipToCurrentLease()
     {
         var now = DateTime.UtcNow;
