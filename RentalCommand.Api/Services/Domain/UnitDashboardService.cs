@@ -197,7 +197,7 @@ public class UnitDashboardService : IUnitDashboardService
             {
                 Status = unitRow.OpenNoticeCount > 0
                     ? "NoticeOpen"
-                    : unitRow.AgreementId is null ? "NoGoverningAgreement" : unitRow.AgreementStatus ?? "AgreementOnFile",
+                    : unitRow.AgreementId is null ? "NoGoverningAgreement" : "NoNotices",
                 AgreementId = unitRow.AgreementId,
                 AgreementStatus = unitRow.AgreementStatus,
                 OpenNoticeCount = unitRow.OpenNoticeCount,
