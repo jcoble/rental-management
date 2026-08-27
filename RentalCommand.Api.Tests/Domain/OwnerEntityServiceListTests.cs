@@ -198,6 +198,49 @@ public class OwnerEntityServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LeaselessTenantAudit_VisibleToPortfolioWideCaller()
+    {
+        var now = DateTime.UtcNow;
+        var property = SeedProperty(SeedOwner("Scope Test Owner", OwnerEntityType.LLC), "Scope Test Property");
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId, FirstName = "Lease-less", LastName = "Tenant",
+            CreatedAt = now, UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+        await _ctx.Db.SaveChangesAsync();
+
+        var audit = new AtomicAuditLog
+        {
+            AttemptId = Guid.NewGuid(), CommandType = "tenant-audit-test",
+            CommandIdempotencyKey = Guid.NewGuid().ToString("N"), MutationOrdinal = 1,
+            PortfolioId = PortfolioId, EntityType = nameof(Tenant), EntityId = tenant.Id,
+            Operation = AuditLogOperation.Created, Timestamp = now,
+        };
+        _ctx.Db.AtomicAuditLogs.Add(audit);
+        await _ctx.Db.SaveChangesAsync();
+
+        var query = _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .WhereAuthorized(_ctx.Db, _scope, now)
+            .Where(row => row.EntityType == nameof(Tenant) && row.EntityId == tenant.Id);
+        var sql = query.ToQueryString();
+        var rows = await query.ToListAsync();
+
+        rows.Should().ContainSingle().Which.Id.Should().Be(audit.Id);
+        sql.Count(character => character == ';').Should().BeLessThanOrEqualTo(1);
+
+        var propertyScope = _ctx.Db.SeedPropertyManagerScope(
+            PortfolioId, property.Id, nameof(LeaselessTenantAudit_VisibleToPortfolioWideCaller));
+        await _ctx.ActivateApiScopeAsync(propertyScope);
+
+        var limitedRows = await _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .WhereAuthorized(_ctx.Db, propertyScope, now)
+            .Where(row => row.EntityType == nameof(Tenant) && row.EntityId == tenant.Id).ToListAsync();
+
+        limitedRows.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task OwnerEntityAuditAuthorization_StaleScopeFailsClosed()
     {
         var owner = SeedOwner("Denied Audit Holdings", OwnerEntityType.LLC);
@@ -248,7 +291,7 @@ public class OwnerEntityServiceTests : IAsyncLifetime
         return owner;
     }
 
-    private void SeedProperty(OwnerEntity owner, string name)
+    private Property SeedProperty(OwnerEntity owner, string name)
     {
         var now = DateTime.UtcNow;
         var property = new Property
@@ -276,6 +319,7 @@ public class OwnerEntityServiceTests : IAsyncLifetime
             PayeeName = owner.Name,
         });
         _ctx.Db.SaveChanges();
+        return property;
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

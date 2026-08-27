@@ -51,11 +51,15 @@ internal static class AuditAuthorizationQuery
                   unit.PortfolioId == scope.PortfolioId &&
                   unit.Id == audit.EntityId &&
                   authorizedProperties.Any(authorized => authorized.Id == unit.PropertyId))) ||
-             (audit.EntityType == nameof(Tenant) && db.LeaseManagementParties.Any(party =>
-                  party.PortfolioId == scope.PortfolioId &&
-                  party.TenantId == audit.EntityId &&
-                  authorizedProperties.Any(authorized =>
-                      authorized.Id == party.LeaseManagement!.PropertyId))) ||
+             (audit.EntityType == nameof(Tenant) && db.Tenants.Any(tenant =>
+                  tenant.PortfolioId == scope.PortfolioId &&
+                  tenant.Id == audit.EntityId &&
+                  (allPropertiesAssignments.Any() ||
+                   db.LeaseManagementParties.Any(party =>
+                       party.PortfolioId == scope.PortfolioId &&
+                       party.TenantId == tenant.Id &&
+                       authorizedProperties.Any(authorized =>
+                           authorized.Id == party.LeaseManagement!.PropertyId))))) ||
              (audit.EntityType == nameof(LeaseManagement) && db.LeaseManagements.Any(management =>
                   management.PortfolioId == scope.PortfolioId &&
                   management.Id == audit.EntityId &&
