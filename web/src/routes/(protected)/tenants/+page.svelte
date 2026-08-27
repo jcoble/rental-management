@@ -297,6 +297,9 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="tenants-page">
 	<PageHeader
 		class="mb-4"
+		band
+		art={4}
+		tone="mint"
 		density="compact"
 		eyebrow="Rentals"
 		title="Tenants"
