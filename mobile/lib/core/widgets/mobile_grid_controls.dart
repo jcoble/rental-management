@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../theme/app_tokens.dart';
@@ -236,6 +238,7 @@ class MobileGridSearchField extends StatefulWidget {
 class _MobileGridSearchFieldState extends State<MobileGridSearchField>
     with WidgetsBindingObserver {
   late final FocusNode _focusNode = FocusNode();
+  Timer? _searchDebounce;
   double _lastViewInsetBottom = 0;
 
   @override
@@ -262,6 +265,7 @@ class _MobileGridSearchFieldState extends State<MobileGridSearchField>
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_handleTextChanged);
     _focusNode.removeListener(_handleTextChanged);
@@ -339,10 +343,18 @@ class _MobileGridSearchFieldState extends State<MobileGridSearchField>
             _focusNode.requestFocus();
           }
         },
+        onChanged: (value) {
+          _searchDebounce?.cancel();
+          _searchDebounce = Timer(
+            const Duration(milliseconds: 300),
+            () => widget.onSubmitted(value),
+          );
+        },
         overlayColor: WidgetStatePropertyAll(
           colorScheme.primary.withValues(alpha: 0.08),
         ),
         onSubmitted: (value) {
+          _searchDebounce?.cancel();
           widget.onSubmitted(value);
           _closeSearch();
         },
