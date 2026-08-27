@@ -17,12 +17,14 @@ import 'mobile_shell_actions.dart';
 class RentalsHubScreen extends ConsumerWidget {
   const RentalsHubScreen({
     super.key,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
 
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
+  final bool handleSystemBack;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -40,6 +42,7 @@ class RentalsHubScreen extends ConsumerWidget {
       ),
       onControllerReady: onControllerReady,
       onControllerDisposed: onControllerDisposed,
+      handleSystemBack: handleSystemBack,
     );
   }
 }
@@ -47,12 +50,14 @@ class RentalsHubScreen extends ConsumerWidget {
 class MoneyHubScreen extends ConsumerWidget {
   const MoneyHubScreen({
     super.key,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
 
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
+  final bool handleSystemBack;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -67,6 +72,7 @@ class MoneyHubScreen extends ConsumerWidget {
       ),
       onControllerReady: onControllerReady,
       onControllerDisposed: onControllerDisposed,
+      handleSystemBack: handleSystemBack,
     );
   }
 }
@@ -74,12 +80,14 @@ class MoneyHubScreen extends ConsumerWidget {
 class WorkHubScreen extends ConsumerWidget {
   const WorkHubScreen({
     super.key,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
 
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
+  final bool handleSystemBack;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -103,6 +111,7 @@ class WorkHubScreen extends ConsumerWidget {
       destinations: destinations,
       onControllerReady: onControllerReady,
       onControllerDisposed: onControllerDisposed,
+      handleSystemBack: handleSystemBack,
     );
   }
 }
@@ -110,12 +119,14 @@ class WorkHubScreen extends ConsumerWidget {
 class InboxHubScreen extends ConsumerWidget {
   const InboxHubScreen({
     super.key,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
 
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
+  final bool handleSystemBack;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -130,6 +141,7 @@ class InboxHubScreen extends ConsumerWidget {
       ),
       onControllerReady: onControllerReady,
       onControllerDisposed: onControllerDisposed,
+      handleSystemBack: handleSystemBack,
     );
   }
 }
@@ -156,6 +168,7 @@ class MobileDomainHubScreen extends ConsumerStatefulWidget {
     required this.title,
     required this.subtitle,
     required this.destinations,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
@@ -163,6 +176,7 @@ class MobileDomainHubScreen extends ConsumerStatefulWidget {
   final String title;
   final String subtitle;
   final List<MobileDestination> destinations;
+  final bool handleSystemBack;
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
 
@@ -324,7 +338,10 @@ class _MobileDomainHubScreenState extends ConsumerState<MobileDomainHubScreen> {
     final rootNavigator = Navigator.of(context);
     if (rootNavigator.canPop()) {
       rootNavigator.pop();
+      return;
     }
+
+    mobileShellNavigatorOf(context)?.openTab(MobileShellTabId.today);
   }
 
   Future<void> _popContentDetail() async {
@@ -415,7 +432,7 @@ class _MobileDomainHubScreenState extends ConsumerState<MobileDomainHubScreen> {
                           ),
                         Expanded(
                           child: PopScope<void>(
-                            canPop: false,
+                            canPop: !widget.handleSystemBack,
                             onPopInvokedWithResult: (didPop, _) {
                               unawaited(_handleSystemBack(didPop));
                             },
