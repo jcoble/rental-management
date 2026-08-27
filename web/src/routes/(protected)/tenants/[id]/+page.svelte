@@ -30,6 +30,7 @@
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import { debounced } from '$lib/utils/debounce.svelte';
+	import { withBlanksAsEmpty } from '$lib/utils/with-blanks-as-empty';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -101,7 +102,7 @@
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ id, data: { portfolioId, ...result.data } });
+		saveMutation.mutate({ id, data: { portfolioId, ...withBlanksAsEmpty(result.data) } });
 	}
 
 	const saveMutation = createMutation(() => ({

@@ -167,7 +167,7 @@ internal sealed class PropertyTenantCrudRule
         if (update.PropertyType.HasValue) property.PropertyType = update.PropertyType.Value;
         if (update.Status.HasValue) property.Status = update.Status.Value;
         if (update.AddressLine1 is not null) property.AddressLine1 = update.AddressLine1;
-        if (update.AddressLine2 is not null) property.AddressLine2 = NormalizeOptionalText(update.AddressLine2);
+        if (update.AddressLine2 is not null) property.AddressLine2 = Blank(update.AddressLine2);
         if (update.City is not null) property.City = update.City;
         if (update.State is not null) property.State = update.State;
         if (update.PostalCode is not null) property.PostalCode = update.PostalCode;
@@ -690,13 +690,13 @@ internal sealed class PropertyTenantCrudRule
         if (update.FirstName is not null) tenant.FirstName = update.FirstName;
         if (update.LastName is not null) tenant.LastName = update.LastName;
         if (update.ClearEmail) tenant.Email = null;
-        else if (update.Email is not null) tenant.Email = update.Email;
+        else if (update.Email is not null) tenant.Email = Blank(update.Email);
         if (update.ClearPhone) tenant.Phone = null;
-        else if (update.Phone is not null) tenant.Phone = update.Phone;
+        else if (update.Phone is not null) tenant.Phone = Blank(update.Phone);
         if (update.ClearEmergencyContact) tenant.EmergencyContact = null;
-        else if (update.EmergencyContact is not null) tenant.EmergencyContact = update.EmergencyContact;
+        else if (update.EmergencyContact is not null) tenant.EmergencyContact = Blank(update.EmergencyContact);
         if (update.DateOfBirth.HasValue) tenant.DateOfBirth = Utc(update.DateOfBirth);
-        if (update.Notes is not null) tenant.Notes = update.Notes;
+        if (update.Notes is not null) tenant.Notes = Blank(update.Notes);
         tenant.UpdatedAt = mutationNow;
         attempt.BindSemanticAudit(tenant, Audit(command, nameof(Tenant), AuditLogOperation.Updated,
             $"Tenant {tenant.FirstName} {tenant.LastName} updated"));
@@ -913,11 +913,8 @@ internal sealed class PropertyTenantCrudRule
         JsonSerializer.Deserialize<T>(command.RequestJson)
         ?? throw new ArgumentException("The record update is invalid.");
 
-    private string? NormalizeOptionalText(string value)
-    {
-        var trimmed = value.Trim();
-        return trimmed.Length == 0 ? null : trimmed;
-    }
+    private static string? Blank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private void Validate(CoreCrudWriteRequest command)
     {
