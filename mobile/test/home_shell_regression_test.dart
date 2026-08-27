@@ -6,13 +6,14 @@ import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/core/time/app_clock.dart';
 import 'package:rental_command/core/realtime/realtime_providers.dart';
 import 'package:rental_command/features/accounting/accounting_repository.dart';
+import 'package:rental_command/features/ai/ai_models.dart';
 import 'package:rental_command/features/home/home_access_providers.dart';
 import 'package:rental_command/features/home/home_shell.dart';
 import 'package:rental_command/features/onboarding/getting_started_provider.dart';
 import 'package:rental_command/features/onboarding/onboarding_repository.dart';
 
 void main() {
-  testWidgets('local evening hour renders the evening greeting', (
+  testWidgets('evening greeting and LeaseAgreement bullet are rendered', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -27,7 +28,21 @@ void main() {
             (ref) async => DateTime(2026, 8, 25, 21),
           ),
           homeBriefingProvider.overrideWith(
-            (ref) => Future.error(StateError('briefing unavailable')),
+            (ref) async => const BriefingResponse(
+              date: '2026-08-25',
+              generatedAt: '2026-08-25T00:00:00Z',
+              llmEnhanced: false,
+              bullets: [
+                BriefingBullet(
+                  title: 'Lease expiring',
+                  detail: 'A lease ends soon.',
+                  category: 'LeaseExpiring',
+                  severity: BulletSeverity.warning,
+                  entityType: 'LeaseAgreement',
+                  entityId: 42,
+                ),
+              ],
+            ),
           ),
           homeLatestMessagesProvider.overrideWith((ref) async => const []),
           homeFieldQueueProvider.overrideWith((ref) async => const []),
@@ -49,6 +64,13 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('Good evening'), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.text('Lease expiring'),
+        matching: find.byType(InkWell),
+      ),
+      findsOneWidget,
+    );
   });
 }
 

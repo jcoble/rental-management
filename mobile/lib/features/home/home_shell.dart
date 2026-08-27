@@ -3302,6 +3302,7 @@ class _BulletRow extends StatelessWidget {
           detailBuilder: (_) => const PaymentsScreen(),
         );
       case 'LeaseManagement':
+      case 'LeaseAgreement':
         if (id != null) {
           return _BriefingTarget(
             tab: MobileShellTabId.rentals,
