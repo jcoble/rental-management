@@ -307,8 +307,9 @@
 				});
 			})(),
 		onSuccess: () => {
+				fixTarget = null;
+				fixChoice = null;
 				showSuccess('Charge reversed.');
-				closeFixCharge();
 				invalidateMoney();
 			},
 		onError: (error) => showError(apiErrorMessage(error, 'The charge was not reversed.'))
