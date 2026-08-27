@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart';
+import '../../core/presentation/plain_english_labels.dart';
 import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
@@ -509,7 +510,7 @@ class _StatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        status,
+        plainEnglishLabel(status),
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
@@ -535,7 +536,7 @@ class _CategoryChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        category,
+        plainEnglishLabel(category),
         style: TextStyle(fontSize: 11, color: colorScheme.onSurfaceVariant),
       ),
     );

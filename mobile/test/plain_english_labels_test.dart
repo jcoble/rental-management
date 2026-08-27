@@ -47,6 +47,7 @@ void main() {
     expect(plainEnglishLabel('RentReady'), 'Ready to rent');
     expect(plainEnglishLabel('AwaitingVacancy'), 'Waiting for move-out');
     expect(plainEnglishLabel('PossessionScheduled'), 'Move-in scheduled');
+    expect(plainEnglishLabel('InProgress'), 'In progress');
   });
 
   test(
