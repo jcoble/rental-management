@@ -18,10 +18,12 @@ test.describe('dashboard needs attention and record payment', () => {
 		expect(box, 'the needs-attention list should have a layout box').not.toBeNull();
 		expect(box!.y).toBeLessThan(400);
 
-		// The removed dashboard sections must not come back.
-		await expect(page.getByTestId('dashboard-hero')).toHaveCount(0);
-		await expect(page.getByTestId('dashboard-latest-messages')).toHaveCount(0);
-		await expect(page.getByTestId('dashboard-latest-maintenance')).toHaveCount(0);
+		// The rest of the dashboard is back, but it all sits below the list.
+		const hero = page.getByTestId('dashboard-hero');
+		await expect(hero).toBeVisible();
+		const heroBox = await hero.boundingBox();
+		expect(heroBox, 'the portfolio band should have a layout box').not.toBeNull();
+		expect(heroBox!.y).toBeGreaterThan(box!.y);
 	});
 
 	test('the Money nav starts with Who\'s behind', async ({ page }) => {

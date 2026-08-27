@@ -24,10 +24,12 @@ describe('dashboard loading contract', () => {
 			attentionPosition > briefingPosition,
 			'the needs-attention list must be the first section on the page'
 		);
-		// The competing sections are gone for good.
-		assert.doesNotMatch(dashboard, /data-testid="dashboard-hero"/);
-		assert.doesNotMatch(dashboard, /data-testid="dashboard-latest-messages"/);
-		assert.doesNotMatch(dashboard, /data-testid="dashboard-activity-row"/);
+		// The rest of the story still follows underneath, never above, the list.
+		for (const testid of ['dashboard-hero', 'dashboard-latest-messages', 'dashboard-activity-row']) {
+			const position = dashboard.indexOf(`data-testid="${testid}"`);
+			assert.ok(position >= 0, `${testid} should still be on the dashboard`);
+			assert.ok(position > attentionPosition, `${testid} must sit below the needs-attention list`);
+		}
 	});
 
 	test('fails a stalled optional AI polish quickly and offers a manual retry', () => {
