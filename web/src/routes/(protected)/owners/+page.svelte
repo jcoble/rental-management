@@ -16,6 +16,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
+	import { formErrorsFromApiError } from '$lib/forms/form-errors';
 	import { Plus, Pencil, Trash2, UserCheck, UserX } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -101,7 +102,19 @@
 			closeOwnerForm();
 			invalidateOwners();
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			const validationErrors = formErrorsFromApiError(err);
+			if (Object.keys(validationErrors).length > 0) {
+				ownerErrors = validationErrors;
+				const firstErrorStep = firstOwnerErrorStep(validationErrors);
+				if (firstErrorStep >= 0) {
+					ownerStep = firstErrorStep;
+					markOwnerStepInvalid(firstErrorStep);
+				}
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	const deleteOwnerMutation = createMutation(() => ({
