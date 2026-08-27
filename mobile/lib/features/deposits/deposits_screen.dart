@@ -15,11 +15,6 @@ import '../accounting/accounting_impact_card.dart';
 import 'deposits_repository.dart';
 import '../../core/presentation/formatting.dart';
 
-String _fmtCurrency(double amount, [String currency = 'USD']) {
-  final value = amount.toStringAsFixed(2);
-  return currency == 'USD' ? '\$$value' : '$value $currency';
-}
-
 String _location(TenantAccountDeposit account) {
   final property = account.propertyName.trim();
   final unit = account.unitNumber.trim();
@@ -375,7 +370,7 @@ class _DepositListItem extends StatelessWidget {
       supporting: [
         Text(_location(account), maxLines: 1, overflow: TextOverflow.ellipsis),
         Text(
-          '${_fmtCurrency(account.heldBalance, account.currency)} currently held',
+          '${moneyFmt(account.heldBalance)} currently held',
           style: theme.textTheme.bodySmall?.copyWith(
             color: colors.onSurfaceVariant,
           ),
@@ -487,20 +482,20 @@ class _DepositDetailSheet extends ConsumerWidget {
         children: [
           _AmountRow(
             label: 'Currently held',
-            value: _fmtCurrency(account.heldBalance, account.currency),
+            value: moneyFmt(account.heldBalance),
             emphasized: true,
           ),
           _AmountRow(
             label: 'Total received',
-            value: _fmtCurrency(account.totalReceived, account.currency),
+            value: moneyFmt(account.totalReceived),
           ),
           _AmountRow(
             label: 'Total deductions',
-            value: _fmtCurrency(account.totalDeductions, account.currency),
+            value: moneyFmt(account.totalDeductions),
           ),
           _AmountRow(
             label: 'Total refunded',
-            value: _fmtCurrency(account.totalRefunded, account.currency),
+            value: moneyFmt(account.totalRefunded),
           ),
           const Divider(height: 28),
           Text('Account', style: theme.textTheme.titleSmall),
@@ -750,7 +745,7 @@ class _DeductDepositSheetState extends ConsumerState<_DeductDepositSheet> {
     title: 'Record deduction',
     subtitle:
         '${widget.account.primaryTenantName ?? 'Tenancy #${widget.account.relationshipNumber}'} · '
-        '${_fmtCurrency(widget.account.heldBalance, widget.account.currency)} held',
+        '${moneyFmt(widget.account.heldBalance)} held',
     formKey: _formKey,
     saving: _saving,
     error: _error,
@@ -851,7 +846,7 @@ class _RefundDepositSheetState extends ConsumerState<_RefundDepositSheet> {
     title: 'Record refund',
     subtitle:
         '${widget.account.primaryTenantName ?? 'Tenancy #${widget.account.relationshipNumber}'} · '
-        '${_fmtCurrency(widget.account.heldBalance, widget.account.currency)} available',
+        '${moneyFmt(widget.account.heldBalance)} available',
     formKey: _formKey,
     saving: _saving,
     error: _error,
@@ -1044,7 +1039,7 @@ class _MoneyField extends StatelessWidget {
         return 'Enter an amount greater than zero';
       }
       if (maximum != null && parsed > maximum!) {
-        return 'Amount cannot exceed ${_fmtCurrency(maximum!)}';
+        return 'Amount cannot exceed ${moneyFmt(maximum!)}';
       }
       return null;
     },
