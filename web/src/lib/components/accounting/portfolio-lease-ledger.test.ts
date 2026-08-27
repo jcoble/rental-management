@@ -7,6 +7,6 @@ describe('portfolio lease ledger contract', () => {
 		for (const field of ['propertyId:', 'unitId:', 'search:', 'entryType:', 'skip:', 'take:', "sort: '-effectiveOn'"]) assert.ok(source.includes(field));
 	});
 	it('renders server rows as month groups with links to unit money', () => {
-		assert.match(source, /portfolio-ledger-month-/); assert.match(source, /\/units\/\$\{row\.unitId\}\?tab=rent/);
+		assert.match(source, /portfolio-ledger-month-/); assert.match(source, /\/units\/\$\{row\.unitId\}\?tab=money&view=tenant-account/);
 	});
 });
