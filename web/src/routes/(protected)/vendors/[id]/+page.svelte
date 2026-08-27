@@ -278,6 +278,21 @@
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Email</dt>
 						<dd class="mt-1 text-sm" data-testid="vendor-detail-email">{vendor.email || '—'}</dd>
 					</div>
+					<div>
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Website</dt>
+						<dd class="mt-1 truncate text-sm" data-testid="vendor-detail-website">
+							{#if vendor.website}
+								<a
+									href={vendor.website}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="text-primary underline underline-offset-4"
+								>{vendor.website.replace(/^https?:\/\//, '')}</a>
+							{:else}
+								—
+							{/if}
+						</dd>
+					</div>
 					<div class="sm:col-span-2 lg:col-span-3">
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Address</dt>
 						<dd class="mt-1 whitespace-pre-line text-sm" data-testid="vendor-detail-address">
