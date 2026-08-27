@@ -777,24 +777,28 @@ class _HomeShellState extends ConsumerState<HomeShell>
         onOpenAssistant: _openAssistant,
       ),
       MobileShellTabId.rentals => RentalsHubScreen(
+        handleSystemBack: tab == availableTabs[_selectedIndex],
         onControllerReady: (controller) =>
             _registerDomain(MobileShellTabId.rentals, controller),
         onControllerDisposed: (controller) =>
             _unregisterDomain(MobileShellTabId.rentals, controller),
       ),
       MobileShellTabId.money => MoneyHubScreen(
+        handleSystemBack: tab == availableTabs[_selectedIndex],
         onControllerReady: (controller) =>
             _registerDomain(MobileShellTabId.money, controller),
         onControllerDisposed: (controller) =>
             _unregisterDomain(MobileShellTabId.money, controller),
       ),
       MobileShellTabId.work => WorkHubScreen(
+        handleSystemBack: tab == availableTabs[_selectedIndex],
         onControllerReady: (controller) =>
             _registerDomain(MobileShellTabId.work, controller),
         onControllerDisposed: (controller) =>
             _unregisterDomain(MobileShellTabId.work, controller),
       ),
       MobileShellTabId.inbox => InboxHubScreen(
+        handleSystemBack: tab == availableTabs[_selectedIndex],
         onControllerReady: (controller) =>
             _registerDomain(MobileShellTabId.inbox, controller),
         onControllerDisposed: (controller) =>
@@ -960,63 +964,78 @@ class _HomeShellState extends ConsumerState<HomeShell>
       controller: _restorationState,
       child: MobileShellNavigation(
         controller: _shellNavigator,
-        child: Scaffold(
-          body: Column(
-            children: [
-              // App-wide "Sandbox mode" indicator: a slim bar above the tabs, shown only while the
-              // account is a seeded demo sandbox. Inert (zero-height) once the account is Live.
-              const _SandboxIndicator(),
-              Expanded(
-                child: IndexedStack(
-                  index: selectedIndex,
-                  children: tenantMode
-                      ? [
-                          _TenantHomeTab(user: user),
-                          const _TenantAccountLeaseTab(),
-                          const TenantMaintenanceScreen(),
-                          const MessagesListScreen(),
-                          const _TenantProfileTab(),
-                        ]
-                      : landlordTabs
-                            .map(
-                              (tab) =>
-                                  _buildLandlordTab(tab, user, landlordTabs),
-                            )
-                            .toList(growable: false),
+        child: PopScope<void>(
+          canPop:
+              tenantMode ||
+              landlordTabs[selectedIndex] == MobileShellTabId.today,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop || tenantMode || !mounted) return;
+            final activeTab = landlordTabs[selectedIndex];
+            if (_domainNavigators[activeTab] != null) return;
+            final todayIndex = landlordTabs.indexOf(MobileShellTabId.today);
+            if (todayIndex >= 0 && selectedIndex != todayIndex) {
+              setState(() => _selectedIndex = todayIndex);
+            }
+          },
+          child: Scaffold(
+            body: Column(
+              children: [
+                // App-wide "Sandbox mode" indicator: a slim bar above the tabs, shown only while the
+                // account is a seeded demo sandbox. Inert (zero-height) once the account is Live.
+                const _SandboxIndicator(),
+                Expanded(
+                  child: IndexedStack(
+                    index: selectedIndex,
+                    children: tenantMode
+                        ? [
+                            _TenantHomeTab(user: user),
+                            const _TenantAccountLeaseTab(),
+                            const TenantMaintenanceScreen(),
+                            const MessagesListScreen(),
+                            const _TenantProfileTab(),
+                          ]
+                        : landlordTabs
+                              .map(
+                                (tab) =>
+                                    _buildLandlordTab(tab, user, landlordTabs),
+                              )
+                              .toList(growable: false),
+                  ),
                 ),
-              ),
-            ],
-          ),
-          floatingActionButton: quickActionController == null
-              ? null
-              : AnimatedBuilder(
-                  animation: quickActionController,
-                  builder: (context, _) {
-                    if (quickActionController.hidden) {
-                      return const SizedBox.shrink();
-                    }
+              ],
+            ),
+            floatingActionButton: quickActionController == null
+                ? null
+                : AnimatedBuilder(
+                    animation: quickActionController,
+                    builder: (context, _) {
+                      if (quickActionController.hidden) {
+                        return const SizedBox.shrink();
+                      }
 
-                    return MobileQuickActionFab(
-                      heroTag: 'home-quick-action-fab-$selectedIndex',
-                      primaryActions: quickActionController.primaryActions,
-                      useNearestScope: false,
-                      onChat: _openAssistant,
-                      onRecord: _openRecord,
-                      onScan: quickActionController.scanAction ?? _openCapture,
-                    );
-                  },
-                ),
-          floatingActionButtonLocation: quickActionController == null
-              ? null
-              : FloatingActionButtonLocation.endFloat,
-          bottomNavigationBar: _MorphNavBar(
-            tabs: tabs,
-            selectedIndex: selectedIndex,
-            centerGap: false,
-            onSelected: (index) => _handleBottomNavigationSelected(
-              index,
-              tenantMode: tenantMode,
-              landlordTabs: landlordTabs,
+                      return MobileQuickActionFab(
+                        heroTag: 'home-quick-action-fab-$selectedIndex',
+                        primaryActions: quickActionController.primaryActions,
+                        useNearestScope: false,
+                        onChat: _openAssistant,
+                        onRecord: _openRecord,
+                        onScan:
+                            quickActionController.scanAction ?? _openCapture,
+                      );
+                    },
+                  ),
+            floatingActionButtonLocation: quickActionController == null
+                ? null
+                : FloatingActionButtonLocation.endFloat,
+            bottomNavigationBar: _MorphNavBar(
+              tabs: tabs,
+              selectedIndex: selectedIndex,
+              centerGap: false,
+              onSelected: (index) => _handleBottomNavigationSelected(
+                index,
+                tenantMode: tenantMode,
+                landlordTabs: landlordTabs,
+              ),
             ),
           ),
         ),
