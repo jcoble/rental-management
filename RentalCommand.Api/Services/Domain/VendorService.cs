@@ -178,18 +178,18 @@ public class VendorService : IVendorService
         var update = CoreCrudWriteSupport.Read<UpdateVendorRequest>(request);
         if (update.Name is not null) vendor.Name = update.Name;
         if (update.ServiceType is not null) vendor.ServiceType = update.ServiceType;
-        if (update.Email is not null) vendor.Email = update.Email;
-        if (update.Phone is not null) vendor.Phone = update.Phone;
-        if (update.Website is not null) vendor.Website = update.Website;
-        if (update.TaxId is not null) vendor.TaxId = update.TaxId;
-        if (update.AddressLine1 is not null) vendor.AddressLine1 = update.AddressLine1;
-        if (update.City is not null) vendor.City = update.City;
-        if (update.State is not null) vendor.State = update.State;
-        if (update.PostalCode is not null) vendor.PostalCode = update.PostalCode;
+        if (update.Email is not null) vendor.Email = Blank(update.Email);
+        if (update.Phone is not null) vendor.Phone = Blank(update.Phone);
+        if (update.Website is not null) vendor.Website = Blank(update.Website);
+        if (update.TaxId is not null) vendor.TaxId = Blank(update.TaxId);
+        if (update.AddressLine1 is not null) vendor.AddressLine1 = Blank(update.AddressLine1);
+        if (update.City is not null) vendor.City = Blank(update.City);
+        if (update.State is not null) vendor.State = Blank(update.State);
+        if (update.PostalCode is not null) vendor.PostalCode = Blank(update.PostalCode);
         if (update.Is1099Eligible.HasValue) vendor.Is1099Eligible = update.Is1099Eligible.Value;
         if (update.W9OnFile.HasValue) vendor.W9OnFile = update.W9OnFile.Value;
         if (update.Preferred.HasValue) vendor.Preferred = update.Preferred.Value;
-        if (update.Notes is not null) vendor.Notes = update.Notes;
+        if (update.Notes is not null) vendor.Notes = Blank(update.Notes);
         vendor.UpdatedAt = now;
         context.BindSemanticAudit(vendor, TransactionalWriteDefaults.Audit(
             request, nameof(Vendor), AuditLogOperation.Updated,
@@ -323,5 +323,8 @@ public class VendorService : IVendorService
             (assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties) ||
              authorizedProperties.Any()));
     }
+
+    private static string? Blank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
 }

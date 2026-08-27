@@ -127,14 +127,14 @@ public class OwnerEntityService : IOwnerEntityService
         var update = CoreCrudWriteSupport.Read<UpdateOwnerEntityRequest>(request);
         if (update.OwnerEntityType.HasValue) owner.OwnerEntityType = update.OwnerEntityType.Value;
         if (update.Name is not null) owner.Name = update.Name;
-        if (update.TaxId is not null) owner.TaxId = update.TaxId;
-        if (update.AddressLine1 is not null) owner.AddressLine1 = update.AddressLine1;
-        if (update.AddressLine2 is not null) owner.AddressLine2 = update.AddressLine2;
-        if (update.City is not null) owner.City = update.City;
-        if (update.State is not null) owner.State = update.State;
-        if (update.PostalCode is not null) owner.PostalCode = update.PostalCode;
-        if (update.Phone is not null) owner.Phone = update.Phone;
-        if (update.Email is not null) owner.Email = update.Email;
+        if (update.TaxId is not null) owner.TaxId = Blank(update.TaxId);
+        if (update.AddressLine1 is not null) owner.AddressLine1 = Blank(update.AddressLine1);
+        if (update.AddressLine2 is not null) owner.AddressLine2 = Blank(update.AddressLine2);
+        if (update.City is not null) owner.City = Blank(update.City);
+        if (update.State is not null) owner.State = Blank(update.State);
+        if (update.PostalCode is not null) owner.PostalCode = Blank(update.PostalCode);
+        if (update.Phone is not null) owner.Phone = Blank(update.Phone);
+        if (update.Email is not null) owner.Email = Blank(update.Email);
         owner.UpdatedAt = now;
         context.BindSemanticAudit(owner, TransactionalWriteDefaults.Audit(
             request, nameof(OwnerEntity), AuditLogOperation.Updated,
@@ -643,6 +643,9 @@ public class OwnerEntityService : IOwnerEntityService
 
     private static string Digest(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static string? Blank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static Guid StableGuid(string value)
     {
