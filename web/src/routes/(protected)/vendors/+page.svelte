@@ -22,6 +22,7 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { withBlanksAsEmpty } from '$lib/utils/with-blanks-as-empty';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -220,7 +221,10 @@
 			return;
 		}
 		vendorErrors = {};
-		saveVendorMutation.mutate({ id: editingVendorId, data: { portfolioId, ...result.data } });
+		saveVendorMutation.mutate({
+			id: editingVendorId,
+			data: { portfolioId, ...(editingVendorId == null ? result.data : withBlanksAsEmpty(result.data)) }
+		});
 	}
 
 	const vendorsList = $derived(vendorsQuery.data?.items ?? []);

@@ -2,6 +2,7 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -14,7 +15,7 @@ using RentalCommand.TestCommon;
 namespace RentalCommand.Api.Tests.Domain;
 
 [Collection(MigratedPostgreSqlCollection.Name2)]
-public class OwnerEntityServiceListTests : IAsyncLifetime
+public class OwnerEntityServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
@@ -24,7 +25,7 @@ public class OwnerEntityServiceListTests : IAsyncLifetime
     private OwnerEntityService _sut = null!;
     private WorkspaceReadScope _scope;
 
-    public OwnerEntityServiceListTests(MigratedPostgreSqlFixture fixture)
+    public OwnerEntityServiceTests(MigratedPostgreSqlFixture fixture)
     {
         _fixture = fixture;
     }
@@ -32,7 +33,7 @@ public class OwnerEntityServiceListTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
-        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(OwnerEntityServiceListTests));
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(OwnerEntityServiceTests));
         await _ctx.ActivateApiScopeAsync(_scope);
         _sut = new OwnerEntityService(
             _ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System,
@@ -128,6 +129,38 @@ public class OwnerEntityServiceListTests : IAsyncLifetime
 
         result.Should().NotBeNull();
         result!.AssignedPropertyCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Update_WithEmptyOptionalFields_ClearsThem()
+    {
+        await using var services = AtomicDomainTestKernel.CreateForCoreCrudPostgreSql(_ctx.ConnectionString);
+        var service = new OwnerEntityService(
+            services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>(),
+            Mock.Of<IDataUpdateService>(), TimeProvider.System,
+            services.GetRequiredService<RentalCommand.Core.Atomic.IWriteExecutor>());
+        var created = await service.CreateAsync(
+            _scope,
+            new CreateOwnerEntityRequest
+            {
+                Name = "Clear Fields Holdings",
+                OwnerEntityType = OwnerEntityType.LLC,
+                TaxId = "12-3456789",
+                Phone = "614-555-0100",
+                Email = "owner@example.test",
+            },
+            "owner-empty-fields-create");
+
+        await service.UpdateAsync(
+            _scope,
+            created!.Id,
+            new UpdateOwnerEntityRequest { Phone = "", Email = "", TaxId = null },
+            "owner-empty-fields-update");
+
+        var persisted = await _ctx.Db.OwnerEntities.SingleAsync(owner => owner.Id == created.Id);
+        persisted.Phone.Should().BeNull();
+        persisted.Email.Should().BeNull();
+        persisted.TaxId.Should().Be("12-3456789");
     }
 
     [Fact]

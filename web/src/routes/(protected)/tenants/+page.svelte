@@ -21,6 +21,7 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { getTenantsEmptyStateCopy } from '$lib/tenants/tenant-list-state';
 	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
+	import { withBlanksAsEmpty } from '$lib/utils/with-blanks-as-empty';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { Plus, Pencil, Trash2, Users } from '@lucide/svelte';
 
@@ -207,7 +208,10 @@
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ id: editingId, data: { portfolioId, ...result.data } });
+		saveMutation.mutate({
+			id: editingId,
+			data: { portfolioId, ...(editingId == null ? result.data : withBlanksAsEmpty(result.data)) }
+		});
 	}
 
 	// DataGrid column definitions

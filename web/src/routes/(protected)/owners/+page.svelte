@@ -25,6 +25,7 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { WIZARD_STEPS } from '$lib/onboarding/wizard-steps';
+	import { withBlanksAsEmpty } from '$lib/utils/with-blanks-as-empty';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -210,7 +211,10 @@
 			return;
 		}
 		ownerErrors = {};
-		saveOwnerMutation.mutate({ id: editingOwnerId, data: { portfolioId, ...result.data } });
+		saveOwnerMutation.mutate({
+			id: editingOwnerId,
+			data: { portfolioId, ...(editingOwnerId == null ? result.data : withBlanksAsEmpty(result.data)) }
+		});
 	}
 
 	const ownersList = $derived(ownersQuery.data?.items ?? []);

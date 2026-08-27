@@ -12,7 +12,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public sealed class VendorServiceMutationClockTests : IDisposable
+public sealed class VendorServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
 
@@ -23,9 +23,9 @@ public sealed class VendorServiceMutationClockTests : IDisposable
     private readonly VendorService _sut;
     private readonly WorkspaceReadScope _scope;
 
-    public VendorServiceMutationClockTests()
+    public VendorServiceTests()
     {
-        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorServiceMutationClockTests));
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorServiceTests));
         var now = DateTime.UtcNow;
         _ctx.Db.Properties.Add(new Property
         {
@@ -87,6 +87,33 @@ public sealed class VendorServiceMutationClockTests : IDisposable
         var persisted = await _ctx.Db.Vendors.SingleAsync(vendor => vendor.Id == created.Id);
         persisted.CreatedAt.Should().Be(createdAtUtc);
         persisted.UpdatedAt.Should().Be(updatedAtUtc.UtcDateTime);
+    }
+
+    [Fact]
+    public async Task Update_WithEmptyOptionalFields_ClearsThem()
+    {
+        var created = await _sut.CreateAsync(
+            _scope,
+            new CreateVendorRequest
+            {
+                Name = "Clear Fields Plumbing",
+                ServiceType = "Plumbing",
+                Email = "dispatch@example.test",
+                Phone = "614-555-0100",
+                Website = "https://example.test",
+            },
+            "vendor-empty-fields-create");
+
+        await _sut.UpdateAsync(
+            _scope,
+            created!.Id,
+            new UpdateVendorRequest { Email = "", Website = "", Phone = null },
+            "vendor-empty-fields-update");
+
+        var persisted = await _ctx.Db.Vendors.SingleAsync(vendor => vendor.Id == created.Id);
+        persisted.Email.Should().BeNull();
+        persisted.Website.Should().BeNull();
+        persisted.Phone.Should().Be("614-555-0100");
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
