@@ -119,6 +119,9 @@
 	<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="units-page">
 	<PageHeader
 		class="mb-4"
+		band
+		art={6}
+		tone="sky"
 		density="compact"
 		eyebrow="Rentals"
 		title="Units"

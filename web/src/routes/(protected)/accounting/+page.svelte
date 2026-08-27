@@ -868,6 +868,9 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="accounting-page">
 	<PageHeader
 		class="mb-4"
+		band
+		art={1}
+		tone="mint"
 		density="compact"
 		eyebrow=""
 		title="Money"
