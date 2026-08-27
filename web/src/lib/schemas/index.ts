@@ -514,15 +514,15 @@ export const appointmentSchema = z.object({
 export const ownerSchema = z.object({
 	name: required('Name'),
 	ownerEntityType: z.string(),
-	taxId: optionalText,
-	addressLine1: optionalText,
-	addressLine2: optionalText,
-	city: optionalText,
-	state: optionalText,
-	postalCode: optionalText,
-	phone: optionalText,
+	taxId: optionalTextMax('Tax ID', 50),
+	addressLine1: optionalTextMax('Address', 250),
+	addressLine2: optionalTextMax('Address line 2', 250),
+	city: optionalTextMax('City', 120),
+	state: optionalTextMax('State', 60),
+	postalCode: optionalTextMax('ZIP', 20),
+	phone: optionalTextMax('Phone', 50),
 	// email: server [EmailAddress] optional
-	email: optionalEmail,
+	email: optionalEmailMax('Email', 254),
 });
 
 export const vendorSchema = z.object({
