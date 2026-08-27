@@ -1073,6 +1073,36 @@ public sealed class AccountingReadModelPostgreSqlTests
     }
 
     [Fact]
+    public async Task RentStillOwed_IgnoresTenantCredits()
+    {
+        var commands = new SqlCommandCounter();
+        await using var setup = await _fixture.CreateContextAsync([commands]);
+        await new ChartOfAccountsSeedService(setup.Db).SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        var scope = setup.Db.SeedAdministratorScope(1, nameof(RentStillOwed_IgnoresTenantCredits));
+        var now = DateTime.UtcNow;
+        var owingTenant = await CreateTenantAccountAsync(setup, scope, now, "OWING-4100");
+        var prepaidTenant = await CreateTenantAccountAsync(setup, scope, now, "PREPAID-5000");
+        var receivable = await AccountAsync(setup, "tenant-accounts-receivable");
+        var income = await AccountAsync(setup, "rental-income");
+
+        await PostAsync(setup, 8226, new DateOnly(2026, 8, 6),
+            new AccountingProposedLine { LedgerAccountId = receivable.Id, TenantAccountId = owingTenant.Id, DebitAmount = 4_100m },
+            new AccountingProposedLine { LedgerAccountId = income.Id, CreditAmount = 4_100m });
+        await PostAsync(setup, 8227, new DateOnly(2026, 8, 7),
+            new AccountingProposedLine { LedgerAccountId = income.Id, DebitAmount = 5_000m },
+            new AccountingProposedLine { LedgerAccountId = receivable.Id, TenantAccountId = prepaidTenant.Id, CreditAmount = 5_000m });
+        await setup.ActivateApiScopeAsync(scope);
+        commands.Reset();
+
+        var result = await new AccountingLedgerReadModelService(setup.Db).GetMoneyPositionAsync(
+            scope, new MoneyPositionQuery { To = new DateOnly(2026, 8, 31) });
+
+        result.RentStillOwed.Should().Be(4_100m);
+        commands.Sql.Count(sql => sql.Contains("tenant-accounts-receivable", StringComparison.Ordinal)).Should().Be(1);
+    }
+
+    [Fact]
     public async Task MoneyPosition_IncludesAuthorizedOperationalDepositLiabilityInOneSqlAggregate()
     {
         var commands = new SqlCommandCounter();
