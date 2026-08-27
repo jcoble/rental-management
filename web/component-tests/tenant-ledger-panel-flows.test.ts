@@ -14,8 +14,14 @@ const mocks = vi.hoisted(() => ({
 	deposit: vi.fn(),
 	postCredit: vi.fn(),
 	reverseCharge: vi.fn(),
-	reverseLedgerEntry: vi.fn()
+	reverseLedgerEntry: vi.fn(),
+	showSuccess: vi.fn()
 }));
+
+vi.mock('$lib/utils/toast', async () => {
+	const actual = await vi.importActual<typeof import('$lib/utils/toast')>('$lib/utils/toast');
+	return { ...actual, showSuccess: mocks.showSuccess };
+});
 
 vi.mock('$lib/api/endpoints/tenant-accounts', async () => {
 	const actual = await vi.importActual<typeof import('$lib/api/endpoints/tenant-accounts')>(
@@ -413,6 +419,21 @@ describe('rendered tenant ledger panel flow boundaries', () => {
 		await waitFor(() => expect(mocks.reverseCharge).toHaveBeenCalledOnce());
 		const [, , , body] = mocks.reverseCharge.mock.calls[0];
 		expect(body).toEqual({ effectiveOn: '2027-02-28', reason: 'Reverse charge: Rent for February 2027' });
+	});
+
+	it('closes the fix dialog and confirms when the reversal posts', async () => {
+		const reversal = deferred<{ value: { found: boolean; applied: boolean }; replayed: boolean }>();
+		const view = await renderPanel(row({ tenantLedgerEntryId: 49 }));
+		mocks.reverseCharge.mockReturnValueOnce(reversal.promise);
+
+		await fireEvent.click(view.getByRole('menuitem', { name: 'Reverse charge' }));
+		await fireEvent.click(view.getByRole('button', { name: /Reverse the posted charge/ }));
+		await fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+		expect(view.getByRole('dialog')).toBeTruthy();
+
+		reversal.resolve({ value: { found: true, applied: true }, replayed: false });
+		await waitFor(() => expect(view.queryByRole('dialog')).toBeNull());
+		expect(mocks.showSuccess).toHaveBeenCalledWith('Charge reversed.');
 	});
 
 	it('calls the generic opening-balance reversal endpoint with the exact body', async () => {
