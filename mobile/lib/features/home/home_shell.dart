@@ -3011,16 +3011,35 @@ class _QuickActionButton extends StatelessWidget {
 // Briefing content
 // ---------------------------------------------------------------------------
 
-class _BriefingContent extends StatelessWidget {
+class _BriefingContent extends StatefulWidget {
   const _BriefingContent({required this.briefing});
 
   final BriefingResponse briefing;
 
   @override
+  State<_BriefingContent> createState() => _BriefingContentState();
+}
+
+class _BriefingContentState extends State<_BriefingContent> {
+  static const _visibleLimit = 5;
+
+  bool _showAllToday = false;
+
+  @override
   Widget build(BuildContext context) {
+    final briefing = widget.briefing;
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final bullets = briefing.bullets.take(5).toList();
+    // Most urgent first, so a warning is never pushed out by routine items.
+    final ordered = [
+      ...briefing.bullets.where((b) => b.severity == BulletSeverity.critical),
+      ...briefing.bullets.where((b) => b.severity == BulletSeverity.warning),
+      ...briefing.bullets.where((b) => b.severity == BulletSeverity.info),
+    ];
+    final hiddenCount = ordered.length - _visibleLimit;
+    final bullets = _showAllToday
+        ? ordered
+        : ordered.take(_visibleLimit).toList();
 
     if (briefing.summary == null && bullets.isEmpty) {
       return SliverToBoxAdapter(child: _AllClearCard());
@@ -3061,6 +3080,40 @@ class _BriefingContent extends StatelessWidget {
           _BulletRow(bullet: bullet),
           const SizedBox(height: 8),
         ],
+
+        if (hiddenCount > 0)
+          Card(
+            child: InkWell(
+              onTap: () => setState(() => _showAllToday = !_showAllToday),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _showAllToday
+                            ? 'Show fewer'
+                            : '$hiddenCount more today',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: cs.onSurface,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      _showAllToday ? Icons.expand_less : Icons.chevron_right,
+                      color: cs.onSurfaceVariant,
+                      size: 18,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
       ]),
     );
   }
