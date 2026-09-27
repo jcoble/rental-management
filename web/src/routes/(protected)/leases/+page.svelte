@@ -20,20 +20,34 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
 
 	const PAGE_SIZE = 20;
-	let search = $state('');
-	let statusFilter = $state('');
-	let skip = $state(0);
+	// Search / status / paging persisted in the URL so they survive navigating away and back.
+	let search = $state(readGridParam(page.url.searchParams, 'q'));
+	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
+	let skip = $state(Math.max(0, (readGridParam(page.url.searchParams, 'page', 1) - 1) * PAGE_SIZE));
 	const debouncedSearch = debounced(() => search, 300);
+	// Reset to the first page when the search/status changes — but not on the initial mount, so a
+	// deep-linked / restored page survives.
+	let leaseFilterPrimed = false;
 	$effect(() => {
 		debouncedSearch.value;
 		statusFilter;
+		if (!leaseFilterPrimed) {
+			leaseFilterPrimed = true;
+			return;
+		}
 		skip = 0;
+	});
+
+	$effect(() => {
+		syncGridUrl({ q: search, status: statusFilter, page: Math.floor(skip / PAGE_SIZE) + 1 }, { page: 1 });
 	});
 
 	const leasesQuery = createQuery(() => ({

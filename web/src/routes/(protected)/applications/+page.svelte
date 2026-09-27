@@ -15,16 +15,23 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Link2, Copy, Check } from '@lucide/svelte';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
-	let search = $state('');
+	// Search + status filter persisted in the URL so they survive navigating away and back.
+	let search = $state(readGridParam(page.url.searchParams, 'q'));
 
 	// shadcn Select binds a string; bits-ui treats '' as "no selection", so the "all" sentinel stands
 	// in for "no status filter". `statusFilter` (below) maps it back to '' for the query.
 	const ALL_STATUSES = 'all';
-	let statusValue = $state<string>(ALL_STATUSES);
+	let statusValue = $state<string>(readGridParam(page.url.searchParams, 'status') || ALL_STATUSES);
 	const statusFilter = $derived<ApplicationStatus | ''>(
 		statusValue === ALL_STATUSES ? '' : (statusValue as ApplicationStatus)
 	);
+
+	$effect(() => {
+		syncGridUrl({ q: search, status: statusValue }, { status: ALL_STATUSES });
+	});
 
 	const STATUS_OPTIONS: { value: string; label: string }[] = [
 		{ value: ALL_STATUSES, label: 'All statuses' },
