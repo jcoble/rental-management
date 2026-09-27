@@ -71,7 +71,8 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         });
 
         var requested = new DateTime(2026, 1, 5, 0, 0, 0, DateTimeKind.Utc);
-        var scheduled = new DateTime(2026, 1, 10, 0, 0, 0, DateTimeKind.Utc);
+        // ScheduledFor is offset-bearing on the wire (DateTimeOffset); it is stored as the UTC instant.
+        var scheduled = new DateTimeOffset(2026, 1, 10, 0, 0, 0, TimeSpan.Zero);
         var completed = new DateTime(2026, 1, 12, 0, 0, 0, DateTimeKind.Utc);
 
         var updated = await _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
@@ -87,7 +88,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
 
         var entity = await _db.WorkOrders.AsNoTracking().FirstAsync(w => w.Id == created.Id);
         entity.RequestedAt.Should().Be(requested);
-        entity.ScheduledFor.Should().Be(scheduled);
+        entity.ScheduledFor.Should().Be(scheduled.UtcDateTime);
         entity.CompletedAt.Should().Be(completed);
         entity.EstimatedCost.Should().Be(150.00m);
         entity.ActualCost.Should().Be(175.50m);

@@ -176,8 +176,8 @@ public class WorkOrderService : IWorkOrderService
             Priority = request.Priority,
             Status = request.Status,
             RequestedAt = request.RequestedAt?.ToUtc() ?? now,
-            ScheduledFor = request.ScheduledFor.ToUtc(),
-            ScheduledWindowEnd = request.ScheduledWindowEnd.ToUtc(),
+            ScheduledFor = request.ScheduledFor.ToUtcDateTime(),
+            ScheduledWindowEnd = request.ScheduledWindowEnd.ToUtcDateTime(),
             CompletedAt = request.CompletedAt.ToUtc(),
             EstimatedCost = request.EstimatedCost,
             ActualCost = request.ActualCost,
@@ -204,9 +204,10 @@ public class WorkOrderService : IWorkOrderService
         await _db.SaveChangesAsync(ct);
 
         // When the work order is scheduled with an arrival window AND tied to a tenant, text the tenant
-        // the appointment window so they know when to expect access. Best-effort: a notification failure
-        // must never roll back the created work order.
-        await NotifyTenantOfScheduleAsync(portfolioId, entity, ct);
+        // the appointment window so they know when to expect access. The original offset-bearing window
+        // (the landlord's local time) is passed through so the SMS renders in their local time rather
+        // than UTC. Best-effort: a notification failure must never roll back the created work order.
+        await NotifyTenantOfScheduleAsync(portfolioId, entity, request.ScheduledFor, request.ScheduledWindowEnd, ct);
 
         var response = WorkOrderResponse.FromEntity(entity);
         await HydrateDisplayNamesAsync(portfolioId, response, ct);
@@ -217,12 +218,17 @@ public class WorkOrderService : IWorkOrderService
     /// <summary>
     /// Enqueues a tenant-facing SMS describing the scheduled arrival window for a newly created work
     /// order. No-ops unless the work order has a tenant, a <see cref="WorkOrder.ScheduledFor"/>, and a
-    /// <see cref="WorkOrder.ScheduledWindowEnd"/>, and that tenant has a phone number on file. Wrapped so
-    /// any failure (missing phone, outbox error) is logged and swallowed rather than failing the create.
+    /// <see cref="WorkOrder.ScheduledWindowEnd"/>, and that tenant has a phone number on file. The
+    /// <paramref name="localStart"/>/<paramref name="localEnd"/> are the original offset-bearing values
+    /// the client sent (the landlord's local time) so the SMS is rendered in that local time rather than
+    /// UTC. Wrapped so any failure (missing phone, outbox error) is logged and swallowed rather than
+    /// failing the create.
     /// </summary>
-    private async Task NotifyTenantOfScheduleAsync(int portfolioId, WorkOrder entity, CancellationToken ct)
+    private async Task NotifyTenantOfScheduleAsync(
+        int portfolioId, WorkOrder entity, DateTimeOffset? localStart, DateTimeOffset? localEnd, CancellationToken ct)
     {
-        if (entity.TenantId is null || entity.ScheduledFor is null || entity.ScheduledWindowEnd is null)
+        if (entity.TenantId is null || entity.ScheduledFor is null || entity.ScheduledWindowEnd is null
+            || localStart is null || localEnd is null)
         {
             return;
         }
@@ -241,7 +247,7 @@ public class WorkOrderService : IWorkOrderService
                 return;
             }
 
-            var message = BuildTenantScheduleSms(entity);
+            var message = BuildTenantScheduleSms(entity.Title, localStart.Value, localEnd.Value);
             await _publisher.PublishAsync(portfolioId, "sms", new
             {
                 to = tenantPhone,
@@ -256,24 +262,23 @@ public class WorkOrderService : IWorkOrderService
     }
 
     /// <summary>
-    /// Builds the tenant arrival-window SMS. Callers guarantee <see cref="WorkOrder.ScheduledFor"/> and
-    /// <see cref="WorkOrder.ScheduledWindowEnd"/> are set. Times are rendered in UTC (the stored kind);
-    /// formatting/localization can be revisited when tenants get a timezone preference.
+    /// Builds the tenant arrival-window SMS. The window is rendered in the landlord's local time — the
+    /// caller passes the original offset-bearing <see cref="DateTimeOffset"/> values the client sent, so
+    /// formatting their wall-clock component yields the local time the tenant should expect access. No
+    /// timezone label is emitted (a residential tenant can't reconcile "UTC"); a per-tenant/per-property
+    /// timezone preference can refine this later.
     /// </summary>
-    private static string BuildTenantScheduleSms(WorkOrder entity)
+    private static string BuildTenantScheduleSms(string title, DateTimeOffset start, DateTimeOffset end)
     {
-        var start = entity.ScheduledFor!.Value;
-        var end = entity.ScheduledWindowEnd!.Value;
-
         var sb = new StringBuilder();
-        sb.Append($"Maintenance scheduled for {entity.Title}: ");
+        sb.Append($"Maintenance scheduled for {title}: ");
         sb.Append(start.ToString("ddd MMM d, h:mm tt"));
         sb.Append(" – ");
         // Same-day window: show only the end time; otherwise show the full end date too.
         sb.Append(end.Date == start.Date
             ? end.ToString("h:mm tt")
             : end.ToString("ddd MMM d, h:mm tt"));
-        sb.Append(" (UTC). Please ensure access is available during this window.");
+        sb.Append(". Please ensure access is available during this window.");
         return sb.ToString();
     }
 
@@ -356,8 +361,8 @@ public class WorkOrderService : IWorkOrderService
         if (request.Status.HasValue) entity.Status = request.Status.Value;
 
         if (request.RequestedAt.HasValue) entity.RequestedAt = request.RequestedAt.Value.ToUtc();
-        if (request.ScheduledFor.HasValue) entity.ScheduledFor = request.ScheduledFor.ToUtc();
-        if (request.ScheduledWindowEnd.HasValue) entity.ScheduledWindowEnd = request.ScheduledWindowEnd.ToUtc();
+        if (request.ScheduledFor.HasValue) entity.ScheduledFor = request.ScheduledFor.ToUtcDateTime();
+        if (request.ScheduledWindowEnd.HasValue) entity.ScheduledWindowEnd = request.ScheduledWindowEnd.ToUtcDateTime();
         if (request.CompletedAt.HasValue) entity.CompletedAt = request.CompletedAt.ToUtc();
         if (request.EstimatedCost.HasValue) entity.EstimatedCost = request.EstimatedCost;
         if (request.ActualCost.HasValue) entity.ActualCost = request.ActualCost;
