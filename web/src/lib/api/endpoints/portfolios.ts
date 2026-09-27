@@ -16,4 +16,10 @@ export const portfolios = {
 	 * Irreversible. Returns the new (Live) state.
 	 */
 	goLive: () => api.post<SandboxState>('/portfolio/go-live'),
+	/**
+	 * Records the first-login Sandbox-vs-Live choice. `sandbox` seeds the demo portfolio; `live`
+	 * keeps an empty real portfolio. Idempotent. Returns the resulting sandbox state.
+	 */
+	onboardingChoice: (mode: 'sandbox' | 'live') =>
+		api.post<SandboxState>('/portfolio/onboarding-choice', { mode }),
 };

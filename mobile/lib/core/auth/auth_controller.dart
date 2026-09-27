@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_exception.dart';
 import '../push/push_service.dart';
+import '../../features/onboarding/onboarding_repository.dart';
 import 'auth_models.dart';
 import 'auth_repository.dart';
 import 'token_store.dart';
@@ -17,9 +18,15 @@ final class AuthStateUnknown extends AuthState {
 }
 
 /// A valid session exists.
+///
+/// [onboardingPending] is true when the account has not yet made the first-login Sandbox-vs-Live
+/// choice; while true the router gates the user onto the choice screen. It is resolved (via
+/// `GET /portfolio/sandbox-state`) before this state is emitted, so the router can read it
+/// synchronously and never flashes the dashboard before the gate decision.
 final class AuthStateAuthenticated extends AuthState {
-  const AuthStateAuthenticated(this.user);
+  const AuthStateAuthenticated(this.user, {this.onboardingPending = false});
   final AuthUser user;
+  final bool onboardingPending;
 }
 
 /// No valid session.
@@ -47,6 +54,20 @@ class AuthController extends Notifier<AuthState> {
 
   AuthRepository get _repository => ref.read(authRepositoryProvider);
   TokenStore get _tokenStore => ref.read(tokenStoreProvider);
+  OnboardingRepository get _onboarding => ref.read(onboardingRepositoryProvider);
+
+  /// Resolves whether the freshly-authenticated user still owes the first-login Sandbox-vs-Live
+  /// choice. Best-effort: a failed lookup (offline, transient 5xx) defaults to NOT pending so a
+  /// returning user is never trapped behind the gate by a flaky network — the worst case is the
+  /// gate is shown a moment later on a subsequent navigation once the state is readable.
+  Future<bool> _resolveOnboardingPending() async {
+    try {
+      final state = await _onboarding.sandboxState();
+      return state.onboardingChoicePending;
+    } on ApiException {
+      return false;
+    }
+  }
 
   /// Attempts to restore a session from secure storage.
   /// Should be called once on app startup.
@@ -59,7 +80,8 @@ class AuthController extends Notifier<AuthState> {
 
     try {
       final user = await _repository.currentUser();
-      state = AuthStateAuthenticated(user);
+      final pending = await _resolveOnboardingPending();
+      state = AuthStateAuthenticated(user, onboardingPending: pending);
     } on ApiException {
       // Stored token is invalid or expired and refresh also failed.
       await _tokenStore.clearTokens();
@@ -78,7 +100,8 @@ class AuthController extends Notifier<AuthState> {
     // error (and our AuthStateUnauthenticated.error backstop) render correctly.
     try {
       final response = await _repository.login(email, password);
-      state = AuthStateAuthenticated(response.user);
+      final pending = await _resolveOnboardingPending();
+      state = AuthStateAuthenticated(response.user, onboardingPending: pending);
     } on ApiException catch (e) {
       // User is already on /login, so setting this does not trigger a redirect;
       // it just provides an error backstop the screen can watch.
@@ -154,10 +177,21 @@ class AuthController extends Notifier<AuthState> {
     // login screen's `_isGoogleLoading` drives the spinner while it stays mounted.
     try {
       final response = await _repository.signInWithGoogle(idToken);
-      state = AuthStateAuthenticated(response.user);
+      final pending = await _resolveOnboardingPending();
+      state = AuthStateAuthenticated(response.user, onboardingPending: pending);
     } on ApiException catch (e) {
       state = AuthStateUnauthenticated(error: e.message);
       rethrow;
+    }
+  }
+
+  /// Clears the first-login gate after the user has made (and the server has recorded) the
+  /// Sandbox-vs-Live choice, so the router stops redirecting to the choice screen and lets them into
+  /// the app. No-op unless currently authenticated and still flagged pending.
+  void markOnboardingComplete() {
+    final current = state;
+    if (current is AuthStateAuthenticated && current.onboardingPending) {
+      state = AuthStateAuthenticated(current.user, onboardingPending: false);
     }
   }
 

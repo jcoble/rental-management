@@ -99,7 +99,6 @@ public class AuthService : IAuthService
     private readonly IUserMigrationService _userMigration;
     private readonly IAuthEmailSender _emailSender;
     private readonly RentalCommandDbContext _db;
-    private readonly DemoDataSeeder _demoSeeder;
     private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly ILogger<AuthService> _logger;
 
@@ -110,7 +109,6 @@ public class AuthService : IAuthService
         IUserMigrationService userMigration,
         IAuthEmailSender emailSender,
         RentalCommandDbContext db,
-        DemoDataSeeder demoSeeder,
         Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
         ILogger<AuthService> logger)
     {
@@ -120,7 +118,6 @@ public class AuthService : IAuthService
         _userMigration = userMigration;
         _emailSender = emailSender;
         _db = db;
-        _demoSeeder = demoSeeder;
         _selfOwnerProvisioner = selfOwnerProvisioner;
         _logger = logger;
     }
@@ -198,12 +195,12 @@ public class AuthService : IAuthService
                 createResult.Errors.Select(e => e.Description));
         }
 
-        // New signups start in SANDBOX: provision a demo portfolio, scope the user to it, and seed it
-        // with realistic demo data so they land in a populated sandbox to explore. While IsSandbox is
-        // true, all real outbound (email/SMS/Stripe/e-sign) is hard-suppressed. "Go Live" later wipes
-        // the demo data and flips to Live (one-way). Resilient: a seeding failure must NOT fail
-        // registration — the account is still created and usable (just with an empty sandbox).
-        await ProvisionSandboxPortfolioAsync(user);
+        // New signups get an EMPTY portfolio with the first-login Sandbox-vs-Live choice still PENDING.
+        // We deliberately do NOT auto-seed demo data here: the user is asked, on first login, whether to
+        // "Explore with sample data (Sandbox)" or "Set up my real portfolio (Live)", and the demo seed
+        // runs only if they pick Sandbox (POST /api/v1/portfolio/onboarding-choice). Resilient: a
+        // provisioning failure must NOT fail registration — the account is still created and usable.
+        await ProvisionPendingPortfolioAsync(user);
 
         var emailToken = await _userManager.GenerateEmailConfirmationTokenAsync(user);
 
@@ -215,12 +212,15 @@ public class AuthService : IAuthService
     }
 
     /// <summary>
-    /// Creates a fresh Sandbox <see cref="Portfolio"/> for a just-registered user, scopes the user to it,
-    /// and seeds it with demo data. Best-effort and self-contained: any failure is logged and swallowed so
-    /// it can never fail the registration that already succeeded. If the portfolio is created but seeding
-    /// fails, the user still lands in an (empty) sandbox — IsSandbox/SandboxSeededAtUtc are still stamped.
+    /// Creates a fresh EMPTY <see cref="Portfolio"/> for a just-registered user with the first-login
+    /// Sandbox-vs-Live choice still PENDING, scopes the user to it, and provisions the self-owner + Admin
+    /// role + staff row. It deliberately does NOT seed demo data and does NOT set <c>IsSandbox</c>: the
+    /// account stays a blank Live-shaped portfolio until the user makes the first-login choice. Picking
+    /// "Sandbox" later seeds the demo data and flips the flag (POST /portfolio/onboarding-choice). Picking
+    /// "Live" keeps it empty. Best-effort and self-contained: any failure is logged and swallowed so it can
+    /// never fail the registration that already succeeded.
     /// </summary>
-    private async Task ProvisionSandboxPortfolioAsync(ApplicationUser user)
+    private async Task ProvisionPendingPortfolioAsync(ApplicationUser user)
     {
         try
         {
@@ -231,24 +231,24 @@ public class AuthService : IAuthService
                 ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Company" : user.DisplayName!,
                 Status = PortfolioStatus.Active,
                 Currency = "USD",
-                IsSandbox = true,
-                SandboxSeededAtUtc = now,
+                // Pending the first-login choice: not a sandbox yet, no demo data. Settings carries the
+                // pending marker so the landing logic routes the user to the choice gate.
+                IsSandbox = false,
+                SandboxSeededAtUtc = null,
+                Settings = Domain.PortfolioOnboarding.WriteChoice(null, Domain.OnboardingChoice.Pending),
                 CreatedAt = now,
                 UpdatedAt = now,
             };
             _db.Portfolios.Add(portfolio);
             await _db.SaveChangesAsync();
 
-            // Scope the new user to their sandbox portfolio so their first JWT carries this portfolioId.
+            // Scope the new user to their portfolio so their first JWT carries this portfolioId.
             user.PortfolioId = portfolio.Id;
             await _userManager.UpdateAsync(user);
 
-            // Seed demo data into the new sandbox portfolio (idempotent; its own inner transaction).
-            await _demoSeeder.SeedPortfolioAsync(portfolio.Id);
-
             // The landlord IS the first owner: auto-create a primary self-owner from their account and
-            // link it, so onboarding never needs a separate "add an owner" step. Idempotent; survives
-            // alongside the demo owners (the Go-Live wipe recreates it for the real portfolio).
+            // link it, so onboarding never needs a separate "add an owner" step. Idempotent; needed for
+            // both the Sandbox and Live paths (the Go-Live wipe later recreates it).
             await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, portfolio.Id);
 
             // A self-service owner administers their own portfolio: grant the Admin role + a UserAccount
@@ -274,14 +274,14 @@ public class AuthService : IAuthService
             }
 
             _logger.LogInformation(
-                "Provisioned sandbox portfolio {PortfolioId} (Admin role + account) for new user {Email} (id {UserId}).",
+                "Provisioned pending portfolio {PortfolioId} (Admin role + account, awaiting Sandbox/Live choice) for new user {Email} (id {UserId}).",
                 portfolio.Id, user.Email, user.Id);
         }
         catch (Exception ex)
         {
-            // Never fail registration over sandbox provisioning — log and continue.
+            // Never fail registration over portfolio provisioning — log and continue.
             _logger.LogError(ex,
-                "Failed to provision/seed sandbox portfolio for new user {Email} (id {UserId}); registration still succeeds.",
+                "Failed to provision pending portfolio for new user {Email} (id {UserId}); registration still succeeds.",
                 user.Email, user.Id);
         }
     }
