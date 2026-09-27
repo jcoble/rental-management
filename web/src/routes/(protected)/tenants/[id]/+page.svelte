@@ -132,15 +132,25 @@
 		return [c.portal ? 'Portal' : '', c.email ? 'Email' : '', c.sms ? 'Sms' : ''].filter(Boolean);
 	}
 
+	// Notice types a landlord can FORCE for this tenant (generated even outside the usual trigger
+	// window). Mirrors the mobile type-first picker; late-rent is omitted here because it still
+	// requires a real overdue payment, so the default "what's due" pass already surfaces it.
+	const FORCEABLE_NOTICE_TYPES: { type: string; label: string }[] = [
+		{ type: 'RenewalOffer', label: 'Lease renewal offer' },
+		{ type: 'MoveOutReminder', label: 'Move-out reminder' }
+	];
+
 	function openNoticeDialog() {
 		noticeDrafts = [];
 		noticeChannels = {};
 		showNoticeDialog = true;
-		generateNoticeMutation.mutate();
+		// Default pass: generate whatever is actually due for this tenant.
+		generateNoticeMutation.mutate(undefined);
 	}
 
 	const generateNoticeMutation = createMutation(() => ({
-		mutationFn: () => notices.generate(id),
+		// noticeType omitted → generate all due; supplied → force that one type (early renewal / move-out).
+		mutationFn: (noticeType?: string) => notices.generate(id, noticeType),
 		onSuccess: (result) => {
 			noticeDrafts = result.drafts ?? [];
 			const seeded: Record<number, { portal: boolean; email: boolean; sms: boolean }> = {};
@@ -418,7 +428,7 @@
 			<div class="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-center" data-testid="tenant-notice-error">
 				<AlertCircle class="mx-auto mb-2 h-6 w-6 text-destructive" />
 				<p class="text-sm text-destructive">{apiErrorMessage(generateNoticeMutation.error)}</p>
-				<Button variant="outline" class="mt-3" onclick={() => generateNoticeMutation.mutate()} data-testid="tenant-notice-retry">
+				<Button variant="outline" class="mt-3" onclick={() => generateNoticeMutation.mutate(undefined)} data-testid="tenant-notice-retry">
 					Try again
 				</Button>
 			</div>
@@ -429,6 +439,21 @@
 				<p class="mt-1 text-xs text-muted-foreground">
 					Renewal, late-rent, and move-out notices appear here automatically when they come due.
 				</p>
+				<!-- Force a specific notice even outside the trigger window (e.g. an early renewal offer). -->
+				<p class="mt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">Create one anyway</p>
+				<div class="mt-2 flex flex-wrap items-center justify-center gap-2">
+					{#each FORCEABLE_NOTICE_TYPES as nt (nt.type)}
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={generateNoticeMutation.isPending}
+							onclick={() => generateNoticeMutation.mutate(nt.type)}
+							data-testid="tenant-notice-force-{nt.type}"
+						>
+							{nt.label}
+						</Button>
+					{/each}
+				</div>
 			</div>
 		{:else}
 			<div class="space-y-4" data-testid="tenant-notice-drafts">
