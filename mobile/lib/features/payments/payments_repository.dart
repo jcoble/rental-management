@@ -115,8 +115,8 @@ class PaymentsRepository {
   ///
   /// The API defaults to ascending `CreatedAt` when no `sort` is supplied
   /// (`PaymentService.ListAsync`), which surfaces the oldest payments on top.
-  /// We pass `-createdAt` so both the Money screen's Payments tab and the
-  /// standalone Payments screen show the most recent activity first.
+  /// We pass `-createdAt` so the Money ledger and the standalone Payments
+  /// screen both show the most recent activity first.
   Future<List<Payment>> listPayments({
     int? leaseId,
     String sort = '-createdAt',

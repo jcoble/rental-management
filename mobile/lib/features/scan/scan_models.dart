@@ -40,6 +40,69 @@ class ScanField {
 }
 
 // ---------------------------------------------------------------------------
+// Lease-import proposal (lease drafts only)
+// ---------------------------------------------------------------------------
+
+/// What confirming a scanned lease will do with one entity (the property or the
+/// unit). Mirrors the API's `ProposedRecord` (see IScanService.cs).
+///
+///   - [action] == 'link'   → an existing in-portfolio record was matched
+///     ([existingId] is set); confirm links to it.
+///   - [action] == 'create' → no match, but the document has enough to create
+///     one ([label]/[detail] describe it).
+///   - [action] == 'select' → not enough on the document to match or create, so
+///     the reviewer must choose manually.
+class ProposedRecord {
+  const ProposedRecord({
+    required this.action,
+    this.existingId,
+    this.label,
+    this.detail,
+  });
+
+  final String action;
+  final int? existingId;
+  final String? label;
+  final String? detail;
+
+  bool get isLink => action == 'link';
+  bool get isCreate => action == 'create';
+  bool get isSelect => action == 'select';
+
+  factory ProposedRecord.fromJson(Map<String, dynamic> json) {
+    return ProposedRecord(
+      action: (json['action'] as String?)?.toLowerCase() ?? 'select',
+      existingId: (json['existingId'] as num?)?.toInt(),
+      label: json['label'] as String?,
+      detail: json['detail'] as String?,
+    );
+  }
+}
+
+/// The property + unit import preview attached to a lease draft, so the review
+/// screen can show what confirming will do (and let a brand-new landlord scan
+/// into an empty portfolio — the property/unit are created from the document).
+class LeaseImportProposal {
+  const LeaseImportProposal({required this.property, required this.unit});
+
+  final ProposedRecord property;
+  final ProposedRecord unit;
+
+  factory LeaseImportProposal.fromJson(Map<String, dynamic> json) {
+    final prop = json['property'];
+    final unit = json['unit'];
+    return LeaseImportProposal(
+      property: prop is Map<String, dynamic>
+          ? ProposedRecord.fromJson(prop)
+          : const ProposedRecord(action: 'select'),
+      unit: unit is Map<String, dynamic>
+          ? ProposedRecord.fromJson(unit)
+          : const ProposedRecord(action: 'select'),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ScanLineItem
 // ---------------------------------------------------------------------------
 
@@ -84,6 +147,7 @@ class ScanDraft {
     required this.createdAt,
     this.reviewedAt,
     this.confirmedAt,
+    this.leaseProposal,
   });
 
   final int id;
@@ -106,6 +170,10 @@ class ScanDraft {
   final DateTime createdAt;
   final DateTime? reviewedAt;
   final DateTime? confirmedAt;
+
+  /// Property/unit import preview for a Lease draft (link-existing vs create-new).
+  /// Null for non-lease drafts, or when the server didn't attach one.
+  final LeaseImportProposal? leaseProposal;
 
   /// Target is a Payment draft (vs. an Expense draft).
   bool get isPayment => targetEntityType == 'Payment';
@@ -158,6 +226,11 @@ class ScanDraft {
           : null,
       confirmedAt: json['confirmedAt'] != null
           ? DateTime.tryParse(json['confirmedAt'] as String)
+          : null,
+      leaseProposal: json['leaseProposal'] is Map<String, dynamic>
+          ? LeaseImportProposal.fromJson(
+              json['leaseProposal'] as Map<String, dynamic>,
+            )
           : null,
     );
   }

@@ -43,9 +43,11 @@ class _OnboardingChoiceScreenState
       await ref
           .read(onboardingRepositoryProvider)
           .submitChoice(OnboardingMode.live);
-      // Clear the gate so the router lets us into the (empty) app, then go home.
+      // Clear the gate so the router lets us past the choice screen, then route
+      // to the guided "add your first property" step (I8) — parity with web,
+      // which walks Live users into a setup wizard rather than a bare dashboard.
       ref.read(authControllerProvider.notifier).markOnboardingComplete();
-      if (mounted) context.go('/');
+      if (mounted) context.go('/live-setup');
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
