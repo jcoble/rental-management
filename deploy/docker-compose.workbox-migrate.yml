@@ -1,0 +1,19 @@
+services:
+  migrate:
+    image: ghcr.io/jcoble/rentalcommand-api:${IMAGE_TAG}
+    command: ["--migrate-only"]
+    restart: "no"
+    cgroup_parent: hosted-main.slice
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - Jwt__SecretKey
+      - ConnectionStrings__MigratorConnection
+      - ConnectionStrings__DefaultConnection
+      - ConnectionStrings__EngineConnection
+    networks:
+      - internal
+
+networks:
+  internal:
+    external: true
+    name: hosted-rental-internal

@@ -7,12 +7,11 @@ name: Deploy
 #   • Manual               ->  Actions ▸ Deploy ▸ Run workflow / `gh workflow run deploy.yml`
 #                              (optionally paste a SHA/ref; deploys the chosen commit)
 # Plain merges to main do nothing — deploy is a deliberate release step run once per batch.
-# Both jobs use ephemeral GitHub-hosted runners; production remains a
-# pull-only box.
+# Both jobs use ephemeral GitHub-hosted runners; the private workbox remains
+# pull-only and accepts releases through a restricted SSH command.
 #
-# Model: build api/engine/web in GitHub Actions, push to GHCR, then the prod box
-# only PULLS and restarts (it never compiles — see deploy/docker-compose.prod.yml).
-# Migrations self-apply on boot under a shared Postgres advisory lock.
+# Model: build api/engine/web in GitHub Actions, push to GHCR, then the workbox
+# helper pulls, runs the one-shot migration, and restarts the hosted stack.
 
 on:
   push:
@@ -112,63 +111,49 @@ jobs:
           docker push "${IMAGE_PREFIX}-web:latest"
 
   deploy:
-    name: Pull & restart on prod box
+    name: Release to private workbox
     needs: build-push
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
+      id-token: write
     environment: production
     steps:
-      - name: Checkout (for the compose file)
-        uses: actions/checkout@v4
+      - name: Connect to the private workbox
+        uses: tailscale/github-action@v4
         with:
-          ref: ${{ github.event.inputs.ref || github.sha }}
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:workbox-deploy
 
       - name: Set up SSH
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          WORKBOX_DEPLOY_SSH_KEY: ${{ secrets.WORKBOX_DEPLOY_SSH_KEY }}
+          WORKBOX_KNOWN_HOSTS: ${{ secrets.WORKBOX_KNOWN_HOSTS }}
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          umask 077
+          install -d -m 700 "$RUNNER_TEMP/workbox-ssh"
+          printf '%s\n' "$WORKBOX_DEPLOY_SSH_KEY" > "$RUNNER_TEMP/workbox-ssh/id_deploy"
+          printf '%s\n' "$WORKBOX_KNOWN_HOSTS" > "$RUNNER_TEMP/workbox-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/workbox-ssh/id_deploy" "$RUNNER_TEMP/workbox-ssh/known_hosts"
 
-      - name: Copy compose file to box
-        env:
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-        run: |
-          scp -i ~/.ssh/id_deploy deploy/docker-compose.prod.yml \
-            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/rental-command/deploy/docker-compose.prod.yml"
-
-      - name: Pull images & restart stack
+      - name: Run guarded release
         env:
           TAG: ${{ needs.build-push.outputs.tag }}
           ACTOR: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
-          # Pipe the GHCR token via stdin so it never lands in the box's process list. docker
-          # login consumes it; the remaining commands run from the ssh command argument. TAG is a
-          # hex git sha and ACTOR a GitHub username — both come from env (not interpolated in shell).
-          printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/id_deploy \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "set -e
-             cd /opt/rental-command
-             docker login ghcr.io -u '$ACTOR' --password-stdin
-             grep -v '^IMAGE_TAG=' .env > .env.tmp 2>/dev/null || true
-             echo 'IMAGE_TAG=$TAG' >> .env.tmp
-             mv .env.tmp .env
-             chmod 600 .env
-             docker image prune -af >/dev/null 2>&1 || true   # free disk BEFORE pulling: clears old *tagged* builds (api:<sha> etc.) that pile up each deploy; the '-f' below only clears dangling, so the 38G box used to fill and the pull failed with 'no space left on device' (2026-06-18). Running images stay (in use) = 1-version rollback kept.
-             docker compose -f deploy/docker-compose.prod.yml --env-file .env pull api engine web
-             docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
-             docker image prune -f >/dev/null 2>&1 || true
-             docker logout ghcr.io >/dev/null 2>&1 || true
-             echo \"deployed IMAGE_TAG=$TAG\""
+          case "$TAG" in ''|*[!0-9a-f]*) echo "::error::invalid release SHA"; exit 1;; esac
+          if [ "${#TAG}" -lt 7 ] || [ "${#TAG}" -gt 40 ]; then
+            echo "::error::invalid release SHA"
+            exit 1
+          fi
+          printf '%s\n%s\n' "$ACTOR" "$GHCR_TOKEN" | ssh \
+            -i "$RUNNER_TEMP/workbox-ssh/id_deploy" \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/workbox-ssh/known_hosts" \
+            blackcolours@100.86.236.69 "$TAG"
 
       - name: Health check
         run: |
