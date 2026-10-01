@@ -13,6 +13,47 @@ The files this uses:
 
 Target box: **49.13.236.209** (Hetzner, Ubuntu 24.04).
 
+## 2026-09-30: private workbox release path
+
+The current six-service release remains live on `49.13.236.209`. No application or
+database upgrade is part of this change. The replacement Rental stack on the European
+workbox is disabled until the DNS cutover, when the copied current release becomes live.
+Any intentional release of newer images is a separate later action.
+
+Future tag and manual releases connect to `100.86.236.69` over Tailscale, then use the
+dedicated `blackcolours` SSH key. Configure repository variables `TS_OAUTH_CLIENT_ID`
+and `TS_AUDIENCE`, plus environment secrets `WORKBOX_DEPLOY_SSH_KEY` and
+`WORKBOX_KNOWN_HOSTS`. Restrict the public key on the host to:
+
+```text
+restrict,command="sudo -n /usr/local/sbin/rental-hosted-deploy \"$SSH_ORIGINAL_COMMAND\""
+```
+
+Install `scripts/hosted-deploy.py` as `/usr/local/sbin/rental-hosted-deploy` and
+`deploy/docker-compose.workbox-migrate.yml` as
+`/srv/hosted/rental/compose.release.yml`, both owned by root. The hosted systemd unit
+continues to own the long-running stack and its custom topology; CI supplies only the
+validated image SHA and short-lived GHCR credentials.
+
+The root-owned, mode-600 `/srv/hosted/rental/release-secrets.json` must contain exactly:
+
+```json
+{
+  "Jwt__SecretKey": "...",
+  "ConnectionStrings__MigratorConnection": "...",
+  "ConnectionStrings__DefaultConnection": "...",
+  "ConnectionStrings__EngineConnection": "..."
+}
+```
+
+Before the first workbox release, retain the existing owner connection as the migrator,
+create distinct login passwords for `rentalcommand_api` and `rentalcommand_engine`, and
+put their connection strings in the matching fields above. Reuse the existing JWT secret.
+The guarded release pulls all three images before stopping the unit, starts only the
+existing Postgres container for migration, and writes the updated root-only authoritative
+compose config only after migration succeeds. The first live CI proof remains pending the
+workbox identity setup, DNS decision, and an owner-authorized merge.
+
 ---
 
 ## 1. DNS
