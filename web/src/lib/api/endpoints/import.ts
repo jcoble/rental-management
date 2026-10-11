@@ -15,12 +15,10 @@
  */
 
 import { browser } from '$app/environment';
-import { CLIENT_API_BASE_URL } from '$lib/config';
-import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
-import { fetchApi, refreshToken } from '../client';
+import { fetchApi, downloadFile } from '../client';
 
 /** The entity types the CSV importer supports (case-insensitive on the wire). */
-export type ImportEntityType = 'tenant' | 'property' | 'unit';
+export type ImportEntityType = 'tenant' | 'property' | 'unit' | 'payment' | 'expense' | 'loan';
 
 /** One row of the dry-run / import result, 1-based as in the spreadsheet. */
 export interface ImportRowResult {
@@ -28,6 +26,8 @@ export interface ImportRowResult {
 	rowNumber: number;
 	valid: boolean;
 	errors: string[];
+	isDuplicate: boolean;
+	skipReason: string | null;
 	/** Set only on a real (non-dry-run) import once the row is created. */
 	createdId: number | null;
 }
@@ -38,9 +38,12 @@ export interface ImportResult {
 	dryRun: boolean;
 	totalRows: number;
 	validRows: number;
+	duplicateRows: number;
 	createdRows: number;
 	rows: ImportRowResult[];
 }
+
+const atomicImportOperationIds = new WeakMap<File, string>();
 
 /**
  * Upload a CSV for preview (dryRun=true) or commit (dryRun=false).
@@ -53,9 +56,20 @@ export function importCsv(
 ): Promise<ImportResult> {
 	const fd = new FormData();
 	fd.append('file', file);
+	const headers: Record<string, string> = {};
+	// Every live import needs a request key so a retry cannot create the same rows twice.
+	if (!dryRun) {
+		let operationId = atomicImportOperationIds.get(file);
+		if (!operationId) {
+			operationId = crypto.randomUUID();
+			atomicImportOperationIds.set(file, operationId);
+		}
+		headers['Idempotency-Key'] = operationId;
+	}
 	return fetchApi<ImportResult>(`/import/${entityType}?dryRun=${dryRun}`, {
 		method: 'POST',
-		body: fd
+		body: fd,
+		headers
 	});
 }
 
@@ -66,28 +80,7 @@ export function importCsv(
 export async function downloadTemplate(entityType: ImportEntityType): Promise<void> {
 	if (!browser) return;
 
-	// Proactively refresh if near expiry, mirroring the main client logic.
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/import/${entityType}/template`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-	});
-
-	if (!response.ok) {
-		throw new Error(`Template download failed (${response.status})`);
-	}
-
-	const blob = await response.blob();
+	const blob = await downloadFile(`/import/${entityType}/template`);
 	const objectUrl = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = objectUrl;

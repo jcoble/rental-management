@@ -57,6 +57,12 @@
 		if (!f) return;
 		const pull = f.querySelector<HTMLInputElement>('input[name="pullEnabled"]');
 		if (pull) pull.value = pullEnabled ? 'true' : 'false';
+		const operationKey = f.querySelector<HTMLInputElement>('input[name="operationKey"]');
+		if (operationKey) {
+			operationKey.value = pullEnabled
+				? operationKey.dataset.enableKey ?? ''
+				: operationKey.dataset.disableKey ?? '';
+		}
 		f.requestSubmit();
 	}
 
@@ -117,7 +123,8 @@
 		switch (type) {
 			case 'Tenant':
 				return 'Tenant';
-			case 'Lease':
+			case 'LeaseManagement':
+			case 'LeaseAgreement':
 				return 'Lease';
 			case 'Vendor':
 				return 'Vendor';
@@ -177,7 +184,7 @@
 		</div>
 	{:else if data.providers.length === 0}
 		<p class="max-w-2xl text-sm text-muted-foreground" data-testid="accounting-no-providers">
-			No accounting providers are available yet.
+			No accounting connections are available yet. You can keep recording payments and expenses in Rental Command.
 		</p>
 	{:else}
 		<div class="max-w-2xl space-y-4" data-testid="accounting-provider-list">
@@ -226,8 +233,8 @@
 							<div class="flex items-start gap-2.5 rounded-md border border-border bg-muted/40 p-3">
 								<Lock class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
 								<p class="text-sm text-muted-foreground">
-									{s.providerName} isn't set up on this server yet. Ask your administrator to add the
-									{s.providerName} keys, then come back to connect it.
+									{s.providerName} isn't available yet. Ask your workspace administrator to enable this
+									connection. Your Rental Command records continue to work without it.
 								</p>
 							</div>
 						{:else if !isConnected(view)}
@@ -255,6 +262,7 @@
 								}}
 							>
 								<input type="hidden" name="provider" value={s.provider} />
+								<input type="hidden" name="operationKey" value={view.connectOperationId} />
 								<Button
 									type="submit"
 									disabled={connectingProvider === s.provider}
@@ -296,6 +304,7 @@
 											}}
 										>
 											<input type="hidden" name="provider" value={s.provider} />
+											<input type="hidden" name="operationKey" value={view.connectOperationId} />
 											<Button
 												type="submit"
 												size="sm"
@@ -346,12 +355,18 @@
 												await update({ reset: false });
 											} else if (result.type === 'failure') {
 												showError((result.data?.error as string) ?? 'Could not save the direction.');
-												await update({ reset: false });
 											}
 										};
 									}}
 								>
 									<input type="hidden" name="provider" value={s.provider} />
+									<input
+										type="hidden"
+										name="operationKey"
+										value={s.pullEnabled ? view.pullDisableOperationId : view.pullEnableOperationId}
+										data-enable-key={view.pullEnableOperationId}
+										data-disable-key={view.pullDisableOperationId}
+									/>
 									<!-- Desired direction is carried in hidden inputs the toggle rewrites before submit.
 									     Push stays off in v1 (its UI control is disabled below). -->
 									<input type="hidden" name="pullEnabled" value={s.pullEnabled ? 'true' : 'false'} />
@@ -633,6 +648,7 @@
 									}}
 								>
 									<input type="hidden" name="provider" value={s.provider} />
+									<input type="hidden" name="operationKey" value={view.disconnectOperationId} />
 									<Button
 										type="submit"
 										variant="ghost"

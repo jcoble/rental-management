@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:rental_command/core/auth/auth_controller.dart';
+import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/features/home/mobile_destination.dart';
 import 'package:rental_command/features/home/mobile_domain_chrome.dart';
 import 'package:rental_command/features/home/mobile_domain_hub.dart';
@@ -19,11 +21,157 @@ void main() {
   test('rentals destinations place units next to properties', () {
     expect(rentalDestinations.map((destination) => destination.id), [
       MobileDestinationId.properties,
+      MobileDestinationId.owners,
       MobileDestinationId.units,
       MobileDestinationId.tenants,
       MobileDestinationId.leases,
       MobileDestinationId.applications,
     ]);
+  });
+
+  testWidgets('large hub keeps every destination in direct pill tabs', (
+    tester,
+  ) async {
+    final destinations = <MobileDestination>[
+      for (final entry in const [
+        (
+          id: MobileDestinationId.properties,
+          icon: Symbols.apartment_rounded,
+          label: 'Properties',
+        ),
+        (
+          id: MobileDestinationId.owners,
+          icon: Symbols.account_balance_rounded,
+          label: 'Owners',
+        ),
+        (
+          id: MobileDestinationId.units,
+          icon: Symbols.home_work_rounded,
+          label: 'Units',
+        ),
+        (
+          id: MobileDestinationId.tenants,
+          icon: Symbols.group_rounded,
+          label: 'Tenants',
+        ),
+        (
+          id: MobileDestinationId.leases,
+          icon: Symbols.description_rounded,
+          label: 'Leases',
+        ),
+        (
+          id: MobileDestinationId.applications,
+          icon: Symbols.assignment_rounded,
+          label: 'Applications',
+        ),
+      ])
+        MobileDestination(
+          id: entry.id,
+          icon: entry.icon,
+          label: entry.label,
+          subtitle: '${entry.label} section',
+          builder: (_) => Scaffold(body: Text('${entry.label} root')),
+        ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: MobileDomainHubScreen(
+            title: 'Rentals',
+            subtitle: 'Test',
+            destinations: destinations,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('hub-section-selector')), findsNothing);
+    expect(find.byKey(const Key('hub-segment-scroll')), findsOneWidget);
+
+    for (final destination in destinations) {
+      expect(find.text(destination.label), findsWidgets);
+    }
+
+    await tester.scrollUntilVisible(
+      find.text('Applications').last,
+      300,
+      scrollable: find.descendant(
+        of: find.byKey(const Key('hub-segment-scroll')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.tap(find.text('Applications').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Applications root'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('Units').last,
+      -300,
+      scrollable: find.descendant(
+        of: find.byKey(const Key('hub-segment-scroll')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.tap(find.text('Units').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Units root'), findsOneWidget);
+  });
+
+  testWidgets('three destination hub keeps direct segment navigation', (
+    tester,
+  ) async {
+    final destinations = <MobileDestination>[
+      for (final entry in const [
+        (
+          id: MobileDestinationId.messages,
+          icon: Symbols.chat_rounded,
+          label: 'Messages',
+        ),
+        (
+          id: MobileDestinationId.notifications,
+          icon: Symbols.notifications_rounded,
+          label: 'Notifications',
+        ),
+        (
+          id: MobileDestinationId.activityHistory,
+          icon: Symbols.history_rounded,
+          label: 'Activity History',
+        ),
+      ])
+        MobileDestination(
+          id: entry.id,
+          icon: entry.icon,
+          label: entry.label,
+          subtitle: '${entry.label} section',
+          builder: (_) => Scaffold(body: Text('${entry.label} root')),
+        ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: MobileDomainHubScreen(
+            title: 'Inbox',
+            subtitle: 'Test',
+            destinations: destinations,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('hub-section-selector')), findsNothing);
+    expect(find.byKey(const Key('hub-segment-scroll')), findsOneWidget);
+    expect(find.text('Messages'), findsWidgets);
+    expect(find.text('Notifications'), findsOneWidget);
+    expect(find.text('Activity History'), findsOneWidget);
+
+    await tester.tap(find.text('Activity History'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Activity History root'), findsOneWidget);
   });
 
   testWidgets('cross-tab detail opens target tab and backs to that tab root', (
@@ -88,6 +236,94 @@ void main() {
     expect(find.text('Open lease'), findsNothing);
   });
 
+  testWidgets('domain navigator pops selected detail to current root', (
+    tester,
+  ) async {
+    MobileDomainNavigator? controller;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: MobileDomainHubScreen(
+            title: 'Money',
+            subtitle: 'Test',
+            onControllerReady: (value) => controller = value,
+            destinations: [
+              MobileDestination(
+                id: MobileDestinationId.moneyLedger,
+                icon: Symbols.receipt_long_rounded,
+                label: 'Ledger',
+                subtitle: 'Transactions feed',
+                builder: (context) => Scaffold(
+                  body: Center(
+                    child: FilledButton(
+                      onPressed: () {
+                        MobileDomainNavigation.maybeOf(
+                          context,
+                        )!.openDestination(
+                          MobileDestinationId.moneyLedger,
+                          detailBuilder: (_) => const MobileDomainDetailHeader(
+                            title: 'Payment #42',
+                            subtitle: 'Paid rent',
+                            child: Scaffold(
+                              body: Center(child: Text('Payment detail')),
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text('Open payment detail'),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(controller, isNotNull);
+    expect(find.text('Transactions feed'), findsOneWidget);
+
+    await tester.tap(find.text('Open payment detail'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Payment detail'), findsOneWidget);
+    expect(find.text('Payment #42'), findsOneWidget);
+    expect(find.byTooltip('Back'), findsOneWidget);
+
+    controller!.popToCurrentRoot();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Payment detail'), findsNothing);
+    expect(find.text('Payment #42'), findsNothing);
+    expect(find.byTooltip('Back'), findsNothing);
+    expect(find.text('Transactions feed'), findsOneWidget);
+    expect(find.text('Open payment detail'), findsOneWidget);
+  });
+
+  testWidgets('detached shell reveal ignores inactive route context', (
+    tester,
+  ) async {
+    late BuildContext routeContext;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            routeContext = context;
+            return const SizedBox.shrink();
+          },
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+
+    expect(() => revealMobileShellIfDetached(routeContext), returnsNormally);
+  });
+
   testWidgets('detail header replaces the destination header above top tabs', (
     tester,
   ) async {
@@ -102,7 +338,7 @@ void main() {
                 id: MobileDestinationId.units,
                 icon: Symbols.home_work_rounded,
                 label: 'Units',
-                subtitle: 'Command centers',
+                subtitle: "Today's summary",
                 builder: (context) => Scaffold(
                   body: Center(
                     child: FilledButton(
@@ -129,21 +365,24 @@ void main() {
       ),
     );
 
-    expect(find.text('Command centers'), findsOneWidget);
+    expect(find.text("Today's summary"), findsOneWidget);
+    expect(find.text('Units'), findsNWidgets(2));
 
     await tester.tap(find.text('Open unit'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Command centers'), findsNothing);
+    expect(find.text("Today's summary"), findsNothing);
     expect(find.text('Unit 2'), findsOneWidget);
     expect(find.text('123 Main St'), findsOneWidget);
     expect(find.byTooltip('Back'), findsOneWidget);
+    expect(find.text('Units'), findsNothing);
 
     await tester.tap(find.byTooltip('Back'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Command centers'), findsOneWidget);
+    expect(find.text("Today's summary"), findsOneWidget);
     expect(find.text('Open unit'), findsOneWidget);
+    expect(find.text('Units'), findsNWidgets(2));
   });
 
   testWidgets('embedded root app bars are hidden and hub header collapses', (
@@ -195,6 +434,11 @@ void main() {
   ) async {
     await tester.pumpWidget(
       ProviderScope(
+        overrides: [
+          authControllerProvider.overrideWith(
+            () => _StaticAuthController(_authenticatedState),
+          ),
+        ],
         child: MaterialApp(
           home: MobileDomainHubScreen(
             title: 'Rentals',
@@ -204,7 +448,7 @@ void main() {
                 id: MobileDestinationId.units,
                 icon: Symbols.home_work_rounded,
                 label: 'Units',
-                subtitle: 'Command centers',
+                subtitle: "Today's summary",
                 builder: (_) =>
                     const Scaffold(body: Center(child: Text('Units root'))),
               ),
@@ -217,14 +461,14 @@ void main() {
     await tester.pump();
 
     expect(find.text('Units root'), findsOneWidget);
-    expect(find.byTooltip('Open quick actions'), findsOneWidget);
+    expect(find.byTooltip('Scan / Add'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.tap(find.byTooltip('Scan / Add'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('Assistant'), findsOneWidget);
     expect(find.text('Record'), findsOneWidget);
-    expect(find.text('Scan'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsOneWidget);
   });
 
   testWidgets('domain hub does not duplicate destination quick action FABs', (
@@ -232,6 +476,11 @@ void main() {
   ) async {
     await tester.pumpWidget(
       ProviderScope(
+        overrides: [
+          authControllerProvider.overrideWith(
+            () => _StaticAuthController(_authenticatedState),
+          ),
+        ],
         child: MaterialApp(
           home: MobileDomainHubScreen(
             title: 'Work',
@@ -240,13 +489,13 @@ void main() {
               MobileDestination(
                 id: MobileDestinationId.workOrders,
                 icon: Symbols.build_rounded,
-                label: 'Work orders',
+                label: 'Repairs',
                 subtitle: 'Open tickets',
                 builder: (_) => Scaffold(
-                  body: const Center(child: Text('Work orders root')),
+                  body: const Center(child: Text('Repairs root')),
                   floatingActionButton: MobileQuickActionFab(
                     primaryAction: MobileQuickAction(
-                      label: 'New work order',
+                      label: 'New repair',
                       icon: Icons.add,
                       onPressed: () {},
                     ),
@@ -264,16 +513,16 @@ void main() {
 
     await tester.pump();
 
-    expect(find.text('Work orders root'), findsOneWidget);
-    expect(find.byTooltip('Open quick actions'), findsOneWidget);
+    expect(find.text('Repairs root'), findsOneWidget);
+    expect(find.byTooltip('Scan / Add'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.tap(find.byTooltip('Scan / Add'));
     await tester.pumpAndSettle();
 
-    expect(find.text('New work order'), findsOneWidget);
-    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('New repair'), findsOneWidget);
+    expect(find.text('Assistant'), findsOneWidget);
     expect(find.text('Record'), findsOneWidget);
-    expect(find.text('Scan'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsOneWidget);
   });
 
   testWidgets('browse destinations prefer registered shell tabs', (
@@ -320,6 +569,18 @@ void main() {
                     },
                     child: const Text('Open units'),
                   ),
+                  FilledButton(
+                    onPressed: () {
+                      const MobileDestination(
+                        id: MobileDestinationId.owners,
+                        icon: Symbols.account_balance_rounded,
+                        label: 'Owners',
+                        subtitle: 'Standalone fallback',
+                        builder: _standaloneBuilder,
+                      ).open(context);
+                    },
+                    child: const Text('Open owners'),
+                  ),
                 ],
               ),
             ),
@@ -349,9 +610,63 @@ void main() {
       ),
       (tab: MobileShellTabId.rentals, destination: MobileDestinationId.units),
     ]);
+
+    await tester.tap(find.text('Open owners'));
+    await tester.pumpAndSettle();
+
+    expect(calls, [
+      (
+        tab: MobileShellTabId.money,
+        destination: MobileDestinationId.moneyLedger,
+      ),
+      (tab: MobileShellTabId.rentals, destination: MobileDestinationId.units),
+      (tab: MobileShellTabId.rentals, destination: MobileDestinationId.owners),
+    ]);
   });
 }
 
 Widget _standaloneBuilder(BuildContext context) {
   return const Scaffold(body: Text('Standalone payments'));
+}
+
+final _authenticatedState = AuthStateAuthenticated(
+  const AuthUser(
+    id: 1,
+    email: 'test@example.test',
+    displayName: 'Test user',
+    emailVerified: true,
+  ),
+  const AccessEnvelope(
+    identity: AccessIdentity(userId: 1, displayName: 'Test user'),
+    selectedContext: SelectedAccessContext(
+      accessContextId: 1,
+      portfolioId: 1,
+      workspaceName: 'Test workspace',
+      accessRevision: 1,
+      activeExperience: WorkspaceExperience.management,
+    ),
+    defaultExperience: WorkspaceExperience.management,
+    availableExperiences: [WorkspaceExperience.management],
+    assignments: [],
+    navigation: [
+      NavigationCapabilities(
+        experience: WorkspaceExperience.management,
+        capabilityKeys: [
+          'money.expenses.manage',
+          'rentals.manage',
+          'reports.read',
+        ],
+      ),
+    ],
+  ),
+  activeExperience: WorkspaceExperience.management,
+);
+
+class _StaticAuthController extends AuthController {
+  _StaticAuthController(this.initialState);
+
+  final AuthState initialState;
+
+  @override
+  AuthState build() => initialState;
 }

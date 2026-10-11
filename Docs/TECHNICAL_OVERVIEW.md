@@ -46,7 +46,7 @@ Three runtime processes share one PostgreSQL database and one upload directory:
                        ▼                                              ▼
                  ┌───────────────────────  PostgreSQL  ───────────────────────┐
                  │  domain tables · Identity · ScanDrafts · OutboxMessage ·    │
-                 │  Conversations · AuditLog · advisory lock (single-Engine)   │
+                 │  Conversations · AtomicAuditLog · advisory lock (single-Engine) │
                  └───────────────────────────┬─────────────────────────────────┘
                                              │  shared upload dir
                                   ┌──────────▼───────────┐
@@ -103,37 +103,37 @@ nullable `DeletedAt` soft-delete with a global query filter.
   `Inspection`.
 - **Intake/safety**: `StoredFile` (polymorphic attachment, re-keyed to the created record on
   confirm), `ScanDraft` (the flagship — `Status` string state machine, `ExtractedFields` jsonb of
-  `{value, confidence}`, provenance `ModelId`/`TokensUsed`/`CostUsd`), `AuditLog` (append-only,
+  `{value, confidence}`, provenance `ModelId`/`TokensUsed`/`CostUsd`), `AtomicAuditLog` (append-only,
   old/new jsonb), `ActivityLog` (UI feed), `OutboxMessage` (sms/email payload + retry).
 - **Messaging**: `Conversation` (per-topic thread: `TenantId`, `Subject`, per-side
   `LandlordUnreadCount`/`TenantUnreadCount`, `LastMessageAt`/preview) + `ConversationMessage`
-  (`ConversationSenderRole` Landlord/Tenant, `Body`, `Channels` comma-separated). (`PortalMessage`
-  remains as the backfill source for the old ticket model.)
+  (`ConversationSenderRole` Landlord/Tenant, `Body`, `Channels` comma-separated).
 - **Auth**: `ApplicationUser : IdentityUser<int>` (**int PK**; nullable `PortfolioId`/`OwnerEntityId`/
   `TenantId`), `RefreshToken`, `UserAccount` (domain login row with `UserRole`).
 - **Stripe**: `PaymentTransaction`, `StripeWebhookEvent` (idempotent by event id).
 
 ## 6. API surface
 
-All under `/api/v1`. Domain controllers extend **`AuthenticatedPortfolioControllerBase`**
-(`[Authorize]`), deriving `GetPortfolioId()` from the JWT **`portfolioId` claim** (never a
-route/query param). **IDOR guard**: inbound FK references are validated in-portfolio via
-`PortfolioScopeGuards` before assignment. `GetPortfolioId()` **throws** (→ 401 via a global handler)
-when the claim is absent, rather than silently scoping to 0.
+All under `/api/v1`. Management controllers resolve the selected workspace, property scope, and
+capabilities from the server-validated canonical access context. Route/query workspace ids are
+never authority. **IDOR guard**: inbound FK references are validated in-scope via
+`PortfolioScopeGuards` before assignment, and PostgreSQL RLS provides the database boundary.
 
 Controllers: `Auth`, `Portfolio` (+ `{id}/dashboard`), `Property`, `Unit`, `OwnerEntity`, `Vendor`,
 `Tenant`, `Lease`, `Payment` (+ `{id}/mark-paid`), `Expense` (+ `{id}/receipt`), `Accounting`
 (`/summary`), `WorkOrder`, `Appointment`, `Inspection`, `Activity`, `Scan` (upload / `{id}` /
 list / `{id}/file` / `{id}/confirm` / `{id}/reject`), `Documents`, `Conversations` (+ tenant
 `/portal/conversations`), `Portal`, `AdminUsers`, `Ai` (`/briefing`, `/ask`), `Analytics`,
-`SecurityDeposits`, `Devices`, `StripeWebhook`. Machine callers can use `ApiKeyAuthenticationHandler`
-(`X-API-Key`, prefix + SHA-256).
+`SecurityDeposits`, `Devices`, `StripeWebhook`. Machine callers require a future canonical
+service-principal authority; the removed portfolio-claim API-key scheme is not supported.
 
 ## 7. Auth & security
 
 - **ASP.NET Identity with int keys** (matches int-keyed domain entities). Password policy, 5-attempt
-  lockout, unique email. Roles: Admin, Manager, Agent, Owner, Tenant.
-- **JWT access tokens** (~15 min) carry `portfolioId` (+ `tenantId`/`ownerEntityId` when scoped).
+  lockout, unique email. Workspace access uses scoped assignments and capability presets; Owner and
+  Tenant are relationship-scoped experiences rather than team roles.
+- **JWT access tokens** (~15 min) identify the session. Mutable workspace authority is resolved from
+  the current access context and access revision rather than embedded role or portfolio claims.
   **Single-use rotated refresh tokens**: a reused/revoked token **revokes the whole token family**
   (theft/replay defense).
 - **Web** keeps tokens in app-namespaced httpOnly cookies (`rc_access_token`, `rc_refresh_token`);
@@ -162,7 +162,7 @@ State machine: `Pending → Processing → Reviewing → Confirming → Confirme
    advisory lock).
 5. **Confirm** (`POST /scans/{id}/confirm`): the **entire confirm-and-create runs in one DB
    transaction** — conditional claim (`Reviewing→Confirming`), create the Expense/Payment, re-key
-   the `StoredFile`, flip to `Confirmed`, write an `AuditLog`. Any failure/cancellation **rolls back
+   the `StoredFile`, flip to `Confirmed`, write an `AtomicAuditLog`. Any failure/cancellation **rolls back
    all of it** (no orphaned record, draft restored to `Reviewing`). Rejects `$0`/blank amounts and
    confirms on non-`Reviewing` drafts. Document-kind routing: RentCheck → Payment, else → Expense.
 

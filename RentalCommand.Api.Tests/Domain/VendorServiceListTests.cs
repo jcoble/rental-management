@@ -2,10 +2,11 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
@@ -19,16 +20,17 @@ public class VendorServiceListTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly VendorService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public VendorServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorServiceListTests));
         _sut = new VendorService(
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
-            Mock.Of<IMessagePublisher>(),
-            Mock.Of<IAuditTrailService>(),
-            NullLogger<VendorService>.Instance);
+            TimeProvider.System,
+            Mock.Of<IWriteExecutor>());
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -42,7 +44,7 @@ public class VendorServiceListTests : IDisposable
         SeedVendor("Delta Cleaning", "Cleaning");
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new ListQuery
+        var result = await _sut.ListPageAsync(_scope, new ListQuery
         {
             Sort = "name",
             Skip = 1,
@@ -64,54 +66,31 @@ public class VendorServiceListTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateAsync_ReturnsStructuredAddressFields()
+    public async Task ListPageAsync_AllowsSelectedPropertyManagerScope()
     {
-        var created = await _sut.CreateAsync(PortfolioId, new CreateVendorRequest
+        var property = SeedProperty("Zenith Duplex");
+        var scope = _ctx.Db.SeedPropertyManagerScope(
+            PortfolioId,
+            property.Id,
+            nameof(ListPageAsync_AllowsSelectedPropertyManagerScope));
+        SeedVendor("Summit Roofing", "Roofing");
+        var sut = new VendorService(
+            _ctx.Db,
+            Mock.Of<IDataUpdateService>(),
+            new FrozenTimeProvider(new DateTimeOffset(2027, 1, 25, 5, 0, 0, TimeSpan.Zero)),
+            Mock.Of<IWriteExecutor>());
+
+        _commands.Clear();
+        var result = await sut.ListPageAsync(scope, new ListQuery
         {
-            Name = "Acme HVAC",
-            ServiceType = "HVAC",
-            Website = "https://acme.example.test",
-            AddressLine1 = "123 Service Rd",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
+            Sort = "name",
+            Take = 10,
         });
 
-        created.Website.Should().Be("https://acme.example.test");
-        created.AddressLine1.Should().Be("123 Service Rd");
-        created.City.Should().Be("Columbus");
-        created.State.Should().Be("OH");
-        created.PostalCode.Should().Be("43215");
-
-        var saved = await _ctx.Db.Vendors.AsNoTracking().SingleAsync(v => v.Id == created.Id);
-        saved.Website.Should().Be("https://acme.example.test");
-        saved.AddressLine1.Should().Be("123 Service Rd");
-        saved.City.Should().Be("Columbus");
-        saved.State.Should().Be("OH");
-        saved.PostalCode.Should().Be("43215");
-    }
-
-    [Fact]
-    public async Task UpdateAsync_UpdatesStructuredAddressFields()
-    {
-        SeedVendor("Acme HVAC", "HVAC");
-        var vendorId = await _ctx.Db.Vendors.Select(v => v.Id).SingleAsync();
-
-        var updated = await _sut.UpdateAsync(PortfolioId, vendorId, new UpdateVendorRequest
-        {
-            Website = "https://repair.example.test",
-            AddressLine1 = "456 Repair Ave",
-            City = "Cincinnati",
-            State = "OH",
-            PostalCode = "45202",
-        });
-
-        updated.Should().NotBeNull();
-        updated!.Website.Should().Be("https://repair.example.test");
-        updated!.AddressLine1.Should().Be("456 Repair Ave");
-        updated.City.Should().Be("Cincinnati");
-        updated.State.Should().Be("OH");
-        updated.PostalCode.Should().Be("45202");
+        result.Items.Select(vendor => vendor.Name).Should().Contain("Summit Roofing");
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Vendors\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("MembershipRoleAssignmentProperties", StringComparison.OrdinalIgnoreCase));
     }
 
     private void SeedVendor(
@@ -139,6 +118,25 @@ public class VendorServiceListTests : IDisposable
         _ctx.Db.SaveChanges();
     }
 
+    private Property SeedProperty(string name)
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = "525 Zenith Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43225",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        return property;
+    }
+
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
     {
         public override InterceptionResult<DbDataReader> ReaderExecuting(
@@ -159,5 +157,10 @@ public class VendorServiceListTests : IDisposable
             commands.Add(command.CommandText);
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
+    }
+
+    private sealed class FrozenTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

@@ -8,4 +8,5 @@ public enum ConversationSenderRole
 {
     Landlord,
     Tenant,
+    Technician,
 }

@@ -9,11 +9,21 @@ export interface OnboardingLeaseConfirmInput {
 	securityDeposit: number;
 	lateFeeAmount: number;
 	rentDueDay: number;
-	rentTrackingStartMode?: string;
-	rentTrackingStartDate?: string | null;
-	openingBalanceAmount?: number | null;
-	openingBalanceAsOfDate?: string | null;
-	openingBalanceNote?: string | null;
+	reviewDisposition: 'AlreadyFullySigned' | 'NeedsSignatures';
+	documentTemplateId: number | null;
+}
+
+export interface OnboardingManualLeaseRequest {
+	propertyId: number;
+	unitId: number;
+	tenantId: number;
+	leaseNumber: string;
+	startDate: string;
+	endDate: string;
+	monthlyRent: number;
+	securityDeposit: number;
+	lateFee: number;
+	rentDueDay: number;
 }
 
 export function buildOnboardingLeaseScanOverrides(input: OnboardingLeaseConfirmInput): string {
@@ -28,10 +38,26 @@ export function buildOnboardingLeaseScanOverrides(input: OnboardingLeaseConfirmI
 		securityDeposit: input.securityDeposit,
 		lateFee: input.lateFeeAmount,
 		rentDueDay: input.rentDueDay,
-		rentTrackingStartMode: input.rentTrackingStartMode,
-		rentTrackingStartDate: input.rentTrackingStartDate,
-		openingBalanceAmount: input.openingBalanceAmount,
-		openingBalanceAsOfDate: input.openingBalanceAsOfDate,
-		openingBalanceNote: input.openingBalanceNote
+		reviewDisposition: input.reviewDisposition,
+		...(input.reviewDisposition === 'NeedsSignatures' && input.documentTemplateId
+			? { documentTemplateId: input.documentTemplateId }
+			: {})
 	});
+}
+
+export function buildOnboardingManualLeaseRequest(
+	input: OnboardingLeaseConfirmInput
+): OnboardingManualLeaseRequest {
+	return {
+		propertyId: input.propertyId,
+		unitId: input.unitId,
+		tenantId: input.tenantId,
+		leaseNumber: input.leaseNumber,
+		startDate: input.startDate,
+		endDate: input.endDate,
+		monthlyRent: input.monthlyRent,
+		securityDeposit: input.securityDeposit,
+		lateFee: input.lateFeeAmount,
+		rentDueDay: input.rentDueDay
+	};
 }

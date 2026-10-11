@@ -83,36 +83,13 @@ public class GettingStartedSignalsResponse
 }
 
 /// <summary>
-/// Body for the first-login onboarding decision. <c>mode</c> is "sandbox" (seed the demo portfolio) or
+/// Body for the first-login onboarding decision. <c>mode</c> is "sandbox" (use Sandbox mode) or
 /// "live" (keep an empty real portfolio). Any other value is rejected with 400.
 /// </summary>
 public class OnboardingChoiceRequest
 {
     [Required]
     public string Mode { get; set; } = string.Empty;
-}
-
-public class CreatePortfolioRequest
-{
-    [Required]
-    [MaxLength(200)]
-    public string Name { get; set; } = string.Empty;
-
-    [MaxLength(2000)]
-    public string? Description { get; set; }
-
-    [Required]
-    [MaxLength(200)]
-    public string ManagementCompanyName { get; set; } = string.Empty;
-
-    [MaxLength(64)]
-    public string? TimeZone { get; set; }
-
-    [MaxLength(8)]
-    public string? Currency { get; set; }
-
-    [MaxLength(10000)]
-    public string? Settings { get; set; }
 }
 
 public class UpdatePortfolioRequest

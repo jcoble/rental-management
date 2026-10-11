@@ -28,10 +28,15 @@ public static class PortfolioOnboarding
 {
     private const string OnboardingKey = "onboarding";
     private const string ChoiceKey = "choice";
+    private const string SandboxOperationKey = "sandboxOperation";
+    private const string OperationIdKey = "key";
+    private const string OperationStateKey = "state";
 
     private const string PendingValue = "pending";
     private const string SandboxValue = "sandbox";
     private const string LiveValue = "live";
+    public const string SandboxPreparingState = "preparing";
+    public const string SandboxCompletedState = "completed";
 
     private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
@@ -100,6 +105,69 @@ public static class PortfolioOnboarding
         return JsonSerializer.Serialize(root, WriteOptions);
     }
 
+    public static SandboxSeedOperation? ReadSandboxOperation(string? settingsJson)
+    {
+        if (string.IsNullOrWhiteSpace(settingsJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(settingsJson);
+            if (!doc.RootElement.TryGetProperty(OnboardingKey, out var onboarding)
+                || onboarding.ValueKind != JsonValueKind.Object
+                || !onboarding.TryGetProperty(SandboxOperationKey, out var operation)
+                || operation.ValueKind != JsonValueKind.Object
+                || !operation.TryGetProperty(OperationIdKey, out var key)
+                || key.ValueKind != JsonValueKind.String
+                || !operation.TryGetProperty(OperationStateKey, out var state)
+                || state.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            var operationKey = key.GetString();
+            var operationState = state.GetString();
+            return string.IsNullOrWhiteSpace(operationKey) || string.IsNullOrWhiteSpace(operationState)
+                ? null
+                : new SandboxSeedOperation(operationKey, operationState);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static string WriteSandboxOperation(string? settingsJson, string operationKey, string state)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        if (state is not SandboxPreparingState and not SandboxCompletedState)
+            throw new ArgumentOutOfRangeException(nameof(state));
+
+        var root = ParseRoot(settingsJson);
+        Dictionary<string, object?> onboarding;
+        if (root.TryGetValue(OnboardingKey, out var existing)
+            && existing is JsonElement element
+            && element.ValueKind == JsonValueKind.Object)
+        {
+            onboarding = JsonSerializer.Deserialize<Dictionary<string, object?>>(element.GetRawText())
+                         ?? new Dictionary<string, object?>();
+        }
+        else if (existing is Dictionary<string, object?> existingDict)
+        {
+            onboarding = existingDict;
+        }
+        else
+        {
+            onboarding = new Dictionary<string, object?>();
+        }
+
+        onboarding[SandboxOperationKey] = new Dictionary<string, object?>
+        {
+            [OperationIdKey] = operationKey,
+            [OperationStateKey] = state,
+        };
+        root[OnboardingKey] = onboarding;
+        return JsonSerializer.Serialize(root, WriteOptions);
+    }
+
     private static Dictionary<string, object?> ParseRoot(string? settingsJson)
     {
         if (string.IsNullOrWhiteSpace(settingsJson))
@@ -132,3 +200,5 @@ public static class PortfolioOnboarding
         _ => PendingValue,
     };
 }
+
+public sealed record SandboxSeedOperation(string Key, string State);

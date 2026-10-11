@@ -29,8 +29,8 @@ export function getCurrentPortfolioId(): number {
 }
 
 /**
- * Client-only: reconcile the in-memory selection with the authenticated user's real portfolio id
- * and persisted localStorage value. In Phase 0 the authenticated portfolio is authoritative, so a
+ * Client-only: reconcile the in-memory selection with the active access envelope's workspace id
+ * and persisted localStorage value. The server-selected workspace is authoritative, so a
  * stale localhost value from another account must not make the first protected route query the SSR
  * placeholder. Idempotent; safe to call on every navigation. No-ops on the server (the store keeps
  * its deterministic default there).

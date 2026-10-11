@@ -32,9 +32,12 @@ Submitted applications show up in the Applications list with the applicant's nam
 
 1. Open an application from the list.
 2. The applicant must have **given consent** to be screened — this is shown on the application.
-3. Click to run **screening**. The result includes a recommendation to help you decide.
+3. Choose **Screen through Rental Command** to create a provider-hosted invitation, or **Screened elsewhere** to track a Zillow or other external screening.
+4. When the screening is complete, record your own decision, the principal reason, and whether a consumer report influenced it.
 
-Screening uses an outside provider. If no provider is set up, you'll see a note that screening isn't configured — you can still review and decide manually.
+The hosted provider collects sensitive identity data. Rental Command stores workflow/status/reference, consumer-reporting-agency contact, and landlord decision metadata. It does not store Social Security numbers, raw reports, criminal or eviction details, credit bands, or provider recommendations. If no integrated provider is set up, you can still track an outside screening or decide without screening.
+
+If a consumer report influenced a decline, add the consumer reporting agency's name, mailing address, and phone before recording the decision. Rental Command can then generate the required adverse-action notice. Those agency fields are not required when no consumer report influenced the decision.
 
 ## Approve or decline
 

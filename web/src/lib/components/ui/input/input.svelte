@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { HTMLInputAttributes, HTMLInputTypeAttribute } from "svelte/elements";
-	import { maskInputValue, type InputMask } from "$lib/forms/input-masks";
+	import { limitInputLength, maskInputValue, type InputMask } from "$lib/forms/input-masks";
 	import { cn, type WithElementRef } from "$lib/utils.js";
 
 	type InputType = Exclude<HTMLInputTypeAttribute, "file">;
@@ -24,19 +24,18 @@
 	}: Props = $props();
 
 	function handleInput(event: Event) {
-		if (mask) {
-			const input = event.currentTarget as HTMLInputElement;
-			const rawMaxLength =
-				typeof restProps.maxlength === "number"
-					? restProps.maxlength
-					: typeof restProps.maxlength === "string"
-						? Number.parseInt(restProps.maxlength, 10)
-						: undefined;
-			const maxLength = Number.isFinite(rawMaxLength) ? rawMaxLength : undefined;
-			const next = maskInputValue(input.value, mask, { maxLength });
-			if (next !== input.value) input.value = next;
-			value = next;
-		}
+		const input = event.currentTarget as HTMLInputElement;
+		const rawMaxLength =
+			typeof restProps.maxlength === "number"
+				? restProps.maxlength
+				: typeof restProps.maxlength === "string"
+					? Number.parseInt(restProps.maxlength, 10)
+					: undefined;
+		const maxLength = Number.isFinite(rawMaxLength) ? rawMaxLength : undefined;
+		const masked = mask ? maskInputValue(input.value, mask, { maxLength }) : input.value;
+		const next = limitInputLength(masked, maxLength);
+		if (next !== input.value) input.value = next;
+		value = next;
 		oninput?.(event);
 	}
 </script>

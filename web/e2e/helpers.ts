@@ -16,6 +16,7 @@ export async function login(page: Page, email = ADMIN_EMAIL, password = ADMIN_PA
 	await page.getByTestId('login-submit').click();
 	// Staff land on the dashboard ('/'); wait until we leave the login route.
 	await expect(page).not.toHaveURL(/\/login/);
+	await expect(page.getByTestId('main-nav')).toBeVisible();
 }
 
 /**
@@ -127,28 +128,65 @@ export function bearer(token: string): Record<string, string> {
 
 export interface UnitDashboardLite {
 	unit: { id: number; propertyId: number; unitNumber: string };
-	currentLease?: { id: number };
+	currentLease?: {
+		id: number;
+		leaseManagementId: number;
+		tenantAccountId?: number | null;
+		leaseNumber: string;
+		monthlyRent: number;
+	};
 }
 
 /**
- * Find a unit (in the caller's portfolio) that has a current lease — required for the Rent tab,
- * which only shows the post-payment affordance and payment list when a lease exists. Walks the
- * units list (newest-id first is irrelevant; the seed has many leased units) and returns the first
- * one whose dashboard carries a `currentLease.id`. Throws if none is found so the test fails loudly
- * rather than silently skipping the most important coverage.
+ * Find a unit (in the caller's portfolio) that has a current tenant account — required for the Rent
+ * tab, which only shows the receipt/charge affordances and ledger when an account exists. Selects
+ * an occupied account from the canonical DB-paged account surface, then loads that unit's lease
+ * summary. This avoids serially loading every unit dashboard when earlier tests leave prepared or
+ * ending accounts at the top of the shared list.
  */
 export async function findLeasedUnit(
 	request: APIRequestContext,
 	token: string
 ): Promise<UnitDashboardLite> {
-	const listRes = await request.get('/api/v1/units?take=500', { headers: bearer(token) });
-	expect(listRes.ok(), `units list failed: ${listRes.status()}`).toBeTruthy();
-	const list = (await listRes.json()) as Array<{ id: number }>;
-	for (const u of list) {
-		const dRes = await request.get(`/api/v1/units/${u.id}/dashboard`, { headers: bearer(token) });
-		if (!dRes.ok()) continue;
-		const d = (await dRes.json()) as UnitDashboardLite;
-		if (d.currentLease?.id) return d;
-	}
-	throw new Error('No unit with a current lease found in the seeded data');
+	const accountsRes = await request.get('/api/v1/tenant-accounts/page?closed=false&take=50&sort=-openedAtUtc', {
+		headers: bearer(token)
+	});
+	expect(accountsRes.ok(), `tenant-account page failed: ${accountsRes.status()}`).toBeTruthy();
+	const accounts = (await accountsRes.json()) as {
+		items: Array<{
+			tenantAccountId: number;
+			leaseManagementId: number;
+			propertyId: number;
+			unitId: number;
+			unitNumber: string;
+			lifecycle: string;
+		}>;
+	};
+	const account = accounts.items.find((item) => item.lifecycle === 'Occupied');
+	if (!account) expect.fail('No occupied tenant account found in the seeded data');
+	const leasesRes = await request.get(
+		`/api/v1/lease-managements/page?unitId=${account.unitId}&take=50&sort=-updatedAtUtc`,
+		{ headers: bearer(token) }
+	);
+	expect(leasesRes.ok(), `lease-management page failed: ${leasesRes.status()}`).toBeTruthy();
+	const leases = (await leasesRes.json()) as {
+		items: Array<{
+			leaseManagementId: number;
+			tenantAccountId?: number | null;
+			agreementNumber?: string | null;
+			baseRentAmount?: number | null;
+		}>;
+	};
+	const lease = leases.items.find((item) => item.leaseManagementId === account.leaseManagementId);
+	if (!lease) expect.fail('Occupied tenant account has no matching lease');
+	return {
+		unit: { id: account.unitId, propertyId: account.propertyId, unitNumber: account.unitNumber },
+		currentLease: {
+			id: lease.leaseManagementId,
+			leaseManagementId: lease.leaseManagementId,
+			tenantAccountId: lease.tenantAccountId,
+			leaseNumber: lease.agreementNumber ?? '',
+			monthlyRent: lease.baseRentAmount ?? 0
+		}
+	};
 }

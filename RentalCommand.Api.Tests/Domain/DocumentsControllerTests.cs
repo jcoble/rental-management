@@ -2,6 +2,7 @@ using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -9,27 +10,45 @@ using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 using SkiaSharp;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public sealed class DocumentsControllerTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name1)]
+public sealed class DocumentsControllerTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private static readonly byte[] TestPng = BuildTestPng();
 
-    private readonly SqliteTestContext _ctx = new();
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
 
-    public void Dispose() => _ctx.Dispose();
+    public DocumentsControllerTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+    }
+
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task GetFile_WithThumbForImage_ReturnsJpegThumbnail()
     {
+        var unitId = SeedDocumentTarget(nameof(StoredDocumentTarget.Unit));
         var documents = new Mock<IDocumentService>();
         documents
             .Setup(d => d.FindAsync(PortfolioId, 7, It.IsAny<CancellationToken>()))
@@ -38,7 +57,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 Id = 7,
                 PortfolioId = PortfolioId,
                 EntityType = "Unit",
-                EntityId = 3,
+                EntityId = unitId,
                 FileName = "inspection.png",
                 FilePath = "stored/inspection.png",
                 ContentType = "image/png",
@@ -51,8 +70,12 @@ public sealed class DocumentsControllerTests : IDisposable
             .Setup(s => s.DownloadAsync("stored/inspection.png", It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new MemoryStream(TestPng));
 
-        var controller = CreateController(documents.Object, storage.Object);
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
 
+        await ActivateControllerScopeAsync(controller);
         var result = await controller.GetFile(7, thumb: true, CancellationToken.None);
 
         var file = result.Should().BeOfType<FileContentResult>().Subject;
@@ -61,30 +84,207 @@ public sealed class DocumentsControllerTests : IDisposable
         controller.Response.Headers.ContentDisposition.ToString().Should().Be("inline; filename=\"inspection-thumb.jpg\"");
     }
 
+    [Fact]
+    public async Task GetFile_WithAuthorizedDocumentTemplateSource_ReturnsSourcePdf()
+    {
+        var (storedFile, template, propertyId) = SeedDocumentTemplateSource();
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, storedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(storedFile);
+
+        var storage = new Mock<IFileStorage>();
+        storage
+            .Setup(s => s.DownloadAsync(storedFile.FilePath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new MemoryStream("%PDF-1.7 source"u8.ToArray()));
+
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, propertyId);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.GetFile(storedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<FileStreamResult>()
+            .Which.ContentType.Should().Be("application/pdf");
+        controller.Response.Headers.ContentDisposition.ToString()
+            .Should().Be($"inline; filename=\"{storedFile.FileName}\"");
+        storage.Verify(s => s.DownloadAsync(storedFile.FilePath, It.IsAny<CancellationToken>()), Times.Once);
+        template.OriginalStoredFileId.Should().Be(storedFile.Id);
+    }
+
+    [Fact]
+    public async Task GetFile_WithPortfolioDocumentTemplateSourceAndSelectedPropertyManager_ReturnsSourcePdf()
+    {
+        var (storedFile, template, propertyId) = SeedDocumentTemplateSource(propertyScoped: false);
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, storedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(storedFile);
+
+        var storage = new Mock<IFileStorage>();
+        storage
+            .Setup(s => s.DownloadAsync(storedFile.FilePath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new MemoryStream("%PDF-1.7 portfolio source"u8.ToArray()));
+
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, propertyId);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.GetFile(storedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<FileStreamResult>()
+            .Which.ContentType.Should().Be("application/pdf");
+        storage.Verify(s => s.DownloadAsync(storedFile.FilePath, It.IsAny<CancellationToken>()), Times.Once);
+        template.PropertyId.Should().BeNull();
+        template.OriginalStoredFileId.Should().Be(storedFile.Id);
+    }
+
+    [Fact]
+    public async Task GetFile_WithDocumentTemplateOutsideSelectedPropertyScope_DeniesBeforeStorage()
+    {
+        var (storedFile, _, authorizedPropertyId) = SeedDocumentTemplateSource();
+        var foreignPropertyId = SeedProperty("Foreign template scope").Id;
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, storedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(storedFile);
+
+        var storage = new Mock<IFileStorage>();
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, foreignPropertyId);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.GetFile(storedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        storage.Verify(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        authorizedPropertyId.Should().NotBe(foreignPropertyId);
+    }
+
+    [Fact]
+    public async Task GetFile_WithDocumentTemplateEntityButUnlinkedStoredFile_DeniesBeforeStorage()
+    {
+        var (storedFile, template, propertyId) = SeedDocumentTemplateSource();
+        var unlinkedFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            EntityType = "DocumentTemplate",
+            EntityId = template.Id,
+            FileName = "unlinked-source.pdf",
+            FilePath = "stored/unlinked-source.pdf",
+            ContentType = "application/pdf",
+            FileSize = 17,
+            UploadedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.StoredFiles.Add(unlinkedFile);
+        _ctx.Db.SaveChanges();
+
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, unlinkedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(unlinkedFile);
+
+        var storage = new Mock<IFileStorage>();
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, propertyId);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.GetFile(unlinkedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        storage.Verify(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        storedFile.Id.Should().Be(template.OriginalStoredFileId);
+    }
+
+    [Fact]
+    public async Task GetFile_WithDocumentTemplateEntityButDifferentLinkedFile_DeniesBeforeStorage()
+    {
+        var (storedFile, template, propertyId) = SeedDocumentTemplateSource();
+        var otherLinkedFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            EntityType = "DocumentTemplate",
+            EntityId = template.Id,
+            FileName = "different-linked.pdf",
+            FilePath = "stored/different-linked.pdf",
+            ContentType = "application/pdf",
+            FileSize = 17,
+            UploadedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.StoredFiles.Add(otherLinkedFile);
+        _ctx.Db.SaveChanges();
+
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, otherLinkedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(otherLinkedFile);
+
+        var storage = new Mock<IFileStorage>();
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, propertyId);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.GetFile(otherLinkedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        storage.Verify(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        storedFile.Id.Should().Be(template.OriginalStoredFileId);
+    }
+
     public static IEnumerable<object[]> StaffUploadTargets()
     {
-        yield return ["Unit"];
-        yield return ["Lease"];
-        yield return ["WorkOrder"];
-        yield return ["Appointment"];
-        yield return ["Tenant"];
-        yield return ["OwnerEntity"];
-        yield return ["SecurityDeposit"];
-        yield return ["Inspection"];
+        foreach (var target in Enum.GetNames<StoredDocumentTarget>())
+            yield return [target];
     }
 
     [Theory]
     [MemberData(nameof(StaffUploadTargets))]
-    public async Task Upload_WithStaffRoleAndTenantClaim_AllowsPortfolioDocumentTargets(string entityType)
+    public async Task Upload_WithCanonicalStaffContext_AllowsPortfolioDocumentTargets(string entityType)
     {
         var entityId = SeedDocumentTarget(entityType);
 
         var documents = new Mock<IDocumentService>();
+        var admission = new PendingFileUploadAdmission(
+            Guid.NewGuid(), "stored/test-upload.txt", PendingFileUploadState.Prepared, null,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        documents.Setup(d => d.PrepareUploadAsync(
+                PortfolioId, 7, "upload-operation", It.IsAny<string>(), "test-upload.txt",
+                "text/plain", It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(admission);
+        documents.Setup(d => d.GetFinalizedUploadAsync(
+                PortfolioId, admission, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentDto?)null);
         documents
             .Setup(d => d.CreateAsync(
+                admission.Id,
                 PortfolioId,
-                entityType,
+                Enum.Parse<StoredDocumentTarget>(entityType),
                 entityId,
+                7,
+                null,
+                true,
+                It.Is<WorkspaceReadScope?>(scope =>
+                    scope.HasValue &&
+                    scope.Value.PortfolioId == PortfolioId &&
+                    scope.Value.UserId == 7),
+                "upload-operation",
+                It.IsAny<string>(),
+                It.IsAny<string>(),
                 "test-upload.txt",
                 "text/plain",
                 It.IsAny<long>(),
@@ -103,34 +303,48 @@ public sealed class DocumentsControllerTests : IDisposable
 
         var storage = new Mock<IFileStorage>();
         storage
-            .Setup(s => s.UploadAsync(
+            .Setup(s => s.UploadAtAsync(
                 It.IsAny<Stream>(),
+                "stored/test-upload.txt",
                 "test-upload.txt",
                 "text/plain",
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync("stored/test-upload.txt");
+            .Returns(Task.CompletedTask);
 
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim("tenantId", "6"),
-            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
+            isManagement: true);
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
-        var result = await controller.Upload(file, entityType, entityId, category: null, CancellationToken.None);
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.Upload(
+            file, entityType, entityId, category: null, clientOperationId: "upload-operation", ct: CancellationToken.None);
 
         var created = result.Result.Should().BeOfType<CreatedAtActionResult>().Subject;
         created.Value.Should().BeOfType<DocumentDto>()
             .Which.Should().Match<DocumentDto>(d => d.EntityType == entityType && d.EntityId == entityId);
-        storage.Verify(s => s.UploadAsync(
+        storage.Verify(s => s.UploadAtAsync(
             It.IsAny<Stream>(),
+            "stored/test-upload.txt",
             "test-upload.txt",
             "text/plain",
             It.IsAny<CancellationToken>()), Times.Once);
         documents.Verify(d => d.CreateAsync(
+            admission.Id,
             PortfolioId,
-            entityType,
+            Enum.Parse<StoredDocumentTarget>(entityType),
             entityId,
+            7,
+            null,
+            true,
+            It.Is<WorkspaceReadScope?>(scope =>
+                scope.HasValue &&
+                scope.Value.PortfolioId == PortfolioId &&
+                scope.Value.UserId == 7),
+            "upload-operation",
+            It.IsAny<string>(),
+            It.IsAny<string>(),
             "test-upload.txt",
             "text/plain",
             It.IsAny<long>(),
@@ -138,19 +352,64 @@ public sealed class DocumentsControllerTests : IDisposable
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    [Theory]
+    [InlineData("Lease")]
+    [InlineData("Payment")]
+    [InlineData("SecurityDeposit")]
+    public async Task Upload_RejectsRemovedLegacyDocumentTargets(string entityType)
+    {
+        var documents = new Mock<IDocumentService>();
+        var storage = new Mock<IFileStorage>();
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.Upload(
+            FormFile("test-upload.txt", "text/plain", "legacy target"),
+            entityType,
+            1,
+            category: null,
+            clientOperationId: "legacy-target-operation",
+            ct: CancellationToken.None);
+
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        documents.VerifyNoOtherCalls();
+        storage.VerifyNoOtherCalls();
+    }
+
     [Fact]
-    public async Task Upload_WithTenantOnlyRole_AllowsOwnedWorkOrder()
+    public async Task Upload_WithTenantRelationshipContext_AllowsOwnedWorkOrder()
     {
         const string entityType = "WorkOrder";
         var entityId = SeedDocumentTarget(entityType);
         var tenantId = _ctx.Db.WorkOrders.Single(w => w.Id == entityId).TenantId!.Value;
 
         var documents = new Mock<IDocumentService>();
+        var admission = new PendingFileUploadAdmission(
+            Guid.NewGuid(), "stored/test-upload.txt", PendingFileUploadState.Prepared, null,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        documents.Setup(d => d.PrepareUploadAsync(
+                PortfolioId, 7, "tenant-upload-operation", It.IsAny<string>(), "test-upload.txt",
+                "text/plain", It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(admission);
+        documents.Setup(d => d.GetFinalizedUploadAsync(
+                PortfolioId, admission, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentDto?)null);
         documents
             .Setup(d => d.CreateAsync(
+                admission.Id,
                 PortfolioId,
-                entityType,
+                StoredDocumentTarget.WorkOrder,
                 entityId,
+                7,
+                tenantId,
+                false,
+                (WorkspaceReadScope?)null,
+                "tenant-upload-operation",
+                It.IsAny<string>(),
+                It.IsAny<string>(),
                 "test-upload.txt",
                 "text/plain",
                 It.IsAny<long>(),
@@ -169,32 +428,49 @@ public sealed class DocumentsControllerTests : IDisposable
 
         var storage = new Mock<IFileStorage>();
         storage
-            .Setup(s => s.UploadAsync(
+            .Setup(s => s.UploadAtAsync(
                 It.IsAny<Stream>(),
+                "stored/test-upload.txt",
                 "test-upload.txt",
                 "text/plain",
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync("stored/test-upload.txt");
+            .Returns(Task.CompletedTask);
 
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim("tenantId", tenantId.ToString()),
-            new Claim(ClaimTypes.Role, nameof(UserRole.Tenant)));
+            isManagement: false,
+            new Claim("tenantId", tenantId.ToString()));
+        var workOrder = _ctx.Db.WorkOrders.Single(candidate => candidate.Id == entityId);
+        workOrder.LeaseManagementId = _ctx.Db.EffectiveTenantAccess
+            .Single(access => access.TenantId == tenantId)
+            .LeaseManagementId;
+        _ctx.Db.SaveChanges();
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
-        var result = await controller.Upload(file, entityType, entityId, category: null, CancellationToken.None);
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.Upload(
+            file, entityType, entityId, category: null, clientOperationId: "tenant-upload-operation", ct: CancellationToken.None);
 
         result.Result.Should().BeOfType<CreatedAtActionResult>();
-        storage.Verify(s => s.UploadAsync(
+        storage.Verify(s => s.UploadAtAsync(
             It.IsAny<Stream>(),
+            "stored/test-upload.txt",
             "test-upload.txt",
             "text/plain",
             It.IsAny<CancellationToken>()), Times.Once);
         documents.Verify(d => d.CreateAsync(
+            admission.Id,
             PortfolioId,
-            entityType,
+            StoredDocumentTarget.WorkOrder,
             entityId,
+            7,
+            tenantId,
+            false,
+            (WorkspaceReadScope?)null,
+            "tenant-upload-operation",
+            It.IsAny<string>(),
+            It.IsAny<string>(),
             "test-upload.txt",
             "text/plain",
             It.IsAny<long>(),
@@ -203,37 +479,308 @@ public sealed class DocumentsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Upload_WithTenantOnlyRole_RejectsNonWorkOrderTarget()
+    public async Task Upload_WithTenantRelationshipContext_RejectsKnownInvalidTargetBeforeBlobIo()
     {
         const string entityType = "Unit";
         var entityId = SeedDocumentTarget(entityType);
+        var tenantId = _ctx.Db.Tenants.OrderByDescending(tenant => tenant.Id).Select(tenant => tenant.Id).First();
 
         var documents = new Mock<IDocumentService>();
         var storage = new Mock<IFileStorage>();
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim("tenantId", "6"),
-            new Claim(ClaimTypes.Role, nameof(UserRole.Tenant)));
+            isManagement: false,
+            new Claim("tenantId", tenantId.ToString()));
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
-        var result = await controller.Upload(file, entityType, entityId, category: null, CancellationToken.None);
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.Upload(
+            file, entityType, entityId, category: null, clientOperationId: "denied-upload-operation", ct: CancellationToken.None);
 
         result.Result.Should().BeOfType<NotFoundObjectResult>();
-        storage.Verify(s => s.UploadAsync(
+        storage.Verify(s => s.UploadAtAsync(
             It.IsAny<Stream>(),
             It.IsAny<string>(),
             It.IsAny<string>(),
+            It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Never);
-        documents.Verify(d => d.CreateAsync(
+        documents.Verify(d => d.PrepareUploadAsync(
+            It.IsAny<int>(),
             It.IsAny<int>(),
             It.IsAny<string>(),
-            It.IsAny<int>(),
+            It.IsAny<string>(),
             It.IsAny<string>(),
             It.IsAny<string>(),
             It.IsAny<long>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Delete_WithTenantRelationshipContext_DeniesBeforeDocumentService()
+    {
+        var workOrderId = SeedDocumentTarget("WorkOrder");
+        var tenantId = _ctx.Db.WorkOrders.Single(workOrder => workOrder.Id == workOrderId).TenantId!.Value;
+        var documents = new Mock<IDocumentService>();
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            isManagement: false,
+            new Claim("tenantId", tenantId.ToString()));
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.Delete(123, "tenant-delete-denied", CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        documents.Verify(d => d.FindAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        documents.Verify(d => d.DeleteAsync(
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<int?>(),
+            It.IsAny<bool>(),
+            It.IsAny<WorkspaceReadScope?>(),
             It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Delete_WithCanonicalStaffContext_DoesNotActiveRowPrecheckBeforeAtomicDelete()
+    {
+        var documents = new Mock<IDocumentService>();
+        documents.Setup(d => d.DeleteAsync(
+                PortfolioId,
+                123,
+                7,
+                null,
+                true,
+                It.Is<WorkspaceReadScope?>(scope =>
+                    scope.HasValue &&
+                    scope.Value.PortfolioId == PortfolioId &&
+                    scope.Value.UserId == 7),
+                "delete-replay",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            isManagement: true);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.Delete(123, "delete-replay", CancellationToken.None);
+
+        result.Should().BeOfType<NoContentResult>();
+        documents.Verify(d => d.FindAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        documents.Verify(d => d.DeleteAsync(
+            PortfolioId,
+            123,
+            7,
+            null,
+            true,
+            It.Is<WorkspaceReadScope?>(scope =>
+                scope.HasValue &&
+                scope.Value.PortfolioId == PortfolioId &&
+                scope.Value.UserId == 7),
+            "delete-replay",
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Delete_WithCanonicalStaffContext_ReturnsNotFoundWhenAtomicDeleteReportsNotFound()
+    {
+        var documents = new Mock<IDocumentService>();
+        documents.Setup(d => d.DeleteAsync(
+                PortfolioId,
+                124,
+                7,
+                null,
+                true,
+                It.IsAny<WorkspaceReadScope?>(),
+                "delete-different-key",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            isManagement: true);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.Delete(124, "delete-different-key", CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        documents.Verify(d => d.FindAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        documents.Verify(d => d.DeleteAsync(
+            PortfolioId,
+            124,
+            7,
+            null,
+            true,
+            It.IsAny<WorkspaceReadScope?>(),
+            "delete-different-key",
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task List_WithoutCanonicalStaffOrTenantRelationship_FailsClosed()
+    {
+        var documents = new Mock<IDocumentService>();
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            isManagement: false);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.List("Unit", 10, CancellationToken.None);
+
+        result.Result.Should().BeOfType<OkObjectResult>()
+            .Which.Value.Should().BeAssignableTo<IReadOnlyList<DocumentDto>>()
+            .Which.Should().BeEmpty();
+        documents.Verify(d => d.ListAsync(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task List_WithTenantRelationshipContext_AllowsOwnedWorkOrder()
+    {
+        var workOrderId = SeedDocumentTarget("WorkOrder");
+        var tenantId = _ctx.Db.WorkOrders.Single(workOrder => workOrder.Id == workOrderId).TenantId!.Value;
+        var expected = new[] { new DocumentDto { Id = 44, EntityType = "WorkOrder", EntityId = workOrderId } };
+        var documents = new Mock<IDocumentService>();
+        documents.Setup(d => d.ListAsync(
+                PortfolioId, "WorkOrder", workOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expected);
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            isManagement: false,
+            new Claim("tenantId", tenantId.ToString()));
+        var workOrder = _ctx.Db.WorkOrders.Single(candidate => candidate.Id == workOrderId);
+        workOrder.LeaseManagementId = _ctx.Db.EffectiveTenantAccess
+            .Single(access => access.TenantId == tenantId)
+            .LeaseManagementId;
+        _ctx.Db.SaveChanges();
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.List("WorkOrder", workOrderId, CancellationToken.None);
+
+        result.Result.Should().BeOfType<OkObjectResult>()
+            .Which.Value.Should().BeSameAs(expected);
+    }
+
+    [Fact]
+    public async Task GetFile_WithSameTenantButDifferentRelationship_DeniesBeforeStorageAndAllowsExactRelationship()
+    {
+        var workOrderId = SeedDocumentTarget("WorkOrder");
+        var workOrder = _ctx.Db.WorkOrders.Single(candidate => candidate.Id == workOrderId);
+        var tenantId = workOrder.TenantId!.Value;
+        var documents = new Mock<IDocumentService>();
+        documents.Setup(d => d.FindAsync(PortfolioId, 46, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new StoredFile
+            {
+                Id = 46,
+                PortfolioId = PortfolioId,
+                EntityType = "WorkOrder",
+                EntityId = workOrderId,
+                FileName = "repair.jpg",
+                FilePath = "stored/repair.jpg",
+                ContentType = "image/jpeg",
+                FileSize = TestPng.Length,
+                UploadedAt = DateTime.UtcNow,
+            });
+        var storage = new Mock<IFileStorage>();
+        storage.Setup(s => s.DownloadAsync(
+                "stored/repair.jpg", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new MemoryStream(TestPng));
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: false,
+            new Claim("tenantId", tenantId.ToString()));
+        var accessRelationshipId = _ctx.Db.EffectiveTenantAccess
+            .Single(access => access.TenantId == tenantId)
+            .LeaseManagementId;
+        var differentRelationship = AddAndSave(new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = workOrder.PropertyId,
+            UnitId = workOrder.UnitId!.Value,
+            RelationshipNumber = $"DOC-DIFFERENT-{Guid.NewGuid():N}",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 7,
+            UpdatedAtUtc = DateTime.UtcNow,
+            RowVersion = Guid.NewGuid(),
+        });
+        workOrder.LeaseManagementId = differentRelationship.Id;
+        _ctx.Db.SaveChanges();
+        _ctx.Db.Entry(workOrder).Reload();
+
+        await ActivateControllerScopeAsync(controller);
+        var denied = await controller.GetFile(46, thumb: false, CancellationToken.None);
+
+        denied.Should().BeOfType<NotFoundObjectResult>();
+        storage.Verify(s => s.DownloadAsync(
+            "stored/repair.jpg", It.IsAny<CancellationToken>()), Times.Never);
+
+        await using (var ownerDb = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(_ctx.ConnectionString)
+                .Options))
+        {
+            var ownerWorkOrder = await ownerDb.WorkOrders.SingleAsync(
+                candidate => candidate.Id == workOrderId);
+            ownerWorkOrder.LeaseManagementId = accessRelationshipId;
+            await ownerDb.SaveChangesAsync();
+        }
+
+        await ActivateControllerScopeAsync(controller);
+        var allowed = await controller.GetFile(46, thumb: false, CancellationToken.None);
+
+        allowed.Should().BeOfType<FileStreamResult>();
+        storage.Verify(s => s.DownloadAsync(
+            "stored/repair.jpg", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task List_WithCanonicalStaffContext_AllowsPortfolioEntity()
+    {
+        var unitId = SeedDocumentTarget(nameof(StoredDocumentTarget.Unit));
+        var expected = new[] { new DocumentDto { Id = 45, EntityType = "Unit", EntityId = unitId } };
+        var documents = new Mock<IDocumentService>();
+        documents.Setup(d => d.ListAsync(PortfolioId, "Unit", unitId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expected);
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            isManagement: true);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.List("Unit", unitId, CancellationToken.None);
+
+        result.Result.Should().BeOfType<OkObjectResult>()
+            .Which.Value.Should().BeSameAs(expected);
+    }
+
+    [Theory]
+    [InlineData("Lease")]
+    [InlineData("Payment")]
+    [InlineData("SecurityDeposit")]
+    public async Task List_RejectsRemovedLegacyDocumentTargets(string entityType)
+    {
+        var documents = new Mock<IDocumentService>();
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            isManagement: true);
+
+        await ActivateControllerScopeAsync(controller);
+        var result = await controller.List(entityType, 1, CancellationToken.None);
+
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        documents.VerifyNoOtherCalls();
     }
 
     private static byte[] BuildTestPng()
@@ -245,12 +792,25 @@ public sealed class DocumentsControllerTests : IDisposable
         return data.ToArray();
     }
 
-    private DocumentsController CreateController(IDocumentService documents, IFileStorage storage, params Claim[] claims)
+    private DocumentsController CreateController(
+        IDocumentService documents,
+        IFileStorage storage,
+        bool isManagement,
+        params Claim[] claims)
     {
+        var user = EnsureUser();
+        var context = EnsureAccessContext(user.Id);
+        var tenantClaim = claims.SingleOrDefault(claim => claim.Type == "tenantId")?.Value;
+        if (int.TryParse(tenantClaim, out var tenantId))
+            EnsureTenantRelationship(context, user, tenantId);
+        var activeContext = isManagement
+            ? EnsureManagementAuthorization(context, user)
+            : EnsureTenantAuthorization(context, user);
+
         var baseClaims = new List<Claim>
         {
             new("portfolioId", PortfolioId.ToString()),
-            new(ClaimTypes.NameIdentifier, "7"),
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
         };
         baseClaims.AddRange(claims);
 
@@ -273,8 +833,220 @@ public sealed class DocumentsControllerTests : IDisposable
                 },
             },
         };
+        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = activeContext;
 
         return controller;
+    }
+
+    private async Task ActivateControllerScopeAsync(DocumentsController controller)
+    {
+        var activeContext = (ActiveAccessContext)controller.HttpContext.Items[
+            CanonicalAccessContextHttpItem.Key]!;
+        var accessRevision = await _ctx.Db.WorkspaceAccessContexts
+            .AsNoTracking()
+            .Where(context => context.Id == activeContext.AccessContextId)
+            .Select(context => context.AccessRevision)
+            .SingleAsync();
+        activeContext = activeContext with { AccessRevision = accessRevision };
+        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = activeContext;
+        await _ctx.ActivateApiScopeAsync(new WorkspaceReadScope(
+            activeContext.PortfolioId,
+            activeContext.UserId,
+            activeContext.SessionId,
+            activeContext.AccessContextId,
+            activeContext.AccessRevision));
+    }
+
+    private ApplicationUser EnsureUser()
+    {
+        var user = _ctx.Db.Users.SingleOrDefault(existing => existing.UserName == "documents-test-user");
+        if (user is not null)
+            return user;
+
+        user = new ApplicationUser
+        {
+            Id = 7,
+            UserName = "documents-test-user",
+            NormalizedUserName = "DOCUMENTS-TEST-USER",
+            Email = "documents@example.test",
+            NormalizedEmail = "DOCUMENTS@EXAMPLE.TEST",
+            DisplayName = "Documents Test User",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.Users.Add(user);
+        _ctx.Db.SaveChanges();
+        return user;
+    }
+
+    private WorkspaceAccessContext EnsureAccessContext(int userId)
+    {
+        var existing = _ctx.Db.WorkspaceAccessContexts.SingleOrDefault(context =>
+            context.UserId == userId && context.PortfolioId == PortfolioId);
+        if (existing is not null)
+            return existing;
+
+        var now = DateTime.UtcNow;
+        var context = new WorkspaceAccessContext
+        {
+            UserId = userId,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.WorkspaceAccessContexts.Add(context);
+        _ctx.Db.SaveChanges();
+        return context;
+    }
+
+    private ActiveAccessContext EnsureManagementAuthorization(
+        WorkspaceAccessContext context,
+        ApplicationUser user)
+    {
+        var now = DateTime.UtcNow;
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _ctx.Db.AddRange(assignment, session);
+        _ctx.Db.SaveChanges();
+
+        return new ActiveAccessContext(
+            session.Id,
+            user.Id,
+            context.Id,
+            PortfolioId,
+            context.AccessRevision,
+            WorkspaceExperience.Management,
+            membership.Id,
+            membership.DefaultExperience);
+    }
+
+    private ActiveAccessContext EnsureTenantAuthorization(
+        WorkspaceAccessContext context,
+        ApplicationUser user)
+    {
+        var now = DateTime.UtcNow;
+        context.LastAuthorizedExperience = WorkspaceExperience.Tenant;
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _ctx.Db.AuthSessions.Add(session);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.Entry(context).Reload();
+
+        return new ActiveAccessContext(
+            session.Id,
+            user.Id,
+            context.Id,
+            PortfolioId,
+            context.AccessRevision,
+            WorkspaceExperience.Tenant,
+            null,
+            WorkspaceExperience.Tenant);
+    }
+
+    private void EnsureTenantRelationship(
+        WorkspaceAccessContext context,
+        ApplicationUser user,
+        int tenantId)
+    {
+        if (_ctx.Db.TenantUserAccesses.Any(access =>
+                access.AccessContextId == context.Id && access.RevokedAtUtc == null))
+            return;
+
+        var target = _ctx.Db.WorkOrders
+            .Where(candidate => candidate.PortfolioId == PortfolioId && candidate.TenantId == tenantId)
+            .OrderBy(candidate => candidate.Id)
+            .Select(candidate => new { candidate.PropertyId, candidate.UnitId })
+            .FirstOrDefault();
+        if (target is null)
+        {
+            if (!_ctx.Db.Tenants.Any(tenant => tenant.Id == tenantId && tenant.PortfolioId == PortfolioId))
+                return;
+
+            target = _ctx.Db.Units
+                .Where(unit => unit.Property!.PortfolioId == PortfolioId)
+                .OrderByDescending(unit => unit.Id)
+                .Select(unit => new { unit.PropertyId, UnitId = (int?)unit.Id })
+                .FirstOrDefault();
+            if (target is null)
+                return;
+        }
+
+        var now = DateTime.UtcNow;
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = target.PropertyId,
+            UnitId = target.UnitId!.Value,
+            RelationshipNumber = $"DOC-{tenantId}-{Guid.NewGuid():N}",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
+            TenantId = tenantId,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddDays(-1)),
+            ChangeReason = "Document access test",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        _ctx.Db.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContext = context,
+            ApplicationUser = user,
+            LeaseManagementParty = party,
+            GrantedAtUtc = now,
+            GrantedByUserId = user.Id,
+            Reason = "Document access test",
+        });
+        _ctx.Db.SaveChanges();
     }
 
     private static FormFile FormFile(string fileName, string contentType, string contents)
@@ -287,9 +1059,18 @@ public sealed class DocumentsControllerTests : IDisposable
         };
     }
 
-    private int SeedDocumentTarget(string entityType)
+    private long SeedDocumentTarget(string entityType)
     {
         var now = DateTime.UtcNow;
+        var user = EnsureUser();
+        var owner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            Name = $"Owner {entityType}",
+            OwnerEntityType = OwnerEntityType.Person,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
         var property = new Property
         {
             PortfolioId = PortfolioId,
@@ -300,6 +1081,18 @@ public sealed class DocumentsControllerTests : IDisposable
             PostalCode = "43215",
             CreatedAt = now,
             UpdatedAt = now,
+            Ownerships =
+            [
+                new PropertyOwnership
+                {
+                    PortfolioId = PortfolioId,
+                    OwnerEntity = owner,
+                    OwnershipSharePercent = 100m,
+                    EffectiveFromUtc = now,
+                    StatementRecipientName = owner.Name,
+                    PayeeName = owner.Name,
+                },
+            ],
         };
         var unit = new Unit
         {
@@ -316,29 +1109,34 @@ public sealed class DocumentsControllerTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _ctx.Db.AddRange(property, unit, tenant);
+        _ctx.Db.AddRange(owner, property, unit, tenant);
         _ctx.Db.SaveChanges();
+
+        if (entityType is nameof(StoredDocumentTarget.Tenant)
+            or nameof(StoredDocumentTarget.LeaseAgreement)
+            or nameof(StoredDocumentTarget.LegalDocumentArtifact)
+            or nameof(StoredDocumentTarget.TenantAccount)
+            or nameof(StoredDocumentTarget.TenantLedgerEntry)
+            or nameof(StoredDocumentTarget.SecurityDepositAccount))
+        {
+            var canonical = SeedCanonicalLeaseDocumentTargets(property, unit, tenant, user, now);
+            return entityType switch
+            {
+                nameof(StoredDocumentTarget.Tenant) => tenant.Id,
+                nameof(StoredDocumentTarget.LeaseAgreement) => canonical.Agreement.Id,
+                nameof(StoredDocumentTarget.LegalDocumentArtifact) => canonical.Artifact.Id,
+                nameof(StoredDocumentTarget.TenantAccount) => canonical.Account.Id,
+                nameof(StoredDocumentTarget.TenantLedgerEntry) => canonical.LedgerEntry.Id,
+                nameof(StoredDocumentTarget.SecurityDepositAccount) => canonical.DepositAccount.Id,
+                _ => throw new InvalidOperationException("The canonical target set is incomplete."),
+            };
+        }
 
         return entityType switch
         {
-            "Property" => property.Id,
-            "Unit" => unit.Id,
-            "Tenant" => tenant.Id,
-            "Lease" => AddAndSave(new Lease
-            {
-                PortfolioId = PortfolioId,
-                PropertyId = property.Id,
-                UnitId = unit.Id,
-                TenantId = tenant.Id,
-                LeaseNumber = $"L-{entityType}",
-                Status = LeaseStatus.Active,
-                StartDate = now.Date,
-                EndDate = now.Date.AddYears(1),
-                MonthlyRent = 1_200m,
-                CreatedAt = now,
-                UpdatedAt = now,
-            }).Id,
-            "WorkOrder" => AddAndSave(new WorkOrder
+            nameof(StoredDocumentTarget.Property) => property.Id,
+            nameof(StoredDocumentTarget.Unit) => unit.Id,
+            nameof(StoredDocumentTarget.WorkOrder) => AddAndSave(new WorkOrder
             {
                 PortfolioId = PortfolioId,
                 PropertyId = property.Id,
@@ -349,7 +1147,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 RequestedAt = now,
                 UpdatedAt = now,
             }).Id,
-            "Appointment" => AddAndSave(new Appointment
+            nameof(StoredDocumentTarget.Appointment) => AddAndSave(new Appointment
             {
                 PortfolioId = PortfolioId,
                 PropertyId = property.Id,
@@ -360,7 +1158,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 CreatedAt = now,
                 UpdatedAt = now,
             }).Id,
-            "Inspection" => AddAndSave(new Inspection
+            nameof(StoredDocumentTarget.Inspection) => AddAndSave(new Inspection
             {
                 PortfolioId = PortfolioId,
                 PropertyId = property.Id,
@@ -369,40 +1167,305 @@ public sealed class DocumentsControllerTests : IDisposable
                 CreatedAt = now,
                 UpdatedAt = now,
             }).Id,
-            "SecurityDeposit" => AddAndSave(new SecurityDepositHolding
+            nameof(StoredDocumentTarget.Expense) => AddAndSave(new Expense
             {
                 PortfolioId = PortfolioId,
-                LeaseId = AddAndSave(new Lease
-                {
-                    PortfolioId = PortfolioId,
-                    PropertyId = property.Id,
-                    UnitId = unit.Id,
-                    TenantId = tenant.Id,
-                    LeaseNumber = $"L-{entityType}",
-                    Status = LeaseStatus.Active,
-                    StartDate = now.Date,
-                    EndDate = now.Date.AddYears(1),
-                    MonthlyRent = 1_200m,
-                    SecurityDeposit = 1_200m,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                }).Id,
-                Amount = 1_200m,
-                HeldAt = now,
+                OperationalScope = ExpenseOperationalScope.Unit,
+                PropertyId = property.Id,
+                UnitId = unit.Id,
+                Description = "Document target expense",
+                Amount = 25m,
+                IncurredAt = now,
                 CreatedAt = now,
                 UpdatedAt = now,
             }).Id,
-            "OwnerEntity" => AddAndSave(new OwnerEntity
-            {
-                PortfolioId = PortfolioId,
-                Name = "Test Owner",
-                OwnerEntityType = OwnerEntityType.Person,
-                CreatedAt = now,
-                UpdatedAt = now,
-            }).Id,
+            nameof(StoredDocumentTarget.Vendor) => SeedVendorTarget(property, unit, tenant, now),
+            nameof(StoredDocumentTarget.OwnerEntity) => owner.Id,
             _ => throw new ArgumentOutOfRangeException(nameof(entityType), entityType, null),
         };
     }
+
+    private CanonicalLeaseDocumentTargets SeedCanonicalLeaseDocumentTargets(
+        Property property,
+        Unit unit,
+        Tenant tenant,
+        ApplicationUser user,
+        DateTime now)
+    {
+        var storedFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            FileName = $"agreement-{Guid.NewGuid():N}.pdf",
+            FilePath = $"stored/agreement-{Guid.NewGuid():N}.pdf",
+            ContentType = "application/pdf",
+            FileSize = 1,
+            UploadedAt = now,
+        };
+        _ctx.Db.StoredFiles.Add(storedFile);
+        _ctx.Db.SaveChanges();
+
+        var artifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = storedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+            StorageKey = storedFile.FilePath,
+            FileName = storedFile.FileName,
+            ContentType = storedFile.ContentType,
+            ByteLength = storedFile.FileSize,
+            ContentSha256 = new string('a', 64),
+            LegalIssuanceFingerprint = new string('b', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        var source = new LegalDocumentSourceVersion
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            SourceKind = LegalDocumentSourceKind.BuiltInRenderer,
+            BusinessKey = $"documents-test:{Guid.NewGuid():N}",
+            RendererKey = $"documents-test-{Guid.NewGuid():N}",
+            RendererVersion = 1,
+            SnapshotPayload = "{}",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        var management = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = $"DOC-{Guid.NewGuid():N}",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        _ctx.Db.AddRange(artifact, source, management);
+        _ctx.Db.SaveChanges();
+
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = $"AGR-{Guid.NewGuid():N}",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now),
+            BaseRentAmount = 1_000m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1_000m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersionId = source.Id,
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+            UpdatedAtUtc = now,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now),
+            ChangeReason = "Document target test",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{Guid.NewGuid():N}",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        _ctx.Db.AddRange(agreement, party, account);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        {
+            PortfolioId = PortfolioId,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = $"{tenant.FirstName} {tenant.LastName}",
+            EmailSnapshot = tenant.Email ?? $"tenant-{tenant.Id}@example.test",
+            SigningOrder = 1,
+            IsRequired = true,
+        });
+        _ctx.Db.SaveChanges();
+        agreement.IssuedArtifactId = artifact.Id;
+        agreement.IssuedAtUtc = now;
+        _ctx.Db.SaveChanges();
+
+        var ledgerEntry = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.OpeningBalance,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 100m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Document target opening balance",
+            BusinessKey = $"documents-test:{Guid.NewGuid():N}",
+            CreatedByUserId = user.Id,
+        };
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            OriginatingAgreementId = agreement.Id,
+            Currency = "USD",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        _ctx.Db.AddRange(ledgerEntry, depositAccount);
+        _ctx.Db.SaveChanges();
+
+        return new CanonicalLeaseDocumentTargets(
+            agreement, artifact, account, ledgerEntry, depositAccount);
+    }
+
+    private long SeedVendorTarget(Property property, Unit unit, Tenant tenant, DateTime now)
+    {
+        var vendor = AddAndSave(new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Document Target Vendor",
+            ServiceType = "General",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        AddAndSave(new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            VendorId = vendor.Id,
+            Title = "Vendor document relationship",
+            Description = "Vendor document relationship",
+            RequestedAt = now,
+            UpdatedAt = now,
+        });
+        return vendor.Id;
+    }
+
+    private (StoredFile StoredFile, DocumentTemplate Template, int PropertyId) SeedDocumentTemplateSource(
+        bool propertyScoped = true)
+    {
+        var now = DateTime.UtcNow;
+        var property = SeedProperty("Template source property");
+        var storedFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            EntityType = "DocumentTemplate",
+            FileName = "lease-template-source.pdf",
+            FilePath = "stored/lease-template-source.pdf",
+            ContentType = "application/pdf",
+            FileSize = 17,
+            UploadedAt = now,
+        };
+        _ctx.Db.StoredFiles.Add(storedFile);
+        _ctx.Db.SaveChanges();
+
+        var template = new DocumentTemplate
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = propertyScoped ? property.Id : null,
+            Kind = DocumentTemplateKind.Lease,
+            Status = DocumentTemplateStatus.Draft,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Name = "Lease template source",
+            OriginalStoredFileId = storedFile.Id,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.DocumentTemplates.Add(template);
+        _ctx.Db.SaveChanges();
+
+        storedFile.EntityId = template.Id;
+        _ctx.Db.SaveChanges();
+        return (storedFile, template, property.Id);
+    }
+
+    private Property SeedProperty(string name)
+    {
+        var now = DateTime.UtcNow;
+        var owner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            Name = $"Owner {name}",
+            OwnerEntityType = OwnerEntityType.Person,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = "200 Template",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+            Ownerships =
+            [
+                new PropertyOwnership
+                {
+                    PortfolioId = PortfolioId,
+                    OwnerEntity = owner,
+                    OwnershipSharePercent = 100m,
+                    EffectiveFromUtc = now,
+                    StatementRecipientName = owner.Name,
+                    PayeeName = owner.Name,
+                },
+            ],
+        };
+        _ctx.Db.AddRange(owner, property);
+        _ctx.Db.SaveChanges();
+        return property;
+    }
+
+    private void RestrictManagementAssignmentToSelectedProperty(string roleProfileKey, int propertyId)
+    {
+        var assignment = _ctx.Db.MembershipRoleAssignments.Single();
+        assignment.RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == roleProfileKey).Id;
+        assignment.ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties;
+        assignment.UpdatedAtUtc = DateTime.UtcNow;
+        _ctx.Db.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignmentId = assignment.Id,
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+        });
+        _ctx.Db.SaveChanges();
+    }
+
+    private sealed record CanonicalLeaseDocumentTargets(
+        LeaseAgreement Agreement,
+        LegalDocumentArtifact Artifact,
+        TenantAccount Account,
+        TenantLedgerEntry LedgerEntry,
+        SecurityDepositAccount DepositAccount);
 
     private T AddAndSave<T>(T entity) where T : class
     {

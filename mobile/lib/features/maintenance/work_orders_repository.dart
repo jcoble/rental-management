@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -5,7 +6,310 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
+import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart';
+
+class WorkOrderListQuery {
+  const WorkOrderListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.propertyId,
+    this.unitId,
+    this.vendorId,
+    this.openOnly = false,
+    this.search,
+    this.sort = '-updatedAt',
+    this.requestedFrom,
+    this.requestedTo,
+    this.scheduledFrom,
+    this.scheduledTo,
+    this.completedFrom,
+    this.completedTo,
+  });
+
+  final int skip;
+  final int take;
+  final int? propertyId;
+  final int? unitId;
+  final int? vendorId;
+  final bool openOnly;
+  final String? search;
+  final String sort;
+  final String? requestedFrom;
+  final String? requestedTo;
+  final String? scheduledFrom;
+  final String? scheduledTo;
+  final String? completedFrom;
+  final String? completedTo;
+
+  @override
+  bool operator ==(Object other) {
+    return other is WorkOrderListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.propertyId == propertyId &&
+        other.unitId == unitId &&
+        other.vendorId == vendorId &&
+        other.openOnly == openOnly &&
+        other.search == search &&
+        other.sort == sort &&
+        other.requestedFrom == requestedFrom &&
+        other.requestedTo == requestedTo &&
+        other.scheduledFrom == scheduledFrom &&
+        other.scheduledTo == scheduledTo &&
+        other.completedFrom == completedFrom &&
+        other.completedTo == completedTo;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    skip,
+    take,
+    propertyId,
+    unitId,
+    vendorId,
+    openOnly,
+    search,
+    sort,
+    requestedFrom,
+    requestedTo,
+    scheduledFrom,
+    scheduledTo,
+    completedFrom,
+    completedTo,
+  );
+}
+
+class WorkOrderListPage {
+  const WorkOrderListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<WorkOrder> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory WorkOrderListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(WorkOrder.fromJson)
+              .toList()
+        : <WorkOrder>[];
+
+    return WorkOrderListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
+bool _jsonBool(
+  Map<String, dynamic> json,
+  String key, {
+  bool fallback = false,
+}) => json[key] as bool? ?? fallback;
+
+class WorkOrderDetailCapabilities {
+  const WorkOrderDetailCapabilities({
+    required this.canViewTenantContact,
+    required this.canViewResidents,
+    required this.canViewAccessInstructions,
+    required this.canViewPrivateManagementNotes,
+    required this.canViewCosts,
+    required this.canCommentPublicly,
+    required this.canCommentPrivately,
+    required this.canUploadPhoto,
+    required this.canDeletePhoto,
+    required this.canCancel,
+    required this.canEditRequestFields,
+    required this.canEditManagementFields,
+    required this.canAssignTechnician,
+    required this.canDispatchVendor,
+    required this.allowedStatusTransitions,
+  });
+
+  final bool canViewTenantContact;
+  final bool canViewResidents;
+  final bool canViewAccessInstructions;
+  final bool canViewPrivateManagementNotes;
+  final bool canViewCosts;
+  final bool canCommentPublicly;
+  final bool canCommentPrivately;
+  final bool canUploadPhoto;
+  final bool canDeletePhoto;
+  final bool canCancel;
+  final bool canEditRequestFields;
+  final bool canEditManagementFields;
+  final bool canAssignTechnician;
+  final bool canDispatchVendor;
+  final List<String> allowedStatusTransitions;
+
+  bool get canEdit => canEditRequestFields || canEditManagementFields;
+  bool get canUpdateStatus => allowedStatusTransitions.isNotEmpty;
+  bool get canContactVendor => canDispatchVendor;
+  bool get canRateVendor => canEditManagementFields;
+
+  static const none = WorkOrderDetailCapabilities(
+    canViewTenantContact: false,
+    canViewResidents: false,
+    canViewAccessInstructions: false,
+    canViewPrivateManagementNotes: false,
+    canViewCosts: false,
+    canCommentPublicly: false,
+    canCommentPrivately: false,
+    canUploadPhoto: false,
+    canDeletePhoto: false,
+    canCancel: false,
+    canEditRequestFields: false,
+    canEditManagementFields: false,
+    canAssignTechnician: false,
+    canDispatchVendor: false,
+    allowedStatusTransitions: [],
+  );
+
+  factory WorkOrderDetailCapabilities.fromJson(Map<String, dynamic> json) {
+    final raw = json['capabilities'];
+    if (raw is! Map<String, dynamic>) return none;
+    final source = raw;
+    final rawTransitions = source['allowedStatusTransitions'];
+    return WorkOrderDetailCapabilities(
+      canViewTenantContact: _jsonBool(source, 'canViewTenantContact'),
+      canViewResidents: _jsonBool(source, 'canViewResidents'),
+      canViewAccessInstructions: _jsonBool(source, 'canViewAccessInstructions'),
+      canViewPrivateManagementNotes: _jsonBool(
+        source,
+        'canViewPrivateManagementNotes',
+      ),
+      canViewCosts: _jsonBool(source, 'canViewCosts'),
+      canCommentPublicly: _jsonBool(source, 'canCommentPublicly'),
+      canCommentPrivately: _jsonBool(source, 'canCommentPrivately'),
+      canUploadPhoto: _jsonBool(source, 'canUploadPhoto'),
+      canDeletePhoto: _jsonBool(source, 'canDeletePhoto'),
+      canCancel: _jsonBool(source, 'canCancel'),
+      canEditRequestFields: _jsonBool(source, 'canEditRequestFields'),
+      canEditManagementFields: _jsonBool(source, 'canEditManagementFields'),
+      canAssignTechnician: _jsonBool(source, 'canAssignTechnician'),
+      canDispatchVendor: _jsonBool(source, 'canDispatchVendor'),
+      allowedStatusTransitions: rawTransitions is List
+          ? rawTransitions.map((value) => value.toString()).toList()
+          : const [],
+    );
+  }
+}
+
+class WorkOrderActivityItem {
+  const WorkOrderActivityItem({
+    required this.id,
+    required this.kind,
+    this.fromStatus,
+    this.toStatus,
+    this.note,
+    this.actorLabel,
+    this.visibility,
+    required this.createdAtUtc,
+  });
+
+  final int id;
+  final String kind;
+  final String? fromStatus;
+  final String? toStatus;
+  final String? note;
+  final String? actorLabel;
+  final String? visibility;
+  final DateTime createdAtUtc;
+
+  factory WorkOrderActivityItem.fromJson(Map<String, dynamic> json) {
+    return WorkOrderActivityItem(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      kind: json['kind'] as String? ?? 'Activity',
+      fromStatus: json['fromStatus'] as String?,
+      toStatus: json['toStatus'] as String?,
+      note: json['note'] as String?,
+      actorLabel: json['actorLabel'] as String?,
+      visibility: json['visibility'] as String?,
+      createdAtUtc:
+          DateTime.tryParse(json['createdAtUtc'] as String? ?? '')?.toLocal() ??
+          DateTime(0),
+    );
+  }
+}
+
+class RoleAwareWorkOrderDetail extends WorkOrderDetail {
+  const RoleAwareWorkOrderDetail({
+    required super.workOrder,
+    required super.timeline,
+    required this.detailRole,
+    required this.capabilities,
+    required this.residentNames,
+    this.privateManagementNotes,
+    required this.activity,
+    required this.hasActiveDispatch,
+    this.activeDispatchId,
+    this.activeDispatchVendorId,
+    this.activeDispatchVendorName,
+  });
+
+  final String detailRole;
+  final WorkOrderDetailCapabilities capabilities;
+  final List<String> residentNames;
+  final String? privateManagementNotes;
+  final List<WorkOrderActivityItem> activity;
+  final bool hasActiveDispatch;
+  final int? activeDispatchId;
+  final int? activeDispatchVendorId;
+  final String? activeDispatchVendorName;
+
+  factory RoleAwareWorkOrderDetail.fromJson(Map<String, dynamic> json) {
+    final base = WorkOrderDetail.fromJson(json);
+    final residents = json['residentNames'];
+    final activity = json['activity'];
+    return RoleAwareWorkOrderDetail(
+      workOrder: base.workOrder,
+      timeline: base.timeline,
+      detailRole: json['detailRole'] as String? ?? '',
+      capabilities: WorkOrderDetailCapabilities.fromJson(json),
+      residentNames: residents is List
+          ? residents.map((value) => value.toString()).toList()
+          : const [],
+      privateManagementNotes: json['privateManagementNotes'] as String?,
+      activity: activity is List
+          ? activity
+                .whereType<Map<String, dynamic>>()
+                .map(WorkOrderActivityItem.fromJson)
+                .toList()
+          : const [],
+      hasActiveDispatch: _jsonBool(json, 'hasActiveDispatch'),
+      activeDispatchId: (json['activeDispatchId'] as num?)?.toInt(),
+      activeDispatchVendorId: (json['activeDispatchVendorId'] as num?)?.toInt(),
+      activeDispatchVendorName: json['activeDispatchVendorName'] as String?,
+    );
+  }
+
+  factory RoleAwareWorkOrderDetail.fromBase(WorkOrderDetail detail) {
+    if (detail is RoleAwareWorkOrderDetail) return detail;
+    return RoleAwareWorkOrderDetail(
+      workOrder: detail.workOrder,
+      timeline: detail.timeline,
+      detailRole: '',
+      capabilities: WorkOrderDetailCapabilities.none,
+      residentNames: const [],
+      activity: const [],
+      hasActiveDispatch: false,
+    );
+  }
+}
 
 /// Repository for work orders.
 ///
@@ -21,32 +325,79 @@ class WorkOrdersRepository {
 
   final Dio _dio;
 
+  Future<WorkOrderListPage> listWorkOrdersPage([
+    WorkOrderListQuery query = const WorkOrderListQuery(),
+  ]) async {
+    final params = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'sort': query.sort,
+      'search': query.search,
+      'propertyId': query.propertyId,
+      'unitId': query.unitId,
+      'vendorId': query.vendorId,
+      if (query.openOnly) 'openOnly': true,
+      'requestedFrom': query.requestedFrom,
+      'requestedTo': query.requestedTo,
+      'scheduledFrom': query.scheduledFrom,
+      'scheduledTo': query.scheduledTo,
+      'completedFrom': query.completedFrom,
+      'completedTo': query.completedTo,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/work-orders/page',
+        queryParameters: params,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return WorkOrderListPage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<List<WorkOrder>> listWorkOrders({
     int? propertyId,
     int? unitId,
     int? vendorId,
     bool openOnly = false,
+    int skip = 0,
     int take = 50,
+    String? search,
     String sort = '-updatedAt',
+    String? requestedFrom,
+    String? requestedTo,
+    String? scheduledFrom,
+    String? scheduledTo,
+    String? completedFrom,
+    String? completedTo,
   }) async {
-    try {
-      final params = <String, dynamic>{'take': take, 'sort': sort};
-      if (propertyId != null) params['propertyId'] = propertyId;
-      if (unitId != null) params['unitId'] = unitId;
-      if (vendorId != null) params['vendorId'] = vendorId;
-      if (openOnly) params['openOnly'] = true;
-      final response = await _dio.get<Map<String, dynamic>>(
-        '/work-orders/page',
-        queryParameters: params,
-      );
-      final data = response.data?['items'] as List<dynamic>? ?? [];
-      return data
-          .whereType<Map<String, dynamic>>()
-          .map(WorkOrder.fromJson)
-          .toList();
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    final page = await listWorkOrdersPage(
+      WorkOrderListQuery(
+        propertyId: propertyId,
+        unitId: unitId,
+        vendorId: vendorId,
+        openOnly: openOnly,
+        skip: skip,
+        take: take,
+        search: search,
+        sort: sort,
+        requestedFrom: requestedFrom,
+        requestedTo: requestedTo,
+        scheduledFrom: scheduledFrom,
+        scheduledTo: scheduledTo,
+        completedFrom: completedFrom,
+        completedTo: completedTo,
+      ),
+    );
+    return page.items;
   }
 
   Future<WorkOrder> getWorkOrder(int id) async {
@@ -76,7 +427,7 @@ class WorkOrdersRepository {
           message: 'Empty response from server.',
         );
       }
-      return WorkOrderDetail.fromJson(data);
+      return RoleAwareWorkOrderDetail.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -116,9 +467,13 @@ class WorkOrdersRepository {
   /// Create body: { propertyId, title, description, priority, category }
   Future<WorkOrder> createWorkOrder(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/work-orders',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'work-order:create:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/work-orders',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -138,6 +493,7 @@ class WorkOrdersRepository {
     required Uint8List bytes,
     required String fileName,
     required String contentType,
+    required String clientOperationId,
   }) async {
     try {
       final formData = FormData.fromMap({
@@ -149,6 +505,7 @@ class WorkOrdersRepository {
         'entityType': 'WorkOrder',
         'entityId': workOrderId,
         'category': 'Maintenance photo',
+        'clientOperationId': clientOperationId,
       });
       await _dio.post<Map<String, dynamic>>('/documents', data: formData);
     } on DioException catch (e) {
@@ -159,9 +516,13 @@ class WorkOrdersRepository {
   /// Update body: any subset of work order fields (partial PATCH).
   Future<WorkOrder> updateWorkOrder(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/work-orders/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'work-order:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/work-orders/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -176,18 +537,128 @@ class WorkOrdersRepository {
     }
   }
 
+  Future<void> commentWorkOrder(
+    int id, {
+    required String body,
+    bool isPrivate = false,
+  }) async {
+    final payload = {'body': body, 'isPrivate': isPrivate};
+    try {
+      await IdempotentMutation.run(
+        'work-order:comment:$id:${jsonEncode(payload)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/work-orders/$id/comments',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> updateTechnicianAssignment(
+    int id,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      await IdempotentMutation.run(
+        'technician:assignment-update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/technician/assignments/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> listResponsibilities(
+    int workOrderId,
+  ) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/work-orders/$workOrderId/responsibilities',
+      );
+      return (response.data ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> listResponsibilityCandidates(
+    int workOrderId,
+  ) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/work-orders/$workOrderId/responsibilities/candidates',
+      );
+      return (response.data ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> assignResponsibility(
+    int workOrderId,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      await IdempotentMutation.run(
+        'work-order:responsibility:assign:$workOrderId:${jsonEncode(data)}',
+        (key) => _dio.put<Map<String, dynamic>>(
+          '/work-orders/$workOrderId/responsibilities/current',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> closeResponsibility(
+    int workOrderId,
+    String responsibilityId,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      await IdempotentMutation.run(
+        'work-order:responsibility:close:$workOrderId:$responsibilityId:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/work-orders/$workOrderId/responsibilities/$responsibilityId/close',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// PATCH /work-orders/{id}  body: { status, statusNote? }
   ///
   /// [statusNote] is recorded on the status timeline for this transition.
   Future<WorkOrder> updateStatus(int id, String status, {String? note}) async {
     try {
       final trimmed = note?.trim();
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/work-orders/$id',
-        data: {
-          'status': status,
-          if (trimmed != null && trimmed.isNotEmpty) 'statusNote': trimmed,
-        },
+      final body = {
+        'status': status,
+        if (trimmed != null && trimmed.isNotEmpty) 'statusNote': trimmed,
+      };
+      final response = await IdempotentMutation.run(
+        'work-order:status:$id:${jsonEncode(body)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/work-orders/$id',
+          data: body,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -284,6 +755,11 @@ final workOrdersProvider =
       WorkOrdersNotifier.new,
     );
 
+final workOrdersPageProvider = FutureProvider.autoDispose
+    .family<WorkOrderListPage, WorkOrderListQuery>((ref, query) {
+      return ref.watch(workOrdersRepositoryProvider).listWorkOrdersPage(query);
+    });
+
 // ── Single work order (with status timeline) ──────────────────────────────────
 
 class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrderDetail>> {
@@ -315,7 +791,20 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrderDetail>> {
   /// reloads so the new timeline entry is shown.
   Future<void> updateStatus(String status, {String? note}) async {
     try {
-      await _repo.updateStatus(_id, status, note: note);
+      final auth = ref.read(authControllerProvider);
+      if (auth is AuthStateAuthenticated &&
+          auth.capabilities.contains('maintenance.assigned-work.update') &&
+          !auth.capabilities.contains('work.manage')) {
+        await _repo.updateTechnicianAssignment(_id, {
+          'status': status,
+          'expectedUpdatedAtUtc': state.value?.workOrder.updatedAt
+              .toUtc()
+              .toIso8601String(),
+          'technicianNote': ?note,
+        });
+      } else {
+        await _repo.updateStatus(_id, status, note: note);
+      }
       // Reload to pick up the freshly-appended timeline entry.
       final detail = await _repo.getWorkOrderDetail(_id);
       state = AsyncValue.data(detail);

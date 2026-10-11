@@ -36,8 +36,7 @@ const NAV_HREFS = [
 
 // Old URLs that became redirects in Wave 1 → where they should land.
 const REDIRECTS: Array<[string, RegExp]> = [
-	['/analytics', /\/$/], // Insights merged into Dashboard
-	['/maintenance/work-orders/1', /\/maintenance\/1$/] // WO detail dedupe
+	['/analytics', /\/$/] // Insights merged into Dashboard
 ];
 
 test.describe('IA Wave 1 — nav resolves', () => {

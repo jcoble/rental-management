@@ -1,9 +1,10 @@
-import type { PropertyStatus, PropertyType } from '$lib/types';
+import type { PropertyStatus, PropertyType, RentalStructure } from '$lib/types';
 import { propertyStatusOptions, propertyTypeOptions } from './property-labels.ts';
 
 export type PropertyFormDraft = {
 	name: string;
 	type: PropertyType;
+	rentalStructure: RentalStructure | '';
 	status: PropertyStatus;
 	addressLine1: string;
 	addressLine2: string;
@@ -11,6 +12,13 @@ export type PropertyFormDraft = {
 	state: string;
 	postalCode: string;
 	ownerEntityId: string;
+	yearBuilt: string;
+	managementFeePercent: string;
+	notes: string;
+	purchasePrice: string;
+	landValue: string;
+	inServiceDate: string;
+	manualAnnualDepreciation: string;
 };
 
 export type PropertiesEmptyStateCopy = {
@@ -34,6 +42,7 @@ export function createEmptyPropertyDraft(filters: {
 	return {
 		name: '',
 		type: isPropertyType(filters.typeFilter) ? filters.typeFilter : 'MultiFamily',
+		rentalStructure: '',
 		status: isPropertyStatus(filters.statusFilter) ? filters.statusFilter : 'Active',
 		addressLine1: '',
 		addressLine2: '',
@@ -41,6 +50,13 @@ export function createEmptyPropertyDraft(filters: {
 		state: '',
 		postalCode: '',
 		ownerEntityId: '',
+		yearBuilt: '',
+		managementFeePercent: '',
+		notes: '',
+		purchasePrice: '',
+		landValue: '',
+		inServiceDate: '',
+		manualAnnualDepreciation: '',
 	};
 }
 

@@ -1,4 +1,5 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
@@ -9,7 +10,7 @@ namespace RentalCommand.Core.Entities;
 /// by the <see cref="RecurrenceInterval"/>. The per-task <see cref="IsActive"/> flag is the real
 /// on/off switch — deactivating it stops generation without losing the chore's history.
 /// </summary>
-public class RecurringMaintenanceTask
+public class RecurringMaintenanceTask : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
@@ -60,6 +61,27 @@ public class RecurringMaintenanceTask
 
     /// <summary>Soft-delete marker; the global query filter hides deleted tasks from every read.</summary>
     public DateTime? DeletedAt { get; set; }
+
+    /// <summary>Short-lived Engine ownership for recurring-maintenance generation.</summary>
+    public string? WorkerClaimOwner { get; set; }
+    public Guid? WorkerClaimToken { get; set; }
+    public DateTime? WorkerClaimExpiresAtUtc { get; set; }
+
+    /// <summary>
+    /// Consecutive claims currently being attempted. The claim store increments this when it leases
+    /// a task; successful generation resets it to zero. Repeated failures quarantine the task at the
+    /// automation policy threshold.
+    /// </summary>
+    public int WorkerClaimAttemptCount { get; set; }
+
+    /// <summary>Most recent failure reason retained for a queryable automation diagnosis.</summary>
+    public string? WorkerClaimLastFailureReason { get; set; }
+
+    /// <summary>UTC timestamp of the most recent failed generation attempt.</summary>
+    public DateTime? WorkerClaimLastFailureAtUtc { get; set; }
+
+    /// <summary>UTC timestamp when repeated failures caused this task to leave the claim queue.</summary>
+    public DateTime? WorkerClaimQuarantinedAtUtc { get; set; }
 
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }

@@ -3,46 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../activity/activity_history_screen.dart';
 import '../leases/leases_repository.dart';
 import '../notices/create_tenant_notice.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'tenants_list_screen.dart';
 import 'tenants_repository.dart';
-
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String _fmt(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
-
-String _formatCurrency(double amount) {
-  final rounded = amount.round();
-  final s = rounded.toString();
-  final buf = StringBuffer(r'$');
-  final start = s.length % 3;
-  if (start > 0) buf.write(s.substring(0, start));
-  for (var i = start; i < s.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(s.substring(i, i + 3));
-  }
-  return buf.toString();
-}
+import '../../core/presentation/formatting.dart';
 
 /// Loads a tenant by id, then shows [TenantDetailScreen]. Use this when the
-/// caller only has a tenant id (e.g. a lease's tenant link, or an approved
+/// caller only has a tenant id (e.g. a relationship's party link, or an approved
 /// application that created a tenant).
 class TenantDetailLoaderScreen extends ConsumerWidget {
   const TenantDetailLoaderScreen({super.key, required this.tenantId});
@@ -75,8 +46,8 @@ class TenantDetailLoaderScreen extends ConsumerWidget {
 
 /// Detail screen for a single tenant.
 ///
-/// Shows tenant info with an edit button and their leases, loaded from
-/// GET /leases filtered by tenantId.
+/// Shows tenant info with an edit button and their canonical relationship
+/// history, filtered server-side by tenant id.
 class TenantDetailScreen extends ConsumerStatefulWidget {
   const TenantDetailScreen({super.key, required this.tenant});
 
@@ -88,37 +59,21 @@ class TenantDetailScreen extends ConsumerStatefulWidget {
 
 class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
   late Tenant _tenant;
-  bool _portalBusy = false;
 
   @override
   void initState() {
     super.initState();
     _tenant = widget.tenant;
-    // tenantLeasesProvider self-loads on first watch (TenantLeasesNotifier.build
-    // calls Future.microtask(load)), so an explicit load() here just double-fetches.
-    //
-    // The list endpoint omits portalAccess, so a tenant pushed from the list
-    // arrives without it; pull the full record to populate the portal card.
-    // (Deep-link/loader entries already carry it, so this is skipped for them.)
-    if (widget.tenant.portalAccess == null) {
-      Future.microtask(_loadFullTenant);
-    }
-  }
-
-  Future<void> _loadFullTenant() async {
-    try {
-      final full =
-          await ref.read(tenantsRepositoryProvider).getTenant(_tenant.id);
-      if (mounted) setState(() => _tenant = full);
-    } on ApiException {
-      // Non-fatal: the rest of the screen still works from the list-loaded copy.
-    }
   }
 
   Future<void> _refresh() async {
+    ref.invalidate(tenantsPageProvider);
+    ref.invalidate(tenantsProvider);
     await Future.wait<void>([
       ref.read(tenantDetailProvider(_tenant.id).notifier).refresh(),
-      ref.read(tenantLeasesProvider(_tenant.id).notifier).refresh(),
+      Future<void>.sync(
+        () => ref.invalidate(tenantLeaseManagementsProvider(_tenant.id)),
+      ),
     ]);
     final updated = ref.read(tenantDetailProvider(_tenant.id));
     updated.whenData((t) {
@@ -141,9 +96,87 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
     await showCreateTenantNoticeFlow(
       context,
       ref,
-      tenantId: _tenant.id,
+      recipientTenantId: _tenant.id,
       tenantName: '${_tenant.firstName} ${_tenant.lastName}'.trim(),
     );
+  }
+
+  void _showActivityHistory() {
+    final name = '${_tenant.firstName} ${_tenant.lastName}'.trim();
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ActivityHistoryScreen(
+          entityType: 'Tenant',
+          entityId: _tenant.id,
+          title: 'Tenant activity',
+          subtitle: name.isEmpty ? null : name,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete() async {
+    final name = '${_tenant.firstName} ${_tenant.lastName}'.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final activeLeaseCount = _tenant.activeLeaseCount ?? 0;
+    final leaseHistoryCount = _tenant.leaseHistoryCount ?? 0;
+    final hasActiveLease = activeLeaseCount > 0;
+    final hasLeaseHistory = leaseHistoryCount > 0;
+    final canDelete = _tenant.canDelete && !hasActiveLease && !hasLeaseHistory;
+    final blockedReason = _tenant.deleteBlockedReason;
+    final title = canDelete
+        ? 'Delete tenant?'
+        : hasActiveLease
+        ? 'Tenant has an active lease'
+        : 'Tenant history is preserved';
+    final message = canDelete
+        ? (name.isEmpty ? 'Delete this tenant?' : 'Delete $name?')
+        : (blockedReason != null && blockedReason.isNotEmpty)
+        ? blockedReason
+        : hasActiveLease
+        ? 'End or reassign this tenant’s active leases before deleting them.'
+        : hasLeaseHistory
+        ? 'This tenant has lease history, so the record is kept for past leases and payments.'
+        : 'This tenant cannot be deleted right now.';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: canDelete
+                ? () => Navigator.of(dialogContext).pop(true)
+                : null,
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await ref.read(tenantsRepositoryProvider).deleteTenant(_tenant.id);
+      ref.invalidate(tenantDetailProvider(_tenant.id));
+      ref.invalidate(tenantsPageProvider);
+      ref.invalidate(tenantsProvider);
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Tenant deleted.')));
+      navigator.pop();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
   }
 
   void _toast(String message) {
@@ -153,54 +186,11 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Staff toggle: turn this tenant's portal sign-in on or off.
-  Future<void> _togglePortalAccess(bool enabled) async {
-    setState(() => _portalBusy = true);
-    try {
-      final newState = await ref
-          .read(tenantsRepositoryProvider)
-          .setPortalAccess(_tenant.id, enabled: enabled);
-      if (!mounted) return;
-      setState(() => _tenant = _tenant.copyWith(portalAccess: newState));
-      _toast(newState == 'active'
-          ? 'Portal access turned on.'
-          : 'Portal access turned off.');
-    } on ApiException catch (e) {
-      _toast(e.message);
-    } finally {
-      if (mounted) setState(() => _portalBusy = false);
-    }
-  }
-
-  /// Staff action: email the tenant their portal invite (provisioning the login
-  /// if needed). Re-pulls the tenant afterward since a 'none' tenant becomes
-  /// 'active' once provisioned.
-  Future<void> _sendPortalInvite() async {
-    setState(() => _portalBusy = true);
-    try {
-      final repo = ref.read(tenantsRepositoryProvider);
-      final result = await repo.sendPortalInvite(_tenant.id);
-      final full = await repo.getTenant(_tenant.id);
-      if (!mounted) return;
-      setState(() => _tenant = full);
-      final to = (result.email != null && result.email!.isNotEmpty)
-          ? result.email!
-          : '${_tenant.firstName} ${_tenant.lastName}'.trim();
-      _toast(result.alreadyExisted
-          ? 'Portal invite resent to $to.'
-          : 'Portal invite sent to $to.');
-    } on ApiException catch (e) {
-      _toast(e.message);
-    } finally {
-      if (mounted) setState(() => _portalBusy = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final leasesAsync = ref.watch(tenantLeasesProvider(_tenant.id));
+    final leasesAsync = ref.watch(tenantLeaseManagementsProvider(_tenant.id));
 
     return Scaffold(
       appBar: AppBar(
@@ -215,9 +205,19 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
             onPressed: _createNotice,
           ),
           IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: 'View tenant activity',
+            onPressed: _showActivityHistory,
+          ),
+          IconButton(
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'Edit tenant',
             onPressed: () => _showEditSheet(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete tenant',
+            onPressed: _confirmDelete,
           ),
         ],
       ),
@@ -234,19 +234,9 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
             ),
             const SizedBox(height: 16),
 
-            // ── Resident portal access ─────────────────────────────────────
-            _PortalAccessCard(
-              portalAccess: _tenant.portalAccess,
-              email: _tenant.email,
-              busy: _portalBusy,
-              onToggle: _portalBusy ? null : _togglePortalAccess,
-              onSendInvite: _portalBusy ? null : _sendPortalInvite,
-            ),
-            const SizedBox(height: 24),
-
             // ── Leases ─────────────────────────────────────────────────────
             Text(
-              'Leases',
+              'Tenant & lease history',
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
@@ -263,16 +253,16 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
-                      'No leases for this tenant.',
+                      'No tenancies for this person.',
                       style: TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
                   );
                 }
-                // Active leases first, then the rest.
+                // Open relationships first, then closed history.
                 final sorted = [...leases]
                   ..sort((a, b) {
-                    final aActive = a.status.toLowerCase() == 'active' ? 0 : 1;
-                    final bActive = b.status.toLowerCase() == 'active' ? 0 : 1;
+                    final aActive = a.isOpen ? 0 : 1;
+                    final bActive = b.isOpen ? 0 : 1;
                     return aActive.compareTo(bActive);
                   });
                 return Column(
@@ -364,11 +354,19 @@ class _TenantInfoCard extends StatelessWidget {
                     label: 'Emergency',
                     value: tenant.emergencyContact!,
                   ),
-                _KeyValue(label: 'Member since', value: _fmt(tenant.createdAt)),
+                _KeyValue(
+                  label: 'Member since',
+                  value: dateFmt(tenant.createdAt),
+                ),
                 if (tenant.activeLeaseCount != null)
                   _KeyValue(
                     label: 'Active leases',
                     value: '${tenant.activeLeaseCount}',
+                  ),
+                if (tenant.leaseHistoryCount != null)
+                  _KeyValue(
+                    label: 'Lease history',
+                    value: '${tenant.leaseHistoryCount}',
                   ),
               ],
             ),
@@ -413,147 +411,21 @@ class _KeyValue extends StatelessWidget {
   }
 }
 
-// ── Resident portal access card ───────────────────────────────────────────────
-
-/// Staff-facing card on the tenant detail screen mirroring the web tenant page:
-/// shows the tenant's portal-login state and lets staff send/resend the invite
-/// and flip access on/off. [portalAccess] is null while the single-GET is in
-/// flight (a tenant opened from the list arrives without it).
-class _PortalAccessCard extends StatelessWidget {
-  const _PortalAccessCard({
-    required this.portalAccess,
-    required this.email,
-    required this.busy,
-    required this.onToggle,
-    required this.onSendInvite,
-  });
-
-  final String? portalAccess;
-  final String? email;
-  final bool busy;
-  final ValueChanged<bool>? onToggle;
-  final VoidCallback? onSendInvite;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final hasEmail = email != null && email!.isNotEmpty;
-    final loading = portalAccess == null;
-    final active = portalAccess == 'active';
-    final hasLogin = active || portalAccess == 'disabled';
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.badge_outlined, size: 20, color: cs.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Resident portal',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                if (busy)
-                  const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            if (loading)
-              Text(
-                'Checking portal access…',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
-              )
-            else ...[
-              Text(
-                _statusText(
-                  hasEmail: hasEmail,
-                  hasLogin: hasLogin,
-                  active: active,
-                ),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
-              ),
-              if (hasLogin)
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Portal access'),
-                  subtitle: Text(
-                    active
-                        ? 'They can sign in to the resident portal.'
-                        : 'Sign-in is turned off.',
-                  ),
-                  value: active,
-                  onChanged: onToggle,
-                ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  onPressed: hasEmail ? onSendInvite : null,
-                  icon: const Icon(Icons.send_outlined, size: 18),
-                  label: Text(active ? 'Resend invite' : 'Send portal invite'),
-                ),
-              ),
-              if (!hasEmail)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    'Add an email to this tenant to give them portal access.',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _statusText({
-    required bool hasEmail,
-    required bool hasLogin,
-    required bool active,
-  }) {
-    if (!hasLogin) {
-      return hasEmail
-          ? 'This tenant doesn’t have portal access yet. Send them an invite to set it up.'
-          : 'This tenant doesn’t have portal access yet.';
-    }
-    return active ? 'Portal access is on.' : 'Portal access is off.';
-  }
-}
-
 // ── Lease summary tile (read-only) ────────────────────────────────────────────
 
 class _LeaseSummaryTile extends StatelessWidget {
   const _LeaseSummaryTile({required this.lease});
 
-  final Lease lease;
+  final LeaseManagementSummary lease;
 
   void _openLease(BuildContext context) {
     openUnitCommandCenter(
       context,
       unitId: lease.unitId,
-      initialTab: UnitCommandCenterTab.lease,
-      lease: lease,
-      tenantId: lease.tenantId,
+      initialTab: UnitCommandCenterTab.tenantLease,
+      initialView: UnitCommandCenterView.agreements,
+      leaseManagementId: lease.id,
+      tenantId: lease.primaryTenantId,
     );
   }
 
@@ -562,7 +434,7 @@ class _LeaseSummaryTile extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    final isActive = lease.status.toLowerCase() == 'active';
+    final isActive = lease.isOpen;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -578,14 +450,14 @@ class _LeaseSummaryTile extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      lease.propertyName ?? 'Lease #${lease.leaseNumber}',
+                      lease.propertyName,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                   Text(
-                    _formatCurrency(lease.monthlyRent),
+                    moneyFmt(lease.baseRentAmount ?? 0, whole: true),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: colorScheme.primary,
@@ -604,8 +476,8 @@ class _LeaseSummaryTile extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Unit ${lease.unitNumber ?? lease.unitId}  ·  '
-                      '${_fmt(lease.startDate)} – ${_fmt(lease.endDate)}',
+                      'Unit ${lease.unitNumber}  ·  '
+                      '${lease.termStartOn == null ? 'Agreement not issued' : '${dateFmt(lease.termStartOn!)} – ${lease.termEndOn == null ? 'Month-to-month' : dateFmt(lease.termEndOn!)}'}',
                       style: TextStyle(
                         fontSize: 12,
                         color: colorScheme.onSurfaceVariant,
@@ -623,7 +495,7 @@ class _LeaseSummaryTile extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        lease.status,
+                        lease.lifecycle,
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w600,

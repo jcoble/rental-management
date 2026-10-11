@@ -11,7 +11,8 @@ public class InspectionResponse
     public int PortfolioId { get; set; }
     public int PropertyId { get; set; }
     public int? UnitId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+    public int? LeaseAgreementId { get; set; }
     public InspectionType Type { get; set; }
     public InspectionStatus Status { get; set; }
     public DateTime ScheduledFor { get; set; }
@@ -40,7 +41,8 @@ public class InspectionResponse
         PortfolioId = e.PortfolioId,
         PropertyId = e.PropertyId,
         UnitId = e.UnitId,
-        LeaseId = e.LeaseId,
+        LeaseManagementId = e.LeaseManagementId,
+        LeaseAgreementId = e.LeaseAgreementId,
         Type = e.Type,
         Status = e.Status,
         ScheduledFor = e.ScheduledFor,
@@ -56,6 +58,21 @@ public class InspectionResponse
         PropertyName = e.Property?.Name,
         UnitNumber = e.Unit?.UnitNumber,
     };
+}
+
+public class InspectionListResponse
+{
+    public IReadOnlyList<InspectionResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+/// <summary>Server-paged Inspection query with an optional Unit-local scope.</summary>
+public sealed class InspectionListQuery : ListQuery
+{
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
 }
 
 /// <summary>One checklist item on an inspection.</summary>
@@ -98,7 +115,8 @@ public class InspectionDetailResponse : InspectionResponse
             PortfolioId = e.PortfolioId,
             PropertyId = e.PropertyId,
             UnitId = e.UnitId,
-            LeaseId = e.LeaseId,
+            LeaseManagementId = e.LeaseManagementId,
+            LeaseAgreementId = e.LeaseAgreementId,
             Type = e.Type,
             Status = e.Status,
             ScheduledFor = e.ScheduledFor,
@@ -252,6 +270,32 @@ public class CompleteInspectionResponse
     public IReadOnlyList<int> CreatedWorkOrderIds { get; set; } = [];
 }
 
+/// <summary>One-time recovery body for a completed inspection whose report was stamped with runtime wall-clock metadata.</summary>
+public class RecoverInspectionChronologyRequest
+{
+    [Required]
+    public DateTime ExpectedContaminatedCompletedAtUtc { get; set; }
+
+    [Required]
+    [Range(1, int.MaxValue)]
+    public int ExpectedContaminatedReportStoredFileId { get; set; }
+
+    [Required]
+    public DateTime ExpectedContaminatedReportUploadedAtUtc { get; set; }
+
+    [Required]
+    public DateTime CorrectCompletedAtUtc { get; set; }
+}
+
+/// <summary>Result of the one-time inspection chronology recovery and regenerated report attachment.</summary>
+public class RecoverInspectionChronologyResponse
+{
+    public int InspectionId { get; set; }
+    public DateTime CompletedAt { get; set; }
+    public int RetiredReportStoredFileId { get; set; }
+    public int? ReportStoredFileId { get; set; }
+}
+
 public class CreateInspectionRequest
 {
     [Required]
@@ -262,7 +306,10 @@ public class CreateInspectionRequest
     public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? LeaseAgreementId { get; set; }
 
     [EnumDataType(typeof(InspectionType))]
     public InspectionType Type { get; set; } = InspectionType.Routine;
@@ -298,7 +345,10 @@ public class UpdateInspectionRequest
     public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? LeaseAgreementId { get; set; }
 
     [EnumDataType(typeof(InspectionType))]
     public InspectionType? Type { get; set; }

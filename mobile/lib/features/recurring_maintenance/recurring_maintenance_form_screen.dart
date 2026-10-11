@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
-import 'recurring_maintenance_list_screen.dart' show fmtDueDate;
 import 'recurring_maintenance_models.dart';
 import 'recurring_maintenance_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 String _fmtIso(DateTime d) =>
     '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -367,8 +367,8 @@ class _RecurringMaintenanceFormScreenState
             if (widget.isEditing) ...[
               Text(
                 widget.task!.generatedWorkOrderCount > 0
-                    ? '${widget.task!.generatedWorkOrderCount} generated work order${widget.task!.generatedWorkOrderCount == 1 ? '' : 's'} linked to this schedule.'
-                    : 'No work orders have been generated from this schedule yet.',
+                    ? '${widget.task!.generatedWorkOrderCount} generated repair${widget.task!.generatedWorkOrderCount == 1 ? '' : 's'} linked to this schedule.'
+                    : 'No repairs have been generated from this schedule yet.',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -382,8 +382,8 @@ class _RecurringMaintenanceFormScreenState
               title: const Text('Active'),
               subtitle: Text(
                 _isActive
-                    ? 'Auto-creates work orders when due'
-                    : 'Paused — no work orders are created',
+                    ? 'Auto-creates repairs when due'
+                    : 'Paused — no repairs are created',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -535,7 +535,7 @@ class _DateField extends StatelessWidget {
           suffixIcon: const Icon(Icons.calendar_today_outlined, size: 18),
         ),
         child: Text(
-          date != null ? fmtDueDate(date!) : 'Select date',
+          date != null ? dateFmt(date!) : 'Select date',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: date != null
                 ? colorScheme.onSurface

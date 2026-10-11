@@ -1,0 +1,28 @@
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Enums;
+
+namespace RentalCommand.Core.Operations;
+
+public sealed record CreateAppointmentCommand(
+    int PortfolioId, StaffOperationActor Actor, int? PropertyId, int? UnitId,
+    int? LeaseManagementId, int? RentalApplicationId, int? TenantId, int? WorkOrderId,
+    string Title, string? ProspectName, string? ProspectEmail,
+    AppointmentType Type, AppointmentStatus Status, DateTime ScheduledStartUtc,
+    DateTime? ScheduledEndUtc, string? AssignedTo, string? Notes,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
+
+public sealed record UpdateAppointmentCommand(
+    int PortfolioId, StaffOperationActor Actor, int AppointmentId,
+    int? PropertyId, int? UnitId, int? LeaseManagementId, int? RentalApplicationId,
+    int? TenantId, int? WorkOrderId, string? Title, string? ProspectName, string? ProspectEmail,
+    AppointmentType? Type, AppointmentStatus? Status, DateTime? ScheduledStartUtc,
+    DateTime? ScheduledEndUtc, string? AssignedTo, string? Notes,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
+
+public sealed record DeleteAppointmentCommand(
+    int PortfolioId, StaffOperationActor Actor, int AppointmentId,
+    int? ExpectedPropertyId,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;

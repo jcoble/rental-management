@@ -63,6 +63,24 @@ services:
           memory: 1G
           cpus: "1.0"
 
+  # One-shot schema owner. Its credential is never mounted into the long-running API or Engine.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: "no"
+    command: ["--migrate-only"]
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ConnectionStrings__MigratorConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=rentalcommand_api;Password=${API_DB_PASSWORD:-rentalcommand_api_dev}
+      - ConnectionStrings__EngineConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:-rentalcommand_engine_dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
   # REST API.
   api:
     build:
@@ -75,7 +93,7 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
       - ASPNETCORE_URLS=http://+:8080
-      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=rentalcommand_api;Password=${API_DB_PASSWORD:-rentalcommand_api_dev}
       - Jwt__SecretKey=${JWT_SECRET_KEY}
       - Jwt__Issuer=${JWT_ISSUER:-RentalCommand}
       - Jwt__Audience=${JWT_AUDIENCE:-RentalCommandWeb}
@@ -89,8 +107,8 @@ services:
       - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - web
       - internal
@@ -125,7 +143,7 @@ services:
       - no-new-privileges:true
     environment:
       - DOTNET_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
-      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:-rentalcommand_engine_dev}
       - Assistant__Provider=${ASSISTANT_PROVIDER:-openai}
       - Assistant__ModelId=${ASSISTANT_MODEL_ID:-gpt-4o}
       - Assistant__ApiKey=${ASSISTANT_API_KEY:-}
@@ -141,8 +159,8 @@ services:
       - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - internal
     deploy:

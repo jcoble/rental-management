@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Building, ArrowRight, Menu, X } from '@lucide/svelte';
+	import { ArrowRight, Menu, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { onScroll } from '$lib/scroll/smooth';
 
 	/**
@@ -10,7 +11,7 @@
 	 * scroll-progress rail, and ships a real mobile menu so the Features/Docs links
 	 * aren't lost below `md`. `current` highlights the active top-level link.
 	 */
-	let { current }: { current?: 'features' | 'docs' } = $props();
+	let { current }: { current?: 'features' | 'docs' | 'blog' } = $props();
 
 	let scrolled = $state(false);
 	let progress = $state(0);
@@ -26,6 +27,7 @@
 
 	const links = [
 		{ href: '/features', label: 'Features', key: 'features' },
+		{ href: '/blog', label: 'Blog', key: 'blog' },
 		{ href: '/docs', label: 'Docs', key: 'docs' }
 	] as const;
 </script>
@@ -37,11 +39,7 @@
 >
 	<div class="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 sm:px-8">
 		<a href="/welcome" class="group flex items-center gap-2.5">
-			<span
-				class="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/12 text-primary ring-1 ring-inset ring-primary/25 transition-transform duration-300 group-hover:scale-105"
-			>
-				<Building class="h-4 w-4" />
-			</span>
+			<BrandMark class="h-8 w-8 shadow-sm transition-transform duration-300 group-hover:scale-105" />
 			<span class="text-base font-semibold tracking-tight">Rental Command</span>
 		</a>
 

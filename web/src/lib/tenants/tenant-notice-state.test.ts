@@ -29,8 +29,8 @@ describe('tenant notice state', () => {
 				description:
 					'Create or activate a lease for this tenant before sending renewal or move-out notices.',
 				showForceControls: false,
-				leaseActionHref: '/leases?create=1&tenantId=42',
-				leaseActionLabel: 'Create lease',
+				leaseActionHref: '/applications?prepareMoveIn=1&tenantId=42',
+				leaseActionLabel: 'Prepare move-in',
 			}
 		);
 	});

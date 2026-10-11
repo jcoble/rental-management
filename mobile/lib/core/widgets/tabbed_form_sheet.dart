@@ -16,6 +16,37 @@ class TabbedFormStepSpec {
   final bool Function()? validate;
 }
 
+/// A collapsed "More details" disclosure for the optional fields on a sheet.
+///
+/// Keeps a phone form down to its essentials without pushing the rest of the
+/// fields onto extra steps.
+class MoreDetailsSection extends StatelessWidget {
+  const MoreDetailsSection({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Theme(
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        key: const Key('more-details-section'),
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(top: 4, bottom: 8),
+        expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+        title: Text(
+          'More details',
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        children: children,
+      ),
+    );
+  }
+}
+
 class TabbedFormSheet extends StatefulWidget {
   const TabbedFormSheet({
     super.key,
@@ -45,7 +76,10 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
   static const _successColor = Color(0xFF2E7D32);
 
   late List<GlobalKey<FormState>> _stepFormKeys;
+  late List<GlobalKey> _stepItemKeys;
+  final ScrollController _stepScrollController = ScrollController();
   final Set<int> _completedSteps = <int>{};
+  final Set<int> _stepErrors = <int>{};
   int _currentIndex = 0;
   int? _celebratingIndex;
   bool _forward = true;
@@ -55,6 +89,13 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
   void initState() {
     super.initState();
     _stepFormKeys = _buildStepKeys();
+    _stepItemKeys = _buildStepItemKeys();
+  }
+
+  @override
+  void dispose() {
+    _stepScrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -62,14 +103,21 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.tabs.length != widget.tabs.length) {
       final oldKeys = _stepFormKeys;
+      final oldItemKeys = _stepItemKeys;
       _stepFormKeys = [
         for (var i = 0; i < widget.tabs.length; i++)
           if (i < oldKeys.length) oldKeys[i] else GlobalKey<FormState>(),
       ];
+      _stepItemKeys = [
+        for (var i = 0; i < widget.tabs.length; i++)
+          if (i < oldItemKeys.length) oldItemKeys[i] else GlobalKey(),
+      ];
       _completedSteps.removeWhere((index) => index >= widget.tabs.length);
+      _stepErrors.removeWhere((index) => index >= widget.tabs.length);
       if (_currentIndex >= widget.tabs.length) {
         _currentIndex = widget.tabs.isEmpty ? 0 : widget.tabs.length - 1;
       }
+      _ensureStepVisible(_currentIndex);
     }
   }
 
@@ -77,7 +125,30 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
     for (var i = 0; i < widget.tabs.length; i++) GlobalKey<FormState>(),
   ];
 
+  List<GlobalKey> _buildStepItemKeys() => [
+    for (var i = 0; i < widget.tabs.length; i++) GlobalKey(),
+  ];
+
   bool get _isLastStep => _currentIndex == widget.tabs.length - 1;
+
+  /// True when nothing after the current step is still outstanding, so the
+  /// sheet can be saved from here instead of walking through steps that have
+  /// nothing left to fill in.
+  ///
+  /// A later step counts as settled only when its own `isComplete` says so.
+  /// `validate` is not consulted here: it is the "show the errors" callback and
+  /// several forms flip error state inside it, which cannot run during a build.
+  /// A step that declares no `isComplete` may still hold required fields that
+  /// were never filled in, so it keeps the Next button.
+  bool get _canSaveFromHere {
+    if (_isLastStep) return true;
+
+    for (var i = _currentIndex + 1; i < widget.tabs.length; i++) {
+      final isComplete = widget.tabs[i].isComplete;
+      if (isComplete == null || !isComplete()) return false;
+    }
+    return true;
+  }
 
   bool get _isBusy => widget.saving || _actionInFlight;
 
@@ -88,18 +159,17 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
       return;
     }
 
-    _completeCurrentStep(
-      nextIndex: _isComplete(nextIndex) || nextIndex == _currentIndex + 1
-          ? nextIndex
-          : (_currentIndex + 1).clamp(0, widget.tabs.length - 1),
-    );
+    _completeCurrentStep(nextIndex: nextIndex);
   }
 
   void _moveToStep(int nextIndex) {
+    if (nextIndex < 0 || nextIndex >= widget.tabs.length) return;
+
     setState(() {
       _forward = nextIndex > _currentIndex;
       _currentIndex = nextIndex;
     });
+    _ensureStepVisible(nextIndex);
   }
 
   bool _isComplete(int index) {
@@ -108,49 +178,94 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
   }
 
   bool _validateCurrentStep() {
+    if (widget.tabs.isEmpty) return true;
+
     final formValid =
         _stepFormKeys[_currentIndex].currentState?.validate() ?? true;
     final customValid = widget.tabs[_currentIndex].validate?.call() ?? true;
-    return formValid && customValid;
+    final valid = formValid && customValid;
+
+    setState(() {
+      if (valid) {
+        _stepErrors.remove(_currentIndex);
+      } else {
+        _stepErrors.add(_currentIndex);
+      }
+    });
+    if (!valid) _ensureStepVisible(_currentIndex);
+
+    return valid;
+  }
+
+  StepState _stepStateFor(int index) {
+    if (_stepErrors.contains(index)) return StepState.error;
+    if (_celebratingIndex == index || _isComplete(index)) {
+      return StepState.complete;
+    }
+    if (_isBusy && index != _currentIndex) return StepState.disabled;
+    if (index == _currentIndex) return StepState.editing;
+    return StepState.indexed;
+  }
+
+  void _ensureStepVisible(int index) {
+    if (index < 0 || index >= _stepItemKeys.length) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final context = _stepItemKeys[index].currentContext;
+      if (context == null) return;
+
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   Widget _buildStepper(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    if (widget.tabs.length < 2) return const SizedBox.shrink();
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (var i = 0; i < widget.tabs.length; i++) ...[
-            _StepperCard(
-              index: i,
-              label: widget.tabs[i].label,
-              selected: i == _currentIndex,
-              complete: _isComplete(i),
-              celebrating: _celebratingIndex == i,
-              enabled: !_isBusy,
-              onTap: () => _selectTab(i),
-            ),
-            if (i < widget.tabs.length - 1)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                child: Icon(
-                  Icons.chevron_right,
-                  size: 18,
-                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+    return SizedBox(
+      height: 56,
+      child: SingleChildScrollView(
+        controller: _stepScrollController,
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            for (var i = 0; i < widget.tabs.length; i++) ...[
+              KeyedSubtree(
+                key: _stepItemKeys[i],
+                child: _StepperCard(
+                  index: i,
+                  label: widget.tabs[i].label,
+                  selected: i == _currentIndex,
+                  state: _stepStateFor(i),
+                  enabled: !_isBusy,
+                  onTap: () => _selectTab(i),
                 ),
               ),
+              if (i < widget.tabs.length - 1)
+                _StepConnector(
+                  complete: _isComplete(i),
+                  colorScheme: colorScheme,
+                ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
 
   Future<void> _completeCurrentStep({required int nextIndex}) async {
-    if (_isBusy || !_validateCurrentStep()) return;
+    if (_isBusy || widget.tabs.isEmpty || !_validateCurrentStep()) return;
 
     setState(() {
       _completedSteps.add(_currentIndex);
+      _stepErrors.remove(_currentIndex);
       _celebratingIndex = _currentIndex;
       _actionInFlight = true;
     });
@@ -164,15 +279,17 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
       _forward = nextIndex > _currentIndex;
       _currentIndex = nextIndex;
     });
+    _ensureStepVisible(nextIndex);
   }
 
   Future<void> _save() async {
-    if (_isBusy || !_validateCurrentStep()) return;
+    if (_isBusy || widget.tabs.isEmpty || !_validateCurrentStep()) return;
 
     final messenger = ScaffoldMessenger.of(context);
 
     setState(() {
       _completedSteps.add(_currentIndex);
+      _stepErrors.remove(_currentIndex);
       _celebratingIndex = _currentIndex;
       _actionInFlight = true;
     });
@@ -211,6 +328,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
     final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
     final height = MediaQuery.sizeOf(context).height * widget.heightFactor;
     final isCelebrating = _celebratingIndex == _currentIndex;
+    final showsSave = _canSaveFromHere;
 
     return SafeArea(
       top: false,
@@ -312,7 +430,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                       ),
                       onPressed: _isBusy
                           ? null
-                          : _isLastStep
+                          : showsSave
                           ? _save
                           : () => _completeCurrentStep(
                               nextIndex: _currentIndex + 1,
@@ -339,19 +457,19 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                               child: Icon(
                                 isCelebrating
                                     ? Icons.check
-                                    : _isLastStep
+                                    : showsSave
                                     ? Icons.check_circle_outline
                                     : Icons.arrow_forward,
                                 key: ValueKey(
                                   isCelebrating
                                       ? 'complete'
-                                      : _isLastStep
+                                      : showsSave
                                       ? 'save'
                                       : 'next',
                                 ),
                               ),
                             ),
-                      label: Text(_isLastStep ? widget.saveLabel : 'Next'),
+                      label: Text(showsSave ? widget.saveLabel : 'Next'),
                     ),
                   ),
                 ],
@@ -369,8 +487,7 @@ class _StepperCard extends StatelessWidget {
     required this.index,
     required this.label,
     required this.selected,
-    required this.complete,
-    required this.celebrating,
+    required this.state,
     required this.enabled,
     required this.onTap,
   });
@@ -378,8 +495,7 @@ class _StepperCard extends StatelessWidget {
   final int index;
   final String label;
   final bool selected;
-  final bool complete;
-  final bool celebrating;
+  final StepState state;
   final bool enabled;
   final VoidCallback onTap;
 
@@ -387,32 +503,44 @@ class _StepperCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final complete = state == StepState.complete;
+    final error = state == StepState.error;
+    final disabled = state == StepState.disabled || !enabled;
     final successSurface = _TabbedFormSheetState._successColor.withValues(
-      alpha: 0.16,
+      alpha: 0.14,
     );
     final successBorder = _TabbedFormSheetState._successColor.withValues(
-      alpha: 0.72,
+      alpha: 0.64,
     );
-    final background = complete
+    final background = error
+        ? colorScheme.errorContainer.withValues(alpha: 0.9)
+        : complete
         ? successSurface
         : selected
         ? colorScheme.primaryContainer
-        : colorScheme.surfaceContainerHighest.withValues(alpha: 0.55);
-    final borderColor = complete
+        : colorScheme.surfaceContainerHighest.withValues(alpha: 0.52);
+    final borderColor = error
+        ? colorScheme.error
+        : complete
         ? successBorder
         : selected
-        ? colorScheme.primary
+        ? colorScheme.primary.withValues(alpha: 0.88)
         : colorScheme.outlineVariant;
-    final foreground = complete
+    final foreground = error
+        ? colorScheme.onErrorContainer
+        : complete
         ? _TabbedFormSheetState._successColor
         : selected
         ? colorScheme.onPrimaryContainer
+        : disabled
+        ? colorScheme.onSurface.withValues(alpha: 0.38)
         : colorScheme.onSurfaceVariant;
+    final iconBackground = foreground.withValues(alpha: selected ? 0.18 : 0.12);
 
     return Material(
       color: background,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(18),
         side: BorderSide(color: borderColor),
       ),
       clipBehavior: Clip.antiAlias,
@@ -422,8 +550,8 @@ class _StepperCard extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
-          constraints: const BoxConstraints(minHeight: 48, minWidth: 118),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          constraints: const BoxConstraints(minHeight: 44, minWidth: 112),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -436,7 +564,14 @@ class _StepperCard extends StatelessWidget {
                   ),
                   child: FadeTransition(opacity: animation, child: child),
                 ),
-                child: complete || celebrating
+                child: error
+                    ? Icon(
+                        Icons.error_outline,
+                        key: Key('tabbed-form-error-$index'),
+                        size: 20,
+                        color: foreground,
+                      )
+                    : complete
                     ? Icon(
                         Icons.check,
                         key: Key('tabbed-form-complete-$index'),
@@ -445,8 +580,8 @@ class _StepperCard extends StatelessWidget {
                       )
                     : CircleAvatar(
                         key: Key('tabbed-form-number-$index'),
-                        radius: 10,
-                        backgroundColor: foreground.withValues(alpha: 0.16),
+                        radius: 11,
+                        backgroundColor: iconBackground,
                         child: Text(
                           '${index + 1}',
                           style: theme.textTheme.labelSmall?.copyWith(
@@ -463,13 +598,39 @@ class _StepperCard extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.labelLarge?.copyWith(
                   color: foreground,
-                  fontWeight: selected || complete
+                  fontWeight: selected || complete || error
                       ? FontWeight.w800
                       : FontWeight.w600,
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StepConnector extends StatelessWidget {
+  const _StepConnector({required this.complete, required this.colorScheme});
+
+  final bool complete;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 5),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        width: 24,
+        height: 2,
+        decoration: BoxDecoration(
+          color: complete
+              ? _TabbedFormSheetState._successColor.withValues(alpha: 0.7)
+              : colorScheme.outlineVariant.withValues(alpha: 0.74),
+          borderRadius: BorderRadius.circular(999),
         ),
       ),
     );

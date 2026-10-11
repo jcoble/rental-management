@@ -52,7 +52,13 @@ public class AccountingEntityMapping : IPortfolioScoped, IAuditable
     /// <summary>The suggester's score (0–1) when the mapping was surfaced for confirmation.</summary>
     public decimal? Confidence { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>
+    /// Monotonic optimistic-concurrency revision. Suggestions start at zero and every explicit
+    /// confirmation or correction advances the revision exactly once.
+    /// </summary>
+    public long Revision { get; set; }
+
+    public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
     public AccountingConnection? AccountingConnection { get; set; }

@@ -1,348 +1,121 @@
-using System.Data.Common;
+using System.Reflection;
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
-using RentalCommand.Data;
+using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Controllers;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class LeaseLedgerServiceTests : IDisposable
+/// <summary>
+/// Contract-level proofs for the canonical ledger response. SQL translation and paging are pinned in
+/// <see cref="CanonicalLeaseReaderSqlTests"/> against the Npgsql provider.
+/// </summary>
+public sealed class LeaseLedgerServiceTests
 {
-    private const int PortfolioId = 1;
-
-    private readonly SqliteConnection _conn;
-    private readonly List<string> _executedSql = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly LeaseService _sut;
-
-    public LeaseLedgerServiceTests()
+    [Fact]
+    public void Ledger_is_exposed_only_on_the_canonical_lease_management_route()
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        typeof(LeaseManagementController).GetCustomAttribute<RouteAttribute>()!.Template
+            .Should().Be("api/v1/lease-managements");
+        typeof(LeaseManagementController).GetMethod(nameof(LeaseManagementController.Ledger))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template
+            .Should().Be("{leaseManagementId:int}/ledger");
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new AccountingServiceTestDbContext(options);
-        _db.Database.EnsureCreated();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        _sut = new LeaseService(
-            _db,
-            new NoopDataUpdateService(),
-            new LedgerInMemoryFileStorage(),
-            new LeaseAgreementPdfGenerator(),
-            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance);
-    }
-
-    public void Dispose()
-    {
-        _db.Dispose();
-        _conn.Dispose();
+        typeof(LeaseManagementController).Assembly
+            .GetType("RentalCommand.Api.Controllers.LeaseController")
+            .Should().BeNull("the mutable legacy /api/v1/leases surface is deleted, not wrapped");
     }
 
     [Fact]
-    public async Task GetLedgerAsync_EnrichesEntriesWithPlainEnglishExplanations_AndComputesBalance()
+    public void Canonical_legal_history_artifacts_and_questions_have_precise_routes()
     {
-        var lease = SeedLease();
-
-        // A paid rent (collected) and an outstanding overdue rent.
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1200m,
-            DueDate = new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
-            PaidDate = new DateTime(2026, 03, 03, 0, 0, 0, DateTimeKind.Utc),
-            Method = "Check",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Late,
-            Amount = 1200m,
-            DueDate = new DateTime(2026, 04, 01, 0, 0, 0, DateTimeKind.Utc),
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        var ledger = await _sut.GetLedgerAsync(PortfolioId, lease.Id, ct: CancellationToken.None);
-
-        ledger.Should().NotBeNull();
-        ledger!.Entries.Should().HaveCount(2);
-
-        var paid = ledger.Entries.Single(e => e.Status == "Paid");
-        paid.Type.Should().Be("Payment");
-        paid.Amount.Should().Be(1200m);
-        paid.Explanation.Should().Be("Payment of $1,200 received by check on Mar 3.");
-
-        var owed = ledger.Entries.Single(e => e.Status == "Late");
-        owed.Type.Should().Be("Charge");
-        owed.Amount.Should().Be(-1200m); // owed charges show negative on the tenant ledger
-        owed.Explanation.Should().Be("Rent for April 2026 — $1,200 due Apr 1 — now past due.");
-
-        // One rent paid, one rent still owed → $1,200 outstanding.
-        ledger.TotalCharged.Should().Be(2400m);
-        ledger.TotalPaid.Should().Be(1200m);
-        ledger.Balance.Should().Be(1200m);
+        typeof(LeaseManagementController).GetMethod(nameof(LeaseManagementController.Ask))!
+            .GetCustomAttribute<HttpPostAttribute>()!.Template
+            .Should().Be("{leaseManagementId:int}/ask");
+        typeof(LeaseAgreementController).GetMethod(nameof(LeaseAgreementController.ListPage))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template.Should().Be("page");
+        typeof(LeaseAgreementController).GetMethod(nameof(LeaseAgreementController.DownloadArtifact))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template
+            .Should().Be("{leaseAgreementId:int}/artifacts/{artifactId:int}");
+        typeof(LeaseAgreementController).GetMethod(nameof(LeaseAgreementController.DownloadSourceScan))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template
+            .Should().Be("{leaseAgreementId:int}/source-scan");
+        typeof(LeaseAddendumController).GetMethod(nameof(LeaseAddendumController.ListPage))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template.Should().Be("page");
+        typeof(LeaseAddendumController).GetMethod(nameof(LeaseAddendumController.DownloadArtifact))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template
+            .Should().Be("{leaseAddendumId:int}/artifacts/{artifactId:int}");
     }
 
     [Fact]
-    public async Task GetLedgerAsync_PartialPayment_ShowsCollectedPortionAsCompanionPaymentLine()
+    public void Voided_issued_agreement_recovery_has_a_dedicated_idempotent_controller_route()
     {
-        var lease = SeedLease();
+        var method = typeof(LeaseAgreementController).GetMethod(
+            nameof(LeaseAgreementController.ReplaceIssuedAgreementWithDraft))!;
 
-        // A rent paid in full, plus a rent partially paid ($700 collected of $1,000 → $300 still owed).
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1000m,
-            DueDate = new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
-            PaidDate = new DateTime(2026, 03, 03, 0, 0, 0, DateTimeKind.Utc),
-            Method = "Check",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Partial,
-            Amount = 1000m,
-            AmountPaid = 700m,
-            DueDate = new DateTime(2026, 04, 01, 0, 0, 0, DateTimeKind.Utc),
-            PaidDate = new DateTime(2026, 04, 02, 0, 0, 0, DateTimeKind.Utc),
-            Method = "Cash",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        var ledger = await _sut.GetLedgerAsync(PortfolioId, lease.Id, ct: CancellationToken.None);
-
-        ledger.Should().NotBeNull();
-
-        // The Partial is still billed at its full amount as a charge (money owed, negative)...
-        var partialCharge = ledger!.Entries.Single(e => e.Status == "Partial" && e.Type == "Charge");
-        partialCharge.Amount.Should().Be(-1000m);
-
-        // ...and the $700 already collected now appears as its own companion payment line (previously
-        // absent — the collected portion was invisible on the ledger, BUG-4).
-        var partialPayment = ledger.Entries.Single(e => e.Status == "Partial" && e.Type == "Payment");
-        partialPayment.Amount.Should().Be(700m);
-        partialPayment.Explanation.Should().Be("Payment of $700 received by cash on Apr 2 — $300 still owed.");
-
-        // The partial's charge + companion net to exactly the still-owed remainder.
-        (partialCharge.Amount + partialPayment.Amount).Should().Be(-300m);
-
-        // Every collected dollar is now visible: the Payment-type lines sum to the headline Paid total.
-        ledger.Entries.Where(e => e.Type == "Payment").Sum(e => e.Amount).Should().Be(ledger.TotalPaid);
-
-        // Headline totals are unchanged by the companion line (no double-count — they're a separate DB
-        // aggregate): Charged $2,000 · Paid $1,700 · Balance $300.
-        ledger.TotalCharged.Should().Be(2000m);
-        ledger.TotalPaid.Should().Be(1700m);
-        ledger.Balance.Should().Be(300m);
+        method.GetCustomAttribute<HttpPostAttribute>()!.Template.Should()
+            .Be("{sourceAgreementId:int}/issued-replacement-draft");
+        method.GetParameters().Single(parameter => parameter.Name == "idempotencyKey")
+            .GetCustomAttribute<FromHeaderAttribute>()!.Name.Should().Be("Idempotency-Key");
+        typeof(LeaseAgreementController).Should().BeDerivedFrom<ManagementControllerBase>(
+            "recovery must retain canonical management authorization and property scope");
     }
 
     [Fact]
-    public async Task GetLedgerAsync_OrdersPaymentRowsInSql()
+    public void Canonical_relationship_page_and_detail_have_stable_routes()
     {
-        var lease = SeedLease();
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Late,
-            Amount = 1200m,
-            DueDate = new DateTime(2026, 04, 01, 0, 0, 0, DateTimeKind.Utc),
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1200m,
-            DueDate = new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
-            PaidDate = new DateTime(2026, 03, 03, 0, 0, 0, DateTimeKind.Utc),
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
+        typeof(LeaseManagementController).GetMethod(nameof(LeaseManagementController.ListPage))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template.Should().Be("page");
+        typeof(LeaseManagementController).GetMethod(nameof(LeaseManagementController.Get))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template.Should().Be("{leaseManagementId:int}");
 
-        _executedSql.Clear();
-
-        var ledger = await _sut.GetLedgerAsync(PortfolioId, lease.Id, ct: CancellationToken.None);
-
-        ledger.Should().NotBeNull();
-        ledger!.Entries.Select(e => e.Date).Should().BeInDescendingOrder();
-        _executedSql.Should().Contain(command =>
-            command.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
-            && !command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
-            "lease ledger transaction rows must be ordered by the database before materialization");
+        typeof(LeaseManagementSummaryResponse).GetProperty("Id").Should().BeNull();
+        typeof(LeaseManagementSummaryResponse).GetProperty(nameof(LeaseManagementSummaryResponse.LeaseManagementId))
+            .Should().NotBeNull();
+        typeof(LeaseManagementSummaryResponse).GetProperty(nameof(LeaseManagementSummaryResponse.LeaseAgreementId))
+            .Should().NotBeNull();
+        typeof(LeaseManagementSummaryResponse).GetProperty(nameof(LeaseManagementSummaryResponse.TenantAccountId))
+            .Should().NotBeNull();
     }
 
     [Fact]
-    public async Task GetLedgerAsync_ReturnsNull_WhenLeaseNotInPortfolio()
+    public void Ledger_response_names_canonical_relationship_and_account_ids_only()
     {
-        var ledger = await _sut.GetLedgerAsync(PortfolioId, id: 9999, ct: CancellationToken.None);
-        ledger.Should().BeNull();
+        typeof(LeaseLedgerResponse).GetProperty(nameof(LeaseLedgerResponse.LeaseManagementId))
+            .Should().NotBeNull();
+        typeof(LeaseLedgerResponse).GetProperty(nameof(LeaseLedgerResponse.TenantAccountId))
+            .Should().NotBeNull();
+        typeof(LeaseLedgerResponse).GetProperty(nameof(LeaseLedgerResponse.AccountNumber))
+            .Should().NotBeNull();
+        typeof(LeaseLedgerResponse).GetProperty("LeaseId").Should().BeNull();
+        typeof(LeaseLedgerResponse).GetProperty("LeaseNumber").Should().BeNull();
+        typeof(LedgerTransactionResponse).GetProperty(nameof(LedgerTransactionResponse.Id))!
+            .PropertyType.Should().Be(typeof(long));
     }
 
     [Fact]
-    public async Task GetLedgerAsync_ReturnsNull_WhenTenantRequestsAnotherTenantsLease()
+    public void Posted_receipt_and_charge_keep_plain_English_ledger_meaning()
     {
-        var lease = SeedLease(); // belongs to the seeded tenant
-        _db.SaveChanges();
+        LedgerExplanation.ForTenantLedgerEntry(
+                TenantLedgerEntryType.PaymentReceipt,
+                TenantLedgerDirection.Credit,
+                1_200m,
+                new DateOnly(2026, 3, 3),
+                null,
+                "Check",
+                "March rent")
+            .Should().Be("Payment of $1,200 received by check on Mar 3.");
 
-        // A different tenant (id intentionally not the lease's tenant) must not read this ledger.
-        var foreignTenantId = lease.TenantId + 1000;
-        var ledger = await _sut.GetLedgerAsync(
-            PortfolioId, lease.Id, restrictToTenantId: foreignTenantId, ct: CancellationToken.None);
-
-        ledger.Should().BeNull("a tenant may only read their own lease's ledger");
-    }
-
-    private Lease SeedLease()
-    {
-        var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "General",
-            AddressLine1 = "1 Main",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "12",
-            MarketRent = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Maria",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-001",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddYears(1),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            LateFeeAmount = 50m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Leases.Add(lease);
-        _db.SaveChanges();
-        return lease;
-    }
-
-    private sealed class NoopDataUpdateService : IDataUpdateService
-    {
-        public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
-            => Task.CompletedTask;
-
-        public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
-            => Task.CompletedTask;
-    }
-
-    private sealed class LedgerInMemoryFileStorage : IFileStorage
-    {
-        private readonly Dictionary<string, byte[]> _files = new();
-
-        public async Task<string> UploadAsync(Stream content, string fileName, string contentType, CancellationToken ct = default)
-        {
-            using var ms = new MemoryStream();
-            await content.CopyToAsync(ms, ct);
-            var key = $"{Guid.NewGuid():N}_{fileName}";
-            _files[key] = ms.ToArray();
-            return key;
-        }
-
-        public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)
-        {
-            if (!_files.TryGetValue(path, out var bytes))
-                throw new FileNotFoundException(path);
-            return Task.FromResult<Stream>(new MemoryStream(bytes));
-        }
-
-        public Task DeleteAsync(string path, CancellationToken ct = default)
-        {
-            _files.Remove(path);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
-    {
-        public override InterceptionResult<DbDataReader> ReaderExecuting(
-            DbCommand command,
-            CommandEventData eventData,
-            InterceptionResult<DbDataReader> result)
-        {
-            commands.Add(command.CommandText);
-            return base.ReaderExecuting(command, eventData, result);
-        }
-
-        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
-            DbCommand command,
-            CommandEventData eventData,
-            InterceptionResult<DbDataReader> result,
-            CancellationToken cancellationToken = default)
-        {
-            commands.Add(command.CommandText);
-            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
-        }
+        LedgerExplanation.ForTenantLedgerEntry(
+                TenantLedgerEntryType.RentCharge,
+                TenantLedgerDirection.Debit,
+                1_200m,
+                new DateOnly(2026, 3, 1),
+                new DateOnly(2026, 4, 1),
+                null,
+                "April rent")
+            .Should().Be("Rent for April 2026 — $1,200 due Apr 1.");
     }
 }

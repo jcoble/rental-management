@@ -1,59 +1,50 @@
 using FluentAssertions;
 using System.Data.Common;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Money;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class ExpenseServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name4)]
+public class ExpenseServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteConnection _conn;
-    private readonly RentalCommandDbContext _db;
-    private readonly ExpenseService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private ExpenseService _sut = null!;
     private readonly List<string> _commands = [];
+    private WorkspaceReadScope _scope;
 
-    public ExpenseServiceTests()
+    public ExpenseServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
-
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_commands))
-            .Options;
-
-        _db = new ExpenseServiceTestDbContext(options);
-        _db.Database.EnsureCreated();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        _sut = new ExpenseService(_db, new NoopDataUpdateService(), Mock.Of<IFileStorage>());
+        _fixture = fixture;
     }
 
-    public void Dispose()
+    public async Task InitializeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        _db = _ctx.Db;
+
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(ExpenseServiceTests));
+
+        _sut = new ExpenseService(
+            _db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IWriteExecutor>());
     }
+
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ListPageAsync_FiltersWorkOrderReceiptsAndPagesInSql()
@@ -66,8 +57,9 @@ public class ExpenseServiceTests : IDisposable
         SeedWorkOrderExpense(otherUnitId, "Other unit", DateTime.UtcNow, 50m);
 
         _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
         var page = await _sut.ListPageAsync(
-            PortfolioId,
+            _scope,
             propertyId: null,
             unitId,
             workOrderId: null,
@@ -96,6 +88,94 @@ public class ExpenseServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_FiltersIncurredDateWindowInSql()
+    {
+        var (unitId, _) = SeedUnitsForListPage();
+        var day1 = new DateTime(2026, 2, 1, 12, 0, 0, DateTimeKind.Utc);
+        SeedDirectUnitExpense(unitId, "Feb 1 supply", day1, 10m);
+        SeedDirectUnitExpense(unitId, "Feb 2 supply", day1.AddDays(1), 20m);
+        SeedDirectUnitExpense(unitId, "Feb 3 supply", day1.AddDays(2), 30m);
+        SeedDirectUnitExpense(unitId, "Feb 4 supply", day1.AddDays(3), 40m);
+        SeedDirectUnitExpense(unitId, "Feb 5 supply", day1.AddDays(4), 50m);
+
+        _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var page = await _sut.ListPageAsync(
+            _scope,
+            propertyId: null,
+            unitId: null,
+            workOrderId: null,
+            workOrderLinkedOnly: false,
+            new ExpenseListQuery
+            {
+                IncurredFrom = new DateTime(2026, 2, 2, 0, 0, 0, DateTimeKind.Utc),
+                IncurredTo = new DateTime(2026, 2, 4, 0, 0, 0, DateTimeKind.Utc),
+                Sort = "incurredAt",
+                Take = 10,
+            });
+
+        page.TotalCount.Should().Be(3);
+        page.Items.Select(e => e.Description).Should().Equal("Feb 2 supply", "Feb 3 supply", "Feb 4 supply");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("IncurredAt", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("IncurredAt", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_SortsExpenseDateColumnsInSql()
+    {
+        var (unitId, _) = SeedUnitsForListPage();
+        var day1 = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        SeedDirectUnitExpense(unitId, "Paid Mar 1", day1, 10m, dueDate: day1.AddDays(10), paidAt: day1);
+        SeedDirectUnitExpense(unitId, "Paid Mar 3", day1, 20m, dueDate: day1.AddDays(8), paidAt: day1.AddDays(2));
+        SeedDirectUnitExpense(unitId, "Paid Mar 2", day1, 30m, dueDate: day1.AddDays(9), paidAt: day1.AddDays(1));
+
+        _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var paidPage = await _sut.ListPageAsync(
+            _scope,
+            propertyId: null,
+            unitId: null,
+            workOrderId: null,
+            workOrderLinkedOnly: false,
+            new ListQuery
+            {
+                Sort = "paidAt",
+                Take = 10,
+            });
+
+        paidPage.Items.Select(e => e.Description).Should().Equal("Paid Mar 1", "Paid Mar 2", "Paid Mar 3");
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("PaidAt", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+
+        _commands.Clear();
+        var duePage = await _sut.ListPageAsync(
+            _scope,
+            propertyId: null,
+            unitId: null,
+            workOrderId: null,
+            workOrderLinkedOnly: false,
+            new ListQuery
+            {
+                Sort = "-dueDate",
+                Take = 10,
+            });
+
+        duePage.Items.Select(e => e.Description).Should().Equal("Paid Mar 1", "Paid Mar 2", "Paid Mar 3");
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("DueDate", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task GetAsync_OrdersReceiptLineItemsInSql()
     {
         var now = DateTime.UtcNow;
@@ -117,7 +197,8 @@ public class ExpenseServiceTests : IDisposable
 
         _commands.Clear();
 
-        var result = await _sut.GetAsync(PortfolioId, expense.Id);
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var result = await _sut.GetAsync(_scope, expense.Id);
 
         result.Should().NotBeNull();
         result!.LineItems.Select(li => li.Description).Should().Equal("First", "Second");
@@ -130,224 +211,173 @@ public class ExpenseServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task UpdateAsync_WithLineItems_ReplacesAllExistingLineItemRows()
+    public async Task ListPageAsync_FiltersSortsAndProjectsAllocationsInSqlWithoutDuplicates()
     {
-        // Arrange — seed an expense with two typed line items.
-        var now = DateTime.UtcNow;
-        var expense = new Expense
-        {
-            PortfolioId = PortfolioId,
-            Category = ScheduleECategory.Repairs,
-            Description = "Seed expense",
-            Status = ExpenseStatus.Paid,
-            Amount = 20.00m,
-            IncurredAt = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        expense.LineItems.Add(new ExpenseLineItem { Description = "Old item 1", Amount = 10.00m, LineNumber = 1 });
-        expense.LineItems.Add(new ExpenseLineItem { Description = "Old item 2", Amount = 10.00m, LineNumber = 2 });
-        _db.Expenses.Add(expense);
-        await _db.SaveChangesAsync();
-
-        var request = new UpdateExpenseRequest
-        {
-            LineItems =
-            [
-                new UpdateExpenseLineItem { Description = "New item A", Quantity = 2m, UnitPrice = 5.00m, Amount = 10.00m },
-                new UpdateExpenseLineItem { Description = "New item B", Amount = 7.50m },
-                new UpdateExpenseLineItem { Description = "New item C", Amount = 2.50m },
-            ]
-        };
-
-        // Act
-        var updated = await _sut.UpdateAsync(PortfolioId, expense.Id, request);
-
-        // Assert — response carries the new rows.
-        updated.Should().NotBeNull();
-        updated!.LineItems.Should().HaveCount(3);
-        updated.LineItems[0].Description.Should().Be("New item A");
-        updated.LineItems[0].LineNumber.Should().Be(1);
-        updated.LineItems[0].Quantity.Should().Be(2m);
-        updated.LineItems[0].UnitPrice.Should().Be(5.00m);
-        updated.LineItems[0].Amount.Should().Be(10.00m);
-        updated.LineItems[1].Description.Should().Be("New item B");
-        updated.LineItems[1].LineNumber.Should().Be(2);
-        updated.LineItems[2].Description.Should().Be("New item C");
-        updated.LineItems[2].LineNumber.Should().Be(3);
-
-        // DB must have exactly 3 rows — old rows are gone.
-        var dbItems = await _db.ExpenseLineItems.AsNoTracking()
-            .Where(li => li.ExpenseId == expense.Id)
-            .OrderBy(li => li.LineNumber)
-            .ToListAsync();
-
-        dbItems.Should().HaveCount(3);
-        dbItems[0].Description.Should().Be("New item A");
-        dbItems[1].Description.Should().Be("New item B");
-        dbItems[2].Description.Should().Be("New item C");
-    }
-
-    [Fact]
-    public async Task UpdateAsync_WithNullLineItems_LeavesExistingLineItemsUntouched()
-    {
-        // Arrange — seed an expense with one typed line item.
-        var now = DateTime.UtcNow;
-        var expense = new Expense
-        {
-            PortfolioId = PortfolioId,
-            Category = ScheduleECategory.Repairs,
-            Description = "Seed expense",
-            Status = ExpenseStatus.Paid,
-            Amount = 10.00m,
-            IncurredAt = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        expense.LineItems.Add(new ExpenseLineItem { Description = "Existing item", Amount = 10.00m, LineNumber = 1 });
-        _db.Expenses.Add(expense);
-        await _db.SaveChangesAsync();
-
-        // Act — update without providing LineItems (null = no change).
-        var request = new UpdateExpenseRequest { Notes = "Just updating notes" };
-        var updated = await _sut.UpdateAsync(PortfolioId, expense.Id, request);
-
-        // Assert — the existing line item is still present.
-        updated.Should().NotBeNull();
-        updated!.LineItems.Should().HaveCount(1);
-        updated.LineItems[0].Description.Should().Be("Existing item");
-
-        var dbCount = await _db.ExpenseLineItems.AsNoTracking()
-            .CountAsync(li => li.ExpenseId == expense.Id);
-        dbCount.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task UpdateAsync_AllowsCorrectingReceiptFieldsAfterScanConfirm()
-    {
-        var expense = SeedExpense();
-        var request = new UpdateExpenseRequest
-        {
-            Notes = "Corrected after reviewing the receipt again",
-        };
-        SetRequiredEditableReceiptProperty(request, "Subtotal", 40.00m);
-        SetRequiredEditableReceiptProperty(request, "TaxAmount", 3.21m);
-        SetRequiredEditableReceiptProperty(
-            request,
-            "ReceiptData",
-            """{"receiptNumber":"R-200","lineItems":[{"description":"Washer hose","amount":40.00}]}""");
-
-        var updated = await _sut.UpdateAsync(PortfolioId, expense.Id, request);
-
-        updated.Should().NotBeNull();
-        updated!.Subtotal.Should().Be(40.00m);
-        updated.TaxAmount.Should().Be(3.21m);
-        updated.ReceiptData.Should().Contain("R-200");
-
-        var fromDb = await _db.Expenses.AsNoTracking().SingleAsync(e => e.Id == expense.Id);
-        fromDb.Subtotal.Should().Be(40.00m);
-        fromDb.TaxAmount.Should().Be(3.21m);
-        fromDb.ReceiptData.Should().Contain("Washer hose");
-    }
-
-    [Fact]
-    public async Task UpdateAsync_WithClearReceiptData_ClearsStoredReceiptJson()
-    {
-        var expense = SeedExpense();
-        var request = new UpdateExpenseRequest
-        {
-            ClearReceiptData = true,
-        };
-
-        var updated = await _sut.UpdateAsync(PortfolioId, expense.Id, request);
-
-        updated.Should().NotBeNull();
-        updated!.ReceiptData.Should().BeNull();
-
-        var fromDb = await _db.Expenses.AsNoTracking().SingleAsync(e => e.Id == expense.Id);
-        fromDb.ReceiptData.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task CreateAsync_FromScanDraft_PersistsTypedColumnsAndLineItems()
-    {
-        var now = DateTime.UtcNow;
-        var request = new CreateExpenseRequest
-        {
-            Category    = ScheduleECategory.Repairs,
-            Description = "ACME Hardware",
-            Status      = ExpenseStatus.Paid,
-            Amount      = 53.49m,
-            Subtotal    = 49.99m,
-            TaxAmount   = 3.50m,
-            IncurredAt  = now,
-            PaidAt      = now,
-            ReceiptData = """{"receiptNumber":"R-42","lineItems":[{"description":"Washer hose","amount":12.99}]}""",
-            // New typed columns promoted from the scan.
-            PaymentMethod = "Visa",
-            CardLast4     = "4242",
-            DocumentKind  = "Receipt",
-            LineItems =
-            [
-                new CreateExpenseLineItem { Description = "Washer hose", Quantity = 2m, UnitPrice = 6.50m, Amount = 12.99m, LineNumber = 1 },
-                new CreateExpenseLineItem { Description = "Pipe tape",   Quantity = 1m, UnitPrice = 3.00m, Amount = 3.00m,  LineNumber = 2 },
-            ],
-        };
-
-        var created = await _sut.CreateAsync(PortfolioId, request);
-
-        created.Should().NotBeNull();
-        created!.PaymentMethod.Should().Be("Visa");
-        created.CardLast4.Should().Be("4242");
-        created.DocumentKind.Should().Be("Receipt");
-        created.ReceiptData.Should().Contain("R-42");
-
-        // The typed columns + child line items are persisted to the DB (not just on the response).
-        var fromDb = await _db.Expenses.AsNoTracking()
-            .Include(e => e.LineItems)
-            .SingleAsync(e => e.Id == created.Id);
-
-        fromDb.PaymentMethod.Should().Be("Visa");
-        fromDb.CardLast4.Should().Be("4242");
-        fromDb.DocumentKind.Should().Be("Receipt");
-
-        fromDb.LineItems.Should().HaveCount(2);
-        var first = fromDb.LineItems.Single(li => li.LineNumber == 1);
-        first.Description.Should().Be("Washer hose");
-        first.Quantity.Should().Be(2m);
-        first.UnitPrice.Should().Be(6.50m);
-        first.Amount.Should().Be(12.99m);
-        fromDb.LineItems.Single(li => li.LineNumber == 2).Description.Should().Be("Pipe tape");
-    }
-
-    private Expense SeedExpense()
-    {
-        var now = DateTime.UtcNow;
-        var expense = new Expense
-        {
-            PortfolioId = PortfolioId,
-            Category = ScheduleECategory.Repairs,
-            Description = "Scanned receipt",
-            Status = ExpenseStatus.Paid,
-            Amount = 43.00m,
-            IncurredAt = now,
-            PaidAt = now,
-            Subtotal = 39.00m,
-            TaxAmount = 4.00m,
-            ReceiptData = """{"receiptNumber":"OLD"}""",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Expenses.Add(expense);
+        var (unitId, otherUnitId) = SeedUnitsForListPage();
+        SeedDirectUnitExpense(unitId, "Allocated 20", DateTime.UtcNow.AddDays(-2), 20m);
+        SeedDirectUnitExpense(unitId, "Allocated 40", DateTime.UtcNow.AddDays(-1), 40m);
+        SeedDirectUnitExpense(otherUnitId, "Decoy", DateTime.UtcNow, 80m);
+        var selected = _db.Expenses
+            .Where(expense => expense.UnitId == unitId)
+            .OrderBy(expense => expense.Amount)
+            .ToArray();
+        _db.ExpenseAllocations.AddRange(
+            new ExpenseAllocation
+            {
+                PortfolioId = PortfolioId,
+                ExpenseId = selected[0].Id,
+                TargetKind = ExpenseAllocationTargetKind.Unit,
+                UnitId = unitId,
+                Amount = 20m,
+                CreatedAt = DateTime.UtcNow,
+            },
+            new ExpenseAllocation
+            {
+                PortfolioId = PortfolioId,
+                ExpenseId = selected[1].Id,
+                TargetKind = ExpenseAllocationTargetKind.Unit,
+                UnitId = unitId,
+                Amount = 40m,
+                CreatedAt = DateTime.UtcNow,
+            });
         _db.SaveChanges();
-        return expense;
+
+        _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var page = await _sut.ListPageAsync(
+            _scope,
+            propertyId: null,
+            unitId: null,
+            workOrderId: null,
+            workOrderLinkedOnly: false,
+            new ExpenseListQuery
+            {
+                AllocationTargetKind = ExpenseAllocationTargetKind.Unit,
+                AllocationTargetId = unitId,
+                Sort = "-allocationTotal",
+                Skip = 0,
+                Take = 10,
+            });
+
+        page.TotalCount.Should().Be(2);
+        page.Items.Select(item => item.Id).Should().OnlyHaveUniqueItems();
+        page.Items.Select(item => item.AllocationTotal).Should().Equal(40m, 20m);
+        _commands.Should().HaveCount(2,
+            "one translated count and one bounded page query are the list budget");
+        _commands[0].Should().Contain("ExpenseAllocations");
+        _commands[0].Should().Contain("EXISTS");
+        _commands[1].Should().Contain("ExpenseAllocations");
+        (_commands[1].Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
+         _commands[1].Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("allocation totals must be summed in translated SQL");
+        _commands[1].Should().Contain("ORDER BY");
+        _commands[1].Should().Contain("LIMIT");
     }
 
-    private static void SetRequiredEditableReceiptProperty(UpdateExpenseRequest request, string name, object value)
+    [Fact]
+    public async Task GetAsync_ProjectsCanonicalScopeAndTypedAllocationsInSql()
     {
-        var prop = typeof(UpdateExpenseRequest).GetProperty(name);
-        prop.Should().NotBeNull($"{name} must be editable after a scan-confirmed expense is created");
-        prop!.SetValue(request, value);
+        var (unitId, _) = SeedUnitsForListPage();
+        SeedDirectUnitExpense(unitId, "Canonical allocation", DateTime.UtcNow, 25m);
+        var expense = await _db.Expenses.SingleAsync(row => row.Description == "Canonical allocation");
+        _db.ExpenseAllocations.Add(new ExpenseAllocation
+        {
+            PortfolioId = PortfolioId,
+            ExpenseId = expense.Id,
+            TargetKind = ExpenseAllocationTargetKind.Unit,
+            UnitId = unitId,
+            Amount = 25m,
+            CreatedAt = DateTime.UtcNow,
+        });
+        await _db.SaveChangesAsync();
+
+        _commands.Clear();
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var result = await _sut.GetAsync(_scope, expense.Id);
+
+        result.Should().NotBeNull();
+        result!.OperationalScope.Should().Be(ExpenseOperationalScope.Unit);
+        result.AllocationTotal.Should().Be(25m);
+        result.Allocations.Should().ContainSingle().Which.UnitId.Should().Be(unitId);
+        _commands.Should().Contain(sql =>
+            sql.Contains("ExpenseAllocations", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void MutationsExposeOnlyScopedReceiptBackedOverloads()
+    {
+        var mutationMethods = typeof(IExpenseService).GetMethods()
+            .Where(method => method.Name is "CreateAsync" or "UpdateAsync" or "DeleteAsync")
+            .ToArray();
+
+        mutationMethods.Should().HaveCount(3);
+        mutationMethods.Should().OnlyContain(method =>
+            method.GetParameters().First().ParameterType == typeof(RentalCommand.Core.Authorization.WorkspaceReadScope) &&
+            method.GetParameters().Any(parameter => parameter.Name == "idempotencyKey"));
+    }
+
+    [Fact]
+    public async Task MutationsPassTheAmbientBusinessClockIntoEveryAtomicCommand()
+    {
+        var businessNowUtc = new DateTime(2027, 1, 31, 5, 0, 0, DateTimeKind.Utc);
+        var captured = new List<AtomicMoneyMutationCommand>();
+        var writes = new Mock<IWriteExecutor>(MockBehavior.Strict);
+        writes.Setup(service => service.ExecuteAsync<
+                AtomicMoneyMutationCommand, AtomicMoneyMutationResult>(
+                It.IsAny<string>(),
+                It.IsAny<TransactionalWrite<AtomicMoneyMutationCommand, AtomicMoneyMutationResult>>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string,
+                TransactionalWrite<AtomicMoneyMutationCommand, AtomicMoneyMutationResult>,
+                CancellationToken>((_, write, _) => captured.Add(write.Request))
+            .ReturnsAsync(new AtomicCommandOutcome<AtomicMoneyMutationResult>(
+                new AtomicMoneyMutationResult(false, false, 0),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()));
+        var service = new ExpenseService(
+            _db,
+            Mock.Of<IFileStorage>(),
+            new FixedTimeProvider(new DateTimeOffset(businessNowUtc)),
+            writes.Object);
+        var scope = new WorkspaceReadScope(
+            PortfolioId, 2, Guid.Parse("7dc8658f-a9d8-4760-b59c-f3087f06ee40"), 3, 4);
+
+        await service.CreateAsync(scope, new CreateExpenseRequest(), "clock-create");
+        await service.UpdateAsync(scope, 41, new UpdateExpenseRequest(), "clock-update");
+        await service.DeleteAsync(scope, 41, "clock-delete");
+
+        captured.Select(command => command.Operation).Should().Equal(
+            AtomicMoneyOperation.Create,
+            AtomicMoneyOperation.Update,
+            AtomicMoneyOperation.Delete);
+        captured.Should().OnlyContain(command => command.BusinessNowUtc == businessNowUtc);
+    }
+
+    [Fact]
+    public async Task AtomicMoneyMutationRejectsAMissingBusinessClockBeforeStartingAnAttempt()
+    {
+        var command = new AtomicMoneyMutationCommand(
+            PortfolioId,
+            2,
+            Guid.Parse("62ebbe35-bf31-4590-8b95-04c146281fa1"),
+            3,
+            4,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense,
+            AtomicMoneyOperation.Create,
+            0,
+            "missing-clock",
+            "{}",
+            default);
+        var handler = new AtomicMoneyMutationRule(_db);
+
+        var act = () => handler.ExecuteAsync(
+            command, Mock.Of<IAtomicCommandContext>(), CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*action, and time are required.*");
     }
 
     private (int UnitId, int OtherUnitId) SeedUnitsForListPage()
@@ -369,6 +399,7 @@ public class ExpenseServiceTests : IDisposable
 
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "1A",
             Bedrooms = 1,
@@ -379,6 +410,7 @@ public class ExpenseServiceTests : IDisposable
         };
         var otherUnit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "2A",
             Bedrooms = 1,
@@ -416,6 +448,9 @@ public class ExpenseServiceTests : IDisposable
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.WorkOrder,
+            PropertyId = propertyId,
+            UnitId = unitId,
             WorkOrderId = workOrder.Id,
             Category = ScheduleECategory.Repairs,
             Description = description,
@@ -428,12 +463,19 @@ public class ExpenseServiceTests : IDisposable
         _db.SaveChanges();
     }
 
-    private void SeedDirectUnitExpense(int unitId, string description, DateTime incurredAt, decimal amount)
+    private void SeedDirectUnitExpense(
+        int unitId,
+        string description,
+        DateTime incurredAt,
+        decimal amount,
+        DateTime? dueDate = null,
+        DateTime? paidAt = null)
     {
         var propertyId = _db.Units.Where(u => u.Id == unitId).Select(u => u.PropertyId).Single();
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Unit,
             PropertyId = propertyId,
             UnitId = unitId,
             Category = ScheduleECategory.Repairs,
@@ -441,19 +483,12 @@ public class ExpenseServiceTests : IDisposable
             Status = ExpenseStatus.Paid,
             Amount = amount,
             IncurredAt = incurredAt,
+            DueDate = dueDate,
+            PaidAt = paidAt,
             CreatedAt = incurredAt,
             UpdatedAt = incurredAt,
         });
         _db.SaveChanges();
-    }
-
-    private sealed class NoopDataUpdateService : IDataUpdateService
-    {
-        public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
-            => Task.CompletedTask;
-
-        public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
-            => Task.CompletedTask;
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
@@ -477,24 +512,9 @@ public class ExpenseServiceTests : IDisposable
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
-}
 
-internal sealed class ExpenseServiceTestDbContext : RentalCommandDbContext
-{
-    public ExpenseServiceTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
-        base.OnModelCreating(modelBuilder);
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<Payment>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<Lease>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<WorkOrder>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<Lease>().ToTable("Leases");
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

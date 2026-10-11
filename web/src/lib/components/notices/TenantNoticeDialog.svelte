@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { notices } from '$lib/api/endpoints/notices';
+	import { notifications } from '$lib/api/endpoints/notifications';
+	import type { TenantNoticeRecipientPreviewResponse } from '$lib/api/types/notification';
 	import type { NoticeDraft } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -9,17 +11,19 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { AlertCircle, BellRing, Send, Trash2 } from '@lucide/svelte';
+	import { AlertCircle, BellRing, Eye, Send, Trash2 } from '@lucide/svelte';
 
 	let {
 		open = $bindable(false),
-		tenantId,
+		recipientTenantId = 0,
+		leaseManagementId = 0,
 		tenantName = 'this tenant',
 		activeLeaseCount = 0,
 		initialNoticeType,
 	}: {
 		open: boolean;
-		tenantId: number;
+		recipientTenantId?: number;
+		leaseManagementId?: number;
 		tenantName?: string;
 		activeLeaseCount?: number;
 		initialNoticeType?: string;
@@ -32,31 +36,35 @@
 	let forcedNoticeLabel = $state<string | null>(null);
 	let noticeChannels = $state<Record<number, { portal: boolean; email: boolean; sms: boolean }>>({});
 	let noticeEdits = $state<Record<number, { subject: string; body: string }>>({});
+	let recipientPreviews = $state<Record<number, TenantNoticeRecipientPreviewResponse[]>>({});
+	let previewingDraftId = $state<number | null>(null);
 	let lastOpenKey: string | null = null;
+
+	const hasNoticeScope = $derived(recipientTenantId > 0 || leaseManagementId > 0);
 
 	const noticeEmptyState = $derived(
 		getTenantNoticeEmptyState({
 			forcedNoticeLabel,
 			activeLeaseCount,
-			tenantId,
+			tenantId: recipientTenantId,
 		})
 	);
 
 	const FORCEABLE_NOTICE_TYPES: { type: string; label: string }[] = [
-		{ type: 'RentReminder', label: 'Rent reminder (coming due)' },
-		{ type: 'RenewalOffer', label: 'Lease renewal offer' },
-		{ type: 'MonthToMonthConversion', label: 'Convert to month-to-month' },
-		{ type: 'MoveOutReminder', label: 'Lease expiration / move-out' },
-		{ type: 'LateRentNotice', label: 'Late rent / late fee' },
+		{ type: 'rent-reminder', label: 'Rent reminder (coming due)' },
+		{ type: 'lease-renewal-offer', label: 'Lease renewal offer' },
+		{ type: 'month-to-month-offer', label: 'Offer month-to-month' },
+		{ type: 'lease-non-renewal', label: 'Lease expiration / non-renewal' },
+		{ type: 'late-rent-late-fee', label: 'Past-due rent / late fee' },
 	];
 
 	function noticeTypeLabel(type: string) {
 		switch (type) {
-			case 'RentReminder': return 'Rent reminder';
-			case 'RenewalOffer': return 'Renewal offer';
-			case 'MonthToMonthConversion': return 'Month-to-month conversion';
-			case 'MoveOutReminder': return 'Move-out reminder';
-			case 'LateRentNotice': return 'Late rent / late fee';
+			case 'rent-reminder': return 'Rent reminder';
+			case 'lease-renewal-offer': return 'Lease renewal offer';
+			case 'month-to-month-offer': return 'Month-to-month offer';
+			case 'lease-non-renewal': return 'Lease expiration / non-renewal';
+			case 'late-rent-late-fee': return 'Past-due rent / late fee';
 			default: return type;
 		}
 	}
@@ -107,7 +115,34 @@
 		noticeDrafts = [];
 		noticeChannels = {};
 		noticeEdits = {};
+		recipientPreviews = {};
+		previewingDraftId = null;
 		forcedNoticeLabel = null;
+	}
+
+	async function previewRecipients(draft: NoticeDraft) {
+		previewingDraftId = draft.id;
+		try {
+			recipientPreviews = {
+				...recipientPreviews,
+				[draft.id]: await notifications.tenantNotices.previewRecipients(
+					draft.noticeType,
+					draft.leaseManagementId
+				)
+			};
+		} catch (error) {
+			showError(apiErrorMessage(error));
+		} finally {
+			previewingDraftId = null;
+		}
+	}
+
+	function generateRequest(noticeType?: string) {
+		return {
+			...(recipientTenantId > 0 ? { recipientTenantId } : {}),
+			...(leaseManagementId > 0 ? { leaseManagementId } : {}),
+			...(noticeType ? { noticeType } : {}),
+		};
 	}
 
 	function generateNoticeDrafts(noticeType?: string) {
@@ -116,19 +151,19 @@
 	}
 
 	$effect(() => {
-		if (!open || tenantId <= 0) {
+		if (!open || !hasNoticeScope) {
 			lastOpenKey = null;
 			return;
 		}
 
-		const openKey = `${tenantId}:${initialNoticeType ?? 'due'}`;
+		const openKey = `${recipientTenantId}:${leaseManagementId}:${initialNoticeType ?? 'due'}`;
 		if (lastOpenKey === openKey) return;
 		lastOpenKey = openKey;
 		generateNoticeDrafts(initialNoticeType);
 	});
 
 	const generateNoticeMutation = createMutation(() => ({
-		mutationFn: (noticeType?: string) => notices.generate(tenantId, noticeType),
+		mutationFn: (noticeType?: string) => notices.generate(generateRequest(noticeType)),
 		onSuccess: (result, noticeType) => {
 			const selectedForcedNoticeLabel = noticeType
 				? FORCEABLE_NOTICE_TYPES.find((nt) => nt.type === noticeType)?.label ?? noticeTypeLabel(noticeType)
@@ -149,7 +184,7 @@
 					getTenantNoticeEmptyState({
 						forcedNoticeLabel: selectedForcedNoticeLabel,
 						activeLeaseCount,
-						tenantId,
+						tenantId: recipientTenantId,
 					}).message
 				);
 			}
@@ -159,6 +194,7 @@
 
 	const sendNoticeMutation = createMutation(() => ({
 		mutationFn: async (draft: NoticeDraft) => {
+			if (draft.status !== 'Draft') return draft;
 			const payload = editedNoticePayload(draft);
 			const changed =
 				payload.subject !== draft.subject.trim() || payload.body !== draft.body.trim();
@@ -250,6 +286,7 @@
 				{#each noticeDrafts as draft (draft.id)}
 					{@const channels = channelsFor(draft.id)}
 					{@const busy = sendNoticeMutation.isPending || dismissNoticeMutation.isPending}
+					{@const editable = draft.status === 'Draft'}
 					{@const canSend = channels.portal || channels.email || channels.sms}
 					{@const edit = noticeEditFor(draft)}
 					<div class="rounded-lg border border-border bg-card p-4" data-testid="tenant-notice-draft-{draft.id}">
@@ -265,6 +302,7 @@
 								<input
 									class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
 									value={edit.subject}
+									disabled={!editable}
 									oninput={(event) => setNoticeEdit(draft.id, 'subject', (event.currentTarget as HTMLInputElement).value)}
 									data-testid="tenant-notice-edit-subject-{draft.id}"
 								/>
@@ -274,38 +312,56 @@
 								<textarea
 									class="min-h-32 w-full rounded-md border border-input bg-background p-3 text-sm leading-6"
 									value={edit.body}
+									disabled={!editable}
 									oninput={(event) => setNoticeEdit(draft.id, 'body', (event.currentTarget as HTMLTextAreaElement).value)}
 									data-testid="tenant-notice-edit-body-{draft.id}"
 								></textarea>
 							</label>
 						</div>
 
-						<div class="mt-3 flex flex-wrap items-center gap-4">
-							<span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Send via</span>
-							<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-portal-{draft.id}">
-								<Checkbox checked={channels.portal} onCheckedChange={(v) => setNoticeChannel(draft.id, 'portal', v === true)} />
-								Portal
-							</label>
-							<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-email-{draft.id}">
-								<Checkbox checked={channels.email} onCheckedChange={(v) => setNoticeChannel(draft.id, 'email', v === true)} />
-								Email
-							</label>
-							<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-sms-{draft.id}">
-								<Checkbox checked={channels.sms} onCheckedChange={(v) => setNoticeChannel(draft.id, 'sms', v === true)} />
-								SMS
-							</label>
-						</div>
+						{#if editable}
+							<div class="mt-3 rounded-md border border-border/70 bg-muted/30 p-3">
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<div><p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Effective recipients</p><p class="mt-1 text-xs text-muted-foreground">Preview who is currently eligible and which destinations are actually available.</p></div>
+									<Button variant="outline" size="sm" disabled={previewingDraftId === draft.id} onclick={() => previewRecipients(draft)}><Eye class="h-4 w-4" />{previewingDraftId === draft.id ? 'Loading…' : 'Preview recipients'}</Button>
+								</div>
+								{#if recipientPreviews[draft.id]}
+									<div class="mt-3 space-y-2">
+										{#each recipientPreviews[draft.id] as recipient (recipient.leaseManagementPartyId)}
+											<div class="rounded-md bg-background p-3"><div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-medium">{recipient.displayName} · {recipient.role}</p><span class={`text-xs font-medium ${recipient.eligible ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground'}`}>{recipient.eligible ? 'Eligible' : 'Excluded'}</span></div><p class="mt-1 text-xs">Available channels: {recipient.availableChannels.length > 0 ? recipient.availableChannels.join(', ') : 'None'}</p><p class="mt-1 text-xs text-muted-foreground">Email: {recipient.email || 'Not available'} · Phone: {recipient.phone || 'Not available'}</p><p class="mt-1 text-xs text-muted-foreground">{recipient.reason}</p></div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+							<div class="mt-3 flex flex-wrap items-center gap-4">
+								<span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Send via</span>
+								<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-portal-{draft.id}">
+									<Checkbox checked={channels.portal} onCheckedChange={(v) => setNoticeChannel(draft.id, 'portal', v === true)} />
+									Portal
+								</label>
+								<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-email-{draft.id}">
+									<Checkbox checked={channels.email} onCheckedChange={(v) => setNoticeChannel(draft.id, 'email', v === true)} />
+									Email
+								</label>
+								<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-sms-{draft.id}">
+									<Checkbox checked={channels.sms} onCheckedChange={(v) => setNoticeChannel(draft.id, 'sms', v === true)} />
+									SMS
+								</label>
+							</div>
 
-						<div class="mt-4 flex items-center justify-end gap-2">
-							<Button variant="ghost" size="sm" disabled={busy} onclick={() => dismissNoticeMutation.mutate(draft)} data-testid="tenant-notice-dismiss-{draft.id}">
-								<Trash2 class="h-4 w-4" />
-								Dismiss
-							</Button>
-							<Button size="sm" class="gap-2" disabled={busy || !canSend || !hasEditedNoticeContent(draft)} onclick={() => sendNoticeMutation.mutate(draft)} data-testid="tenant-notice-send-{draft.id}">
-								<Send class="h-4 w-4" />
-								Send
-							</Button>
-						</div>
+							<div class="mt-4 flex items-center justify-end gap-2">
+								<Button variant="ghost" size="sm" disabled={busy} onclick={() => dismissNoticeMutation.mutate(draft)} data-testid="tenant-notice-dismiss-{draft.id}">
+									<Trash2 class="h-4 w-4" />
+									Dismiss
+								</Button>
+								<Button size="sm" class="gap-2" disabled={busy || !canSend || !hasEditedNoticeContent(draft)} onclick={() => sendNoticeMutation.mutate(draft)} data-testid="tenant-notice-send-{draft.id}">
+									<Send class="h-4 w-4" />
+									Send
+								</Button>
+							</div>
+						{:else}
+							<p class="mt-3 text-xs text-muted-foreground">This notice already exists and will not be sent again.</p>
+						{/if}
 					</div>
 				{/each}
 			</div>

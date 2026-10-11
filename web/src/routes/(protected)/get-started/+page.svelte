@@ -19,6 +19,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import Progress from '$lib/components/ui/Progress.svelte';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -164,12 +165,9 @@
 	<title>Get started - Rental Command</title>
 </svelte:head>
 
-<div class="box-border h-full overflow-y-auto bg-muted/30 p-6 pb-20" data-testid="get-started-page">
+	<div class="box-border h-full overflow-y-auto bg-muted/30 p-6 pb-20" data-testid="get-started-page">
 	{#if stateQuery.isLoading}
-		<div class="flex h-64 items-center justify-center gap-2 text-sm text-muted-foreground" data-testid="get-started-loading">
-			<Loader2 class="h-4 w-4 animate-spin" />
-			Loading…
-		</div>
+		<LoadingState label="Loading your getting-started checklist" variant="page" testid="get-started-loading" />
 	{:else if showFork}
 		<!-- First-run fork: explore the example data, or wipe it and set up your real rentals. -->
 		<div class="mx-auto w-full max-w-3xl">

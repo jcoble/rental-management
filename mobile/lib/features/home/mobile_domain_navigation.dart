@@ -5,6 +5,7 @@ enum MobileShellTabId { today, rentals, money, work, inbox }
 enum MobileDestinationId {
   gettingStarted,
   properties,
+  owners,
   units,
   tenants,
   leases,
@@ -25,12 +26,14 @@ enum MobileDestinationId {
   notices,
   messages,
   notifications,
+  activityHistory,
   assistant,
   team,
   settings,
 }
 
 typedef MobileDetailBuilder = WidgetBuilder;
+typedef MobileNavigationGuard = bool Function();
 
 class MobileDomainHeaderSnapshot {
   const MobileDomainHeaderSnapshot({required this.title, this.subtitle});
@@ -170,7 +173,11 @@ class _MobileDomainDetailHeaderState extends State<MobileDomainDetailHeader> {
 }
 
 class MobileShellNavigator {
-  const MobileShellNavigator({required this.openTab, required this.openRoute});
+  const MobileShellNavigator({
+    required this.openTab,
+    required this.openRoute,
+    this.setTabQuickActionsHidden,
+  });
 
   final void Function(
     MobileShellTabId tab, {
@@ -180,6 +187,8 @@ class MobileShellNavigator {
   openTab;
 
   final bool Function(String route) openRoute;
+  final void Function(MobileShellTabId tab, Object owner, bool hidden)?
+  setTabQuickActionsHidden;
 }
 
 class MobileShellNavigation extends InheritedWidget {
@@ -224,24 +233,46 @@ MobileShellNavigator? mobileShellNavigatorOf(BuildContext context) {
 }
 
 void revealMobileShellIfDetached(BuildContext context) {
-  if (MobileShellNavigation.maybeOf(context) != null) return;
-  Navigator.of(context).popUntil((route) => route.isFirst);
+  try {
+    if (!context.mounted || MobileShellNavigation.maybeOf(context) != null) {
+      return;
+    }
+    Navigator.maybeOf(context)?.popUntil((route) => route.isFirst);
+  } on FlutterError {
+    // Route teardown can leave a previously valid context inactive for one
+    // frame. Back navigation should keep the current shell instead of crashing.
+  }
 }
 
 class MobileDomainNavigator {
-  const MobileDomainNavigator(this._openDestination);
+  const MobileDomainNavigator({
+    required void Function(
+      MobileDestinationId destination, {
+      MobileDetailBuilder? detailBuilder,
+      MobileNavigationGuard? canNavigate,
+    })
+    openDestination,
+    required this.popToCurrentRoot,
+  }) : _openDestination = openDestination;
 
   final void Function(
     MobileDestinationId destination, {
     MobileDetailBuilder? detailBuilder,
+    MobileNavigationGuard? canNavigate,
   })
   _openDestination;
+  final VoidCallback popToCurrentRoot;
 
   void openDestination(
     MobileDestinationId destination, {
     MobileDetailBuilder? detailBuilder,
+    MobileNavigationGuard? canNavigate,
   }) {
-    _openDestination(destination, detailBuilder: detailBuilder);
+    _openDestination(
+      destination,
+      detailBuilder: detailBuilder,
+      canNavigate: canNavigate,
+    );
   }
 }
 

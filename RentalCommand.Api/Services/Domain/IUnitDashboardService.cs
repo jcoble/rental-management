@@ -14,7 +14,7 @@ public interface IUnitDashboardService
     Task<UnitDashboardResponse?> GetDashboardAsync(int portfolioId, int unitId, CancellationToken ct = default);
 
     /// <summary>
-    /// The unit's history as a bounded <see cref="Core.Entities.AuditLog"/> union over the unit and its
+    /// The unit's history as a bounded <see cref="Core.Entities.AtomicAuditLog"/> union over the unit and its
     /// children (lease/payment/work-order/inspection/appointment/expense ids), newest first, paged.
     /// A fixed, small number of queries regardless of data size. Returns an empty list when out of scope.
     /// </summary>

@@ -1,0 +1,2655 @@
+[
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L01_P01U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P01U1",
+   "signDate": "April 1, 2024",
+   "tenantName": "James Whitfield",
+   "tenantEmail": "james.whitfield@example.com",
+   "tenantPhone": "(937) 555-8186",
+   "propertyAddress": "412 Maple St",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45504",
+   "bedrooms": 3,
+   "bathrooms": 1.5,
+   "squareFeet": "1,180",
+   "startDate": "April 1, 2024",
+   "endDate": "March 31, 2025",
+   "monthlyRent": "1,250.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "1,250.00",
+   "lateFee": "75.00",
+   "paymentMethod": "Check",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease-photo-page.html",
+  "out": "generated/leases/photos/L01_p1.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "leaseNumber": "L-2024-P01U1",
+   "pageLabel": "page 1 of 2",
+   "rotate": "-1.4",
+   "bodyHtml": "<h1>RESIDENTIAL LEASE AGREEMENT</h1><div class=\"sub\">State of Ohio &middot; Lease No. L-2024-P01U1 &middot; Okafor Property Group</div><h2>Parties &amp; Premises</h2><table><tr><td class=\"k\">Tenant</td><td class=\"v\">James Whitfield</td></tr><tr><td class=\"k\">Email</td><td class=\"v\">james.whitfield@example.com</td></tr><tr><td class=\"k\">Premises</td><td class=\"v\">412 Maple St, Unit 1<br>Springfield, OH 45504</td></tr></table><h2>Term &amp; Rent</h2><table><tr><td class=\"k\">Commencement</td><td class=\"v\">April 1, 2024</td></tr><tr><td class=\"k\">Expiration</td><td class=\"v\">March 31, 2025</td></tr><tr><td class=\"k\">Monthly rent</td><td class=\"v\">$1,250.00</td></tr><tr><td class=\"k\">Rent due day</td><td class=\"v\">1st of the month</td></tr><tr><td class=\"k\">Security deposit</td><td class=\"v\">$1,250.00</td></tr><tr><td class=\"k\">Late fee</td><td class=\"v\">$75.00</td></tr></table><p>Tenant agrees to pay Monthly Rent in advance. Page 1 of 2; signatures follow.</p>"
+  }
+ },
+ {
+  "template": "templates/lease-photo-page.html",
+  "out": "generated/leases/photos/L01_p2.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "leaseNumber": "L-2024-P01U1",
+   "pageLabel": "page 2 of 2",
+   "rotate": "1.2",
+   "bodyHtml": "<h2>Signatures</h2><p>By signing, the parties agree to all terms for 412 Maple St, Unit 1, Springfield, OH.</p><div class=\"sigline\">Tenant &mdash; James Whitfield</div><div class=\"sigline\">Landlord / Agent &mdash; Okafor Property Group</div><p style=\"margin-top:18px\">Executed April 1, 2024 at Springfield, Ohio.</p>"
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L02_P02A.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P02A",
+   "signDate": "May 1, 2024",
+   "tenantName": "Rosa Delgado",
+   "tenantEmail": "rosa.delgado@example.com",
+   "tenantPhone": "(937) 555-8275",
+   "propertyAddress": "418-420 Vine St",
+   "unitNumber": "A",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45504",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "900",
+   "startDate": "May 1, 2024",
+   "endDate": "April 30, 2025",
+   "monthlyRent": "950.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "950.00",
+   "lateFee": "50.00",
+   "paymentMethod": "ACH",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L03_P02B.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P02B",
+   "signDate": "October 1, 2024",
+   "tenantName": "Sam Klein",
+   "tenantEmail": "sam.klein@example.com",
+   "tenantPhone": "(937) 555-5360",
+   "propertyAddress": "418-420 Vine St",
+   "unitNumber": "B",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45504",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "900",
+   "startDate": "October 1, 2024",
+   "endDate": "September 30, 2025",
+   "monthlyRent": "975.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "975.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Zelle",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L04_P03U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P03U1",
+   "signDate": "July 1, 2024",
+   "tenantName": "John Abernathy",
+   "tenantEmail": "john.abernathy@example.com",
+   "tenantPhone": "(937) 555-7607",
+   "propertyAddress": "77 Birch Ave",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45503",
+   "bedrooms": 3,
+   "bathrooms": 2,
+   "squareFeet": "1,320",
+   "startDate": "July 1, 2024",
+   "endDate": "June 30, 2025",
+   "monthlyRent": "1,150.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "1,150.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Check",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L05_P04U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P04U1",
+   "signDate": "June 1, 2024",
+   "tenantName": "Michael Osei",
+   "tenantEmail": "michael.osei@example.com",
+   "tenantPhone": "(937) 555-8153",
+   "propertyAddress": "1203 Oakwood Dr",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45503",
+   "bedrooms": 3,
+   "bathrooms": 2,
+   "squareFeet": "1,500",
+   "startDate": "June 1, 2024",
+   "endDate": "May 31, 2025",
+   "monthlyRent": "1,450.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "1,450.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Cash",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L06_P051.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P051",
+   "signDate": "August 1, 2024",
+   "tenantName": "Dominic Ferraro",
+   "tenantEmail": "dominic.ferraro@example.com",
+   "tenantPhone": "(937) 555-5760",
+   "propertyAddress": "305 Elm Court",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "850",
+   "startDate": "August 1, 2024",
+   "endDate": "July 31, 2025",
+   "monthlyRent": "850.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "850.00",
+   "lateFee": "50.00",
+   "paymentMethod": "ACH",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L07_P052.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P052",
+   "signDate": "November 1, 2024",
+   "tenantName": "Tomiko Nakamura",
+   "tenantEmail": "tomiko.nakamura@example.com",
+   "tenantPhone": "(937) 555-6765",
+   "propertyAddress": "305 Elm Court",
+   "unitNumber": "2",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "850",
+   "startDate": "November 1, 2024",
+   "endDate": "October 31, 2025",
+   "monthlyRent": "850.00",
+   "rentDueDayOrdinal": "5th",
+   "securityDeposit": "850.00",
+   "lateFee": "50.00",
+   "paymentMethod": "MoneyOrder",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L08_P053.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2025-P053",
+   "signDate": "March 1, 2025",
+   "tenantName": "Ravi Anand",
+   "tenantEmail": "ravi.anand@example.com",
+   "tenantPhone": "(937) 555-3836",
+   "propertyAddress": "305 Elm Court",
+   "unitNumber": "3",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "850",
+   "startDate": "March 1, 2025",
+   "endDate": "February 28, 2026",
+   "monthlyRent": "850.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "850.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Check",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L09_P06U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P06U1",
+   "signDate": "September 1, 2024",
+   "tenantName": "Brian Kowalski",
+   "tenantEmail": "brian.kowalski@example.com",
+   "tenantPhone": "(937) 555-2421",
+   "propertyAddress": "88 Cedar Ln",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45504",
+   "bedrooms": 3,
+   "bathrooms": 2,
+   "squareFeet": "1,450",
+   "startDate": "September 1, 2024",
+   "endDate": "August 31, 2025",
+   "monthlyRent": "1,395.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "1,395.00",
+   "lateFee": "50.00",
+   "paymentMethod": "ACH autopay",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L10_P07A.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P07A",
+   "signDate": "December 1, 2024",
+   "tenantName": "Elena Santos",
+   "tenantEmail": "elena.santos@example.com",
+   "tenantPhone": "(937) 555-6799",
+   "propertyAddress": "210 Willow Way",
+   "unitNumber": "A",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45503",
+   "bedrooms": 2,
+   "bathrooms": 1.5,
+   "squareFeet": "1,050",
+   "startDate": "December 1, 2024",
+   "endDate": "November 30, 2025",
+   "monthlyRent": "1,100.00",
+   "rentDueDayOrdinal": "15th",
+   "securityDeposit": "1,100.00",
+   "lateFee": "50.00",
+   "paymentMethod": "ACH",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L11_P07B.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P07B",
+   "signDate": "March 1, 2024",
+   "tenantName": "Hien Pham",
+   "tenantEmail": "hien.pham@example.com",
+   "tenantPhone": "(937) 555-7810",
+   "propertyAddress": "210 Willow Way",
+   "unitNumber": "B",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45503",
+   "bedrooms": 2,
+   "bathrooms": 1.5,
+   "squareFeet": "1,050",
+   "startDate": "March 1, 2024",
+   "endDate": "February 28, 2025",
+   "monthlyRent": "1,150.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "1,150.00",
+   "lateFee": "60.00",
+   "paymentMethod": "Check",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease-photo-page.html",
+  "out": "generated/leases/photos/L11_p1.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "leaseNumber": "L-2024-P07B",
+   "pageLabel": "page 1 of 2",
+   "rotate": "-1.4",
+   "bodyHtml": "<h1>RESIDENTIAL LEASE AGREEMENT</h1><div class=\"sub\">State of Ohio &middot; Lease No. L-2024-P07B &middot; Okafor Property Group</div><h2>Parties &amp; Premises</h2><table><tr><td class=\"k\">Tenant</td><td class=\"v\">Hien Pham</td></tr><tr><td class=\"k\">Co-tenant</td><td class=\"v\">Minh Pham</td></tr><tr><td class=\"k\">Email</td><td class=\"v\">hien.pham@example.com</td></tr><tr><td class=\"k\">Premises</td><td class=\"v\">210 Willow Way, Unit B<br>Springfield, OH 45503</td></tr></table><h2>Term &amp; Rent</h2><table><tr><td class=\"k\">Commencement</td><td class=\"v\">March 1, 2024</td></tr><tr><td class=\"k\">Expiration</td><td class=\"v\">February 28, 2025</td></tr><tr><td class=\"k\">Monthly rent</td><td class=\"v\">$1,150.00</td></tr><tr><td class=\"k\">Rent due day</td><td class=\"v\">1st of the month</td></tr><tr><td class=\"k\">Security deposit</td><td class=\"v\">$1,150.00</td></tr><tr><td class=\"k\">Late fee</td><td class=\"v\">$60.00</td></tr></table><p>Tenant agrees to pay Monthly Rent in advance. Page 1 of 2; signatures follow.</p>"
+  }
+ },
+ {
+  "template": "templates/lease-photo-page.html",
+  "out": "generated/leases/photos/L11_p2.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "leaseNumber": "L-2024-P07B",
+   "pageLabel": "page 2 of 2",
+   "rotate": "1.2",
+   "bodyHtml": "<h2>Signatures</h2><p>By signing, the parties agree to all terms for 210 Willow Way, Unit B, Springfield, OH.</p><div class=\"sigline\">Tenant &mdash; Hien Pham</div><div class=\"sigline\">Landlord / Agent &mdash; Okafor Property Group</div><p style=\"margin-top:18px\">Executed March 1, 2024 at Springfield, Ohio.</p>"
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L12_P08U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2025-P08U1",
+   "signDate": "January 1, 2025",
+   "tenantName": "Carla Reynolds",
+   "tenantEmail": "carla.reynolds@example.com",
+   "tenantPhone": "(937) 555-5123",
+   "propertyAddress": "540 Sycamore St",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "980",
+   "startDate": "January 1, 2025",
+   "endDate": "December 31, 2025",
+   "monthlyRent": "1,050.00",
+   "rentDueDayOrdinal": "5th",
+   "securityDeposit": "1,050.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Zelle",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L13_P091.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P091",
+   "signDate": "May 1, 2024",
+   "tenantName": "Anthony Brooks",
+   "tenantEmail": "anthony.brooks@example.com",
+   "tenantPhone": "(937) 555-2303",
+   "propertyAddress": "1450 Highland Blvd",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "780",
+   "startDate": "May 1, 2024",
+   "endDate": "April 30, 2025",
+   "monthlyRent": "825.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "825.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Cash",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L14_P092.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P092",
+   "signDate": "August 1, 2024",
+   "tenantName": "Lena Turner",
+   "tenantEmail": "lena.turner@example.com",
+   "tenantPhone": "(937) 555-4486",
+   "propertyAddress": "1450 Highland Blvd",
+   "unitNumber": "2",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "780",
+   "startDate": "August 1, 2024",
+   "endDate": "July 31, 2025",
+   "monthlyRent": "825.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "825.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Check",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease-photo-page.html",
+  "out": "generated/leases/photos/L14_p1.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "leaseNumber": "L-2024-P092",
+   "pageLabel": "page 1 of 2",
+   "rotate": "-1.4",
+   "bodyHtml": "<h1>RESIDENTIAL LEASE AGREEMENT</h1><div class=\"sub\">State of Ohio &middot; Lease No. L-2024-P092 &middot; Okafor Property Group</div><h2>Parties &amp; Premises</h2><table><tr><td class=\"k\">Tenant</td><td class=\"v\">Lena Turner</td></tr><tr><td class=\"k\">Email</td><td class=\"v\">lena.turner@example.com</td></tr><tr><td class=\"k\">Premises</td><td class=\"v\">1450 Highland Blvd, Unit 2<br>Springfield, OH 45505</td></tr></table><h2>Term &amp; Rent</h2><table><tr><td class=\"k\">Commencement</td><td class=\"v\">August 1, 2024</td></tr><tr><td class=\"k\">Expiration</td><td class=\"v\">July 31, 2025</td></tr><tr><td class=\"k\">Monthly rent</td><td class=\"v\">$825.00</td></tr><tr><td class=\"k\">Rent due day</td><td class=\"v\">1st of the month</td></tr><tr><td class=\"k\">Security deposit</td><td class=\"v\">$825.00</td></tr><tr><td class=\"k\">Late fee</td><td class=\"v\">$50.00</td></tr></table><p>Tenant agrees to pay Monthly Rent in advance. Page 1 of 2; signatures follow.</p>"
+  }
+ },
+ {
+  "template": "templates/lease-photo-page.html",
+  "out": "generated/leases/photos/L14_p2.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "leaseNumber": "L-2024-P092",
+   "pageLabel": "page 2 of 2",
+   "rotate": "1.2",
+   "bodyHtml": "<h2>Signatures</h2><p>By signing, the parties agree to all terms for 1450 Highland Blvd, Unit 2, Springfield, OH.</p><div class=\"sigline\">Tenant &mdash; Lena Turner</div><div class=\"sigline\">Landlord / Agent &mdash; Okafor Property Group</div><p style=\"margin-top:18px\">Executed August 1, 2024 at Springfield, Ohio.</p>"
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L15_P093.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P093",
+   "signDate": "October 1, 2024",
+   "tenantName": "Grace Iverson",
+   "tenantEmail": "grace.iverson@example.com",
+   "tenantPhone": "(937) 555-2376",
+   "propertyAddress": "1450 Highland Blvd",
+   "unitNumber": "3",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "780",
+   "startDate": "October 1, 2024",
+   "endDate": "September 30, 2025",
+   "monthlyRent": "825.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "825.00",
+   "lateFee": "50.00",
+   "paymentMethod": "ACH",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L16_P094.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2025-P094",
+   "signDate": "March 1, 2025",
+   "tenantName": "Sofia Marin",
+   "tenantEmail": "sofia.marin@example.com",
+   "tenantPhone": "(937) 555-4253",
+   "propertyAddress": "1450 Highland Blvd",
+   "unitNumber": "4",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "780",
+   "startDate": "March 15, 2025",
+   "endDate": "March 14, 2026",
+   "monthlyRent": "825.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "825.00",
+   "lateFee": "50.00",
+   "paymentMethod": "ACH",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L17_P10U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P10U1",
+   "signDate": "July 1, 2024",
+   "tenantName": "Nia Adeyemi",
+   "tenantEmail": "nia.adeyemi@example.com",
+   "tenantPhone": "(937) 555-1504",
+   "propertyAddress": "63 Chestnut St",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45504",
+   "bedrooms": 3,
+   "bathrooms": 2,
+   "squareFeet": "1,560",
+   "startDate": "July 1, 2024",
+   "endDate": "June 30, 2025",
+   "monthlyRent": "1,525.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "1,525.00",
+   "lateFee": "50.00",
+   "paymentMethod": "ACH autopay",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L18_P11U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P11U1",
+   "signDate": "November 1, 2024",
+   "tenantName": "Will Foster",
+   "tenantEmail": "will.foster@example.com",
+   "tenantPhone": "(937) 555-5637",
+   "propertyAddress": "9 Aspen Circle",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45503",
+   "bedrooms": 2,
+   "bathrooms": 2,
+   "squareFeet": "1,100",
+   "startDate": "November 1, 2024",
+   "endDate": "October 31, 2025",
+   "monthlyRent": "1,100.00",
+   "rentDueDayOrdinal": "15th",
+   "securityDeposit": "1,100.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Zelle",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L19_P12U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2025-P12U1",
+   "signDate": "January 1, 2025",
+   "tenantName": "Kevin Malloy",
+   "tenantEmail": "kevin.malloy@example.com",
+   "tenantPhone": "(937) 555-7653",
+   "propertyAddress": "1155 Riverside Dr",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45504",
+   "bedrooms": 4,
+   "bathrooms": 2.5,
+   "squareFeet": "1,850",
+   "startDate": "January 1, 2025",
+   "endDate": "December 31, 2025",
+   "monthlyRent": "1,600.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "1,600.00",
+   "lateFee": "50.00",
+   "paymentMethod": "ACH",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L20_P04U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2025-P04U1",
+   "signDate": "July 1, 2025",
+   "tenantName": "Derek Cole",
+   "tenantEmail": "derek.cole@example.com",
+   "tenantPhone": "(937) 555-4550",
+   "propertyAddress": "1203 Oakwood Dr",
+   "unitNumber": "1",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45503",
+   "bedrooms": 3,
+   "bathrooms": 2,
+   "squareFeet": "1,500",
+   "startDate": "July 1, 2025",
+   "endDate": "June 30, 2026",
+   "monthlyRent": "1,495.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "1,495.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Zelle",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L21_P13A.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P13A",
+   "signDate": "September 1, 2024",
+   "tenantName": "Olivia Ricci",
+   "tenantEmail": "olivia.ricci@example.com",
+   "tenantPhone": "(937) 555-5284",
+   "propertyAddress": "330 Walnut St",
+   "unitNumber": "A",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "900",
+   "startDate": "September 1, 2024",
+   "endDate": "August 31, 2025",
+   "monthlyRent": "925.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "925.00",
+   "lateFee": "50.00",
+   "paymentMethod": "Check",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/lease.html",
+  "out": "generated/leases/L22_P13B.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "leaseNumber": "L-2024-P13B",
+   "signDate": "June 1, 2024",
+   "tenantName": "Viktor Sokolov",
+   "tenantEmail": "viktor.sokolov@example.com",
+   "tenantPhone": "(937) 555-3050",
+   "propertyAddress": "330 Walnut St",
+   "unitNumber": "B",
+   "propertyCity": "Springfield",
+   "propertyState": "OH",
+   "propertyPostal": "45505",
+   "bedrooms": 2,
+   "bathrooms": 1,
+   "squareFeet": "900",
+   "startDate": "June 1, 2024",
+   "endDate": "May 31, 2025",
+   "monthlyRent": "940.00",
+   "rentDueDayOrdinal": "1st",
+   "securityDeposit": "940.00",
+   "lateFee": "50.00",
+   "paymentMethod": "MoneyOrder",
+   "additionalProvisions": "No smoking inside the premises. Renter's insurance required. Tenant maintains the lawn where noted; Landlord maintains major systems and appliances. Quiet hours 10pm-7am."
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P01_PSB-4471-0412.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Prairie State Bank",
+   "loanNumber": "PSB-4471-0412",
+   "propertyAddress": "412 Maple St, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "782.26",
+   "currentBalance": "89,405.08",
+   "originalAmount": "96,000.00",
+   "interestRate": "4.25",
+   "termMonths": "360",
+   "startDate": "03/01/2021",
+   "maturityDate": "03/01/2051",
+   "principalInterest": "472.26",
+   "escrow": "310.00",
+   "principalPortion": "155.62",
+   "interestPortion": "316.64",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P02_PSB-4471-0418.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Prairie State Bank",
+   "loanNumber": "PSB-4471-0418",
+   "propertyAddress": "418-420 Vine St, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "1,069.36",
+   "currentBalance": "120,564.89",
+   "originalAmount": "140,000.00",
+   "interestRate": "4.5",
+   "termMonths": "360",
+   "startDate": "08/01/2017",
+   "maturityDate": "08/01/2047",
+   "principalInterest": "709.36",
+   "escrow": "360.00",
+   "principalPortion": "257.24",
+   "interestPortion": "452.12",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P04_CCCU-2031-1203.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Clark County CU",
+   "loanNumber": "CCCU-2031-1203",
+   "propertyAddress": "1203 Oakwood Dr, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "978.53",
+   "currentBalance": "111,176.18",
+   "originalAmount": "126,000.00",
+   "interestRate": "3.75",
+   "termMonths": "360",
+   "startDate": "03/01/2019",
+   "maturityDate": "03/01/2049",
+   "principalInterest": "583.53",
+   "escrow": "395.00",
+   "principalPortion": "236.10",
+   "interestPortion": "347.43",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P05_PSB-4471-0305.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Prairie State Bank",
+   "loanNumber": "PSB-4471-0305",
+   "propertyAddress": "305 Elm Court, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "1,542.43",
+   "currentBalance": "174,846.36",
+   "originalAmount": "196,000.00",
+   "interestRate": "4.75",
+   "termMonths": "360",
+   "startDate": "11/01/2018",
+   "maturityDate": "11/01/2048",
+   "principalInterest": "1,022.43",
+   "escrow": "520.00",
+   "principalPortion": "330.33",
+   "interestPortion": "692.10",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P06_CCCU-2031-0088.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Clark County CU",
+   "loanNumber": "CCCU-2031-0088",
+   "propertyAddress": "88 Cedar Ln, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "1,008.84",
+   "currentBalance": "124,467.45",
+   "originalAmount": "137,600.00",
+   "interestRate": "3.25",
+   "termMonths": "360",
+   "startDate": "07/01/2020",
+   "maturityDate": "07/01/2050",
+   "principalInterest": "598.84",
+   "escrow": "410.00",
+   "principalPortion": "261.74",
+   "interestPortion": "337.10",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P07_FTB-8890-0210.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Fifth Third",
+   "loanNumber": "FTB-8890-0210",
+   "propertyAddress": "210 Willow Way, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "1,224.40",
+   "currentBalance": "155,606.21",
+   "originalAmount": "168,000.00",
+   "interestRate": "3.5",
+   "termMonths": "360",
+   "startDate": "05/01/2021",
+   "maturityDate": "05/01/2051",
+   "principalInterest": "754.40",
+   "escrow": "470.00",
+   "principalPortion": "300.55",
+   "interestPortion": "453.85",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P09_FTB-8890-1450.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Fifth Third",
+   "loanNumber": "FTB-8890-1450",
+   "propertyAddress": "1450 Highland Blvd, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "2,264.39",
+   "currentBalance": "260,725.27",
+   "originalAmount": "272,000.00",
+   "interestRate": "5.5",
+   "termMonths": "360",
+   "startDate": "02/01/2022",
+   "maturityDate": "02/01/2052",
+   "principalInterest": "1,544.39",
+   "escrow": "720.00",
+   "principalPortion": "349.40",
+   "interestPortion": "1,194.99",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P10_CCCU-2031-0063.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Clark County CU",
+   "loanNumber": "CCCU-2031-0063",
+   "propertyAddress": "63 Chestnut St, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "1,365.46",
+   "currentBalance": "145,330.11",
+   "originalAmount": "148,000.00",
+   "interestRate": "6.5",
+   "termMonths": "360",
+   "startDate": "06/01/2023",
+   "maturityDate": "06/01/2053",
+   "principalInterest": "935.46",
+   "escrow": "430.00",
+   "principalPortion": "148.26",
+   "interestPortion": "787.20",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P11_PSB-4471-0009.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Prairie State Bank",
+   "loanNumber": "PSB-4471-0009",
+   "propertyAddress": "9 Aspen Circle, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "542.84",
+   "currentBalance": "68,337.39",
+   "originalAmount": "76,000.00",
+   "interestRate": "4",
+   "termMonths": "360",
+   "startDate": "10/01/2019",
+   "maturityDate": "10/01/2049",
+   "principalInterest": "362.84",
+   "escrow": "180.00",
+   "principalPortion": "135.05",
+   "interestPortion": "227.79",
+   "escrowCovers": "County property tax"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P12_FTB-8890-1155.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Fifth Third",
+   "loanNumber": "FTB-8890-1155",
+   "propertyAddress": "1155 Riverside Dr, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "1,487.38",
+   "currentBalance": "156,711.85",
+   "originalAmount": "158,400.00",
+   "interestRate": "6.75",
+   "termMonths": "360",
+   "startDate": "01/01/2024",
+   "maturityDate": "01/01/2054",
+   "principalInterest": "1,027.38",
+   "escrow": "460.00",
+   "principalPortion": "145.88",
+   "interestPortion": "881.50",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/mortgage-statement.html",
+  "out": "generated/mortgage/P13_CCCU-2031-0330.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "lender": "Clark County CU",
+   "loanNumber": "CCCU-2031-0330",
+   "propertyAddress": "330 Walnut St, Springfield OH",
+   "statementDate": "01/05/2025",
+   "dueDate": "02/01/2025",
+   "totalPayment": "1,018.82",
+   "currentBalance": "115,348.58",
+   "originalAmount": "132,000.00",
+   "interestRate": "4.5",
+   "termMonths": "360",
+   "startDate": "03/01/2018",
+   "maturityDate": "03/01/2048",
+   "principalInterest": "668.82",
+   "escrow": "350.00",
+   "principalPortion": "236.26",
+   "interestPortion": "432.56",
+   "escrowCovers": "County property tax & hazard insurance"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L01_2025-01.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "James Whitfield",
+   "payerAddress": "412 Maple St Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1205",
+   "date": "01/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,250.00",
+   "amountWords": "One thousand two hundred fifty and 00/100",
+   "memo": "Rent January 2025 - 412 Maple St #1",
+   "routing": "044072324",
+   "account": "•••••4405"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L01_2025-03.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "James Whitfield",
+   "payerAddress": "412 Maple St Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1206",
+   "date": "03/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,250.00",
+   "amountWords": "One thousand two hundred fifty and 00/100",
+   "memo": "Rent March 2025 - 412 Maple St #1",
+   "routing": "044072324",
+   "account": "•••••4406"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L01_2025-04.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "James Whitfield",
+   "payerAddress": "412 Maple St Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1207",
+   "date": "04/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,287.50",
+   "amountWords": "One thousand two hundred eighty-seven and 50/100",
+   "memo": "Rent April 2025 - 412 Maple St #1",
+   "routing": "044072324",
+   "account": "•••••4407"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L01_2025-07.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "James Whitfield",
+   "payerAddress": "412 Maple St Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1208",
+   "date": "07/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,287.50",
+   "amountWords": "One thousand two hundred eighty-seven and 50/100",
+   "memo": "Rent July 2025 - 412 Maple St #1",
+   "routing": "044072324",
+   "account": "•••••4408"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L01_2025-10.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "James Whitfield",
+   "payerAddress": "412 Maple St Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1209",
+   "date": "10/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,287.50",
+   "amountWords": "One thousand two hundred eighty-seven and 50/100",
+   "memo": "Rent October 2025 - 412 Maple St #1",
+   "routing": "044072324",
+   "account": "•••••4409"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L01_2025-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "James Whitfield",
+   "payerAddress": "412 Maple St Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1210",
+   "date": "12/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,287.50",
+   "amountWords": "One thousand two hundred eighty-seven and 50/100",
+   "memo": "Rent December 2025 - 412 Maple St #1",
+   "routing": "044072324",
+   "account": "•••••4410"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L04_2025-01.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "John Abernathy",
+   "payerAddress": "77 Birch Ave Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1211",
+   "date": "01/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,150.00",
+   "amountWords": "One thousand one hundred fifty and 00/100",
+   "memo": "Rent January 2025 - 77 Birch Ave #1",
+   "routing": "044072324",
+   "account": "•••••4411"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L04_2025-03.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "John Abernathy",
+   "payerAddress": "77 Birch Ave Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1212",
+   "date": "03/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,150.00",
+   "amountWords": "One thousand one hundred fifty and 00/100",
+   "memo": "Rent March 2025 - 77 Birch Ave #1",
+   "routing": "044072324",
+   "account": "•••••4412"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L04_2025-04.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "John Abernathy",
+   "payerAddress": "77 Birch Ave Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1213",
+   "date": "04/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,150.00",
+   "amountWords": "One thousand one hundred fifty and 00/100",
+   "memo": "Rent April 2025 - 77 Birch Ave #1",
+   "routing": "044072324",
+   "account": "•••••4413"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L04_2025-07.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "John Abernathy",
+   "payerAddress": "77 Birch Ave Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1214",
+   "date": "07/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,184.50",
+   "amountWords": "One thousand one hundred eighty-four and 50/100",
+   "memo": "Rent July 2025 - 77 Birch Ave #1",
+   "routing": "044072324",
+   "account": "•••••4414"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L04_2025-10.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "John Abernathy",
+   "payerAddress": "77 Birch Ave Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1215",
+   "date": "10/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,184.50",
+   "amountWords": "One thousand one hundred eighty-four and 50/100",
+   "memo": "Rent October 2025 - 77 Birch Ave #1",
+   "routing": "044072324",
+   "account": "•••••4415"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L04_2025-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "John Abernathy",
+   "payerAddress": "77 Birch Ave Unit 1, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1216",
+   "date": "12/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,184.50",
+   "amountWords": "One thousand one hundred eighty-four and 50/100",
+   "memo": "Rent December 2025 - 77 Birch Ave #1",
+   "routing": "044072324",
+   "account": "•••••4416"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L07_2025-01.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Tomiko Nakamura",
+   "payerAddress": "305 Elm Court Unit 2, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1217",
+   "date": "01/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent January 2025 - 305 Elm Court #2",
+   "routing": "044072324",
+   "account": "•••••4417"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L07_2025-03.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Tomiko Nakamura",
+   "payerAddress": "305 Elm Court Unit 2, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1218",
+   "date": "03/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent March 2025 - 305 Elm Court #2",
+   "routing": "044072324",
+   "account": "•••••4418"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L07_2025-04.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Tomiko Nakamura",
+   "payerAddress": "305 Elm Court Unit 2, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1219",
+   "date": "04/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent April 2025 - 305 Elm Court #2",
+   "routing": "044072324",
+   "account": "•••••4419"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L07_2025-07.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Tomiko Nakamura",
+   "payerAddress": "305 Elm Court Unit 2, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1220",
+   "date": "07/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent July 2025 - 305 Elm Court #2",
+   "routing": "044072324",
+   "account": "•••••4420"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L07_2025-10.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Tomiko Nakamura",
+   "payerAddress": "305 Elm Court Unit 2, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1221",
+   "date": "10/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent October 2025 - 305 Elm Court #2",
+   "routing": "044072324",
+   "account": "•••••4421"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L07_2025-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Tomiko Nakamura",
+   "payerAddress": "305 Elm Court Unit 2, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1222",
+   "date": "12/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "875.50",
+   "amountWords": "Eight hundred seventy-five and 50/100",
+   "memo": "Rent December 2025 - 305 Elm Court #2",
+   "routing": "044072324",
+   "account": "•••••4422"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L08_2025-01.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Ravi Anand",
+   "payerAddress": "305 Elm Court Unit 3, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1223",
+   "date": "01/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent January 2025 - 305 Elm Court #3",
+   "routing": "044072324",
+   "account": "•••••4423"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L08_2025-03.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Ravi Anand",
+   "payerAddress": "305 Elm Court Unit 3, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1224",
+   "date": "03/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent March 2025 - 305 Elm Court #3",
+   "routing": "044072324",
+   "account": "•••••4424"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L08_2025-04.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Ravi Anand",
+   "payerAddress": "305 Elm Court Unit 3, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1225",
+   "date": "04/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent April 2025 - 305 Elm Court #3",
+   "routing": "044072324",
+   "account": "•••••4425"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L08_2025-07.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Ravi Anand",
+   "payerAddress": "305 Elm Court Unit 3, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1226",
+   "date": "07/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent July 2025 - 305 Elm Court #3",
+   "routing": "044072324",
+   "account": "•••••4426"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L08_2025-10.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Ravi Anand",
+   "payerAddress": "305 Elm Court Unit 3, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1227",
+   "date": "10/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent October 2025 - 305 Elm Court #3",
+   "routing": "044072324",
+   "account": "•••••4427"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L08_2025-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Ravi Anand",
+   "payerAddress": "305 Elm Court Unit 3, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1228",
+   "date": "12/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "850.00",
+   "amountWords": "Eight hundred fifty and 00/100",
+   "memo": "Rent December 2025 - 305 Elm Court #3",
+   "routing": "044072324",
+   "account": "•••••4428"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L11_2025-01.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Hien Pham",
+   "payerAddress": "210 Willow Way Unit B, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1229",
+   "date": "01/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,150.00",
+   "amountWords": "One thousand one hundred fifty and 00/100",
+   "memo": "Rent January 2025 - 210 Willow Way #B",
+   "routing": "044072324",
+   "account": "•••••4429"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L11_2025-03.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Hien Pham",
+   "payerAddress": "210 Willow Way Unit B, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1230",
+   "date": "03/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,184.50",
+   "amountWords": "One thousand one hundred eighty-four and 50/100",
+   "memo": "Rent March 2025 - 210 Willow Way #B",
+   "routing": "044072324",
+   "account": "•••••4430"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L11_2025-04.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Hien Pham",
+   "payerAddress": "210 Willow Way Unit B, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1231",
+   "date": "04/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,184.50",
+   "amountWords": "One thousand one hundred eighty-four and 50/100",
+   "memo": "Rent April 2025 - 210 Willow Way #B",
+   "routing": "044072324",
+   "account": "•••••4431"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L11_2025-07.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Hien Pham",
+   "payerAddress": "210 Willow Way Unit B, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1232",
+   "date": "07/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,184.50",
+   "amountWords": "One thousand one hundred eighty-four and 50/100",
+   "memo": "Rent July 2025 - 210 Willow Way #B",
+   "routing": "044072324",
+   "account": "•••••4432"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L11_2025-10.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Hien Pham",
+   "payerAddress": "210 Willow Way Unit B, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1233",
+   "date": "10/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,184.50",
+   "amountWords": "One thousand one hundred eighty-four and 50/100",
+   "memo": "Rent October 2025 - 210 Willow Way #B",
+   "routing": "044072324",
+   "account": "•••••4433"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L11_2025-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Hien Pham",
+   "payerAddress": "210 Willow Way Unit B, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1234",
+   "date": "12/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "1,184.50",
+   "amountWords": "One thousand one hundred eighty-four and 50/100",
+   "memo": "Rent December 2025 - 210 Willow Way #B",
+   "routing": "044072324",
+   "account": "•••••4434"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L14_2025-01.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Lena Turner",
+   "payerAddress": "1450 Highland Blvd Unit 2, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1235",
+   "date": "01/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "825.00",
+   "amountWords": "Eight hundred twenty-five and 00/100",
+   "memo": "Rent January 2025 - 1450 Highland Blvd #2",
+   "routing": "044072324",
+   "account": "•••••4435"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L14_2025-03.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Lena Turner",
+   "payerAddress": "1450 Highland Blvd Unit 2, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1236",
+   "date": "03/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "825.00",
+   "amountWords": "Eight hundred twenty-five and 00/100",
+   "memo": "Rent March 2025 - 1450 Highland Blvd #2",
+   "routing": "044072324",
+   "account": "•••••4436"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L14_2025-04.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Lena Turner",
+   "payerAddress": "1450 Highland Blvd Unit 2, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1237",
+   "date": "04/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "825.00",
+   "amountWords": "Eight hundred twenty-five and 00/100",
+   "memo": "Rent April 2025 - 1450 Highland Blvd #2",
+   "routing": "044072324",
+   "account": "•••••4437"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L14_2025-07.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Lena Turner",
+   "payerAddress": "1450 Highland Blvd Unit 2, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1238",
+   "date": "07/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "825.00",
+   "amountWords": "Eight hundred twenty-five and 00/100",
+   "memo": "Rent July 2025 - 1450 Highland Blvd #2",
+   "routing": "044072324",
+   "account": "•••••4438"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L14_2025-10.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Lena Turner",
+   "payerAddress": "1450 Highland Blvd Unit 2, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1239",
+   "date": "10/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "849.75",
+   "amountWords": "Eight hundred forty-nine and 75/100",
+   "memo": "Rent October 2025 - 1450 Highland Blvd #2",
+   "routing": "044072324",
+   "account": "•••••4439"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L14_2025-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Lena Turner",
+   "payerAddress": "1450 Highland Blvd Unit 2, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1240",
+   "date": "12/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "849.75",
+   "amountWords": "Eight hundred forty-nine and 75/100",
+   "memo": "Rent December 2025 - 1450 Highland Blvd #2",
+   "routing": "044072324",
+   "account": "•••••4440"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L21_2025-01.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Olivia Ricci",
+   "payerAddress": "330 Walnut St Unit A, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1241",
+   "date": "01/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "925.00",
+   "amountWords": "Nine hundred twenty-five and 00/100",
+   "memo": "Rent January 2025 - 330 Walnut St #A",
+   "routing": "044072324",
+   "account": "•••••4441"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L21_2025-03.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Olivia Ricci",
+   "payerAddress": "330 Walnut St Unit A, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1242",
+   "date": "03/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "925.00",
+   "amountWords": "Nine hundred twenty-five and 00/100",
+   "memo": "Rent March 2025 - 330 Walnut St #A",
+   "routing": "044072324",
+   "account": "•••••4442"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L21_2025-04.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Olivia Ricci",
+   "payerAddress": "330 Walnut St Unit A, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1243",
+   "date": "04/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "925.00",
+   "amountWords": "Nine hundred twenty-five and 00/100",
+   "memo": "Rent April 2025 - 330 Walnut St #A",
+   "routing": "044072324",
+   "account": "•••••4443"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L21_2025-07.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Olivia Ricci",
+   "payerAddress": "330 Walnut St Unit A, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1244",
+   "date": "07/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "925.00",
+   "amountWords": "Nine hundred twenty-five and 00/100",
+   "memo": "Rent July 2025 - 330 Walnut St #A",
+   "routing": "044072324",
+   "account": "•••••4444"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L21_2025-10.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Olivia Ricci",
+   "payerAddress": "330 Walnut St Unit A, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1245",
+   "date": "10/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "952.75",
+   "amountWords": "Nine hundred fifty-two and 75/100",
+   "memo": "Rent October 2025 - 330 Walnut St #A",
+   "routing": "044072324",
+   "account": "•••••4445"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L21_2025-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Olivia Ricci",
+   "payerAddress": "330 Walnut St Unit A, Springfield OH",
+   "bankName": "Springfield Community Bank",
+   "checkNumber": "1246",
+   "date": "12/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "952.75",
+   "amountWords": "Nine hundred fifty-two and 75/100",
+   "memo": "Rent December 2025 - 330 Walnut St #A",
+   "routing": "044072324",
+   "account": "•••••4446"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L22_2025-01.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Viktor Sokolov",
+   "payerAddress": "330 Walnut St Unit B, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1247",
+   "date": "01/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "940.00",
+   "amountWords": "Nine hundred forty and 00/100",
+   "memo": "Rent January 2025 - 330 Walnut St #B",
+   "routing": "044072324",
+   "account": "•••••4447"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L22_2025-03.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Viktor Sokolov",
+   "payerAddress": "330 Walnut St Unit B, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1248",
+   "date": "03/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "940.00",
+   "amountWords": "Nine hundred forty and 00/100",
+   "memo": "Rent March 2025 - 330 Walnut St #B",
+   "routing": "044072324",
+   "account": "•••••4448"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L22_2025-04.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Viktor Sokolov",
+   "payerAddress": "330 Walnut St Unit B, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1249",
+   "date": "04/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "940.00",
+   "amountWords": "Nine hundred forty and 00/100",
+   "memo": "Rent April 2025 - 330 Walnut St #B",
+   "routing": "044072324",
+   "account": "•••••4449"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L22_2025-07.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Viktor Sokolov",
+   "payerAddress": "330 Walnut St Unit B, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1250",
+   "date": "07/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "968.20",
+   "amountWords": "Nine hundred sixty-eight and 20/100",
+   "memo": "Rent July 2025 - 330 Walnut St #B",
+   "routing": "044072324",
+   "account": "•••••4450"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L22_2025-10.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Viktor Sokolov",
+   "payerAddress": "330 Walnut St Unit B, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1251",
+   "date": "10/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "968.20",
+   "amountWords": "Nine hundred sixty-eight and 20/100",
+   "memo": "Rent October 2025 - 330 Walnut St #B",
+   "routing": "044072324",
+   "account": "•••••4451"
+  }
+ },
+ {
+  "template": "templates/rent-check.html",
+  "out": "generated/checks/L22_2025-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   820
+  ],
+  "data": {
+   "payerName": "Viktor Sokolov",
+   "payerAddress": "330 Walnut St Unit B, Springfield OH",
+   "bankName": "USPS Money Order",
+   "checkNumber": "MO1252",
+   "date": "12/03/2025",
+   "payee": "Okafor Property Group",
+   "amount": "968.20",
+   "amountWords": "Nine hundred sixty-eight and 20/100",
+   "memo": "Rent December 2025 - 330 Walnut St #B",
+   "routing": "044072324",
+   "account": "•••••4452"
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-01-14_P09_58201.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Rooter Brothers Plumbing",
+   "vendorAddress": "Springfield, OH 45571",
+   "vendorPhone": "(937) 555-1120",
+   "vendorWebsite": "rooter.example.com",
+   "receiptNumber": "R-58201",
+   "transactionDate": "01/14/2025",
+   "serviceAddress": "1450 Highland Blvd #2",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">kitchen faucet cartridge (L14 request)</span><span>$170.00</span></div>",
+   "subtotal": "170.00",
+   "taxRate": "7.25",
+   "tax": "12.33",
+   "total": "182.33",
+   "paymentMethod": "Visa",
+   "cardLast4": "6601",
+   "notes": "kitchen faucet cartridge (L14 request) — category Repairs. PAID."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-06-14_P09_58202.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "CoolFlow HVAC",
+   "vendorAddress": "Springfield, OH 45572",
+   "vendorPhone": "(937) 555-1377",
+   "vendorWebsite": "coolflow.example.com",
+   "receiptNumber": "R-58202",
+   "transactionDate": "06/14/2025",
+   "serviceAddress": "1450 Highland Blvd #3",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">AC recharge (L15 request)</span><span>$228.44</span></div>",
+   "subtotal": "228.44",
+   "taxRate": "7.25",
+   "tax": "16.56",
+   "total": "245.00",
+   "paymentMethod": "Visa",
+   "cardLast4": "6602",
+   "notes": "AC recharge (L15 request) — category Repairs. PAID."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-08-15_P02_58203.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Summit Roofing",
+   "vendorAddress": "Springfield, OH 45573",
+   "vendorPhone": "(937) 555-4675",
+   "vendorWebsite": "summit.example.com",
+   "receiptNumber": "R-58203",
+   "transactionDate": "08/15/2025",
+   "serviceAddress": "418-420 Vine St #A",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">roof leak repair</span><span>$596.74</span></div>",
+   "subtotal": "596.74",
+   "taxRate": "7.25",
+   "tax": "43.26",
+   "total": "640.00",
+   "paymentMethod": "Visa",
+   "cardLast4": "6603",
+   "notes": "roof leak repair — category Repairs. PAID."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-09-18_P06_58204.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "ApplianceCare",
+   "vendorAddress": "Springfield, OH 45574",
+   "vendorPhone": "(937) 555-7118",
+   "vendorWebsite": "appliancecare.example.com",
+   "receiptNumber": "R-58204",
+   "transactionDate": "09/18/2025",
+   "serviceAddress": "88 Cedar Ln #U1",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">dishwasher repair</span><span>$195.80</span></div>",
+   "subtotal": "195.80",
+   "taxRate": "7.25",
+   "tax": "14.20",
+   "total": "210.00",
+   "paymentMethod": "Visa",
+   "cardLast4": "6604",
+   "notes": "dishwasher repair — category Repairs. PAID."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-11-10_P13_58205.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Rooter Brothers Plumbing",
+   "vendorAddress": "Springfield, OH 45575",
+   "vendorPhone": "(937) 555-1120",
+   "vendorWebsite": "rooter.example.com",
+   "receiptNumber": "R-58205",
+   "transactionDate": "11/10/2025",
+   "serviceAddress": "330 Walnut St #A",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">water heater replacement</span><span>$918.41</span></div>",
+   "subtotal": "918.41",
+   "taxRate": "7.25",
+   "tax": "66.59",
+   "total": "985.00",
+   "paymentMethod": "Visa",
+   "cardLast4": "6605",
+   "notes": "water heater replacement — category Repairs. PAID."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-11-20_P08_58206.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Handy Hank LLC",
+   "vendorAddress": "Springfield, OH 45576",
+   "vendorPhone": "(937) 555-1359",
+   "vendorWebsite": "handy.example.com",
+   "receiptNumber": "R-58206",
+   "transactionDate": "11/20/2025",
+   "serviceAddress": "540 Sycamore St #U1",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">gutter cleaning</span><span>$130.54</span></div>",
+   "subtotal": "130.54",
+   "taxRate": "7.25",
+   "tax": "9.46",
+   "total": "140.00",
+   "paymentMethod": "Visa",
+   "cardLast4": "6606",
+   "notes": "gutter cleaning — category CleaningMaintenance. PAID."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-06-10_P04_58207.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Freshcoat Painters",
+   "vendorAddress": "Springfield, OH 45577",
+   "vendorPhone": "(937) 555-2827",
+   "vendorWebsite": "freshcoat.example.com",
+   "receiptNumber": "R-58207",
+   "transactionDate": "06/10/2025",
+   "serviceAddress": "1203 Oakwood Dr",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">interior repaint</span><span>$634.03</span></div>",
+   "subtotal": "634.03",
+   "taxRate": "7.25",
+   "tax": "45.97",
+   "total": "680.00",
+   "paymentMethod": "Visa",
+   "cardLast4": "6607",
+   "notes": "interior repaint — category Repairs. PAID."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-06-10_P04_58208.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Valley Carpet",
+   "vendorAddress": "Springfield, OH 45578",
+   "vendorPhone": "(937) 555-2500",
+   "vendorWebsite": "valley.example.com",
+   "receiptNumber": "R-58208",
+   "transactionDate": "06/10/2025",
+   "serviceAddress": "1203 Oakwood Dr",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">carpet replacement</span><span>$484.85</span></div>",
+   "subtotal": "484.85",
+   "taxRate": "7.25",
+   "tax": "35.15",
+   "total": "520.00",
+   "paymentMethod": "Visa",
+   "cardLast4": "6608",
+   "notes": "carpet replacement — category CleaningMaintenance. PAID."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-02-05_P03_58209.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Clark County Treasurer",
+   "vendorAddress": "Springfield, OH 45579",
+   "vendorPhone": "(937) 555-1596",
+   "vendorWebsite": "clark.example.com",
+   "receiptNumber": "TAX-58209",
+   "transactionDate": "02/05/2025",
+   "serviceAddress": "77 Birch Ave",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">Property tax 2025 first half</span><span>$800.00</span></div>",
+   "subtotal": "800.00",
+   "taxRate": "0.00",
+   "tax": "0.00",
+   "total": "800.00",
+   "paymentMethod": "Escrow/ACH",
+   "cardLast4": "6609",
+   "notes": "Property tax 2025 first half — category Taxes. PropertyTax."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-07-10_P03_58210.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Clark County Treasurer",
+   "vendorAddress": "Springfield, OH 45580",
+   "vendorPhone": "(937) 555-1596",
+   "vendorWebsite": "clark.example.com",
+   "receiptNumber": "TAX-58210",
+   "transactionDate": "07/10/2025",
+   "serviceAddress": "77 Birch Ave",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">Property tax 2025 second half</span><span>$800.00</span></div>",
+   "subtotal": "800.00",
+   "taxRate": "0.00",
+   "tax": "0.00",
+   "total": "800.00",
+   "paymentMethod": "Escrow/ACH",
+   "cardLast4": "6610",
+   "notes": "Property tax 2025 second half — category Taxes. PropertyTax."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-01-15_P03_58211.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Buckeye Mutual Insurance",
+   "vendorAddress": "Springfield, OH 45581",
+   "vendorPhone": "(937) 555-3704",
+   "vendorWebsite": "buckeye.example.com",
+   "receiptNumber": "INS-58211",
+   "transactionDate": "01/15/2025",
+   "serviceAddress": "77 Birch Ave",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">Annual landlord hazard policy 2025</span><span>$780.00</span></div>",
+   "subtotal": "780.00",
+   "taxRate": "0.00",
+   "tax": "0.00",
+   "total": "780.00",
+   "paymentMethod": "Visa",
+   "cardLast4": "6611",
+   "notes": "Annual landlord hazard policy 2025 — category Insurance. Insurance."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-02-05_P08_58212.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Clark County Treasurer",
+   "vendorAddress": "Springfield, OH 45582",
+   "vendorPhone": "(937) 555-1596",
+   "vendorWebsite": "clark.example.com",
+   "receiptNumber": "TAX-58212",
+   "transactionDate": "02/05/2025",
+   "serviceAddress": "540 Sycamore St",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">Property tax 2025 first half</span><span>$700.00</span></div>",
+   "subtotal": "700.00",
+   "taxRate": "0.00",
+   "tax": "0.00",
+   "total": "700.00",
+   "paymentMethod": "Escrow/ACH",
+   "cardLast4": "6612",
+   "notes": "Property tax 2025 first half — category Taxes. PropertyTax."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-07-10_P08_58213.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Clark County Treasurer",
+   "vendorAddress": "Springfield, OH 45583",
+   "vendorPhone": "(937) 555-1596",
+   "vendorWebsite": "clark.example.com",
+   "receiptNumber": "TAX-58213",
+   "transactionDate": "07/10/2025",
+   "serviceAddress": "540 Sycamore St",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">Property tax 2025 second half</span><span>$700.00</span></div>",
+   "subtotal": "700.00",
+   "taxRate": "0.00",
+   "tax": "0.00",
+   "total": "700.00",
+   "paymentMethod": "Escrow/ACH",
+   "cardLast4": "6613",
+   "notes": "Property tax 2025 second half — category Taxes. PropertyTax."
+  }
+ },
+ {
+  "template": "templates/receipt.html",
+  "out": "generated/receipts/2025-01-15_P08_58214.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "vendorName": "Buckeye Mutual Insurance",
+   "vendorAddress": "Springfield, OH 45584",
+   "vendorPhone": "(937) 555-3704",
+   "vendorWebsite": "buckeye.example.com",
+   "receiptNumber": "INS-58214",
+   "transactionDate": "01/15/2025",
+   "serviceAddress": "540 Sycamore St",
+   "lineItemsHtml": "<div class=\"row\"><span class=\"d\">Annual landlord hazard policy 2025</span><span>$680.00</span></div>",
+   "subtotal": "680.00",
+   "taxRate": "0.00",
+   "tax": "0.00",
+   "total": "680.00",
+   "paymentMethod": "Visa",
+   "cardLast4": "6614",
+   "notes": "Annual landlord hazard policy 2025 — category Insurance. Insurance."
+  }
+ },
+ {
+  "template": "templates/application.html",
+  "out": "generated/applications/Ravi-Anand_P053.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "firstName": "Ravi",
+   "lastName": "Anand",
+   "email": "ravi.anand@example.com",
+   "phone": "(937) 555-3836",
+   "dob": "02/14/1991",
+   "idLast4": "3700",
+   "currentAddress": "300 Prior St, Springfield OH",
+   "employer": "Springfield Regional Hospital",
+   "monthlyIncome": "3,400.00",
+   "coSigner": "—",
+   "propertyName": "305 Elm Court",
+   "unitNumber": "3",
+   "applyingFor": "2bd/1ba at 305 Elm Court",
+   "desiredMoveIn": "March 1, 2025",
+   "signDate": "February 1, 2025"
+  }
+ },
+ {
+  "template": "templates/application.html",
+  "out": "generated/applications/Sofia-Marin_P094.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "firstName": "Sofia",
+   "lastName": "Marin",
+   "email": "sofia.marin@example.com",
+   "phone": "(937) 555-4253",
+   "dob": "03/14/1991",
+   "idLast4": "3400",
+   "currentAddress": "800 Prior St, Springfield OH",
+   "employer": "Clark State College",
+   "monthlyIncome": "3,100.00",
+   "coSigner": "—",
+   "propertyName": "1450 Highland Blvd",
+   "unitNumber": "4",
+   "applyingFor": "2bd/1ba at 1450 Highland Blvd",
+   "desiredMoveIn": "March 15, 2025",
+   "signDate": "February 1, 2025"
+  }
+ },
+ {
+  "template": "templates/application.html",
+  "out": "generated/applications/Derek-Cole_P04U1.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "firstName": "Derek",
+   "lastName": "Cole",
+   "email": "derek.cole@example.com",
+   "phone": "(937) 555-4550",
+   "dob": "02/14/1991",
+   "idLast4": "3700",
+   "currentAddress": "500 Prior St, Springfield OH",
+   "employer": "Honda of America Mfg.",
+   "monthlyIncome": "5,200.00",
+   "coSigner": "—",
+   "propertyName": "1203 Oakwood Dr",
+   "unitNumber": "1",
+   "applyingFor": "3bd/2ba at 1203 Oakwood Dr",
+   "desiredMoveIn": "July 1, 2025",
+   "signDate": "June 15, 2025"
+  }
+ },
+ {
+  "template": "templates/application.html",
+  "out": "generated/applications/Marcus-Webb_P053.pdf",
+  "mode": "pdf",
+  "data": {
+   "managementCompany": "Okafor Property Group",
+   "firstName": "Marcus",
+   "lastName": "Webb",
+   "email": "marcus.webb@example.com",
+   "phone": "(937) 555-2755",
+   "dob": "03/14/1991",
+   "idLast4": "3300",
+   "currentAddress": "600 Prior St, Springfield OH",
+   "employer": "(gig / rideshare)",
+   "monthlyIncome": "2,100.00",
+   "coSigner": "—",
+   "propertyName": "305 Elm Court",
+   "unitNumber": "3",
+   "applyingFor": "2bd/1ba at 305 Elm Court",
+   "desiredMoveIn": "March 1, 2025",
+   "signDate": "February 1, 2025"
+  }
+ },
+ {
+  "template": "templates/maintenance-photo.html",
+  "out": "generated/maintenance/P092_2025-01-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "title": "Leaky kitchen faucet",
+   "location": "1450 Highland Blvd #2",
+   "description": "Steady drip under sink; cabinet base damp.",
+   "date": "01/12/2025",
+   "icon": "⚠",
+   "rot": "-2",
+   "c1": "#2b3a4a",
+   "c2": "#1c2733",
+   "c3": "#141b24",
+   "sc1": "#3d5266"
+  }
+ },
+ {
+  "template": "templates/maintenance-photo.html",
+  "out": "generated/maintenance/P093_2025-06-12.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "title": "AC not cooling",
+   "location": "1450 Highland Blvd #3",
+   "description": "Unit runs but blows warm; ~82F indoors.",
+   "date": "06/12/2025",
+   "icon": "⚠",
+   "rot": "-2",
+   "c1": "#3a2f2a",
+   "c2": "#241d19",
+   "c3": "#161110",
+   "sc1": "#5a463a"
+  }
+ },
+ {
+  "template": "templates/maintenance-photo.html",
+  "out": "generated/maintenance/P091_2025-08-20.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "title": "Garbage disposal jammed",
+   "location": "1450 Highland Blvd #1",
+   "description": "Hums, won't spin; standing water in sink.",
+   "date": "08/20/2025",
+   "icon": "⚠",
+   "rot": "-2",
+   "c1": "#2a3330",
+   "c2": "#1a201e",
+   "c3": "#111514",
+   "sc1": "#3c4a45"
+  }
+ },
+ {
+  "template": "templates/maintenance-photo.html",
+  "out": "generated/maintenance/P02A_2025-08-15.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "title": "Roof leak — ceiling stain",
+   "location": "418-420 Vine St #A",
+   "description": "Brown stain spreading in back bedroom ceiling after rain.",
+   "date": "08/15/2025",
+   "icon": "⚠",
+   "rot": "-2",
+   "c1": "#33302a",
+   "c2": "#201e19",
+   "c3": "#141210",
+   "sc1": "#4a4438"
+  }
+ },
+ {
+  "template": "templates/maintenance-photo.html",
+  "out": "generated/maintenance/P13A_2025-11-10.jpg",
+  "mode": "photo",
+  "size": [
+   1200,
+   1600
+  ],
+  "data": {
+   "title": "Water heater failed",
+   "location": "330 Walnut St #A",
+   "description": "No hot water; tank leaking at base in utility closet.",
+   "date": "11/10/2025",
+   "icon": "⚠",
+   "rot": "-2",
+   "c1": "#26313b",
+   "c2": "#181f26",
+   "c3": "#0f1318",
+   "sc1": "#374857"
+  }
+ }
+]

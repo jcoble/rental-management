@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -12,26 +13,37 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class WorkOrderServiceListTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public class WorkOrderServiceListTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly WorkOrderService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private WorkOrderService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public WorkOrderServiceListTests()
+    public WorkOrderServiceListTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(WorkOrderServiceListTests));
         _sut = new WorkOrderService(
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IMessagePublisher>(),
             Mock.Of<IFileStorage>(),
-            NullLogger<WorkOrderService>.Instance);
+            NullLogger<WorkOrderService>.Instance,
+            TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IWriteExecutor>());
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ListPageAsync_FiltersSortsAndPagesInSql()
@@ -42,8 +54,9 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("D-400", "West Market Lofts", WorkOrderStatus.New, WorkOrderPriority.High);
         SeedWorkOrder("E-500", "York House", WorkOrderStatus.Completed, WorkOrderPriority.Normal);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new WorkOrderListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
             Status = WorkOrderStatus.New,
             Priority = WorkOrderPriority.Normal,
@@ -78,8 +91,9 @@ public class WorkOrderServiceListTests : IDisposable
         SeedWorkOrder("Closed cancelled", "West Market Lofts", WorkOrderStatus.Cancelled, WorkOrderPriority.Normal);
         SeedWorkOrder("Closed archived", "York House", WorkOrderStatus.Archived, WorkOrderPriority.Normal);
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new WorkOrderListQuery
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
         {
             OpenOnly = true,
             Sort = "title",
@@ -98,9 +112,101 @@ public class WorkOrderServiceListTests : IDisposable
             sql.Contains("NOT IN", StringComparison.OrdinalIgnoreCase));
     }
 
-    private void SeedWorkOrder(string title, string propertyName, WorkOrderStatus status, WorkOrderPriority priority)
+    [Fact]
+    public async Task ListPageAsync_FieldQueueSortsByPriorityThenRequestedDateInSql()
     {
-        var now = DateTime.UtcNow;
+        var day1 = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc);
+        SeedWorkOrder("Normal older", "Cedar Point Flats", WorkOrderStatus.New, WorkOrderPriority.Normal, day1);
+        SeedWorkOrder("Emergency later", "Elm Ridge Homes", WorkOrderStatus.New, WorkOrderPriority.Emergency, day1.AddDays(3));
+        SeedWorkOrder("High earlier", "Harbor View Apartments", WorkOrderStatus.New, WorkOrderPriority.High, day1.AddDays(2));
+        SeedWorkOrder("High oldest", "West Market Lofts", WorkOrderStatus.New, WorkOrderPriority.High, day1.AddDays(1));
+
+        await _ctx.ActivateApiScopeAsync(_scope);
+        _commands.Clear();
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
+        {
+            OpenOnly = true,
+            Sort = "fieldQueue",
+            Take = 10,
+        });
+
+        result.Items.Select(w => w.Title).Should().Equal(
+            "Emergency later",
+            "High oldest",
+            "High earlier",
+            "Normal older");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Priority", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("RequestedAt", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_FiltersRequestedDateWindowInSql()
+    {
+        var day1 = new DateTime(2026, 4, 1, 12, 0, 0, DateTimeKind.Utc);
+        SeedWorkOrder("April 1", "Cedar Point Flats", WorkOrderStatus.New, WorkOrderPriority.Normal, day1);
+        SeedWorkOrder("April 2", "Elm Ridge Homes", WorkOrderStatus.New, WorkOrderPriority.Normal, day1.AddDays(1));
+        SeedWorkOrder("April 3", "Harbor View Apartments", WorkOrderStatus.New, WorkOrderPriority.Normal, day1.AddDays(2));
+        SeedWorkOrder("April 4", "West Market Lofts", WorkOrderStatus.New, WorkOrderPriority.Normal, day1.AddDays(3));
+
+        await _ctx.ActivateApiScopeAsync(_scope);
+        _commands.Clear();
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
+        {
+            RequestedFrom = new DateTime(2026, 4, 2, 0, 0, 0, DateTimeKind.Utc),
+            RequestedTo = new DateTime(2026, 4, 3, 0, 0, 0, DateTimeKind.Utc),
+            Sort = "requestedAt",
+            Take = 10,
+        });
+
+        result.TotalCount.Should().Be(2);
+        result.Items.Select(w => w.Title).Should().Equal("April 2", "April 3");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("RequestedAt", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("RequestedAt", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_SortsCompletedDateInSql()
+    {
+        var day1 = new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc);
+        SeedWorkOrder("Completed first", "Cedar Point Flats", WorkOrderStatus.Completed, WorkOrderPriority.Normal, day1, day1);
+        SeedWorkOrder("Completed third", "Elm Ridge Homes", WorkOrderStatus.Completed, WorkOrderPriority.Normal, day1, day1.AddDays(2));
+        SeedWorkOrder("Completed second", "Harbor View Apartments", WorkOrderStatus.Completed, WorkOrderPriority.Normal, day1, day1.AddDays(1));
+
+        await _ctx.ActivateApiScopeAsync(_scope);
+        _commands.Clear();
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new WorkOrderListQuery
+        {
+            Sort = "-completedAt",
+            Take = 10,
+        });
+
+        result.Items.Select(w => w.Title).Should().Equal("Completed third", "Completed second", "Completed first");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("CompletedAt", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void SeedWorkOrder(
+        string title,
+        string propertyName,
+        WorkOrderStatus status,
+        WorkOrderPriority priority,
+        DateTime? requestedAt = null,
+        DateTime? completedAt = null)
+    {
+        var now = requestedAt ?? DateTime.UtcNow;
         _ctx.Db.WorkOrders.Add(new WorkOrder
         {
             PortfolioId = PortfolioId,
@@ -121,6 +227,7 @@ public class WorkOrderServiceListTests : IDisposable
             Status = status,
             Priority = priority,
             RequestedAt = now,
+            CompletedAt = completedAt,
             UpdatedAt = now,
         });
         _ctx.Db.SaveChanges();

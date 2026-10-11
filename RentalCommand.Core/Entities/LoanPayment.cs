@@ -50,4 +50,5 @@ public class LoanPayment : IPortfolioScoped
 
     public Portfolio? Portfolio { get; set; }
     public Loan? Loan { get; set; }
+    public List<LoanPaymentCorrection> Corrections { get; set; } = [];
 }

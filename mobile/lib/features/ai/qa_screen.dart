@@ -16,6 +16,7 @@ class _QaState {
     this.lastQuestion,
     this.deliveringChannel,
     this.deliveryNote,
+    this.deliveredTurnIndex,
     this.writeModeEnabled = false,
     this.actionDraft,
     this.actionStatus,
@@ -38,6 +39,7 @@ class _QaState {
 
   /// Short status note shown under the latest answer after a delivery attempt.
   final String? deliveryNote;
+  final int? deliveredTurnIndex;
 
   final bool writeModeEnabled;
   final AssistantActionDraft? actionDraft;
@@ -56,6 +58,7 @@ class _QaState {
     String? lastQuestion,
     String? deliveringChannel,
     String? deliveryNote,
+    int? deliveredTurnIndex,
     bool? writeModeEnabled,
     AssistantActionDraft? actionDraft,
     String? actionStatus,
@@ -86,6 +89,9 @@ class _QaState {
       deliveryNote: clearDeliveryNote
           ? null
           : (deliveryNote ?? this.deliveryNote),
+      deliveredTurnIndex: clearDeliveryNote
+          ? null
+          : (deliveredTurnIndex ?? this.deliveredTurnIndex),
       writeModeEnabled: writeModeEnabled ?? this.writeModeEnabled,
       actionDraft: clearAction ? null : (actionDraft ?? this.actionDraft),
       actionStatus: clearAction ? null : (actionStatus ?? this.actionStatus),
@@ -110,7 +116,12 @@ class _QaNotifier extends Notifier<_QaState> {
   }
 
   Future<void> ask(String question) async {
-    if (question.trim().isEmpty || state.pending) return;
+    if (question.trim().isEmpty ||
+        state.pending ||
+        state.executingAction ||
+        state.deliveringChannel != null) {
+      return;
+    }
 
     final userTurn = QaTurn(role: 'user', content: question.trim());
     final historyForRequest = List<QaTurn>.from(state.history);
@@ -184,6 +195,7 @@ class _QaNotifier extends Notifier<_QaState> {
     if (draft == null || state.pending || state.executingAction) {
       return;
     }
+    final targetTurnIndex = state.history.length - 1;
 
     state = state.copyWith(executingAction: true, clearActionNote: true);
 
@@ -192,9 +204,10 @@ class _QaNotifier extends Notifier<_QaState> {
           .read(aiRepositoryProvider)
           .executeAction(draft, state.writeModeEnabled);
       final updatedHistory = List<QaTurn>.from(state.history);
-      if (updatedHistory.isNotEmpty &&
-          updatedHistory.last.role == 'assistant') {
-        updatedHistory[updatedHistory.length - 1] = QaTurn(
+      if (targetTurnIndex >= 0 &&
+          targetTurnIndex < updatedHistory.length &&
+          updatedHistory[targetTurnIndex].role == 'assistant') {
+        updatedHistory[targetTurnIndex] = QaTurn(
           role: 'assistant',
           content: response.message,
         );
@@ -203,7 +216,7 @@ class _QaNotifier extends Notifier<_QaState> {
         history: updatedHistory,
         executingAction: false,
         actionStatus: response.status,
-        actionDraft: response.status == 'Created' ? null : draft,
+        clearAction: response.status != 'Created',
         actionNote: response.detailHref != null
             ? 'Open: ${response.detailHref}'
             : null,
@@ -225,6 +238,7 @@ class _QaNotifier extends Notifier<_QaState> {
     if (question == null || state.pending || state.deliveringChannel != null) {
       return;
     }
+    final deliveredTurnIndex = state.history.length - 1;
 
     // History excludes the final assistant turn (the answer being delivered).
     final historyForRequest = state.history.length >= 2
@@ -250,15 +264,21 @@ class _QaNotifier extends Notifier<_QaState> {
           : (channel == 'email'
                 ? "Couldn't email — no address on file."
                 : "Couldn't text — no phone on file.");
-      state = state.copyWith(deliveryNote: note, clearDeliveringChannel: true);
+      state = state.copyWith(
+        deliveryNote: note,
+        deliveredTurnIndex: deliveredTurnIndex,
+        clearDeliveringChannel: true,
+      );
     } on ApiException catch (e) {
       state = state.copyWith(
         deliveryNote: e.message,
+        deliveredTurnIndex: deliveredTurnIndex,
         clearDeliveringChannel: true,
       );
     } catch (e) {
       state = state.copyWith(
         deliveryNote: 'Delivery failed.',
+        deliveredTurnIndex: deliveredTurnIndex,
         clearDeliveringChannel: true,
       );
     }
@@ -381,6 +401,7 @@ class _QaScreenState extends ConsumerState<QaScreen> {
                   canDeliver: qa.lastQuestion != null && !qa.pending,
                   deliveringChannel: qa.deliveringChannel,
                   deliveryNote: qa.deliveryNote,
+                  deliveredTurnIndex: qa.deliveredTurnIndex,
                   actionDraft: qa.actionDraft,
                   actionStatus: qa.actionStatus,
                   actionMissingFields: qa.actionMissingFields,
@@ -405,7 +426,8 @@ class _QaScreenState extends ConsumerState<QaScreen> {
         _InputRow(
           controller: _inputController,
           focusNode: _focusNode,
-          pending: qa.pending,
+          pending:
+              qa.pending || qa.executingAction || qa.deliveringChannel != null,
           onSubmit: _submit,
         ),
       ],
@@ -526,6 +548,7 @@ class _ChatList extends StatelessWidget {
     required this.canDeliver,
     required this.deliveringChannel,
     required this.deliveryNote,
+    required this.deliveredTurnIndex,
     required this.actionDraft,
     required this.actionStatus,
     required this.actionMissingFields,
@@ -544,6 +567,7 @@ class _ChatList extends StatelessWidget {
   final bool canDeliver;
   final String? deliveringChannel;
   final String? deliveryNote;
+  final int? deliveredTurnIndex;
   final AssistantActionDraft? actionDraft;
   final String? actionStatus;
   final List<String> actionMissingFields;
@@ -572,6 +596,8 @@ class _ChatList extends StatelessWidget {
         final turn = history[index];
         final isLastAssistant =
             turn.role == 'assistant' && index == history.length - 1;
+        final isDeliveredAssistant =
+            turn.role == 'assistant' && index == deliveredTurnIndex;
 
         return _TurnBubble(
           turn: turn,
@@ -579,7 +605,7 @@ class _ChatList extends StatelessWidget {
           lastResponse: isLastAssistant ? lastResponse : null,
           canDeliver: isLastAssistant && canDeliver,
           deliveringChannel: isLastAssistant ? deliveringChannel : null,
-          deliveryNote: isLastAssistant ? deliveryNote : null,
+          deliveryNote: isDeliveredAssistant ? deliveryNote : null,
           actionDraft: isLastAssistant ? actionDraft : null,
           actionStatus: isLastAssistant ? actionStatus : null,
           actionMissingFields: isLastAssistant ? actionMissingFields : const [],

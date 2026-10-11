@@ -6,13 +6,18 @@ const TARGET_FILE_PREFIX: Record<string, string> = {
 	Expense: 'expense',
 	Payment: 'payment',
 	WorkOrder: 'work-order',
-	Lease: 'lease',
-	Application: 'application'
+	LeaseAgreement: 'lease',
+	Application: 'application',
+	Loan: 'loan',
+	LeaseEndingNotice: 'move-out-notice',
 };
 
 function isPdf(file: File): boolean {
 	const type = file.type.trim().toLowerCase();
-	return type === 'application/pdf' || file.name.trim().toLowerCase().endsWith('.pdf');
+	return (
+		type === 'application/pdf' ||
+		file.name.trim().toLowerCase().endsWith('.pdf')
+	);
 }
 
 export function scanUploadFileName(targetEntityType: string): string {
@@ -23,7 +28,7 @@ export async function prepareScanDocumentUpload(
 	files: File[],
 	{
 		targetEntityType,
-		stitcher = stitchImagesToPdf
+		stitcher = stitchImagesToPdf,
 	}: {
 		targetEntityType: string;
 		stitcher?: Stitcher;

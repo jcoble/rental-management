@@ -1,0 +1,605 @@
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Accounting;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Payments;
+using RentalCommand.Core.Operations;
+using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Payments;
+
+namespace RentalCommand.Api.Controllers;
+
+[ApiController]
+[Route("api/v1/tenant-accounts/{tenantAccountId:int}")]
+[Produces("application/json")]
+public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControllerBase
+{
+    private readonly IWriteExecutor _writes;
+    private readonly IAccountingLedgerReadModelService _ledgerReadModels;
+    private readonly RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
+
+    public TenantAccountMoneyController(
+        IAccountingLedgerReadModelService ledgerReadModels,
+        RentalCommandDbContext db,
+        TimeProvider timeProvider,
+        IWriteExecutor writes)
+    {
+        _ledgerReadModels = ledgerReadModels;
+        _db = db;
+        _timeProvider = timeProvider;
+        _writes = writes;
+    }
+
+    [HttpGet("ledger")]
+    [ProducesResponseType(typeof(AccountingPage<TenantLedgerRow>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AccountingPage<TenantLedgerRow>>> Ledger(
+        int tenantAccountId, [FromQuery] TenantLedgerQuery query, CancellationToken ct)
+    {
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
+        var page = await _ledgerReadModels.GetTenantLedgerAsync(GetWorkspaceReadScope(), tenantAccountId, query, ct);
+        return page is null ? NotFound() : Ok(page);
+    }
+
+    [HttpGet("month-summary")]
+    [ProducesResponseType(typeof(IReadOnlyList<TenantMonthSummary>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<TenantMonthSummary>>> MonthSummary(
+        int tenantAccountId, [FromQuery] TenantMonthSummaryQuery query, CancellationToken ct)
+    {
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
+        var summary = await _ledgerReadModels.GetTenantMonthSummaryAsync(
+            GetWorkspaceReadScope(), tenantAccountId, query, ct);
+        return summary is null ? NotFound() : Ok(summary);
+    }
+
+    [HttpGet("credit-targets")]
+    [ProducesResponseType(typeof(AccountingPage<TenantCreditTargetRow>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AccountingPage<TenantCreditTargetRow>>> CreditTargets(
+        int tenantAccountId, [FromQuery] TenantCreditTargetQuery query, CancellationToken ct)
+    {
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
+        var page = await _ledgerReadModels.GetTenantCreditTargetsAsync(
+            GetWorkspaceReadScope(), tenantAccountId, query, ct);
+        return page is null ? NotFound() : Ok(page);
+    }
+
+    [HttpGet("ledger-summary")]
+    [ProducesResponseType(typeof(TenantLedgerPeriodSummary), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<TenantLedgerPeriodSummary>> LedgerSummary(
+        int tenantAccountId, [FromQuery] TenantLedgerPeriodSummaryQuery query, CancellationToken ct)
+    {
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
+        try
+        {
+            var summary = await _ledgerReadModels.GetTenantLedgerPeriodSummaryAsync(
+                GetPortfolioId(), tenantAccountId, query.Months, ct);
+            return summary is null ? NotFound() : Ok(summary);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpGet("recurring-charges")]
+    [ProducesResponseType(typeof(AccountingPage<RecurringTenantChargeRow>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AccountingPage<RecurringTenantChargeRow>>> RecurringCharges(
+        int tenantAccountId, [FromQuery] ListQuery query, CancellationToken ct)
+    {
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
+        return Ok(await _ledgerReadModels.GetRecurringTenantChargesAsync(
+            GetPortfolioId(), tenantAccountId, query, ct));
+    }
+
+    [HttpPost("recurring-charges")]
+    [ProducesResponseType(typeof(RecurringTenantChargeRow), StatusCodes.Status201Created)]
+    public async Task<IActionResult> CreateRecurringCharge(
+        int tenantAccountId, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] CreateRecurringTenantChargeRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        var command = new CreateRecurringTenantChargeCommand(
+            envelope.PortfolioId,
+            new StaffOperationActor(
+                envelope.UserId, envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision),
+            tenantAccountId,
+            request.LeaseAgreementId ?? 0,
+            request.DisplayName,
+            request.Amount,
+            request.LedgerAccountId,
+            request.EffectiveStartOn,
+            request.EffectiveEndOn,
+            request.MonthlyDueDay,
+            request.NextRunDate,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            $"recurring-charge-create:{envelope.KeyDigest}");
+        var handler = new CreateRecurringTenantChargeRule(_db);
+        return await ExecuteRecurringCharge(
+            command.DeliveryIdempotencyKey,
+            command,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync,
+            tenantAccountId,
+            created: true,
+            ct: ct);
+    }
+
+    [HttpPatch("recurring-charges/{id:int}")]
+    [ProducesResponseType(typeof(RecurringTenantChargeRow), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> PatchRecurringCharge(
+        int tenantAccountId, int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] PatchRecurringTenantChargeRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        var command = new UpdateRecurringTenantChargeCommand(
+            envelope.PortfolioId,
+            new StaffOperationActor(
+                envelope.UserId, envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision),
+            tenantAccountId,
+            id,
+            request.DisplayName,
+            request.Amount,
+            request.LedgerAccountId,
+            request.EffectiveStartOn,
+            request.EffectiveEndOn,
+            request.MonthlyDueDay,
+            request.NextRunDate,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            $"recurring-charge-update:{envelope.KeyDigest}");
+        var handler = new UpdateRecurringTenantChargeRule(_db);
+        return await ExecuteRecurringCharge(
+            command.DeliveryIdempotencyKey,
+            command,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync,
+            tenantAccountId,
+            created: false,
+            ct: ct);
+    }
+
+    [HttpPost("recurring-charges/{id:int}/deactivate")]
+    [ProducesResponseType(typeof(RecurringTenantChargeRow), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeactivateRecurringCharge(
+        int tenantAccountId, int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        var command = new DeactivateRecurringTenantChargeCommand(
+            envelope.PortfolioId,
+            new StaffOperationActor(
+                envelope.UserId, envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision),
+            tenantAccountId,
+            id,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            $"recurring-charge-deactivate:{envelope.KeyDigest}");
+        var handler = new DeactivateRecurringTenantChargeRule(_db);
+        return await ExecuteRecurringCharge(
+            command.DeliveryIdempotencyKey,
+            command,
+            handler.ExecuteAsync,
+            handler.AuthorizeAsync,
+            tenantAccountId,
+            created: false,
+            ct: ct);
+    }
+
+    [HttpPost("receipts")]
+    public async Task<IActionResult> RecordReceipt(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] RecordTenantReceiptRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        if (request.EffectiveOn == default) return BadRequest(new { error = "EffectiveOn is required." });
+        var command = new RecordTenantReceiptCommand(envelope.PortfolioId, tenantAccountId,
+            request.Amount, request.EffectiveOn, request.Description, request.PaymentMethodSummary,
+            request.ExternalReference, request.PayerName, request.CheckNumber, request.BankName,
+            request.SourceStoredFileId, request.TargetChargeEntryId, envelope.UserId,
+            envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision,
+            CapabilityKeys.MoneyPaymentsManage, $"manual-receipt:{envelope.KeyDigest}",
+            $"tenant-receipt:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}",
+            _timeProvider.GetUtcNow().UtcDateTime)
+        {
+            AllocateOldestCharges = request.AllocateOldestCharges,
+        };
+        var handler = new RecordTenantReceiptRule(_db);
+        return await Execute(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    [HttpPost("charges")]
+    public async Task<IActionResult> PostCharge(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] PostTenantChargeRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        if (request.EffectiveOn == default || request.DueOn == default)
+            return BadRequest(new { error = "EffectiveOn and DueOn are required." });
+        var command = new PostTenantChargeCommand(envelope.PortfolioId, tenantAccountId,
+            request.Amount, request.EffectiveOn, request.DueOn, request.Description,
+            request.SourceStoredFileId, envelope.UserId, envelope.SessionId,
+            envelope.AccessContextId, envelope.AccessRevision, CapabilityKeys.MoneyChargesManage,
+            $"tenant-charge:{envelope.KeyDigest}",
+            $"tenant-charge:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}",
+            request.IncomeLedgerAccountId, request.ServicePeriodStartOn, request.ServicePeriodEndOn);
+        var handler = new PostTenantChargeRule(_db);
+        return await ExecuteCharge(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    [HttpPost("charges/{chargeEntryId:long}/reversals")]
+    public async Task<IActionResult> ReverseCharge(int tenantAccountId, long chargeEntryId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] ReverseTenantChargeRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        if (chargeEntryId <= 0 || request.EffectiveOn == default)
+            return BadRequest(new { error = "Charge entry and EffectiveOn are required." });
+        var command = new ReverseTenantChargeCommand(envelope.PortfolioId, tenantAccountId,
+            chargeEntryId, request.EffectiveOn, request.Reason,
+            request.SourceStoredFileId, envelope.UserId, envelope.SessionId,
+            envelope.AccessContextId, envelope.AccessRevision, CapabilityKeys.MoneyChargesManage,
+            $"tenant-charge-reversal:{envelope.KeyDigest}",
+            $"tenant-charge-reversal:{envelope.PortfolioId}:{tenantAccountId}:{chargeEntryId}:{envelope.KeyDigest}");
+        var handler = new ReverseTenantChargeRule(_db);
+        return await ExecuteCharge(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    [HttpPost("credits")]
+    public async Task<IActionResult> PostCredit(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] PostTenantCreditRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var e, out var failure)) return failure!;
+        if (request.EffectiveOn == default)
+            return BadRequest(new { error = "EffectiveOn is required." });
+        var command = new PostTenantCreditCommand(e.PortfolioId, tenantAccountId,
+            request.Amount, request.EffectiveOn, request.Description,
+            request.SourceStoredFileId, request.AllocateOldestCharges, e.UserId,
+            e.SessionId, e.AccessContextId, e.AccessRevision,
+            CapabilityKeys.MoneyChargesManage, $"tenant-credit:{e.KeyDigest}",
+            $"tenant-credit:{e.PortfolioId}:{tenantAccountId}:{e.KeyDigest}",
+            request.TargetChargeEntryId, request.IncomeLedgerAccountId);
+        var handler = new PostTenantCreditRule(_db);
+        return await ExecuteLedger(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    [HttpPost("adjustments")]
+    public async Task<IActionResult> PostAdjustment(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] PostTenantAdjustmentRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var e, out var failure)) return failure!;
+        if (request.Direction is null || request.EffectiveOn == default)
+            return BadRequest(new { error = "Direction and EffectiveOn are required." });
+        var command = new PostTenantAdjustmentCommand(e.PortfolioId, tenantAccountId,
+            request.Direction.Value, request.Amount, request.EffectiveOn,
+            request.Description, request.SourceStoredFileId, e.UserId, e.SessionId,
+            e.AccessContextId, e.AccessRevision, CapabilityKeys.MoneyChargesManage,
+            $"tenant-adjustment:{e.KeyDigest}",
+            $"tenant-adjustment:{e.PortfolioId}:{tenantAccountId}:{e.KeyDigest}");
+        var handler = new PostTenantAdjustmentRule(_db);
+        return await ExecuteLedger(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    [HttpPost("reversals")]
+    public async Task<IActionResult> ReverseLedgerEntry(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] ReverseTenantLedgerEntryRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var e, out var failure)) return failure!;
+        if (request.ReversesEntryId <= 0 || request.EffectiveOn == default)
+            return BadRequest(new { error = "Ledger entry and EffectiveOn are required." });
+        var command = new ReverseTenantLedgerEntryCommand(e.PortfolioId, tenantAccountId,
+            request.ReversesEntryId, request.EffectiveOn, request.Reason,
+            request.SourceStoredFileId, e.UserId, e.SessionId, e.AccessContextId,
+            e.AccessRevision, CapabilityKeys.MoneyChargesManage,
+            $"tenant-ledger-reversal:{e.KeyDigest}",
+            $"tenant-ledger-reversal:{e.PortfolioId}:{tenantAccountId}:{request.ReversesEntryId}:{e.KeyDigest}");
+        var handler = new ReverseTenantLedgerEntryRule(_db);
+        return await ExecuteLedger(command.DeliveryIdempotencyKey, command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    [HttpPost("refunds")]
+    public async Task<IActionResult> RefundPayment(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] RefundTenantPaymentRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var e, out var failure)) return failure!;
+        if (request.PaymentEntryId <= 0 || request.EffectiveOn == default)
+            return BadRequest(new { error = "Payment entry and EffectiveOn are required." });
+        var command = new RefundTenantPaymentCommand(e.PortfolioId, tenantAccountId,
+            request.PaymentEntryId, request.EffectiveOn, request.Reason,
+            request.PaymentMethodSummary, request.ExternalReference,
+            request.SourceStoredFileId, e.UserId, e.SessionId, e.AccessContextId,
+            e.AccessRevision, CapabilityKeys.MoneyPaymentsManage,
+            $"tenant-payment-refund:{e.KeyDigest}",
+            $"tenant-payment-refund:{e.PortfolioId}:{tenantAccountId}:{request.PaymentEntryId}:{e.KeyDigest}");
+        try
+        {
+            var handler = new RefundTenantPaymentRule(_db);
+            var outcome = await _writes.ExecuteAsync(
+                command.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
+                ct);
+            if (outcome.Value.Outcome is TenantPaymentRefundOutcome.AlreadyRefunded
+                    or TenantPaymentRefundOutcome.ExternalCorrectionUnavailable)
+                return Conflict(new { error = outcome.Value.Error, outcome.Value.Outcome });
+            return Ok(new { outcome.Value,
+                replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    [HttpPost("deposit/fund")]
+    public async Task<IActionResult> FundDeposit(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] FundSecurityDepositRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var e, out var failure)) return failure!;
+        if (request.EffectiveOn == default) return BadRequest(new { error = "EffectiveOn is required." });
+        var command = new FundSecurityDepositCommand(e.PortfolioId, tenantAccountId,
+            request.SecurityDepositAccountId, request.Amount, request.EffectiveOn,
+            request.Description, request.PaymentMethodSummary, request.ExternalReference,
+            request.SourceStoredFileId, e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
+            CapabilityKeys.MoneyDepositsManage, $"deposit-fund:{e.KeyDigest}",
+            $"deposit-fund:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{e.KeyDigest}");
+        var handler = new FundSecurityDepositRule(_db);
+        return await ExecuteDeposit(command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    [HttpPost("deposit/deductions")]
+    public async Task<IActionResult> DeductDeposit(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] DeductSecurityDepositRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var e, out var failure)) return failure!;
+        if (request.EffectiveOn == default) return BadRequest(new { error = "EffectiveOn is required." });
+        var command = new DeductSecurityDepositCommand(e.PortfolioId, tenantAccountId,
+            request.SecurityDepositAccountId, request.Amount, request.EffectiveOn, request.Reason,
+            request.Notes, request.SourceStoredFileId, e.UserId, e.SessionId, e.AccessContextId,
+            e.AccessRevision, CapabilityKeys.MoneyDepositsManage, $"deposit-deduction:{e.KeyDigest}",
+            $"deposit-deduction:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{e.KeyDigest}");
+        var handler = new DeductSecurityDepositRule(_db);
+        return await ExecuteDeposit(command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    [HttpPost("deposit/refunds")]
+    public async Task<IActionResult> RefundDeposit(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] RefundSecurityDepositRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var e, out var failure)) return failure!;
+        if (request.EffectiveOn == default) return BadRequest(new { error = "EffectiveOn is required." });
+        var command = new RefundSecurityDepositCommand(e.PortfolioId, tenantAccountId,
+            request.SecurityDepositAccountId, request.Amount, request.EffectiveOn,
+            request.Description, request.ExternalReference, e.UserId, e.SessionId,
+            e.AccessContextId, e.AccessRevision, CapabilityKeys.MoneyDepositsManage,
+            $"deposit-refund:{e.KeyDigest}",
+            $"deposit-refund:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{e.KeyDigest}");
+        var handler = new RefundSecurityDepositRule(_db);
+        return await ExecuteDeposit(command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    [HttpPost("deposit/reversals")]
+    public async Task<IActionResult> ReverseDepositEntry(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] ReverseSecurityDepositEntryRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var e, out var failure)) return failure!;
+        if (request.SecurityDepositAccountId <= 0 || request.ReversesEntryId <= 0
+            || request.EffectiveOn == default)
+            return BadRequest(new
+            {
+                error = "Security deposit account, deposit entry, and EffectiveOn are required."
+            });
+        var command = new ReverseSecurityDepositEntryCommand(e.PortfolioId, tenantAccountId,
+            request.SecurityDepositAccountId, request.ReversesEntryId,
+            request.EffectiveOn, request.Reason, request.SourceStoredFileId,
+            e.UserId, e.SessionId, e.AccessContextId, e.AccessRevision,
+            CapabilityKeys.MoneyDepositsManage, $"deposit-reversal:{e.KeyDigest}",
+            $"deposit-reversal:{e.PortfolioId}:{tenantAccountId}:{request.SecurityDepositAccountId}:{request.ReversesEntryId}:{e.KeyDigest}");
+        var handler = new ReverseSecurityDepositEntryRule(_db);
+        return await ExecuteDeposit(command,
+            handler.ExecuteAsync, handler.AuthorizeAsync, ct);
+    }
+
+    private WorkspaceReadScope GetWorkspaceReadScope()
+    {
+        var active = GetActiveAccessContext();
+        return new WorkspaceReadScope(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+    }
+
+    private Task<bool> TenantAccountExistsAsync(int tenantAccountId, CancellationToken ct) =>
+        _db.TenantAccounts.AnyAsync(account => account.PortfolioId == GetPortfolioId()
+            && account.Id == tenantAccountId, ct);
+
+    private static RecurringTenantChargeRow ToRecurringRow(
+        RecurringTenantChargeMutationSnapshot snapshot) =>
+        new()
+        {
+            Id = snapshot.Id,
+            PublicId = snapshot.PublicId,
+            TenantAccountId = snapshot.TenantAccountId,
+            LeaseAgreementId = snapshot.LeaseAgreementId,
+            DisplayName = snapshot.DisplayName,
+            Amount = snapshot.Amount,
+            Currency = snapshot.Currency,
+            LedgerAccountId = snapshot.LedgerAccountId,
+            EffectiveStartOn = snapshot.EffectiveStartOn,
+            EffectiveEndOn = snapshot.EffectiveEndOn,
+            MonthlyDueDay = snapshot.MonthlyDueDay,
+            NextRunDate = snapshot.NextRunDate,
+            IsActive = snapshot.IsActive,
+            PropertyId = snapshot.PropertyId,
+            UnitId = snapshot.UnitId,
+        };
+
+    private async Task<IActionResult> ExecuteRecurringCharge<TCommand>(
+        string idempotencyKey,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken,
+            Task<RecurringTenantChargeMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        int tenantAccountId,
+        bool created,
+        CancellationToken ct)
+        where TCommand : notnull, IAtomicCommandData
+    {
+        try
+        {
+            var outcome = await _writes.ExecuteAsync(
+                idempotencyKey,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
+                ct);
+            if (outcome.Value.Outcome == RecurringTenantChargeMutationOutcome.NotFound
+                || outcome.Value.Snapshot is null)
+                return NotFound();
+            var row = ToRecurringRow(outcome.Value.Snapshot);
+            return created
+                ? CreatedAtAction(nameof(RecurringCharges), new { tenantAccountId }, row)
+                : Ok(row);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private async Task<IActionResult> ExecuteDeposit<TCommand>(TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<SecurityDepositMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        CancellationToken ct) where TCommand : notnull, ISecurityDepositMoneyCommand
+    {
+        try
+        {
+            var outcome = await _writes.ExecuteAsync(
+                command.DeliveryIdempotencyKey,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
+                ct);
+            if (!outcome.Value.Applied) return Conflict(new { error = outcome.Value.Error });
+            return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    private async Task<IActionResult> ExecuteCharge<TCommand>(string key, TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TenantChargeMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        CancellationToken ct) where TCommand : notnull, ITenantMoneyCommand
+    {
+        try
+        {
+            var outcome = await _writes.ExecuteAsync(
+                key,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
+                ct);
+            if (!outcome.Value.Applied) return Conflict(new { error = outcome.Value.Error });
+            return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    private async Task<IActionResult> ExecuteLedger<TCommand>(string key, TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TenantLedgerMutationResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        CancellationToken ct) where TCommand : notnull, ITenantMoneyCommand
+    {
+        try
+        {
+            var outcome = await _writes.ExecuteAsync(
+                key,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
+                ct);
+            if (!outcome.Value.Applied) return Conflict(new { error = outcome.Value.Error });
+            return Ok(new { outcome.Value,
+                replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    private async Task<IActionResult> Execute<TCommand, TResult>(string key,
+        TCommand command,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task<TResult>> executeAsync,
+        Func<TCommand, IAtomicCommandContext, CancellationToken, Task> authorizeReplayAsync,
+        CancellationToken ct)
+        where TCommand : notnull, ITenantMoneyCommand where TResult : notnull
+    {
+        try
+        {
+            var outcome = await _writes.ExecuteAsync(
+                key,
+                TenantMoneyWriteSupport.Write(command, executeAsync, authorizeReplayAsync),
+                ct);
+            return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    private bool TryEnvelope(string? idempotencyKey, out CommandEnvelope envelope, out IActionResult? failure)
+    {
+        envelope = default;
+        failure = null;
+        var normalized = idempotencyKey?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 200)
+        {
+            failure = BadRequest(new { error = "A request key is required and cannot exceed 200 characters." });
+            return false;
+        }
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            failure = Forbid();
+            return false;
+        }
+        envelope = new CommandEnvelope(active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision,
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant());
+        return true;
+    }
+
+    private readonly record struct CommandEnvelope(int PortfolioId, int UserId, Guid SessionId,
+        int AccessContextId, long AccessRevision, string KeyDigest);
+}

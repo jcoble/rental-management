@@ -9,7 +9,7 @@ describe('prepareScanDocumentUpload', () => {
 		let stitched = false;
 
 		const upload = await prepareScanDocumentUpload([pdf], {
-			targetEntityType: 'Lease',
+			targetEntityType: 'LeaseAgreement',
 			stitcher: async () => {
 				stitched = true;
 				return new File(['stitched'], 'lease-scan.pdf', { type: 'application/pdf' });
@@ -42,7 +42,7 @@ describe('prepareScanDocumentUpload', () => {
 		const photo = new File(['photo'], 'lease-page-2.jpg', { type: 'image/jpeg' });
 
 		await assert.rejects(
-			() => prepareScanDocumentUpload([pdf, photo], { targetEntityType: 'Lease' }),
+			() => prepareScanDocumentUpload([pdf, photo], { targetEntityType: 'LeaseAgreement' }),
 			/Upload one PDF or multiple photos/
 		);
 	});

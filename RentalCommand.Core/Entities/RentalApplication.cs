@@ -67,14 +67,21 @@ public class RentalApplication : IAuditable, IPortfolioScoped
     /// <summary>Optional reason captured when the application is declined.</summary>
     public string? DecisionReason { get; set; }
 
-    public DateTime SubmittedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime SubmittedAtUtc { get; set; }
     public DateTime? ReviewedAtUtc { get; set; }
 
     /// <summary>Tenant created when this application was approved; null otherwise.</summary>
     public int? ApprovedTenantId { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>
+    /// The one lease relationship prepared from this approved application. This is a durable
+    /// conversion result, not a legacy Lease bridge; possession and portal access are separate
+    /// explicit commands.
+    /// </summary>
+    public int? PreparedLeaseManagementId { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
     /// <summary>Soft-delete marker; null means active.</summary>
     public DateTime? DeletedAt { get; set; }
@@ -83,4 +90,8 @@ public class RentalApplication : IAuditable, IPortfolioScoped
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
     public Tenant? ApprovedTenant { get; set; }
+    public LeaseManagement? PreparedLeaseManagement { get; set; }
+    public ApplicationFinancialAccount? FinancialAccount { get; set; }
+    public List<Appointment> Appointments { get; set; } = [];
+    public List<ApplicantScreening> Screenings { get; set; } = [];
 }

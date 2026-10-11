@@ -9,29 +9,58 @@
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
+	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight, ScanLine } from '@lucide/svelte';
 	import { scanHref } from '$lib/scan/scan-context';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
+	import { formatDateOnly } from '$lib/utils/date';
 
-	let { propertyId }: { propertyId: number } = $props();
+	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
 	const queryClient = useQueryClient();
+	const PAGE_SIZE = 10;
+
+	let loanPage = $state(1);
+	let loanSort = $state('-startDate');
+	let loanFrom = $state('');
+	let loanTo = $state('');
+
+	let loanFilterResetPrimed = false;
+	$effect(() => {
+		propertyId;
+		loanFrom;
+		loanTo;
+		if (!loanFilterResetPrimed) {
+			loanFilterResetPrimed = true;
+			return;
+		}
+		loanPage = 1;
+	});
 
 	const loansQuery = createQuery(() => ({
-		queryKey: ['loans', propertyId],
-		queryFn: () => loans.list({ propertyId }),
+		queryKey: ['loans', propertyId, 'page', loanPage, loanSort, loanFrom, loanTo, PAGE_SIZE],
+		queryFn: () => loans.listPage({
+			propertyId,
+			skip: (loanPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: loanSort || undefined,
+			from: loanFrom || undefined,
+			to: loanTo || undefined
+		}),
 		enabled: !isNaN(propertyId) && propertyId > 0
 	}));
 
-	const loansList = $derived(loansQuery.data ?? []);
+	const loansList = $derived(loansQuery.data?.items ?? []);
+	const loansTotalCount = $derived(loansQuery.data?.totalCount ?? 0);
 
-	function fmtCurrency(value: number): string {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
-	}
+
+	/** Loan dates come from free-form rows; show nothing when the value is not a real date. */
 	function fmtDate(value: string): string {
-		const d = new Date(value);
-		return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+		return isNaN(new Date(value).getTime()) ? '' : formatDateOnly(value);
 	}
 
 	const statusOptions = [
@@ -77,6 +106,7 @@
 	] as const;
 
 	function openAdd() {
+		if (!canManage) return;
 		editingLoanId = null;
 		form = { ...emptyLoan };
 		formErrors = {};
@@ -86,6 +116,7 @@
 	}
 
 	function openEdit(l: Loan) {
+		if (!canManage) return;
 		editingLoanId = l.id;
 		form = {
 			lender: l.lender,
@@ -215,6 +246,7 @@
 	const columns: ColumnDef<Loan>[] = [
 		{ key: 'lender', title: 'Lender', sortable: true, mobileRole: 'title' },
 		{ key: 'currentBalance', title: 'Balance', format: 'currency', sortable: true, mobileRole: 'metric' },
+		{ key: 'startDate', title: 'Start', format: 'date', sortable: true, mobileRole: 'meta' },
 		{ key: 'annualInterestRatePct', title: 'Rate %', format: 'number', sortable: true, mobileRole: 'meta' },
 		{ key: 'monthlyPrincipalInterest', title: 'P&I', format: 'currency', sortable: true, mobileRole: 'meta' },
 		{ key: 'monthlyEscrow', title: 'Escrow', format: 'currency', mobileRole: 'meta' },
@@ -230,6 +262,15 @@
 		enabled: expandedLoanId != null
 	}));
 	const scheduleRows = $derived(scheduleQuery.data ?? []);
+	const postPaymentMut = createMutation(() => ({
+		mutationFn: (paymentId: number) => loans.postPayment(expandedLoanId as number, paymentId),
+		onSuccess: () => {
+			showSuccess('Loan payment recorded.');
+			queryClient.invalidateQueries({ queryKey: ['loan-payments', expandedLoanId] });
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
 
 	function toggleSchedule(id: number) {
 		expandedLoanId = expandedLoanId === id ? null : id;
@@ -242,12 +283,14 @@
 			{#if expandedLoanId === loan.id}<ChevronDown class="h-4 w-4" />{:else}<ChevronRight class="h-4 w-4" />{/if}
 			<span class="hidden sm:inline">Schedule</span>
 		</Button>
-		<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(loan); }} aria-label="Edit loan">
-			<Pencil class="h-4 w-4" />
-		</Button>
-		<Button variant="ghost" size="sm" class="h-7 w-7 p-0 text-destructive" onclick={(e) => { e.stopPropagation(); deleteTarget = loan; }} aria-label="Delete loan">
-			<Trash2 class="h-4 w-4" />
-		</Button>
+		{#if canManage}
+			<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(loan); }} aria-label="Edit loan">
+				<Pencil class="h-4 w-4" />
+			</Button>
+			<Button variant="ghost" size="sm" class="h-7 w-7 p-0 text-destructive" onclick={(e) => { e.stopPropagation(); deleteTarget = loan; }} aria-label="Delete loan">
+				<Trash2 class="h-4 w-4" />
+			</Button>
+		{/if}
 	</div>
 {/snippet}
 
@@ -256,27 +299,43 @@
 	<DataGrid
 		data={loansList}
 		{columns}
-		loading={loansQuery.isLoading}
+		loading={loansQuery.isLoading || loansQuery.isFetching}
 		emptyMessage="No loans on this property yet."
 		getRowKey={(l) => l.id}
-		pageSize={10}
+		pageSize={PAGE_SIZE}
+		page={loanPage}
+		totalCount={loansTotalCount}
+		serverSide
+		sort={loanSort}
+		onPageChange={(page) => (loanPage = page)}
+		onSortChange={(sort) => { loanSort = sort ?? ''; loanPage = 1; }}
 		data-testid="property-loans-grid"
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1"></div>
-			<Button
-				variant="outline"
-				class="gap-2 shrink-0"
-				href={scanHref({ type: 'Loan', propertyId, returnTo: `/properties/${propertyId}` })}
-				data-testid="loan-scan-button"
-			>
-				<ScanLine class="h-4 w-4" />
-				Scan / import
-			</Button>
-			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="loan-add-button">
-				<Plus class="h-4 w-4" />
-				Add Loan
-			</Button>
+			<RangeDatePicker
+				bind:start={loanFrom}
+				bind:end={loanTo}
+				presets
+				placeholder="Start dates"
+				align="end"
+				testid="property-loans-date-range"
+			/>
+			{#if canManage}
+				<Button
+					variant="outline"
+					class="gap-2 shrink-0"
+					href={scanHref({ type: 'Loan', propertyId, returnTo: `/properties/${propertyId}` })}
+					data-testid="loan-scan-button"
+				>
+					<ScanLine class="h-4 w-4" />
+					Scan / import
+				</Button>
+				<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="loan-add-button">
+					<Plus class="h-4 w-4" />
+					Add Loan
+				</Button>
+			{/if}
 		{/snippet}
 	</DataGrid>
 
@@ -300,6 +359,7 @@
 								<th class="py-1 pr-3 text-right">Escrow</th>
 								<th class="py-1 pr-3 text-right">Total</th>
 								<th class="py-1 pr-3 text-right">Balance</th>
+								<th class="py-1 text-right">Status</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -307,15 +367,40 @@
 								<tr class="border-t border-border/60">
 									<td class="py-1 pr-3">{row.periodKey}</td>
 									<td class="py-1 pr-3">{fmtDate(row.dueDate)}</td>
-									<td class="py-1 pr-3 text-right">{fmtCurrency(row.interestAmount)}</td>
-									<td class="py-1 pr-3 text-right">{fmtCurrency(row.principalAmount)}</td>
-									<td class="py-1 pr-3 text-right">{fmtCurrency(row.escrowAmount)}</td>
-									<td class="py-1 pr-3 text-right font-medium">{fmtCurrency(row.totalAmount)}</td>
-									<td class="py-1 pr-3 text-right">{fmtCurrency(row.balanceAfter)}</td>
+									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.interestAmount)}</td>
+									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.principalAmount)}</td>
+									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.escrowAmount)}</td>
+									<td class="py-1 pr-3 text-right font-medium">{formatAccountingCurrency(row.totalAmount)}</td>
+									<td class="py-1 pr-3 text-right">{formatAccountingCurrency(row.balanceAfter)}</td>
+									<td class="py-1 text-right">
+										{#if row.status === 'Paid'}
+											<span class="font-medium text-success">Paid {row.paidDate ? fmtDate(row.paidDate) : ''}</span>
+										{:else if canManage}
+											<Button
+												variant="outline"
+												size="sm"
+												class="h-7"
+												disabled={postPaymentMut.isPending}
+												onclick={() => postPaymentMut.mutate(row.id)}
+												data-testid={`loan-payment-post-${row.id}`}
+											>
+												{postPaymentMut.isPending && postPaymentMut.variables === row.id ? 'Recording…' : 'Record paid'}
+											</Button>
+										{:else}
+											<span class="text-muted-foreground">Scheduled</span>
+										{/if}
+									</td>
 								</tr>
+								{#if row.status === 'Paid'}
+									<tr data-testid={`loan-payment-accounting-impact-${row.id}`}>
+										<td colspan="8" class="py-2">
+											<AccountingImpactCard sourceType="LoanPayment" sourceId={row.id} />
+										</td>
+									</tr>
+								{/if}
 								{#if row.paymentDoesNotCoverInterest}
 									<tr>
-										<td colspan="7" class="pb-1 text-xs text-amber-600">
+										<td colspan="8" class="pb-1 text-xs text-amber-600">
 											<AlertTriangle class="mr-1 inline h-3 w-3" />Payment didn't cover interest this period.
 										</td>
 									</tr>
@@ -330,7 +415,7 @@
 </div>
 
 <!-- Loan add/edit dialog -->
-<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+<Dialog.Root open={canManage && showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
 	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
 		<Dialog.Header>
 			<Dialog.Title>{editingLoanId == null ? 'Add Loan' : 'Edit Loan'}</Dialog.Title>
@@ -349,7 +434,11 @@
 						<InlineField label="Term (months)" bind:value={form.termMonths} editing type="number" maxlength={4} error={formErrors.termMonths} testid="loan-term" />
 					</div>
 					<div class="grid gap-3 sm:grid-cols-2">
-						<InlineField label="Start date" bind:value={form.startDate} editing type="date" error={formErrors.startDate} testid="loan-start-date" />
+						<div data-testid="loan-start-date-field">
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="loan-start-date-input">Start date</label>
+							<DatePicker id="loan-start-date-input" testid="loan-start-date-input" bind:value={form.startDate} />
+							{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="loan-start-date-error">{formErrors.startDate}</p>{/if}
+						</div>
 						<InlineField label="Day of month due" bind:value={form.dayOfMonthDue} editing type="number" maxlength={2} error={formErrors.dayOfMonthDue} testid="loan-day-due" />
 					</div>
 				{:else if loanStep === 2}
@@ -394,7 +483,7 @@
 </Dialog.Root>
 
 <ConfirmDialog
-	open={deleteTarget !== null}
+	open={canManage && deleteTarget !== null}
 	title="Remove loan"
 	message={deleteTarget ? `Remove the loan from "${deleteTarget.lender}"? This removes its amortization history.` : ''}
 	busy={deleteMut.isPending}

@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { FlaskConical, Rocket, Check, Loader2, ArrowRight, Building } from '@lucide/svelte';
+	import { FlaskConical, Rocket, Check, Loader2, ArrowRight } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import type { PageData } from './$types';
@@ -52,11 +53,7 @@
 	<div class="mx-auto flex min-h-dvh max-w-4xl flex-col items-center justify-center px-5 py-12 sm:py-16">
 		<!-- Brand + heading -->
 		<div class="mb-10 flex flex-col items-center text-center">
-			<span
-				class="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
-			>
-				<Building class="h-6 w-6" />
-			</span>
+			<BrandMark class="mb-5 h-12 w-12 shadow-md" alt="Rental Command" />
 			<h1 class="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
 				{firstName ? `Welcome, ${firstName}` : 'Welcome to Rental Command'}
 			</h1>

@@ -1,55 +1,41 @@
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.DTOs;
+using System.Diagnostics;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class DailyBriefingServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public class DailyBriefingServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
+    private const int ActorUserId = 1;
 
-    private readonly SqliteConnection _conn;
     private readonly List<string> _executedSql = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly DailyBriefingService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private DailyBriefingService _sut = null!;
 
-    public DailyBriefingServiceTests()
+    public DailyBriefingServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
-
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new AccountingServiceTestDbContext(options);
-        _db.Database.EnsureCreated();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        _sut = new DailyBriefingService(_db, new NoopLlmProvider());
+        _fixture = fixture;
     }
 
-    public void Dispose()
+    public async Task InitializeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
+        _db = _ctx.Db;
+        _sut = new DailyBriefingService(_db, new NoopLlmProvider(), TimeProvider.System);
     }
+
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ComposeAsync_RanksAndCapsBriefingCandidatesInSql()
@@ -57,7 +43,8 @@ public class DailyBriefingServiceTests : IDisposable
         SeedBriefingData();
         _executedSql.Clear();
 
-        var briefing = await _sut.ComposeAsync(PortfolioId, CancellationToken.None);
+        var briefing = await _sut.ComposeAsync(
+            await SeedAdministratorScopeAsync(null, DateTime.UtcNow), CancellationToken.None);
 
         briefing.Bullets.Should().Contain(b => b.Category == "Maintenance" && b.Severity == "critical");
         briefing.Bullets.Should().Contain(b => b.Category == "RentLate");
@@ -66,19 +53,17 @@ public class DailyBriefingServiceTests : IDisposable
         briefing.Bullets.Should().Contain(b => b.Category == "Inspection");
         briefing.Bullets.Should().Contain(b => b.Category == "LeaseExpiring");
         briefing.Bullets
-            .Where(b => b.EntityType is "WorkOrder" or "Payment" or "Lease")
+            .Where(b => b.EntityType is "WorkOrder" or nameof(TenantAccount) or nameof(LeaseAgreement))
             .Should().OnlyContain(b => b.UnitId > 0,
                 "unit-tied dashboard action items should deep-link into the unit Command Center");
 
         _executedSql.Should().Contain(command =>
-            command.Contains("UNION", StringComparison.OrdinalIgnoreCase)
+            command.Contains("vw_morning_briefing_candidates", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("RequiredCapability", StringComparison.OrdinalIgnoreCase)
             && command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
             && command.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("Payments", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("Leases", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("Appointments", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("Inspections", StringComparison.OrdinalIgnoreCase),
+            && command.Contains("money.balances.read", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("work.read", StringComparison.OrdinalIgnoreCase),
             "daily briefing candidate ranking and cap must happen in one DB-side query before bullet formatting");
     }
 
@@ -87,7 +72,7 @@ public class DailyBriefingServiceTests : IDisposable
     {
         var now = DateTime.UtcNow;
         var today = now.Date;
-        var endedLease = SeedLease(
+        var endedRelationship = SeedRelationship(
             today,
             leaseNumber: "L-OLD",
             propertyName: "Westview Four-Plex",
@@ -95,8 +80,9 @@ public class DailyBriefingServiceTests : IDisposable
             tenantFirstName: "Jordan",
             tenantLastName: "Smith",
             startDate: today.AddMonths(-15),
-            endDate: today.AddMonths(-3));
-        var currentLease = SeedLease(
+            endDate: today.AddMonths(-3),
+            lifecycle: "Occupied");
+        var currentRelationship = SeedRelationship(
             today,
             leaseNumber: "L-CURRENT",
             propertyName: "Eastland 8-Plex",
@@ -104,38 +90,18 @@ public class DailyBriefingServiceTests : IDisposable
             tenantFirstName: "Kevin",
             tenantLastName: "Brown",
             startDate: today.AddMonths(-6),
-            endDate: today.AddMonths(6));
+            endDate: today.AddMonths(6),
+            lifecycle: "Occupied");
 
-        _db.Payments.AddRange(
-            new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = endedLease,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Late,
-                Amount = 925m,
-                DueDate = today.AddMonths(-10),
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = currentLease,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Late,
-                Amount = 975m,
-                DueDate = today.AddDays(-7),
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
-        await _db.SaveChangesAsync();
+        SeedOpenRentCharge(endedRelationship, 925m, DateOnly.FromDateTime(today.AddMonths(-10)));
+        SeedOpenRentCharge(currentRelationship, 975m, DateOnly.FromDateTime(today.AddDays(-7)));
 
-        var briefing = await _sut.ComposeAsync(PortfolioId, CancellationToken.None);
+        var briefing = await _sut.ComposeAsync(
+            await SeedAdministratorScopeAsync(null, DateTime.UtcNow), CancellationToken.None);
 
         briefing.Bullets.Should().ContainSingle(b =>
             b.Category == "RentLate" &&
-            b.EntityId == _db.Payments.Single(p => p.LeaseId == currentLease.Id).Id);
+            b.EntityId == currentRelationship.Account.Id);
         briefing.Bullets.Should().NotContain(b =>
             b.Category == "RentLate" &&
             b.Title.Contains("L-OLD", StringComparison.OrdinalIgnoreCase));
@@ -146,7 +112,7 @@ public class DailyBriefingServiceTests : IDisposable
     {
         var now = DateTime.UtcNow;
         var today = now.Date;
-        var lease = SeedLease(
+        var relationship = SeedRelationship(
             today,
             leaseNumber: "L2024-003",
             propertyName: "Westview Four-Plex",
@@ -154,22 +120,13 @@ public class DailyBriefingServiceTests : IDisposable
             tenantFirstName: "Jordan",
             tenantLastName: "Smith",
             startDate: today.AddMonths(-6),
-            endDate: today.AddMonths(6));
+            endDate: today.AddMonths(6),
+            lifecycle: "Occupied");
 
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Late,
-            Amount = 925m,
-            DueDate = today.AddDays(-7),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        await _db.SaveChangesAsync();
+        SeedOpenRentCharge(relationship, 925m, DateOnly.FromDateTime(today.AddDays(-7)));
 
-        var briefing = await _sut.ComposeAsync(PortfolioId, CancellationToken.None);
+        var briefing = await _sut.ComposeAsync(
+            await SeedAdministratorScopeAsync(null, DateTime.UtcNow), CancellationToken.None);
 
         var rentBullet = briefing.Bullets.Should().ContainSingle(b => b.Category == "RentLate").Subject;
         rentBullet.Title.Should().Contain("Jordan Smith");
@@ -178,65 +135,177 @@ public class DailyBriefingServiceTests : IDisposable
         rentBullet.Title.Should().NotContain("L2024-003");
     }
 
+    [Fact]
+    public async Task ComposeAsync_SelectedPropertyScope_ExcludesDecoyWorkCandidate()
+    {
+        var now = DateTime.UtcNow;
+        var allowed = SeedBareProperty("Allowed", now);
+        var decoy = SeedBareProperty("Decoy", now);
+        _db.WorkOrders.AddRange(
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = allowed.Id,
+                Title = "Allowed emergency",
+                Description = "Visible",
+                Priority = WorkOrderPriority.Emergency,
+                Status = WorkOrderStatus.New,
+                RequestedAt = now,
+                UpdatedAt = now,
+            },
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = decoy.Id,
+                Title = "Decoy emergency",
+                Description = "Hidden",
+                Priority = WorkOrderPriority.Emergency,
+                Status = WorkOrderStatus.New,
+                RequestedAt = now,
+                UpdatedAt = now,
+            });
+        await _db.SaveChangesAsync();
+        var scope = await SeedAdministratorScopeAsync(allowed.Id, now);
+
+        var briefing = await _sut.ComposeAsync(scope, CancellationToken.None);
+
+        briefing.Bullets.Should().ContainSingle(bullet => bullet.Category == "Maintenance");
+        briefing.Bullets.Single(bullet => bullet.Category == "Maintenance").Title
+            .Should().Contain("Allowed emergency");
+    }
+
+    [Fact]
+    public async Task TryPolishSummaryAsync_ReturnsRulesOnlyBriefingWhenOptionalLlmPolishStalls()
+    {
+        var sut = new DailyBriefingService(
+            _db,
+            new HangingLlmProvider(),
+            TimeProvider.System,
+            TimeSpan.FromMilliseconds(50));
+        var stopwatch = Stopwatch.StartNew();
+
+        var (summary, enhanced) = await sut.TryPolishSummaryAsync(
+            [
+                new BriefingBullet(
+                    "Rent overdue",
+                    "$1,050 was due 24 days ago",
+                    "RentLate",
+                    "critical",
+                    nameof(TenantAccount),
+                    1,
+                    1)
+            ],
+            CancellationToken.None);
+
+        stopwatch.Stop();
+        summary.Should().BeNull();
+        enhanced.Should().BeFalse();
+        stopwatch.Elapsed.Should().BeLessThan(
+            TimeSpan.FromSeconds(1),
+            "optional AI wording must never hold the factual Daily Briefing open");
+    }
+
+    private Property SeedBareProperty(string name, DateTime now)
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = $"{name} address",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Properties.Add(property);
+        _db.SaveChanges();
+        return property;
+    }
+
+    private async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(int? propertyId, DateTime now)
+    {
+        var user = _db.Users.Single(user => user.Id == ActorUserId);
+        var context = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = propertyId.HasValue
+                ? MembershipRoleAssignmentScopeKind.SelectedProperties
+                : MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        if (propertyId.HasValue)
+        {
+            assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+            {
+                MembershipRoleAssignment = assignment,
+                PortfolioId = PortfolioId,
+                PropertyId = propertyId.Value,
+            });
+        }
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _db.AddRange(assignment, session);
+        _db.SaveChanges();
+        var scope = new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, context.Id, context.AccessRevision);
+        await _ctx.ActivateApiScopeAsync(scope);
+        return scope;
+    }
+
     private void SeedBriefingData()
     {
         var now = DateTime.UtcNow;
         var today = now.Date;
-
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Maple",
-            AddressLine1 = "1 Main",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "1A",
-            MarketRent = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Maria",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-1A",
-            Status = LeaseStatus.Active,
-            StartDate = today.AddMonths(-1),
-            EndDate = today.AddDays(30),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            RentDueDay = today.Day,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
+        var relationship = SeedRelationship(
+            today,
+            leaseNumber: "L-1A",
+            propertyName: "Maple",
+            unitNumber: "1A",
+            tenantFirstName: "Maria",
+            tenantLastName: "Tenant",
+            startDate: today.AddMonths(-1),
+            endDate: today.AddDays(30),
+            lifecycle: "Occupied");
 
         _db.AddRange(
-            property,
-            unit,
-            tenant,
-            lease,
             new WorkOrder
             {
                 PortfolioId = PortfolioId,
-                Property = property,
-                Unit = unit,
+                Property = relationship.Property,
+                Unit = relationship.Unit,
                 Title = "Water leak",
                 Description = "Water is entering the kitchen ceiling.",
                 Priority = WorkOrderPriority.Emergency,
@@ -244,22 +313,11 @@ public class DailyBriefingServiceTests : IDisposable
                 RequestedAt = now,
                 UpdatedAt = now,
             },
-            new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = lease,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Late,
-                Amount = 1200m,
-                DueDate = today.AddDays(-6),
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
             new Appointment
             {
                 PortfolioId = PortfolioId,
-                Property = property,
-                Unit = unit,
+                Property = relationship.Property,
+                Unit = relationship.Unit,
                 Title = "Showing",
                 Type = AppointmentType.Showing,
                 Status = AppointmentStatus.Scheduled,
@@ -270,8 +328,8 @@ public class DailyBriefingServiceTests : IDisposable
             new Inspection
             {
                 PortfolioId = PortfolioId,
-                Property = property,
-                Unit = unit,
+                Property = relationship.Property,
+                Unit = relationship.Unit,
                 Type = InspectionType.Routine,
                 Status = InspectionStatus.Scheduled,
                 ScheduledFor = today.AddDays(1).AddHours(9),
@@ -279,9 +337,11 @@ public class DailyBriefingServiceTests : IDisposable
                 UpdatedAt = now,
             });
         _db.SaveChanges();
+        SeedOpenRentCharge(relationship, 1_200m, DateOnly.FromDateTime(today.AddDays(-6)));
+        SeedOpenRentCharge(relationship, 1_200m, DateOnly.FromDateTime(today));
     }
 
-    private Lease SeedLease(
+    private CanonicalRelationship SeedRelationship(
         DateTime today,
         string leaseNumber,
         string propertyName,
@@ -289,7 +349,8 @@ public class DailyBriefingServiceTests : IDisposable
         string tenantFirstName,
         string tenantLastName,
         DateTime startDate,
-        DateTime endDate)
+        DateTime endDate,
+        string lifecycle)
     {
         var now = DateTime.UtcNow;
         var property = new Property
@@ -319,26 +380,190 @@ public class DailyBriefingServiceTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         };
-        var lease = new Lease
+        _db.AddRange(property, unit, tenant);
+        _db.SaveChanges();
+
+        var management = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = $"REL-{Guid.NewGuid():N}"[..12],
+            PlannedPossessionAtUtc = startDate,
+            PossessionGivenAtUtc = startDate,
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        _db.LeaseManagements.Add(management);
+        _db.SaveChanges();
+
+        var startOn = DateOnly.FromDateTime(startDate);
+        var endOn = DateOnly.FromDateTime(endDate);
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = leaseNumber,
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = startOn,
+            TermEndOn = endOn,
+            GoverningFromOn = startOn,
+            BaseRentAmount = 1_200m,
+            RentDueDay = checked((short)today.Day),
+            SecurityDepositObligation = 1_200m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId, ActorUserId, now),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = now,
+        };
+        var party = new LeaseManagementParty
         {
             PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = leaseNumber,
-            Status = LeaseStatus.Active,
-            StartDate = startDate,
-            EndDate = endDate,
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            RentDueDay = today.Day,
-            CreatedAt = now,
-            UpdatedAt = now,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = startOn,
+            EffectiveThrough = lifecycle == "Closed" ? endOn : null,
+            ChangeReason = "Canonical daily briefing fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
         };
-        _db.Leases.Add(lease);
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{Guid.NewGuid():N}"[..12],
+            Currency = "USD",
+            OpenedAtUtc = startDate,
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        _db.AddRange(agreement, party, account);
         _db.SaveChanges();
-        return lease;
+        _db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        {
+            PortfolioId = PortfolioId,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = $"{tenantFirstName} {tenantLastName}",
+            EmailSnapshot = $"{tenantFirstName}.{tenantLastName}@example.test".ToLowerInvariant(),
+            SigningOrder = 1,
+            IsRequired = true,
+        });
+        _db.SaveChanges();
+
+        var issuedFile = NewStoredFile($"briefing-agreement-{agreement.Id}-issued.pdf", now);
+        var executedFile = NewStoredFile($"briefing-agreement-{agreement.Id}-executed.pdf", now);
+        _db.StoredFiles.AddRange(issuedFile, executedFile);
+        _db.SaveChanges();
+        var issuedArtifact = NewAgreementArtifact(
+            issuedFile, LegalDocumentArtifactKind.IssuedAgreement, 'a', now);
+        var executedArtifact = NewAgreementArtifact(
+            executedFile, LegalDocumentArtifactKind.ExecutedAgreement, 'c', now);
+        _db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        _db.SaveChanges();
+
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = now;
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = now;
+        _db.SaveChanges();
+
+        if (lifecycle == "Closed")
+        {
+            management.PossessionReturnedAtUtc = endDate;
+            management.AccountClosedAtUtc = endDate;
+            account.ClosedAtUtc = endDate;
+            account.CloseReasonCode = "LeaseEnded";
+            _db.SaveChanges();
+        }
+
+        return new CanonicalRelationship(property, unit, tenant, management, agreement, party, account);
     }
+
+    private static StoredFile NewStoredFile(string fileName, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        FileName = fileName,
+        FilePath = $"test/{fileName}",
+        ContentType = "application/pdf",
+        FileSize = 1024,
+        UploadedAt = now,
+    };
+
+    private static LegalDocumentArtifact NewAgreementArtifact(
+        StoredFile file,
+        LegalDocumentArtifactKind kind,
+        char hashCharacter,
+        DateTime now) => new()
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = file.Id,
+            ArtifactKind = kind,
+            StorageKey = file.FilePath,
+            FileName = file.FileName,
+            ContentType = file.ContentType,
+            ByteLength = file.FileSize,
+            ContentSha256 = new string(hashCharacter, 64),
+            LegalIssuanceFingerprint = kind == LegalDocumentArtifactKind.IssuedAgreement
+            ? new string('b', 64)
+            : null,
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+
+    private TenantLedgerEntry SeedOpenRentCharge(
+        CanonicalRelationship relationship,
+        decimal amount,
+        DateOnly dueOn)
+    {
+        var now = DateTime.UtcNow;
+        var entry = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = relationship.Account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = dueOn,
+            DueOn = dueOn,
+            PostedAtUtc = now,
+            Description = "Rent charge",
+            BusinessKey = $"briefing-rent:{relationship.Account.Id}:{dueOn:yyyy-MM-dd}",
+            LeaseAgreementId = relationship.Agreement.Id,
+            CreatedByUserId = ActorUserId,
+        };
+        _db.TenantLedgerEntries.Add(entry);
+        _db.SaveChanges();
+        return entry;
+    }
+
+    private sealed record CanonicalRelationship(
+        Property Property,
+        Unit Unit,
+        Tenant Tenant,
+        LeaseManagement Management,
+        LeaseAgreement Agreement,
+        LeaseManagementParty Party,
+        TenantAccount Account);
 
     private sealed class NoopLlmProvider : ILlmProvider
     {
@@ -360,4 +585,30 @@ public class DailyBriefingServiceTests : IDisposable
             CancellationToken ct = default)
             => Task.FromResult(new LlmToolResult("end", "", [], 0, 0, "test"));
     }
+
+    private sealed class HangingLlmProvider : ILlmProvider
+    {
+        public async Task<string> ChatAsync(string prompt, CancellationToken ct = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return "";
+        }
+
+        public Task<ExtractedFields> ExtractAsync(
+            byte[] documentBytes,
+            string contentType,
+            string instructions,
+            IReadOnlyList<ExtractionFieldSpec> fields,
+            string? groundingContext = null,
+            CancellationToken ct = default)
+            => Task.FromResult(new ExtractedFields());
+
+        public Task<LlmToolResult> ChatWithToolsAsync(
+            string systemPrompt,
+            IReadOnlyList<LlmChatMessage> messages,
+            IReadOnlyList<LlmToolSpec> tools,
+            CancellationToken ct = default)
+            => Task.FromResult(new LlmToolResult("end", "", [], 0, 0, "test"));
+    }
+
 }

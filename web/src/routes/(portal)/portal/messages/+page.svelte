@@ -84,11 +84,13 @@
 
 	// --- Reply compose (right pane, pinned bottom) -----------------------------
 	let replyBody = $state('');
+	let replyOperationKey = $state<string | null>(null);
 
 	// Reset the reply box whenever the active thread changes.
 	$effect(() => {
 		void selectedId;
 		replyBody = '';
+		replyOperationKey = null;
 	});
 
 	const canSendReply = $derived(!!replyBody.trim() && selectedId !== null);
@@ -96,10 +98,12 @@
 	const replyMutation = createMutation(() => ({
 		mutationFn: () =>
 			portal.conversations.sendMessage(selectedId as number, {
+				operationKey: (replyOperationKey ??= crypto.randomUUID()),
 				body: replyBody.trim()
 			}),
 		onSuccess: (updated) => {
 			replyBody = '';
+			replyOperationKey = null;
 			// Seed the detail cache with the server's fresh thread so the tenant's own
 			// message shows instantly, then refresh both keys (don't depend on the socket).
 			queryClient.setQueryData(['portal-conversation', updated.id], updated);
@@ -124,6 +128,7 @@
 
 	// --- New conversation dialog -----------------------------------------------
 	let composeOpen = $state(false);
+	let composeOperationKey = $state<string | null>(null);
 	const composeEmpty = { subject: '', body: '' };
 	let composeForm = $state({ ...composeEmpty });
 
@@ -131,17 +136,20 @@
 
 	function openCompose() {
 		composeForm = { ...composeEmpty };
+		composeOperationKey = null;
 		composeOpen = true;
 	}
 
 	function closeCompose() {
 		composeOpen = false;
 		composeForm = { ...composeEmpty };
+		composeOperationKey = null;
 	}
 
 	const startMutation = createMutation(() => ({
 		mutationFn: () =>
 			portal.conversations.start({
+				operationKey: (composeOperationKey ??= crypto.randomUUID()),
 				subject: composeForm.subject.trim(),
 				body: composeForm.body.trim()
 			}),

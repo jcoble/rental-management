@@ -8,6 +8,7 @@
 		assistantActionFieldLabel,
 		formatAssistantMoney
 	} from '$lib/assistant/actions';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	let {
 		draft,
@@ -74,7 +75,7 @@
 			</div>
 			<div>
 				<p class="text-[11px] uppercase tracking-wide text-muted-foreground">Status</p>
-				<p class="font-medium">{expense.status}</p>
+				<p class="font-medium">{formatStatusLabel(expense.status)}</p>
 			</div>
 			<div class="sm:col-span-2">
 				<p class="text-[11px] uppercase tracking-wide text-muted-foreground">Description</p>

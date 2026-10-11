@@ -9,7 +9,7 @@ public sealed class DocumentTemplateFieldCatalog : IDocumentTemplateFieldCatalog
     private static readonly IReadOnlyList<DocumentTemplateFieldCatalogItemResponse> LeaseFields =
     [
         new("landlord.name", "Landlord name", DocumentTemplateFieldKind.Text, DocumentTemplateSignerRole.None, false,
-            "Name of the landlord or owner entity."),
+            "Name of the landlord or owner."),
         new("tenant.fullName", "Tenant full name", DocumentTemplateFieldKind.Text, DocumentTemplateSignerRole.None, false,
             "Primary tenant or lessee name."),
         new("tenant.email", "Tenant email", DocumentTemplateFieldKind.Text, DocumentTemplateSignerRole.None, false,

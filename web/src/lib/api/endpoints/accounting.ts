@@ -2,7 +2,6 @@ import type {
 	AccountingReports,
 	AccountingSummary,
 	AccountingTransaction,
-	CashFlowSummary,
 	MoneySnapshotResponse,
 	OwnerStatementReport,
 	OwnerStatementSummary,
@@ -10,9 +9,7 @@ import type {
 	ScheduleEReport,
 	YearEndView
 } from '$lib/types';
-import { api, refreshToken } from '../client';
-import { CLIENT_API_BASE_URL } from '$lib/config';
-import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
+import { api, downloadFile } from '../client';
 import { browser } from '$app/environment';
 import { buildListQuery, type ListParams } from '../list-params';
 
@@ -24,6 +21,21 @@ export type AccountingTransactionParams = ListParams & {
 	from?: string;
 	to?: string;
 };
+
+export interface OwnerStatementPeriodParams {
+	period?: string;
+	asOf?: string;
+	year?: number;
+}
+
+function ownerStatementQuery(params: OwnerStatementPeriodParams | number = {}): string {
+	const normalized = typeof params === 'number' ? { year: params } : params;
+	return buildListQuery(undefined, {
+		period: normalized.period,
+		asOf: normalized.asOf,
+		year: normalized.year
+	});
+}
 
 /**
  * A high-confidence, still-unmatched bank line the user can one-tap confirm against a
@@ -70,10 +82,11 @@ export const accounting = {
 	// GET /api/v1/accounting/snapshot — plain-English money snapshot (collected / spent /
 	// kept) with ready-to-show explanation sentences for the non-technical landlord.
 	snapshot: () => api.get<MoneySnapshotResponse>('/accounting/snapshot'),
-	// GET /api/v1/accounting/past-due — the "Who's behind" list: one row per behind lease/tenant.
+	// GET /api/v1/accounting/past-due — the server-paged "Who's behind" list: one row per tenant account.
 	// Shares the snapshot's past-due definition server-side, so totalCount == snapshot.pastDueCount.
 	// This is the single source both the dashboard KPI and the past-due list read from.
-	pastDue: () => api.get<PastDueResponse>('/accounting/past-due'),
+	pastDue: (params: Pick<ListParams, 'skip' | 'take'> = {}) =>
+		api.get<PastDueResponse>(`/accounting/past-due${buildListQuery(params)}`),
 	reports: () => api.get<AccountingReports>('/accounting/reports'),
 	transactions: (params?: AccountingTransactionParams) => {
 		const { kind, status, category, propertyId, from, to, ...list } = params ?? {};
@@ -91,23 +104,20 @@ export const accounting = {
 	// GET /api/v1/accounting/schedule-e?year=YYYY
 	scheduleE: (year: number) => api.get<ScheduleEReport>(`/accounting/schedule-e?year=${year}`),
 
-	// GET /api/v1/accounting/cash-flow?from=&to= — true cash flow (rent − opex − debt service),
-	// escrow-aware, per property + portfolio. Omitting the range defaults to the current year-to-date.
-	cashFlow: (params?: { from?: string; to?: string }) =>
-		api.get<CashFlowSummary>(`/accounting/cash-flow${buildListQuery(undefined, { from: params?.from, to: params?.to })}`),
-
 	// GET /api/v1/accounting/year-end?year=YYYY — the three-block view (cash flow vs taxable income +
 	// rent roll). Omitting the year defaults to the previous calendar year (the year you file for).
 	yearEnd: (year?: number, propertyId?: number) =>
 		api.get<YearEndView>(`/accounting/year-end${buildListQuery(undefined, { year, propertyId })}`),
 
-	// GET /api/v1/accounting/owner-statements?year=YYYY
-	ownerStatements: (year: number) =>
-		api.get<OwnerStatementSummary[]>(`/accounting/owner-statements?year=${year}`),
+	// GET /api/v1/accounting/owner-statements?period=&asOf=&year=
+	// Omitting period/asOf defaults to the previous completed month; year remains a
+	// compatibility escape hatch for the former annual report.
+	ownerStatements: (params: OwnerStatementPeriodParams | number = {}) =>
+		api.get<OwnerStatementSummary[]>(`/accounting/owner-statements${ownerStatementQuery(params)}`),
 
-	// GET /api/v1/accounting/owner-statement?ownerId=&year=YYYY
-	ownerStatement: (ownerId: number, year: number) =>
-		api.get<OwnerStatementReport>(`/accounting/owner-statement?ownerId=${ownerId}&year=${year}`),
+	// GET /api/v1/accounting/owner-statement?ownerId=&period=&asOf=&year=
+	ownerStatement: (ownerId: number, params: OwnerStatementPeriodParams | number = {}) =>
+		api.get<OwnerStatementReport>(`/accounting/owner-statement?ownerId=${ownerId}${ownerStatementQuery(params).replace('?', '&')}`),
 };
 
 /**
@@ -118,28 +128,7 @@ export const accounting = {
 export async function downloadScheduleECsv(year: number): Promise<void> {
 	if (!browser) return;
 
-	// Proactively refresh if near expiry, mirroring the main client logic.
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/accounting/schedule-e/export?year=${year}`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-	});
-
-	if (!response.ok) {
-		throw new Error(`CSV download failed (${response.status})`);
-	}
-
-	const blob = await response.blob();
+	const blob = await downloadFile(`/accounting/schedule-e/export?year=${year}`);
 	const objectUrl = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = objectUrl;
@@ -158,28 +147,7 @@ export async function downloadScheduleECsv(year: number): Promise<void> {
 export async function downloadYearEndPacket(year: number): Promise<void> {
 	if (!browser) return;
 
-	// Proactively refresh if near expiry, mirroring the main client logic.
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/accounting/year-end-packet?year=${year}`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-	});
-
-	if (!response.ok) {
-		throw new Error(`Packet download failed (${response.status})`);
-	}
-
-	const blob = await response.blob();
+	const blob = await downloadFile(`/accounting/year-end-packet?year=${year}`);
 	const objectUrl = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = objectUrl;
@@ -194,34 +162,25 @@ export async function downloadYearEndPacket(year: number): Promise<void> {
  * Download the owner-statement CSV for the given owner and year with the bearer token attached.
  * Mirrors downloadScheduleECsv exactly.
  */
-export async function downloadOwnerStatementCsv(ownerId: number, year: number): Promise<void> {
+export async function downloadOwnerStatementCsv(
+	ownerId: number,
+	params: OwnerStatementPeriodParams | number = {}
+): Promise<void> {
 	if (!browser) return;
 
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/accounting/owner-statement/export?ownerId=${ownerId}&year=${year}`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+	const normalized = typeof params === 'number' ? { year: params } : params;
+	const query = buildListQuery(undefined, {
+		ownerId,
+		period: normalized.period,
+		asOf: normalized.asOf,
+		year: normalized.year
 	});
-
-	if (!response.ok) {
-		throw new Error(`CSV download failed (${response.status})`);
-	}
-
-	const blob = await response.blob();
+	const periodLabel = normalized.period ?? normalized.year?.toString() ?? 'statement';
+	const blob = await downloadFile(`/accounting/owner-statement/export${query}`);
 	const objectUrl = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = objectUrl;
-	a.download = `owner-statement-${ownerId}-${year}.csv`;
+	a.download = `owner-statement-${ownerId}-${periodLabel}.csv`;
 	document.body.appendChild(a);
 	a.click();
 	document.body.removeChild(a);

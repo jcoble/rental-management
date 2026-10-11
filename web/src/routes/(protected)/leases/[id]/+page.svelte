@@ -1,11 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
-	import LeaseDetail from '$lib/components/records/LeaseDetail.svelte';
+	import LeaseManagementDetail from '$lib/components/leases/LeaseManagementDetail.svelte';
+
+	const leaseManagementId = $derived(Number(page.params.id));
 </script>
 
-<LeaseDetail
-	leaseId={Number(page.params.id)}
-	initialTab={page.url.searchParams.get('tab') ?? undefined}
-	onDeleted={() => goto('/leases')}
-/>
+<div class="m3-page-frame">
+	<LeaseManagementDetail {leaseManagementId} />
+</div>

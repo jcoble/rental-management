@@ -1,8 +1,12 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'vendors_models.dart';
 
 /// Repository for vendors, their scorecards, ratings, and SMS dispatch.
@@ -21,9 +25,16 @@ class VendorsRepository {
 
   final Dio _dio;
 
-  Future<List<Vendor>> list() async {
+  Future<List<Vendor>> list({
+    int skip = 0,
+    int take = 50,
+    String sort = 'name',
+  }) async {
     try {
-      final response = await _dio.get<List<dynamic>>('/vendors');
+      final response = await _dio.get<List<dynamic>>(
+        '/vendors',
+        queryParameters: {'skip': skip, 'take': take, 'sort': sort},
+      );
       return (response.data ?? [])
           .whereType<Map<String, dynamic>>()
           .map(Vendor.fromJson)
@@ -33,10 +44,44 @@ class VendorsRepository {
     }
   }
 
+  Future<VendorPage> listPage([
+    VendorListQuery query = const VendorListQuery(),
+  ]) async {
+    final parameters = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/vendors/page',
+        queryParameters: parameters,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return VendorPage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<Vendor> createVendor(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/vendors', data: data);
+      final response = await IdempotentMutation.run(
+        'vendors:create:$data',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/vendors',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
       final responseData = response.data;
       if (responseData == null) {
         throw const ApiException(
@@ -52,9 +97,13 @@ class VendorsRepository {
 
   Future<Vendor> updateVendor(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/vendors/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'vendors:update:$id:$data',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/vendors/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -71,7 +120,13 @@ class VendorsRepository {
 
   Future<void> deleteVendor(int id) async {
     try {
-      await _dio.delete<dynamic>('/vendors/$id');
+      await IdempotentMutation.run(
+        'vendors:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/vendors/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -79,8 +134,9 @@ class VendorsRepository {
 
   Future<VendorScorecard> scorecard(int vendorId) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/vendors/$vendorId/scorecard');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/vendors/$vendorId/scorecard',
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -103,13 +159,18 @@ class VendorsRepository {
   }) async {
     try {
       final trimmed = comment?.trim();
-      await _dio.post<Map<String, dynamic>>(
-        '/vendors/$vendorId/ratings',
-        data: {
-          'stars': stars,
-          if (trimmed != null && trimmed.isNotEmpty) 'comment': trimmed,
-          'workOrderId': ?workOrderId,
-        },
+      final data = <String, dynamic>{
+        'stars': stars,
+        if (trimmed != null && trimmed.isNotEmpty) 'comment': trimmed,
+        'workOrderId': ?workOrderId,
+      };
+      await IdempotentMutation.run(
+        'vendor:rate:$vendorId:${jsonEncode(data)}',
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/vendors/$vendorId/ratings',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -118,10 +179,14 @@ class VendorsRepository {
 
   /// Texts the vendor a request to send back their W-9. Throws [ApiException]
   /// (400) when the vendor has no phone number on file.
-  Future<W9RequestResult> requestW9(int vendorId) async {
+  Future<W9RequestResult> requestW9(
+    int vendorId, {
+    required String clientOperationId,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/vendors/$vendorId/request-w9',
+        data: {'clientOperationId': clientOperationId},
       );
       return W9RequestResult.fromJson(response.data ?? const {});
     } on DioException catch (e) {
@@ -153,6 +218,7 @@ class VendorsRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/work-orders/$workOrderId/dispatch',
         data: {
+          'idempotencyKey': const Uuid().v4(),
           'vendorId': vendorId,
           if (trimmed != null && trimmed.isNotEmpty) 'note': trimmed,
         },
@@ -165,6 +231,34 @@ class VendorsRepository {
         );
       }
       return VendorDispatchResult.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Cancels one open vendor dispatch while keeping its history on the work order.
+  Future<VendorDispatchCancellationResult> cancelDispatch(
+    int workOrderId, {
+    required int dispatchId,
+    String? reason,
+  }) async {
+    try {
+      final trimmed = reason?.trim();
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/work-orders/$workOrderId/dispatches/$dispatchId/cancel',
+        data: {
+          'idempotencyKey': const Uuid().v4(),
+          if (trimmed != null && trimmed.isNotEmpty) 'reason': trimmed,
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return VendorDispatchCancellationResult.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -182,8 +276,18 @@ final vendorsProvider = FutureProvider.autoDispose<List<Vendor>>((ref) {
   return ref.watch(vendorsRepositoryProvider).list();
 });
 
+final vendorsBySortProvider = FutureProvider.autoDispose
+    .family<List<Vendor>, String>((ref, sort) {
+      return ref.watch(vendorsRepositoryProvider).list(sort: sort);
+    });
+
+final vendorsPageProvider = FutureProvider.autoDispose
+    .family<VendorPage, VendorListQuery>((ref, query) {
+      return ref.watch(vendorsRepositoryProvider).listPage(query);
+    });
+
 /// Performance scorecard for a single vendor.
 final vendorScorecardProvider = FutureProvider.autoDispose
     .family<VendorScorecard, int>((ref, vendorId) {
-  return ref.watch(vendorsRepositoryProvider).scorecard(vendorId);
-});
+      return ref.watch(vendorsRepositoryProvider).scorecard(vendorId);
+    });

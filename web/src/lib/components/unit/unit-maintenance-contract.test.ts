@@ -1,0 +1,62 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { describe, test } from 'node:test';
+
+const page = readFileSync(
+	new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
+	'utf8',
+);
+const recurringDialog = readFileSync(
+	new URL('../maintenance/RecurringMaintenanceFormDialog.svelte', import.meta.url),
+	'utf8',
+);
+const recurringView = readFileSync(
+	new URL('../maintenance/UnitRecurringMaintenanceView.svelte', import.meta.url),
+	'utf8',
+);
+const inspections = readFileSync(new URL('../../api/endpoints/inspections.ts', import.meta.url), 'utf8');
+const recurring = readFileSync(new URL('../../api/endpoints/recurring-maintenance.ts', import.meta.url), 'utf8');
+const inspectionDetail = readFileSync(new URL('../records/InspectionDetail.svelte', import.meta.url), 'utf8');
+
+describe('Unit Maintenance query contract', () => {
+	test('requests server-paged Unit inspections', () => {
+		assert.match(inspections, /\/inspections\/page/);
+		assert.match(inspections, /buildListQuery\(list, \{ unitId \}\)/);
+		assert.match(page, /inspections\.listUnitPage\(\{[\s\S]*unitId: id/);
+	});
+
+	test('requests server-paged Unit recurring maintenance', () => {
+		assert.match(recurring, /\/recurring-maintenance\/page/);
+		assert.match(recurring, /unitId/);
+		assert.match(page, /<UnitRecurringMaintenanceView/);
+		assert.match(recurringView, /recurringMaintenance\.listPage\(\{[\s\S]*unitId/);
+	});
+
+	test('opens an inspection detail from the Unit list with a maintenance-owned record key', () => {
+		assert.match(page, /page\.url\.searchParams\.get\('inspection'\)/);
+		assert.match(page, /goto\(`\/units\/\$\{id\}\?tab=maintenance&view=inspections&inspection=\$\{inspectionId\}`/);
+		assert.match(page, /<InspectionDetail inspectionId=\{selectedInspectionId\} expectedUnitId=\{id\} onUnitMismatch=\{closeInspection\} \/>/);
+		assert.match(page, /data-testid="inspection-detail-close"/);
+		assert.match(page, /formatDateOnly\(inspection\.scheduledFor\)/);
+		assert.match(inspectionDetail, /inspections\.get\(inspectionId\)/);
+		assert.match(inspectionDetail, /isMismatchedUnitSelection/);
+		assert.match(inspectionDetail, /onUnitMismatch\?\.\(\)/);
+		assert.doesNotMatch(inspectionDetail, /\.sort\(/);
+		assert.match(inspectionDetail, /data-testid="inspection-detail-facts"/);
+		assert.match(inspectionDetail, /data-testid="inspection-detail-checklist"/);
+	});
+
+	test('offers a unit-scoped create flow and refreshes the list after save', () => {
+		assert.match(page, /<UnitRecurringMaintenanceView[\s\S]*propertyId=\{dashboard\.unit\.propertyId\}/);
+		assert.match(recurringView, /data-testid="unit-recurring-create-button"/);
+		assert.match(page, /propertyId=\{dashboard\.unit\.propertyId\}/);
+		assert.match(page, /unitId=\{dashboard\.unit\.id\}/);
+		assert.match(recurringView, /lockProperty/);
+		assert.match(recurringView, /lockUnit/);
+		assert.match(recurringView, /query\.refetch\(\)/);
+		assert.match(page, /No recurring tasks yet\. Select the New recurring task button to add work that repeats on a schedule\./);
+		assert.match(recurringDialog, /recurringMaintenance\.create\(data as never\)/);
+		assert.match(recurringDialog, /disabled=\{editingId != null \|\| lockProperty\}/);
+		assert.match(recurringDialog, /disabled=\{!form\.propertyId \|\| lockUnit\}/);
+	});
+});

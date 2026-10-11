@@ -11,6 +11,7 @@ public class ConversationSummary
     public int Id { get; set; }
     public int TenantId { get; set; }
     public string TenantName { get; set; } = string.Empty;
+    public string CounterpartyName { get; set; } = string.Empty;
 
     /// <summary>The conversation topic (e.g. "Rent", "Maintenance").</summary>
     public string Subject { get; set; } = string.Empty;
@@ -35,6 +36,15 @@ public class ConversationListResponse
     public int TotalCount { get; set; }
     public int Skip { get; set; }
     public int Take { get; set; }
+}
+
+/// <summary>
+/// Server-side conversation search, filtering, sorting, and paging. Search covers the tenant,
+/// subject, linked property, and latest-message preview without materializing the inbox.
+/// </summary>
+public class ConversationListQuery : ListQuery
+{
+    public bool? UnreadOnly { get; set; }
 }
 
 public sealed record ConversationUnreadCountResponse(int Count);
@@ -67,9 +77,21 @@ public class ConversationMessageDto
 /// <summary>Landlord → tenant: open a new topic thread and send the first message over one or more channels.</summary>
 public class StartConversationRequest : IValidatableObject
 {
+    [Required]
+    [MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
     /// <summary>The tenant (in the caller's portfolio) to start a conversation with.</summary>
     [Range(1, int.MaxValue)]
     public int TenantId { get; set; }
+
+    /// <summary>
+    /// Property context for the thread. Required when the tenant has more than one current rental
+    /// relationship; omitted only when the server can derive exactly one canonical property or the
+    /// caller has workspace-wide access to an unattached tenant.
+    /// </summary>
+    [Range(1, int.MaxValue)]
+    public int? PropertyId { get; set; }
 
     /// <summary>The conversation topic.</summary>
     [Required]
@@ -99,6 +121,10 @@ public class StartConversationRequest : IValidatableObject
 public class PostMessageRequest : IValidatableObject
 {
     [Required]
+    [MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
+    [Required]
     [MaxLength(4000)]
     public string Body { get; set; } = string.Empty;
 
@@ -114,6 +140,10 @@ public class TenantStartConversationRequest
 {
     [Required]
     [MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
+    [Required]
+    [MaxLength(200)]
     public string Subject { get; set; } = string.Empty;
 
     [Required]
@@ -124,6 +154,10 @@ public class TenantStartConversationRequest
 /// <summary>Tenant: append a message to one of their own conversations (no channel selection).</summary>
 public class TenantPostMessageRequest
 {
+    [Required]
+    [MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
     [Required]
     [MaxLength(4000)]
     public string Body { get; set; } = string.Empty;

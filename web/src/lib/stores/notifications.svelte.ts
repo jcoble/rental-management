@@ -11,6 +11,7 @@ import type { NotificationItem } from '$lib/api/types/notification';
  * components render the 0/[] defaults during SSR.
  */
 class NotificationStore {
+	private accessGeneration = 0;
 	unreadCount = $state(0);
 	recentNotifications = $state<NotificationItem[]>([]);
 	isDropdownOpen = $state(false);
@@ -32,11 +33,13 @@ class NotificationStore {
 	}
 
 	async refresh() {
+		const accessGeneration = this.accessGeneration;
 		try {
 			const [count, recent] = await Promise.all([
 				notifications.unreadCount(),
 				notifications.list({ take: 20 })
 			]);
+			if (accessGeneration !== this.accessGeneration) return;
 			this.unreadCount = count.count;
 			this.recentNotifications = recent;
 		} catch {
@@ -45,8 +48,10 @@ class NotificationStore {
 	}
 
 	async markAsRead(notificationId: number) {
+		const accessGeneration = this.accessGeneration;
 		try {
 			await notifications.markAsRead(notificationId);
+			if (accessGeneration !== this.accessGeneration) return;
 			const idx = this.recentNotifications.findIndex((n) => n.id === notificationId);
 			if (idx >= 0 && !this.recentNotifications[idx].isRead) {
 				this.recentNotifications[idx] = { ...this.recentNotifications[idx], isRead: true };
@@ -58,8 +63,10 @@ class NotificationStore {
 	}
 
 	async markAllAsRead() {
+		const accessGeneration = this.accessGeneration;
 		try {
 			await notifications.markAllAsRead();
+			if (accessGeneration !== this.accessGeneration) return;
 			this.recentNotifications = this.recentNotifications.map((n) => ({ ...n, isRead: true }));
 			this.unreadCount = 0;
 		} catch {
@@ -86,6 +93,15 @@ class NotificationStore {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
 		this.initialized = false;
+	}
+
+	resetForAccessChange() {
+		this.accessGeneration++;
+		this.unreadCount = 0;
+		this.recentNotifications = [];
+		this.isDropdownOpen = false;
+		this.activeDropdownId = null;
+		if (this.initialized) void this.refresh();
 	}
 }
 

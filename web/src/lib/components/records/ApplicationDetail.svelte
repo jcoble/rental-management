@@ -4,12 +4,16 @@
 	import {
 		applications,
 		type ApplicationResponse,
-		type ScreeningResultResponse,
+		type ApplicantScreeningResponse,
+		type ScreeningRecommendation,
 		type AdverseActionNoticeResponse,
 		type UpdateApplicationRequest,
+		type RecordApplicationFeeRequest,
 	} from '$lib/api/endpoints/applications';
 	import { downloadDocument } from '$lib/api/endpoints/documents';
 	import { ApiError } from '$lib/api/client';
+	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { parseForm, applicationFeeSchema } from '$lib/schemas';
 	import { showSuccess, showWarning, showError, apiErrorMessage } from '$lib/utils/toast';
 	import {
 		formatApplicationAddress,
@@ -17,15 +21,22 @@
 		formatRequestedProperty,
 		formatRequestedUnit,
 	} from '$lib/applications/application-display';
-	import { leaseCreateHrefForApprovedTenant } from '$lib/leases/lease-create-prefill';
+	import {
+		screeningAction,
+		reportDetailsRequired,
+		type ScreeningDecision,
+	} from '$lib/applications/screening-mode';
+	import { prepareMoveInHrefForApprovedTenant } from '$lib/leases/prepare-move-in-prefill';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import {
 		Mail,
 		Phone,
@@ -43,8 +54,11 @@
 		Download,
 		User,
 		Edit3,
+		DollarSign,
+		ChevronDown,
 	} from '@lucide/svelte';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	// `applicationId` selects the record; `onDeleted` is the exit/close callback (the page has no
 	// delete) — the host uses it to clear the selection / navigate back to the list.
@@ -53,19 +67,32 @@
 		onDeleted,
 		expectedUnitId,
 		onUnitMismatch,
+		prepareMoveInBasePath = '/applications',
+		loadApplication = applications.get,
+		showApplicationActions = true,
+		showScreening = true,
+		showTenantLink = true,
+		applicationQueryScope = 'management',
 	}: {
 		applicationId: number;
 		onDeleted: () => void;
 		expectedUnitId?: number;
 		onUnitMismatch?: () => void;
+		prepareMoveInBasePath?: string;
+		loadApplication?: (id: number) => Promise<ApplicationResponse>;
+		showApplicationActions?: boolean;
+		showScreening?: boolean;
+		showTenantLink?: boolean;
+		applicationQueryScope?: string;
 	} = $props();
 
 	const queryClient = useQueryClient();
 	const id = $derived(applicationId);
+	const portfolioId = $derived(getCurrentPortfolioId());
 
 	const applicationQuery = createQuery(() => ({
-		queryKey: ['application', id],
-		queryFn: () => applications.get(id),
+		queryKey: ['application', applicationQueryScope, id],
+		queryFn: () => loadApplication(id),
 		enabled: !isNaN(id) && id > 0,
 	}));
 
@@ -88,7 +115,7 @@
 	};
 
 	function invalidate() {
-		queryClient.invalidateQueries({ queryKey: ['application', id] });
+		queryClient.invalidateQueries({ queryKey: ['application', applicationQueryScope, id] });
 		queryClient.invalidateQueries({ queryKey: ['applications'] });
 	}
 
@@ -134,6 +161,58 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	// ── Record application fee in the application's pre-tenancy financial account ─────────────────
+	let showRecordFee = $state(false);
+	let feeAmount = $state('');
+	let feeMethod = $state('');
+	let feeEffectiveOn = $state('');
+	let feeOperationKey = $state<string | null>(null);
+	let feeErrors = $state<Record<string, string>>({});
+
+	function openRecordFee() {
+		feeAmount = '';
+		feeMethod = '';
+		feeEffectiveOn = '';
+		feeOperationKey = null;
+		feeErrors = {};
+		showRecordFee = true;
+	}
+
+	const recordFeeMutation = createMutation(() => ({
+		mutationFn: (body: RecordApplicationFeeRequest) => {
+			feeOperationKey ??= crypto.randomUUID();
+			return applications.recordFee(id, feeOperationKey, body);
+		},
+		onSuccess: () => {
+			feeOperationKey = null;
+			showRecordFee = false;
+			showSuccess('Application fee recorded.');
+			queryClient.invalidateQueries({ queryKey: ['application', applicationQueryScope, id] });
+			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['accounting-transactions'] });
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function submitRecordFee() {
+		const result = parseForm(applicationFeeSchema, {
+			amount: feeAmount,
+			method: feeMethod,
+			effectiveOn: feeEffectiveOn,
+		});
+		if (result.errors) {
+			feeErrors = result.errors;
+			return;
+		}
+		feeErrors = {};
+		recordFeeMutation.mutate({
+			amount: result.data.amount,
+			method: result.data.method ?? null,
+			currency: 'USD',
+			effectiveOn: result.data.effectiveOn ?? null,
+		});
+	}
 
 	// ── Landlord corrections ─────────────────────────────────────────────────────
 	type ApplicationEditForm = {
@@ -255,11 +334,11 @@
 	const screeningQuery = createQuery(() => ({
 		queryKey: ['application-screening', id],
 		queryFn: () => applications.screening(id),
-		enabled: !isNaN(id) && id > 0,
+		enabled: showScreening && !isNaN(id) && id > 0,
 	}));
 
-	const latestScreening = $derived<ScreeningResultResponse | undefined>(
-		screeningQuery.data?.[0]
+	const latestScreening = $derived<ApplicantScreeningResponse | undefined>(
+		screeningQuery.data?.screenings[0]
 	);
 	const hasScreening = $derived(!!latestScreening);
 	const canScreen = $derived(
@@ -272,15 +351,111 @@
 		Decline: { label: 'Decline', class: 'm3-tone-chip border m3-tone--error' },
 	};
 	const SCREEN_STATUS_MAP = {
-		Requested: { label: 'Requested', class: 'm3-tone-chip border m3-tone--info' },
+		Created: { label: 'Created', class: 'm3-tone-chip border m3-tone--info' },
+		AwaitingProvider: { label: 'Connecting', class: 'm3-tone-chip border m3-tone--info' },
+		AwaitingApplicant: { label: 'Waiting for applicant', class: 'm3-tone-chip border m3-tone--warning' },
+		InProgress: { label: 'In progress', class: 'm3-tone-chip border m3-tone--primary' },
 		Completed: { label: 'Completed', class: 'm3-tone-chip border m3-tone--success' },
 		Failed: { label: 'Failed', class: 'm3-tone-chip border m3-tone--error' },
+		Cancelled: { label: 'Cancelled', class: 'm3-tone-chip border' },
 	};
 
+	// One screening action. A connected provider means Rental Command invites the applicant;
+	// otherwise the same button records a screening the landlord already ran somewhere else.
+	const providerConnected = $derived(screeningQuery.data?.integratedProvider.isConfigured === true);
+	const screeningActionKind = $derived(
+		screeningAction({
+			providerConnected,
+			consent: application?.consentGiven,
+			status: application?.status,
+		})
+	);
+	const screeningButtonLabel = $derived(
+		providerConnected ? 'Request screening' : 'Record a screening done elsewhere'
+	);
+
+	const RESULT_LABELS: Record<'InProgress' | ScreeningDecision, string> = {
+		InProgress: 'Still in progress',
+		Accept: 'Accept',
+		Conditional: 'Accept with conditions',
+		Decline: 'Decline',
+	};
+
+	let showRecordElsewhere = $state(false);
+	let externalProvider = $state('');
+	let externalResult = $state<'InProgress' | ScreeningDecision>('InProgress');
+	let externalUrl = $state('');
+	let externalReference = $state('');
+	let externalCraName = $state('');
+	let externalCraAddress = $state('');
+	let externalCraPhone = $state('');
+	let externalReportUsed = $state(false);
+	let externalReason = $state('');
+	let reportDetailsOpen = $state(false);
+	let externalScreeningOperationKey = $state<string | null>(null);
+	let externalDecisionOperationKey = $state<string | null>(null);
+
+	const externalDecision = $derived<ScreeningDecision | null>(
+		externalResult === 'InProgress' ? null : externalResult
+	);
+	const externalReportDetailsRequired = $derived(
+		reportDetailsRequired({ decision: externalDecision, consumerReportUsed: externalReportUsed })
+	);
+	const canSaveExternal = $derived(
+		Boolean(externalProvider.trim()) &&
+			(!externalReportUsed || Boolean(externalReason.trim())) &&
+			(!externalReportDetailsRequired ||
+				Boolean(externalCraName.trim() && externalCraAddress.trim() && externalCraPhone.trim()))
+	);
+
+	// A decline that leans on the report cannot be saved without those details, so open them.
+	$effect(() => {
+		if (externalReportDetailsRequired) reportDetailsOpen = true;
+	});
+
+	function openRecordElsewhere() {
+		externalProvider = '';
+		externalResult = 'InProgress';
+		externalUrl = '';
+		externalReference = '';
+		externalCraName = '';
+		externalCraAddress = '';
+		externalCraPhone = '';
+		externalReportUsed = false;
+		externalReason = '';
+		reportDetailsOpen = false;
+		externalScreeningOperationKey = crypto.randomUUID();
+		externalDecisionOperationKey = crypto.randomUUID();
+		showRecordElsewhere = true;
+	}
+
+	function runScreeningAction() {
+		if (screeningActionKind === 'integrated') screenMutation.mutate();
+		else openRecordElsewhere();
+	}
+
+	let integratedScreeningOperationKey = $state<string | null>(null);
+	let completeExternalOperationKey = $state<string | null>(null);
+	let updateCraOperationKey = $state<string | null>(null);
+	let screeningDecisionOperationKey = $state<string | null>(null);
+	let showCraContact = $state(false);
+	let showScreeningDecision = $state(false);
+	let craName = $state('');
+	let craAddress = $state('');
+	let craPhone = $state('');
+	let screeningDecision = $state<ScreeningRecommendation>('Accept');
+	let screeningDecisionReason = $state('');
+	let consumerReportUsed = $state(false);
+
 	const screenMutation = createMutation(() => ({
-		mutationFn: () => applications.screen(id),
+		mutationFn: () =>
+			applications.startIntegratedScreening(
+				id,
+				(integratedScreeningOperationKey ??= crypto.randomUUID())
+			),
 		onSuccess: () => {
-			showSuccess('Screening complete.');
+			showSuccess('Screening invitation created.');
+			integratedScreeningOperationKey = null;
 			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
 			invalidate(); // screening flips the application to UnderReview
 		},
@@ -293,26 +468,145 @@
 		},
 	}));
 
+	const externalScreeningMutation = createMutation(() => ({
+		mutationFn: async () => {
+			const decision = externalDecision;
+			const created = await applications.trackExternalScreening(id, {
+				operationKey: (externalScreeningOperationKey ??= crypto.randomUUID()),
+				providerDisplayName: externalProvider.trim(),
+				providerReference: externalReference.trim() || null,
+				providerHostedUrl: externalUrl.trim() || null,
+				creditReportingAgencyName: externalCraName.trim() || null,
+				creditReportingAgencyAddress: externalCraAddress.trim() || null,
+				creditReportingAgencyPhone: externalCraPhone.trim() || null,
+				status: decision ? 'Completed' : 'InProgress',
+			});
+			if (!decision) return created;
+			return applications.recordScreeningDecision(id, created.id, {
+				operationKey: (externalDecisionOperationKey ??= crypto.randomUUID()),
+				decision,
+				reason: externalReason.trim() || null,
+				consumerReportUsed: externalReportUsed,
+			});
+		},
+		onSuccess: () => {
+			showSuccess('Screening saved.');
+			externalScreeningOperationKey = null;
+			externalDecisionOperationKey = null;
+			showRecordElsewhere = false;
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'The screening could not be saved.')),
+	}));
+
+	const completeExternalScreeningMutation = createMutation(() => ({
+		mutationFn: (screeningId: number) =>
+			applications.updateExternalScreening(id, screeningId, {
+				operationKey: (completeExternalOperationKey ??= crypto.randomUUID()),
+				status: 'Completed',
+			}),
+		onSuccess: () => {
+			showSuccess('Outside screening marked complete.');
+			completeExternalOperationKey = null;
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Screening status could not be updated.')),
+	}));
+
+	function openCraContact(screening: ApplicantScreeningResponse) {
+		craName = screening.creditReportingAgencyName ?? '';
+		craAddress = screening.creditReportingAgencyAddress ?? '';
+		craPhone = screening.creditReportingAgencyPhone ?? '';
+		updateCraOperationKey = crypto.randomUUID();
+		showCraContact = true;
+	}
+
+	const updateCraMutation = createMutation(() => ({
+		mutationFn: (screeningId: number) =>
+			applications.updateExternalScreening(id, screeningId, {
+				operationKey: (updateCraOperationKey ??= crypto.randomUUID()),
+				creditReportingAgencyName: craName.trim(),
+				creditReportingAgencyAddress: craAddress.trim(),
+				creditReportingAgencyPhone: craPhone.trim(),
+			}),
+		onSuccess: () => {
+			updateCraOperationKey = null;
+			showCraContact = false;
+			showSuccess('Consumer reporting agency contact saved.');
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Agency contact could not be saved.')),
+	}));
+
+	function openScreeningDecision(screening: ApplicantScreeningResponse) {
+		screeningDecision = screening.decision ?? 'Accept';
+		screeningDecisionReason = screening.decisionReason ?? '';
+		consumerReportUsed = screening.consumerReportUsedForDecision;
+		screeningDecisionOperationKey = crypto.randomUUID();
+		showScreeningDecision = true;
+	}
+
+	const screeningDecisionMutation = createMutation(() => ({
+		mutationFn: (screeningId: number) =>
+			applications.recordScreeningDecision(id, screeningId, {
+				operationKey: (screeningDecisionOperationKey ??= crypto.randomUUID()),
+				decision: screeningDecision,
+				reason: screeningDecisionReason.trim() || null,
+				consumerReportUsed,
+			}),
+		onSuccess: () => {
+			screeningDecisionOperationKey = null;
+			showScreeningDecision = false;
+			showSuccess('Screening decision recorded.');
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Screening decision could not be recorded.')),
+	}));
+
+	function openApplicationOutcome(outcome: 'Approve' | 'Decline') {
+		if (latestScreening?.status === 'Completed') {
+			const compatible = outcome === 'Approve'
+				? latestScreening.decision === 'Accept' || latestScreening.decision === 'Conditional'
+				: latestScreening.decision === 'Decline';
+			if (!compatible) {
+				showWarning(`Record a ${outcome.toLowerCase()} screening decision first.`);
+				openScreeningDecision(latestScreening);
+				return;
+			}
+		}
+		if (outcome === 'Approve') showApprove = true;
+		else showDecline = true;
+	}
+
 	// ── Adverse-action notice ──────────────────────────────────────────────────────
 	let showAdverseAction = $state(false);
 	let adverseReason = $state('');
 	let adverseSendToApplicant = $state(false);
 	let adverseNotice = $state<AdverseActionNoticeResponse | null>(null);
+	let adverseOperationKey = $state<string | null>(null);
 
 	function openAdverseAction() {
 		adverseReason = application?.decisionReason ?? '';
 		adverseSendToApplicant = false;
+		adverseOperationKey = crypto.randomUUID();
 		showAdverseAction = true;
+	}
+
+	function adverseActionOperationKey(): string {
+		return (adverseOperationKey ??= crypto.randomUUID());
 	}
 
 	const adverseActionMutation = createMutation(() => ({
 		mutationFn: () =>
 			applications.adverseAction(id, {
+				operationKey: adverseActionOperationKey(),
 				reason: adverseReason.trim() || undefined,
 				sendToApplicant: adverseSendToApplicant,
 			}),
 		onSuccess: (notice) => {
 			adverseNotice = notice;
+			adverseOperationKey = null;
 			showAdverseAction = false;
 			showSuccess(
 				notice.sentAtUtc
@@ -348,10 +642,6 @@
 		if (!value) return '—';
 		const d = new Date(value);
 		return isNaN(d.getTime()) ? '—' : d.toLocaleString();
-	}
-	function fmtMoney(value: number | null | undefined): string {
-		if (value == null) return '—';
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
 	}
 </script>
 
@@ -393,15 +683,18 @@
 					<span class="flex items-center gap-1"><Phone class="h-3.5 w-3.5" />{application.phone}</span>
 				</div>
 			</div>
-			{#if isOpen}
+			{#if showApplicationActions && isOpen}
 				<div class="flex flex-wrap items-center gap-2">
 					<Button variant="outline" class="gap-2" onclick={openEditApplication} data-testid="application-edit">
 						<Edit3 class="h-4 w-4" /> Edit
 					</Button>
-					<Button class="gap-2" onclick={() => (showApprove = true)} data-testid="application-approve">
+					<Button variant="outline" class="gap-2" onclick={openRecordFee} data-testid="application-record-fee">
+						<DollarSign class="h-4 w-4" /> Record fee
+					</Button>
+					<Button class="gap-2" onclick={() => openApplicationOutcome('Approve')} data-testid="application-approve">
 						<CheckCircle2 class="h-4 w-4" /> Approve
 					</Button>
-					<Button variant="outline" class="gap-2" onclick={() => (showDecline = true)} data-testid="application-decline">
+					<Button variant="outline" class="gap-2" onclick={() => openApplicationOutcome('Decline')} data-testid="application-decline">
 						<XCircle class="h-4 w-4" /> Decline
 					</Button>
 					<Button variant="outline" class="gap-2" onclick={() => (showWithdraw = true)} data-testid="application-withdraw">
@@ -422,12 +715,14 @@
 					<span>This applicant was approved and a tenant record was created.</span>
 				</div>
 				<div class="flex flex-wrap items-center gap-2">
-					<Button class="gap-2" href={leaseCreateHrefForApprovedTenant(tenantLinkId)} data-testid="application-create-lease">
-						<Home class="h-4 w-4" /> Create lease <ArrowRight class="h-4 w-4" />
+					<Button class="gap-2" href={prepareMoveInHrefForApprovedTenant(tenantLinkId, id, application?.unitId ?? '', prepareMoveInBasePath)} data-testid="application-prepare-move-in">
+						<Home class="h-4 w-4" /> Prepare move-in <ArrowRight class="h-4 w-4" />
 					</Button>
-					<Button variant="outline" class="gap-2" onclick={() => goto(`/tenants/${tenantLinkId}`)} data-testid="application-view-tenant">
-						<User class="h-4 w-4" /> View tenant <ArrowRight class="h-4 w-4" />
-					</Button>
+					{#if showTenantLink}
+						<Button variant="outline" class="gap-2" onclick={() => goto(`/tenants/${tenantLinkId}`)} data-testid="application-view-tenant">
+							<User class="h-4 w-4" /> View tenant <ArrowRight class="h-4 w-4" />
+						</Button>
+					{/if}
 				</div>
 			</div>
 		{/if}
@@ -463,7 +758,7 @@
 				<Card.Content class="grid grid-cols-2 gap-x-4 gap-y-4 text-sm">
 					<div class="col-span-2">{@render fieldRow('Current address', formatApplicationAddress(application))}</div>
 					{@render fieldRow('Employer', application.employer || '—')}
-					{@render fieldRow('Monthly income', fmtMoney(application.monthlyIncome))}
+					{@render fieldRow('Monthly income', formatAccountingCurrency(application.monthlyIncome))}
 				</Card.Content>
 			</Card.Root>
 
@@ -552,35 +847,48 @@
 			{/if}
 
 			<!-- Screening -->
+			{#if showScreening}
 			<Card.Root class="lg:col-span-2" data-testid="application-screening-card">
 				<Card.Header>
-					<div class="flex flex-wrap items-center justify-between gap-3">
-						<Card.Title class="flex items-center gap-2 text-base"><ScanSearch class="h-4 w-4" /> Screening</Card.Title>
-							<div class="flex flex-col items-end gap-1">
-								{#if isOpen}
-									<Button
-										class="gap-2"
-										disabled={!canScreen || screenMutation.isPending}
-										onclick={() => screenMutation.mutate()}
-										data-testid="application-run-screening"
-									>
-										<ScanSearch class="h-4 w-4" />
-										{screenMutation.isPending ? 'Screening…' : hasScreening ? 'Re-run screening' : 'Run screening'}
-									</Button>
-								{/if}
-								{#if !isOpen}
-									<p class="text-xs text-muted-foreground" data-testid="application-screening-terminal-note">
-										Screening can only be run before a decision
-									</p>
-								{:else if !canScreen}
-									<p class="text-xs text-muted-foreground" data-testid="application-screening-consent-note">
-										Applicant consent is required to screen
-									</p>
-								{/if}
-						</div>
-					</div>
+					<Card.Title class="flex items-center gap-2 text-base"><ScanSearch class="h-4 w-4" /> Applicant screening</Card.Title>
+					<p class="text-sm text-muted-foreground">
+						Check an applicant's rental, credit, and background history before you hand over keys.
+					</p>
+					<p class="text-xs text-muted-foreground">
+						Do not type Social Security numbers, identity answers, or anything from the report here. Read those only on the screening company's own secure site.
+					</p>
 				</Card.Header>
-				<Card.Content>
+				<Card.Content class="space-y-5">
+					<div
+						class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-4"
+						data-testid="screening-action"
+					>
+						<div class="min-w-0 space-y-1">
+							<p class="font-medium">{screeningButtonLabel}</p>
+							<p class="text-xs text-muted-foreground">
+								{providerConnected
+									? `${screeningQuery.data?.integratedProvider.displayName ?? 'Your screening service'} emails the applicant a secure link. They enter their own details; you never handle them.`
+									: 'No screening service is connected yet, so add the screening you ran with Zillow, a local agency, or anywhere else.'}
+							</p>
+							{#if screeningActionKind === null}
+								<p class="text-xs text-muted-foreground" data-testid="screening-blocked-note">
+									{application?.consentGiven
+										? 'This application is closed, so no new screening can be added.'
+										: "You need the applicant's written OK before a screening can be run."}
+								</p>
+							{/if}
+						</div>
+						<Button
+							class="gap-2"
+							disabled={screeningActionKind === null || screenMutation.isPending}
+							onclick={runScreeningAction}
+							data-testid="application-request-screening"
+						>
+							<ScanSearch class="h-4 w-4" />
+							{screenMutation.isPending ? 'Sending invitation…' : screeningButtonLabel}
+						</Button>
+					</div>
+
 					{#if screeningQuery.isLoading}
 						<div class="flex items-center gap-2 text-sm text-muted-foreground">
 							<div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
@@ -590,49 +898,64 @@
 						<div class="space-y-4" data-testid="application-screening-result">
 							<div class="flex flex-wrap items-center gap-2">
 								<StatusBadge status={latestScreening.status} map={SCREEN_STATUS_MAP} />
-								{#if latestScreening.recommendation}
+								<span class="m3-tone-chip border">{latestScreening.mode === 'Integrated' ? 'Through Rental Command' : 'Done elsewhere'}</span>
+								{#if latestScreening.decision}
 									<StatusBadge
-										status={latestScreening.recommendation}
+										status={latestScreening.decision}
 										map={RECOMMENDATION_MAP}
 									/>
 								{/if}
 								<span class="text-xs text-muted-foreground">
-									Screened {fmtDateTime(latestScreening.completedAtUtc ?? latestScreening.requestedAtUtc)}
+									Updated {fmtDateTime(latestScreening.lastStatusAtUtc)}
 								</span>
 							</div>
-							<div class="grid grid-cols-2 gap-x-4 gap-y-4 text-sm sm:grid-cols-3">
-								{@render fieldRow('Credit score band', latestScreening.creditScoreBand || '—')}
-								<div class="min-w-0">
-									<p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Criminal records</p>
-									<p
-										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasCriminalRecord ? 'text-[var(--m3c-error)]' : 'text-foreground'}"
-										data-testid="application-screening-criminal"
-									>
-										{#if latestScreening.hasCriminalRecord}
-											<AlertCircle class="h-4 w-4 shrink-0" /> Records found — review
-										{:else}
-											<CheckCircle2 class="h-4 w-4 shrink-0 text-[var(--success)]" /> No criminal records found
-										{/if}
-									</p>
-								</div>
-								<div class="min-w-0">
-									<p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Eviction records</p>
-									<p
-										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasEvictionRecord ? 'text-[var(--m3c-error)]' : 'text-foreground'}"
-										data-testid="application-screening-eviction"
-									>
-										{#if latestScreening.hasEvictionRecord}
-											<AlertCircle class="h-4 w-4 shrink-0" /> Records found — review
-										{:else}
-											<CheckCircle2 class="h-4 w-4 shrink-0 text-[var(--success)]" /> No eviction records found
-										{/if}
-									</p>
-								</div>
+							<div class="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+								<p class="font-medium text-foreground">{latestScreening.statusSummary}</p>
+								<p class="mt-1 text-muted-foreground">Next: {latestScreening.nextAction}</p>
 							</div>
+							<div class="grid gap-x-4 gap-y-4 text-sm sm:grid-cols-3">
+								{@render fieldRow('Provider', latestScreening.providerDisplayName)}
+								{@render fieldRow('Reference', latestScreening.providerReference || '—')}
+								{@render fieldRow('Consumer report used', latestScreening.decision ? (latestScreening.consumerReportUsedForDecision ? 'Yes' : 'No') : 'Not recorded yet')}
+								{@render fieldRow('Agency contact', latestScreening.hasCompleteCreditReportingAgencyContact ? 'Complete' : (latestScreening.decision && !latestScreening.consumerReportUsedForDecision ? 'Not required for this decision' : 'Missing'))}
+								{#if latestScreening.decisionReason}
+									{@render fieldRow('Decision reason', latestScreening.decisionReason)}
+								{/if}
+								{#if latestScreening.providerHostedUrl}
+									<a class="text-primary underline underline-offset-2" href={latestScreening.providerHostedUrl} target="_blank" rel="noopener noreferrer">Open provider</a>
+								{/if}
+							</div>
+							{#if latestScreening.mode === 'External' && latestScreening.status !== 'Completed' && latestScreening.status !== 'Cancelled'}
+								<Button
+									variant="outline"
+									disabled={completeExternalScreeningMutation.isPending}
+									onclick={() => completeExternalScreeningMutation.mutate(latestScreening.id)}
+								>
+									Mark outside screening complete
+								</Button>
+							{/if}
+							<div class="flex flex-wrap gap-2">
+								{#if latestScreening.mode === 'External'}
+									<Button variant="outline" onclick={() => openCraContact(latestScreening)}>
+										{latestScreening.hasCompleteCreditReportingAgencyContact ? 'Update agency contact' : 'Add agency contact'}
+									</Button>
+								{/if}
+								{#if latestScreening.status === 'Completed'}
+									<Button variant="outline" onclick={() => openScreeningDecision(latestScreening)}>
+										{latestScreening.decision ? 'Update screening decision' : 'Record screening decision'}
+									</Button>
+								{/if}
+							</div>
+							{#if latestScreening.status === 'Completed' && !latestScreening.decision}
+								<p class="text-xs text-muted-foreground">Record whether the consumer report influenced your decision before approving or declining this application.</p>
+							{/if}
+							{#if latestScreening.decision && latestScreening.consumerReportUsedForDecision && !latestScreening.hasCompleteCreditReportingAgencyContact}
+								<p class="text-xs text-destructive">Agency name, mailing address, and phone are required for a report-based decision. Add them to continue to adverse action.</p>
+							{/if}
 						</div>
 					{:else}
 						<p class="text-sm text-muted-foreground" data-testid="application-screening-empty">
-							No screening has been run yet.
+							No screening yet. Use the button above to start one.
 						</p>
 					{/if}
 				</Card.Content>
@@ -641,7 +964,9 @@
 				{#if hasScreening && application.status === 'Declined'}
 					<Card.Footer class="flex-col items-stretch gap-3 border-t pt-4">
 						<p class="text-xs text-muted-foreground" data-testid="application-adverse-action-help">
-							When you decline based on a report, the law requires sending the applicant this notice.
+							{latestScreening?.consumerReportUsedForDecision
+								? 'When you decline based on a report, the law requires sending the applicant this notice.'
+								: 'No adverse-action notice is offered here unless you record that a consumer report influenced the decline.'}
 						</p>
 						{#if adverseNotice}
 							<div
@@ -673,7 +998,7 @@
 									</Button>
 								</div>
 							</div>
-						{:else}
+						{:else if latestScreening?.canGenerateAdverseAction}
 							<div>
 								<Button
 									variant="outline"
@@ -688,6 +1013,7 @@
 					</Card.Footer>
 				{/if}
 			</Card.Root>
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -820,6 +1146,218 @@
 	</Dialog.Content>
 </Dialog.Root>
 
+<!-- Record a screening the landlord already ran somewhere else -->
+<Dialog.Root open={showRecordElsewhere} onOpenChange={(v) => { if (!v) showRecordElsewhere = false; }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Record a screening done elsewhere</Dialog.Title>
+			<Dialog.Description>
+				Note who ran the screening and how it came out. Keep the report itself with the company that produced it.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3" data-testid="screening-elsewhere-form">
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Who ran it?</span>
+				<Input
+					bind:value={externalProvider}
+					placeholder="Zillow, a local agency, another service…"
+					data-testid="screening-provider-input"
+				/>
+			</label>
+			<div class="space-y-1 text-sm">
+				<span class="font-medium">Result</span>
+				<Select.Root type="single" bind:value={externalResult}>
+					<Select.Trigger class="h-10 w-full" data-testid="screening-result-select">
+						{RESULT_LABELS[externalResult]}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="InProgress" label="Still in progress">Still in progress</Select.Item>
+						<Select.Item value="Accept" label="Accept">Accept</Select.Item>
+						<Select.Item value="Conditional" label="Accept with conditions">Accept with conditions</Select.Item>
+						<Select.Item value="Decline" label="Decline">Decline</Select.Item>
+					</Select.Content>
+				</Select.Root>
+			</div>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Link to it (optional)</span>
+				<Input
+					bind:value={externalUrl}
+					type="url"
+					placeholder="https://…"
+					data-testid="screening-link-input"
+				/>
+			</label>
+			{#if externalDecision}
+				<label class="flex items-start gap-3 rounded-lg border border-border p-3 text-sm">
+					<Checkbox bind:checked={externalReportUsed} data-testid="screening-report-used" />
+					<span>
+						<strong class="block">The report influenced this result</strong>
+						<span class="text-xs text-muted-foreground">Turn this on even if the report was only one of the reasons.</span>
+					</span>
+				</label>
+			{/if}
+			{#if externalDecision && externalReportUsed}
+				<label class="space-y-1 text-sm">
+					<span class="font-medium">Main reason</span>
+					<textarea
+						bind:value={externalReason}
+						rows="2"
+						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+						placeholder="The main reason for this result"
+						data-testid="screening-reason-input"
+					></textarea>
+				</label>
+			{/if}
+			<details
+				class="rounded-lg border border-border px-3 py-2"
+				bind:open={reportDetailsOpen}
+				data-testid="screening-report-details"
+			>
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-2">
+					<span class="text-sm font-semibold">Report details</span>
+					<ChevronDown class="h-4 w-4 text-muted-foreground" />
+				</summary>
+				<div class="mt-3 space-y-3">
+					{#if externalReportDetailsRequired}
+						<p class="text-xs text-destructive" data-testid="screening-report-details-note">
+							Required before declining based on this report.
+						</p>
+					{/if}
+					<label class="space-y-1 text-sm">
+						<span class="font-medium">Reference (optional)</span>
+						<Input
+							bind:value={externalReference}
+							placeholder="Order or file number"
+							data-testid="screening-reference-input"
+						/>
+					</label>
+					<div class="space-y-2 text-sm">
+						<span class="flex items-center gap-1 font-medium">
+							The company that ran the report
+							<HelpPopover
+								title="The company that ran the report"
+								summary="The company that produced the report (the consumer reporting agency)."
+								learnMoreUrl="/docs/tenants-and-applications"
+								testid="screening-report-company-help"
+							/>
+						</span>
+						<Input
+							bind:value={externalCraName}
+							placeholder="Company name"
+							data-testid="screening-report-company-name-input"
+						/>
+						<Input
+							bind:value={externalCraAddress}
+							placeholder="Mailing address"
+							data-testid="screening-report-company-address-input"
+						/>
+						<Input
+							bind:value={externalCraPhone}
+							placeholder="Phone"
+							data-testid="screening-report-company-phone-input"
+						/>
+					</div>
+				</div>
+			</details>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showRecordElsewhere = false)} data-testid="screening-elsewhere-cancel">Cancel</Button>
+			<Button
+				onclick={() => externalScreeningMutation.mutate()}
+				disabled={!canSaveExternal || externalScreeningMutation.isPending}
+				data-testid="screening-elsewhere-save"
+			>
+				{externalScreeningMutation.isPending ? 'Saving…' : 'Save screening'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Correct consumer reporting agency contact without creating another screening -->
+<Dialog.Root open={showCraContact} onOpenChange={(v) => { if (!v) showCraContact = false; }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Consumer reporting agency contact</Dialog.Title>
+			<Dialog.Description>
+				Required only when a consumer report influences the decision. Correcting this contact updates the existing screening; it does not create a new one.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3">
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Agency name</span>
+				<Input bind:value={craName} placeholder="Consumer reporting agency" />
+			</label>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Mailing address</span>
+				<Input bind:value={craAddress} placeholder="Street, city, state, postal code" />
+			</label>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Phone</span>
+				<Input bind:value={craPhone} placeholder="Agency phone" />
+			</label>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showCraContact = false)}>Cancel</Button>
+			<Button
+				onclick={() => latestScreening && updateCraMutation.mutate(latestScreening.id)}
+				disabled={!craName.trim() || !craAddress.trim() || !craPhone.trim() || updateCraMutation.isPending}
+			>
+				{updateCraMutation.isPending ? 'Saving…' : 'Save agency contact'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Explicit landlord decision about the completed screening -->
+<Dialog.Root open={showScreeningDecision} onOpenChange={(v) => { if (!v) showScreeningDecision = false; }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Record screening decision</Dialog.Title>
+			<Dialog.Description>
+				Record your decision and whether a consumer report influenced it. Rental Command stores this workflow metadata, not the report or its findings.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-4">
+			<div class="space-y-1 text-sm">
+				<span class="font-medium">Decision</span>
+				<Select.Root type="single" bind:value={screeningDecision}>
+					<Select.Trigger class="h-10 w-full" data-testid="application-screening-decision-select">
+						{screeningDecision}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="Accept" label="Accept">Accept</Select.Item>
+						<Select.Item value="Conditional" label="Conditional">Conditional</Select.Item>
+						<Select.Item value="Decline" label="Decline">Decline</Select.Item>
+					</Select.Content>
+				</Select.Root>
+			</div>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Principal reason</span>
+				<textarea bind:value={screeningDecisionReason} rows="3" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Required when a consumer report influenced the decision"></textarea>
+			</label>
+			<label class="flex items-start gap-3 rounded-lg border border-border p-3 text-sm">
+				<Checkbox bind:checked={consumerReportUsed} />
+				<span>
+					<strong class="block">A consumer report influenced this decision</strong>
+					<span class="text-xs text-muted-foreground">Turn this on even if the report was only one factor. Adverse-action guidance is enabled for a decline.</span>
+				</span>
+			</label>
+			{#if consumerReportUsed && !latestScreening?.hasCompleteCreditReportingAgencyContact}
+				<p class="text-xs text-destructive">Save the agency name, mailing address, and phone before recording a report-based decision.</p>
+			{/if}
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showScreeningDecision = false)}>Cancel</Button>
+			<Button
+				onclick={() => latestScreening && screeningDecisionMutation.mutate(latestScreening.id)}
+				disabled={screeningDecisionMutation.isPending || (consumerReportUsed && (!screeningDecisionReason.trim() || !latestScreening?.hasCompleteCreditReportingAgencyContact))}
+			>
+				{screeningDecisionMutation.isPending ? 'Saving…' : 'Save decision'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
 <!-- Adverse-action notice -->
 <Dialog.Root open={showAdverseAction} onOpenChange={(v) => { if (!v) showAdverseAction = false; }}>
 	<Dialog.Content class="max-w-lg">
@@ -855,6 +1393,57 @@
 				data-testid="application-adverse-action-confirm"
 			>
 				{adverseActionMutation.isPending ? 'Generating…' : 'Generate notice'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Record application fee (lease-less income against the application's property) -->
+<Dialog.Root open={showRecordFee} onOpenChange={(v) => { if (!v) showRecordFee = false; }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Record application fee</Dialog.Title>
+			<Dialog.Description>
+				Record a paid application/screening fee as income for {fullName}. It posts to the
+				application's property and shows on the accounting ledger and Schedule E — no lease required.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3" data-testid="application-fee-form">
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
+				<Input
+					data-testid="application-fee-amount-input"
+					bind:value={feeAmount}
+					type="text"
+					inputmode="decimal"
+					mask="currency"
+					placeholder="0.00"
+				/>
+				{#if feeErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="application-fee-amount-error">{feeErrors.amount}</p>{/if}
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Method (optional)</span>
+				<Input
+					data-testid="application-fee-method-input"
+					bind:value={feeMethod}
+					placeholder="e.g. Card, Cash, Check"
+				/>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Effective date (optional)</span>
+				<DatePicker
+					id="application-fee-paid-date-input"
+					testid="application-fee-paid-date-input"
+					value={feeEffectiveOn}
+					onchange={(v) => (feeEffectiveOn = v)}
+					placeholder="Defaults to today"
+				/>
+			</div>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showRecordFee = false)} data-testid="application-fee-cancel">Cancel</Button>
+			<Button onclick={submitRecordFee} disabled={recordFeeMutation.isPending} data-testid="application-fee-save">
+				{recordFeeMutation.isPending ? 'Recording…' : 'Record fee'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

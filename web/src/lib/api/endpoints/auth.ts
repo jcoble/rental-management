@@ -1,5 +1,13 @@
-import type { LoginRequest, LoginResponse, User } from '$lib/types/user';
+import type {
+	AccessEnvelope,
+	EffectiveAccessContextOption,
+	LoginRequest,
+	LoginResponse,
+	User,
+	WorkspaceExperience
+} from '$lib/types/user';
 import { api, fetchPublicApi } from '../client';
+import { idempotentMutation } from '../idempotency';
 
 /**
  * Auth endpoints. The session lives in httpOnly cookies set by the API /
@@ -14,18 +22,49 @@ export const auth = {
 			body: JSON.stringify(data)
 		}),
 	me: () => api.get<User>('/auth/me'),
+	access: () => api.get<AccessEnvelope>('/auth/access'),
+	contexts: () => api.get<EffectiveAccessContextOption[]>('/auth/contexts'),
+	selectContext: (accessContextId: number) =>
+		api.post<{ accessToken: string; accessTokenExpiration: string; access: AccessEnvelope }>(
+			'/auth/contexts/select',
+			{ accessContextId }
+		),
+	selectExperience: (experience: WorkspaceExperience) =>
+		idempotentMutation(`auth:experience:${experience}`, (operationKey) =>
+			api.post<AccessEnvelope>(
+				'/auth/experience/select',
+				{ experience },
+				{ headers: { 'Idempotency-Key': operationKey } }
+			)
+		),
 	/**
 	 * Re-send the email-verification message. Anonymous endpoint — the API always responds
 	 * with a neutral success (no account enumeration), so callers can fire-and-forget.
 	 */
 	resendVerification: (email: string) =>
-		fetchPublicApi<{ message: string }>('/auth/resend-verification', {
-			method: 'POST',
-			body: JSON.stringify({ email })
-		}),
+		idempotentMutation(`auth:resend-verification:${email}`, (operationKey) =>
+			fetchPublicApi<{ message: string }>('/auth/resend-verification', {
+				method: 'POST',
+				headers: { 'Idempotency-Key': operationKey },
+				body: JSON.stringify({ email })
+			})
+		),
 	/** Change the signed-in user's password (Bearer-authenticated). */
-	changePassword: (currentPassword: string, newPassword: string) =>
-		api.post<{ message: string }>('/auth/change-password', { currentPassword, newPassword }),
+	changePassword: async (currentPassword: string, newPassword: string) => {
+		const request = { currentPassword, newPassword };
+		const digest = await crypto.subtle.digest(
+			'SHA-256',
+			new TextEncoder().encode(JSON.stringify(request))
+		);
+		const requestScope = Array.from(new Uint8Array(digest), (byte) =>
+			byte.toString(16).padStart(2, '0')
+		).join('');
+		return idempotentMutation(`auth:change-password:${requestScope}`, (operationKey) =>
+			api.post<{ message: string }>('/auth/change-password', request, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		);
+	},
 	/** Revoke the refresh token (cookie sent automatically via credentials). */
 	logout: () => api.post<void>('/auth/logout'),
 	listUsers: (portfolioId: number) => api.get(`/auth/users?portfolioId=${portfolioId}`),

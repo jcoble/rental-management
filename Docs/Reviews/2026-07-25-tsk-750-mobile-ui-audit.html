@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TSK-750 Mobile UI Audit</title>
+  <style>
+    :root { color-scheme: dark; --bg:#101014; --panel:#1b1a21; --line:#393641;
+      --text:#f4f0fa; --muted:#c9c1d0; --p1:#ffb4ab; --p2:#ffddb3;
+      --p3:#d0bcff; --ok:#9adca0; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:16px/1.55 system-ui,-apple-system,sans-serif; }
+    main { max-width:1180px; margin:auto; padding:40px 24px 80px; }
+    h1 { font-size:clamp(2rem,5vw,4rem); line-height:1; margin:.2em 0; }
+    h2 { margin-top:2.3rem; }
+    .lede { max-width:78ch; color:var(--muted); font-size:1.1rem; }
+    .summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+      gap:12px; margin:28px 0; }
+    .metric,.finding { background:var(--panel); border-radius:20px; padding:20px; }
+    .metric strong { display:block; font-size:2rem; }
+    table { width:100%; border-collapse:separate; border-spacing:0 10px; }
+    th { text-align:left; color:var(--muted); padding:0 14px; }
+    td { background:var(--panel); padding:16px 14px; vertical-align:top; }
+    td:first-child { border-radius:16px 0 0 16px; width:64px; font-weight:800; }
+    td:last-child { border-radius:0 16px 16px 0; }
+    .p1 { color:var(--p1); } .p2 { color:var(--p2); } .p3 { color:var(--p3); }
+    code { background:#292630; padding:.15rem .4rem; border-radius:6px; }
+    a { color:#d0bcff; }
+    ul { padding-left:1.25rem; }
+    .good { color:var(--ok); }
+    @media(max-width:760px) { table,tbody,tr,td { display:block; }
+      thead { display:none; } td { border-radius:0!important; }
+      td:first-child { border-radius:16px 16px 0 0!important; width:auto; }
+      td:last-child { border-radius:0 0 16px 16px!important; } }
+  </style>
+</head>
+<body>
+<main>
+  <p>Rental Command · TSK-750 · 25 July 2026</p>
+  <h1>Mobile UI rescue audit</h1>
+  <p class="lede">A read-only pass through 39 distinct route/state scenarios on the
+    single Azure Android emulator found four release-blocking defects plus repeated
+    navigation, wording, loading, density, and continuity problems. The app already
+    has a useful Material 3 foundation; the rescue should repair shared systems and
+    user language rather than repaint isolated screens.</p>
+
+  <section class="summary">
+    <div class="metric"><strong>39</strong>route/state scenarios</div>
+    <div class="metric"><strong>4</strong>release blockers</div>
+    <div class="metric"><strong>≈17s</strong>Deposits first load</div>
+    <div class="metric"><strong>1</strong>shared FAB causing many overlaps</div>
+  </section>
+
+  <h2>Severity-ranked findings</h2>
+  <table>
+    <thead><tr><th>Level</th><th>Finding and evidence</th><th>Likely ownership</th></tr></thead>
+    <tbody>
+      <tr><td class="p1">P1</td><td><strong>The global Scan / Add FAB obstructs
+        critical actions.</strong> It covers Appointment Save Changes, Inspection
+        Complete, Notice SMS, payment Append correction, Record receipt, and final
+        list rows. UI hierarchy bounds overlap, not just the screenshots.
+        Evidence: 11, 12, 15, 20, 45, 48.</td><td><code>mobile_quick_action_fab.dart</code>,
+        <code>mobile_domain_hub.dart</code>, <code>home_shell.dart</code>,
+        <code>tabbed_form_sheet.dart</code></td></tr>
+      <tr><td class="p1">P1</td><td><strong>A send-ready legal notice contains
+        unresolved brace values and administrator instructions.</strong> The preview
+        includes values such as <code>{Sofia Rodriguez}</code> and an instruction
+        beginning “Workspace administrator”. Approval must remain unsafe until the
+        persisted template/rendering boundary is proved. Evidence: 20.</td>
+        <td><code>notices_screen.dart</code>, supplied template baseline and draft store</td></tr>
+      <tr><td class="p1">P1</td><td><strong>Deposits shows a blank spinner for about
+        17 seconds.</strong> A small sample list was still loading after seven
+        seconds and appeared only after another ten-second wait. Evidence: 32–34.</td>
+        <td><code>deposits_screen.dart</code> and its server-side query/authorization path</td></tr>
+      <tr><td class="p1">P1</td><td><strong>Portfolio finance values contradict one
+        another.</strong> July shows $20,175 scheduled rent but only $1,050 Monthly
+        Rent recurring. The display is confirmed; seed versus projection cause still
+        requires proof. Evidence: 25.</td><td><code>insights_screen.dart</code>,
+        <code>AnalyticsService.cs</code></td></tr>
+      <tr><td class="p2">P2</td><td><strong>Today deep links lose their origin.</strong>
+        A work order opened from Today returns to the Work root rather than Today at
+        the prior scroll position. Evidence: 05–07.</td><td><code>home_shell.dart</code>,
+        unit-aware work-order navigation</td></tr>
+      <tr><td class="p2">P2</td><td><strong>Internal implementation names leak into
+        the UI.</strong> Examples include <code>PaymentReceipt</code>,
+        <code>TenantAccount</code>, <code>NoGoverningAgreement</code>,
+        <code>InProgress</code>, <code>NotAvailable</code>, <code>RentReady</code>,
+        and demo relationship IDs. Evidence: 07, 41, 42, 55.</td>
+        <td>Unit, work-order, payment, and lease presentation layers</td></tr>
+      <tr><td class="p2">P2</td><td><strong>Unit and domain navigation is weakly
+        discoverable.</strong> Scrollable tab labels are visibly clipped and later
+        destinations have no overflow affordance. Swiping works, but users must
+        guess that it exists. Evidence: 00, 42, 52, 53, 57.</td>
+        <td><code>mobile_domain_hub.dart</code>, <code>unit_command_center_screen.dart</code></td></tr>
+      <tr><td class="p2">P2</td><td><strong>Empty states reference controls that are
+        absent.</strong> Automations says “Tap +” and Messages says “Tap the pencil”
+        while neither action is visible. Evidence: 18, 21.</td>
+        <td>Recurring maintenance and messages list screens</td></tr>
+      <tr><td class="p2">P2</td><td><strong>Dense feeds truncate decisive context.</strong>
+        Ledger source/date, inspection unit identity, activity descriptions, and
+        lease records lose distinguishing information. Evidence: 14, 24, 30, 31, 55.</td>
+        <td>Shared mobile list rows and feature presenters</td></tr>
+      <tr><td class="p2">P2</td><td><strong>Month labels are cryptic.</strong> The chart
+        shows <code>-08 … -07</code> because the painter takes the last three
+        characters of a year-month value. Evidence: 25, 26.</td>
+        <td><code>_BarChartPainter</code> in <code>insights_screen.dart</code></td></tr>
+      <tr><td class="p2">P2</td><td><strong>Vendor “jobs” can mislead.</strong> A vendor
+        assigned to a visible work order is shown with zero jobs; the measure may
+        mean completed jobs, but the label does not say so. Evidence: 06, 16.</td>
+        <td>Vendor list copy and DTO projection</td></tr>
+      <tr><td class="p3">P3</td><td><strong>TalkBack proof remains incomplete.</strong>
+        Alert switches expose checked state, but several appointment fields are
+        reported as not accessibility-focused by UIAutomator. This is a verification
+        gap, not yet a confirmed spoken-navigation failure. Evidence: 12, 51.</td>
+        <td>Changed navigation and form semantics</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Material 3 strengths to preserve</h2>
+  <ul class="good">
+    <li>Five labeled primary destinations form a coherent bottom navigation model.</li>
+    <li>The platform date picker is readable, themed, and cancellable.</li>
+    <li>Inspection paging is explicit rather than silently truncating records.</li>
+    <li>Alert switches expose state and Applications has a clear share action.</li>
+    <li>Filled surfaces and typography already provide a workable visual foundation.</li>
+  </ul>
+
+  <h2>Implementation direction</h2>
+  <ul>
+    <li>Fix the shared FAB and content insets once, then prove every affected action.</li>
+    <li>Replace mystery horizontal scrolling with a visible section selector while
+      keeping unit context persistent.</li>
+    <li>Translate wire enums and accounting terms at presentation boundaries.</li>
+    <li>Use contextual skeletons for initial loads and compact inline progress for
+      pagination; do not freeze an otherwise usable page.</li>
+    <li>Block legal-notice approval when merge fields are unresolved or admin-only
+      guidance remains.</li>
+    <li>Diagnose Deposits and Portfolio figures in SQL. All filtering, joins,
+      grouping, aggregation, sorting, and paging must remain one translated
+      DB-side query/view; no load-then-loop or N+1 repair is acceptable.</li>
+  </ul>
+
+  <p>Detailed coverage and the post-change acceptance list are in
+    <a href="./2026-07-25-tsk-750-mobile-ui-checklist.md">the checklist</a>.
+    Captures are under <code>Docs/Reviews/artifacts/tsk-750/</code>.</p>
+</main>
+</body>
+</html>

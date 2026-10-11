@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/scheduler.dart';
+
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/mobile_access_policy.dart';
 
 class MobileQuickAction {
   const MobileQuickAction({
@@ -15,27 +19,48 @@ class MobileQuickAction {
 
 class MobileQuickActionController extends ChangeNotifier {
   final List<_MobileQuickActionRegistration> _registrations = [];
+  final List<_MobileScanActionRegistration> _scanRegistrations = [];
+  final Set<Object> _hiddenOwners = <Object>{};
   bool _disposed = false;
   bool _notifyScheduled = false;
 
+  bool get hidden => _hiddenOwners.isNotEmpty;
+
+  List<MobileQuickAction> get primaryActions {
+    for (final registration in _registrations.reversed) {
+      if (registration.actions.isNotEmpty) return registration.actions;
+    }
+    return const [];
+  }
+
   MobileQuickAction? get primaryAction =>
-      _registrations.isEmpty ? null : _registrations.last.action;
+      primaryActions.isEmpty ? null : primaryActions.first;
+
+  VoidCallback? get scanAction =>
+      _scanRegistrations.isEmpty ? null : _scanRegistrations.last.action;
 
   void setPrimaryAction(Object owner, MobileQuickAction? action) {
+    setPrimaryActions(owner, action == null ? const [] : [action]);
+  }
+
+  void setPrimaryActions(Object owner, List<MobileQuickAction> actions) {
     if (_disposed) return;
 
     final index = _registrations.indexWhere(
       (entry) => identical(entry.owner, owner),
     );
     if (index == -1) {
-      _registrations.add(_MobileQuickActionRegistration(owner, action));
+      _registrations.add(_MobileQuickActionRegistration(owner, actions));
       _notifyChanged();
       return;
     }
 
     final existing = _registrations[index];
-    if (existing.action == action) return;
-    _registrations[index] = _MobileQuickActionRegistration(owner, action);
+    if (identical(existing.actions, actions) ||
+        _listEquals(existing.actions, actions)) {
+      return;
+    }
+    _registrations[index] = _MobileQuickActionRegistration(owner, actions);
     _notifyChanged();
   }
 
@@ -46,6 +71,45 @@ class MobileQuickActionController extends ChangeNotifier {
     _registrations.removeWhere((entry) => identical(entry.owner, owner));
     if (_registrations.length == previousLength) return;
     _notifyChanged();
+  }
+
+  void setScanAction(Object owner, VoidCallback? action) {
+    if (_disposed) return;
+
+    final index = _scanRegistrations.indexWhere(
+      (entry) => identical(entry.owner, owner),
+    );
+    if (action == null) {
+      if (index == -1) return;
+      _scanRegistrations.removeAt(index);
+      _notifyChanged();
+      return;
+    }
+
+    if (index == -1) {
+      _scanRegistrations.add(_MobileScanActionRegistration(owner, action));
+      _notifyChanged();
+      return;
+    }
+
+    if (_scanRegistrations[index].action == action) return;
+    _scanRegistrations[index] = _MobileScanActionRegistration(owner, action);
+    _notifyChanged();
+  }
+
+  void clearScanAction(Object owner) => setScanAction(owner, null);
+
+  void setHidden(Object owner, bool hidden) {
+    if (_disposed) return;
+
+    final changed = hidden
+        ? _hiddenOwners.add(owner)
+        : _hiddenOwners.remove(owner);
+    if (changed) _notifyChanged();
+  }
+
+  void clearHidden(Object owner) {
+    setHidden(owner, false);
   }
 
   void _notifyChanged() {
@@ -76,10 +140,25 @@ class MobileQuickActionController extends ChangeNotifier {
 }
 
 class _MobileQuickActionRegistration {
-  const _MobileQuickActionRegistration(this.owner, this.action);
+  const _MobileQuickActionRegistration(this.owner, this.actions);
 
   final Object owner;
-  final MobileQuickAction? action;
+  final List<MobileQuickAction> actions;
+}
+
+class _MobileScanActionRegistration {
+  const _MobileScanActionRegistration(this.owner, this.action);
+
+  final Object owner;
+  final VoidCallback action;
+}
+
+bool _listEquals<T>(List<T> a, List<T> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 class MobileQuickActionScope
@@ -94,6 +173,70 @@ class MobileQuickActionScope
     return context
         .dependOnInheritedWidgetOfExactType<MobileQuickActionScope>()
         ?.notifier;
+  }
+}
+
+/// Temporarily hides the nearest shell quick-action launcher while [child] is
+/// mounted.
+///
+/// Multiple hiders can overlap safely because each owns its own registration.
+/// Removing one hider does not reveal the launcher until every owner clears.
+class MobileQuickActionHider extends StatefulWidget {
+  const MobileQuickActionHider({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<MobileQuickActionHider> createState() => _MobileQuickActionHiderState();
+}
+
+class _MobileQuickActionHiderState extends State<MobileQuickActionHider> {
+  final Object _owner = Object();
+  MobileQuickActionController? _controller;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextController = MobileQuickActionScope.maybeOf(context);
+    if (identical(nextController, _controller)) return;
+
+    _controller?.clearHidden(_owner);
+    _controller = nextController;
+    _controller?.setHidden(_owner, true);
+  }
+
+  @override
+  void dispose() {
+    _controller?.clearHidden(_owner);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+Future<T?> showMobileQuickActionHiddenModalBottomSheet<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+  bool isScrollControlled = false,
+  ShapeBorder? shape,
+  bool showDragHandle = false,
+  bool useSafeArea = false,
+}) async {
+  final controller = MobileQuickActionScope.maybeOf(context);
+  final owner = Object();
+  controller?.setHidden(owner, true);
+  try {
+    return await showModalBottomSheet<T>(
+      context: context,
+      isScrollControlled: isScrollControlled,
+      shape: shape,
+      showDragHandle: showDragHandle,
+      useSafeArea: useSafeArea,
+      builder: builder,
+    );
+  } finally {
+    controller?.clearHidden(owner);
   }
 }
 
@@ -147,10 +290,11 @@ class MobileQuickActionFabHost
   }
 }
 
-class MobileQuickActionFab extends StatefulWidget {
+class MobileQuickActionFab extends ConsumerStatefulWidget {
   const MobileQuickActionFab({
     super.key,
     this.primaryAction,
+    this.primaryActions = const [],
     required this.onChat,
     required this.onRecord,
     required this.onScan,
@@ -160,6 +304,7 @@ class MobileQuickActionFab extends StatefulWidget {
   });
 
   final MobileQuickAction? primaryAction;
+  final List<MobileQuickAction> primaryActions;
   final VoidCallback onChat;
   final VoidCallback onRecord;
   final VoidCallback onScan;
@@ -168,10 +313,11 @@ class MobileQuickActionFab extends StatefulWidget {
   final bool registerWithHost;
 
   @override
-  State<MobileQuickActionFab> createState() => _MobileQuickActionFabState();
+  ConsumerState<MobileQuickActionFab> createState() =>
+      _MobileQuickActionFabState();
 }
 
-class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
+class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
   final Object _scopeOwner = Object();
   MobileQuickActionController? _scopeController;
   MobileQuickActionFabRegistry? _registry;
@@ -199,6 +345,7 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
   @override
   void dispose() {
     _scopeController?.clearPrimaryAction(_scopeOwner);
+    _scopeController?.clearScanAction(_scopeOwner);
     _unregister();
     super.dispose();
   }
@@ -227,13 +374,16 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
     final nextController = MobileQuickActionScope.maybeOf(context);
     if (!identical(_scopeController, nextController)) {
       _scopeController?.clearPrimaryAction(_scopeOwner);
+      _scopeController?.clearScanAction(_scopeOwner);
       _scopeController = nextController;
     }
 
     if (_usesScope) {
-      _scopeController!.setPrimaryAction(_scopeOwner, widget.primaryAction);
+      _scopeController!.setPrimaryActions(_scopeOwner, _primaryActions);
+      _scopeController!.setScanAction(_scopeOwner, widget.onScan);
     } else {
       _scopeController?.clearPrimaryAction(_scopeOwner);
+      _scopeController?.clearScanAction(_scopeOwner);
     }
   }
 
@@ -244,66 +394,76 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
     callback();
   }
 
-  List<MobileQuickAction> get _actions => [
+  List<MobileQuickAction> get _primaryActions => [
     ?widget.primaryAction,
-    MobileQuickAction(
-      label: 'Chat',
-      icon: Icons.auto_awesome,
-      onPressed: widget.onChat,
-    ),
-    MobileQuickAction(
-      label: 'Record',
-      icon: Icons.mic_none_rounded,
-      onPressed: widget.onRecord,
-    ),
-    MobileQuickAction(
-      label: 'Scan',
-      icon: Icons.document_scanner_outlined,
-      onPressed: widget.onScan,
-    ),
+    ...widget.primaryActions,
   ];
 
   @override
   Widget build(BuildContext context) {
     if (_usesScope) return const SizedBox.shrink();
 
-    final actions = _actions;
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        AnimatedSize(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.bottomRight,
-          child: _open
-              ? Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      for (var i = 0; i < actions.length; i++)
-                        Padding(
-                          padding: EdgeInsets.only(top: i == 0 ? 0 : 8),
-                          child: _QuickActionButton(
-                            action: actions[i],
-                            delay: i * 32,
-                            onPressed: () => _run(actions[i].onPressed),
-                          ),
-                        ),
-                    ],
-                  ),
-                )
-              : const SizedBox.shrink(),
+    final auth = ref.watch(authControllerProvider);
+    final capabilities = auth is AuthStateAuthenticated
+        ? auth.capabilities
+        : const <String>{};
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    final hasGlobalScan = canUseGlobalScan(capabilities);
+    final actions = <MobileQuickAction>[
+      if (hasGlobalScan)
+        MobileQuickAction(
+          label: 'Scan / Add',
+          icon: Icons.document_scanner_outlined,
+          onPressed: widget.onScan,
         ),
-        FloatingActionButton(
-          heroTag: widget.heroTag,
-          onPressed: _toggle,
-          tooltip: _open ? 'Close quick actions' : 'Open quick actions',
-          elevation: 3,
-          child: AnimatedSwitcher(
+      ..._primaryActions,
+      if (canUseVoiceRecord(capabilities))
+        MobileQuickAction(
+          label: 'Record',
+          icon: Icons.mic_none_rounded,
+          onPressed: widget.onRecord,
+        ),
+      if (canUseAssistant(capabilities))
+        MobileQuickAction(
+          label: 'Assistant',
+          icon: Icons.auto_awesome,
+          onPressed: widget.onChat,
+        ),
+    ];
+    if (actions.isEmpty) return const SizedBox.shrink();
+
+    final actionMenu = _open
+        ? Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (var i = 0; i < actions.length; i++)
+                  Padding(
+                    padding: EdgeInsets.only(top: i == 0 ? 0 : 8),
+                    child: _QuickActionButton(
+                      action: actions[i],
+                      delay: i * 32,
+                      disableAnimations: disableAnimations,
+                      onPressed: () => _run(actions[i].onPressed),
+                    ),
+                  ),
+              ],
+            ),
+          )
+        : const SizedBox.shrink();
+    final fabIcon = Icon(
+      _open
+          ? Icons.close_rounded
+          : hasGlobalScan
+          ? Icons.document_scanner_outlined
+          : Icons.add_rounded,
+      key: ValueKey((_open, hasGlobalScan)),
+    );
+    final animatedFabIcon = disableAnimations
+        ? fabIcon
+        : AnimatedSwitcher(
             duration: const Duration(milliseconds: 160),
             transitionBuilder: (child, animation) {
               return ScaleTransition(
@@ -314,12 +474,39 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
                 ),
               );
             },
-            child: Icon(
-              _open ? Icons.close_rounded : Icons.add_rounded,
-              key: ValueKey(_open),
-            ),
+            child: fabIcon,
+          );
+    final launcher = _open
+        ? FloatingActionButton.extended(
+            heroTag: widget.heroTag,
+            onPressed: _toggle,
+            tooltip: 'Close quick actions',
+            elevation: 3,
+            icon: animatedFabIcon,
+            label: const Text('Close'),
+          )
+        : FloatingActionButton(
+            heroTag: widget.heroTag,
+            onPressed: _toggle,
+            tooltip: hasGlobalScan ? 'Scan / Add' : 'Open quick actions',
+            elevation: 3,
+            child: animatedFabIcon,
+          );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (disableAnimations)
+          actionMenu
+        else
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.bottomRight,
+            child: actionMenu,
           ),
-        ),
+        launcher,
       ],
     );
   }
@@ -329,16 +516,63 @@ class _QuickActionButton extends StatelessWidget {
   const _QuickActionButton({
     required this.action,
     required this.delay,
+    required this.disableAnimations,
     required this.onPressed,
   });
 
   final MobileQuickAction action;
   final int delay;
+  final bool disableAnimations;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+
+    final button = Semantics(
+      button: true,
+      label: action.label,
+      child: Material(
+        color: colorScheme.secondaryContainer,
+        elevation: 2,
+        shadowColor: colorScheme.shadow.withValues(alpha: 0.18),
+        shape: const StadiumBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onPressed,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 260),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    action.icon,
+                    size: 20,
+                    color: colorScheme.onSecondaryContainer,
+                  ),
+                  const SizedBox(width: 12),
+                  Flexible(
+                    child: Text(
+                      action.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: colorScheme.onSecondaryContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (disableAnimations) return button;
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
@@ -353,52 +587,7 @@ class _QuickActionButton extends StatelessWidget {
           ),
         );
       },
-      child: Semantics(
-        button: true,
-        label: action.label,
-        child: Material(
-          color: colorScheme.secondaryContainer,
-          elevation: 2,
-          shadowColor: colorScheme.shadow.withValues(alpha: 0.18),
-          shape: const StadiumBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            customBorder: const StadiumBorder(),
-            onTap: onPressed,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 260),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      action.icon,
-                      size: 20,
-                      color: colorScheme.onSecondaryContainer,
-                    ),
-                    const SizedBox(width: 12),
-                    Flexible(
-                      child: Text(
-                        action.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: colorScheme.onSecondaryContainer,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
+      child: button,
     );
   }
 }

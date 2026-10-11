@@ -1,17 +1,19 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
-/// Read-only access to the portfolio's append-only <see cref="Core.Entities.AuditLog"/> trail.
-/// Every query is filtered by the caller's portfolio id (cross-tenant IDOR guard); there are no
-/// create/update/delete operations.
+/// Read-only access to the portfolio's append-only <see cref="Core.Entities.AtomicAuditLog"/> trail.
+/// User-facing queries consume a server-validated workspace scope and apply current-session,
+/// access-revision, <c>reports.read</c>, and property scope in the translated SQL statement. The
+/// separate forensic operations are platform-operator-only and retain an explicit portfolio scope.
 /// </summary>
 public interface IAuditQueryService
 {
     Task<IReadOnlyList<AuditEntryResponse>> ListAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         AuditLogOperation? operation,
         string? entityType,
         int? entityId,
@@ -19,8 +21,8 @@ public interface IAuditQueryService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Admin-only forensic variant of <see cref="ListAsync"/>: same portfolio-scoped filters, but the
-    /// rows include the IP address and raw old→new JSON withheld from the landlord-facing projection.
+    /// Admin-only forensic variant of <see cref="ListAsync"/>: same portfolio-scoped filters, plus
+    /// actor identity and the raw captured values used by the operator view.
     /// </summary>
     Task<IReadOnlyList<AdminAuditEntryResponse>> ListForensicAsync(
         int portfolioId,

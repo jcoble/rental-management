@@ -11,8 +11,10 @@ public class AppointmentResponse
     public int PortfolioId { get; set; }
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+    public int? RentalApplicationId { get; set; }
     public int? TenantId { get; set; }
+    public int? WorkOrderId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? ProspectName { get; set; }
     public string? ProspectEmail { get; set; }
@@ -44,8 +46,10 @@ public class AppointmentResponse
         PortfolioId = e.PortfolioId,
         PropertyId = e.PropertyId,
         UnitId = e.UnitId,
-        LeaseId = e.LeaseId,
+        LeaseManagementId = e.LeaseManagementId,
+        RentalApplicationId = e.RentalApplicationId,
         TenantId = e.TenantId,
+        WorkOrderId = e.WorkOrderId,
         Title = e.Title,
         ProspectName = e.ProspectName,
         ProspectEmail = e.ProspectEmail,
@@ -72,6 +76,18 @@ public class AppointmentListResponse
     public int Take { get; set; }
 }
 
+/// <summary>
+/// Minimal shell read model for the signed-in staff user's authorized schedule. The window is
+/// half-open: appointments starting at <see cref="WindowStartUtc"/> are included and appointments
+/// starting exactly at <see cref="WindowEndUtc"/> are excluded.
+/// </summary>
+public sealed class AppointmentScheduleSummaryResponse
+{
+    public int NextSevenDaysCount { get; set; }
+    public DateTime WindowStartUtc { get; set; }
+    public DateTime WindowEndUtc { get; set; }
+}
+
 public class AppointmentListQuery : ListQuery
 {
     public int? PropertyId { get; set; }
@@ -80,7 +96,7 @@ public class AppointmentListQuery : ListQuery
     public AppointmentStatus? Status { get; set; }
 }
 
-public class CreateAppointmentRequest
+public class CreateAppointmentRequest : IValidatableObject
 {
     [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
@@ -89,10 +105,16 @@ public class CreateAppointmentRequest
     public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? RentalApplicationId { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? WorkOrderId { get; set; }
 
     [Required]
     [MaxLength(200)]
@@ -121,9 +143,19 @@ public class CreateAppointmentRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (ScheduledEnd.HasValue && ScheduledEnd.Value <= ScheduledStart)
+        {
+            yield return new ValidationResult(
+                "The end time must be after the start time",
+                [nameof(ScheduledEnd)]);
+        }
+    }
 }
 
-public class UpdateAppointmentRequest
+public class UpdateAppointmentRequest : IValidatableObject
 {
     [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
@@ -132,10 +164,16 @@ public class UpdateAppointmentRequest
     public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? RentalApplicationId { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? WorkOrderId { get; set; }
 
     [MaxLength(200)]
     public string? Title { get; set; }
@@ -161,4 +199,14 @@ public class UpdateAppointmentRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (ScheduledStart.HasValue && ScheduledEnd.HasValue && ScheduledEnd.Value <= ScheduledStart.Value)
+        {
+            yield return new ValidationResult(
+                "The end time must be after the start time",
+                [nameof(ScheduledEnd)]);
+        }
+    }
 }

@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
+using SkiaSharp;
 
 namespace RentalCommand.Api.Scanning;
 
@@ -17,7 +18,10 @@ namespace RentalCommand.Api.Scanning;
 /// Falls back to a deterministic no-op (no network call, all confidence 0) when no API key is
 /// configured, so the app runs offline.
 /// </summary>
-public sealed class OpenAiLlmProvider : ILlmProvider
+public sealed class OpenAiLlmProvider :
+    ILlmProvider,
+    ILlmCredentialProbe,
+    IWorkspaceLlmExtractionProvider
 {
     private const string ToolName = "record_extraction";
 
@@ -26,6 +30,8 @@ public sealed class OpenAiLlmProvider : ILlmProvider
     private readonly ILogger<OpenAiLlmProvider> _logger;
     private readonly IImageTextExtractor _imageTextExtractor;
     private bool _warnedNoKey;
+
+    public string ProviderKey => "openai";
 
     public OpenAiLlmProvider(
         HttpClient http,
@@ -63,7 +69,48 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         return text ?? string.Empty;
     }
 
-    public async Task<ExtractedFields> ExtractAsync(
+    public async Task<LlmCredentialProbeResult> TestCredentialAsync(
+        string apiKey,
+        string modelId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(modelId))
+        {
+            return new(false, ProviderKey, modelId, "API key and model are required.");
+        }
+
+        var body = new
+        {
+            model = modelId.Trim(),
+            max_completion_tokens = 1,
+            messages = new[] { new { role = "user", content = "Reply OK." } }
+        };
+        using var response = await _http.SendAsync(BuildRequest(body, apiKey.Trim()), ct);
+        return response.IsSuccessStatusCode
+            ? new(true, ProviderKey, modelId.Trim())
+            : new(false, ProviderKey, modelId.Trim(),
+                $"OpenAI rejected the credential ({(int)response.StatusCode}).");
+    }
+
+    public Task<ExtractedFields> ExtractAsync(
+        byte[] documentBytes,
+        string contentType,
+        string instructions,
+        IReadOnlyList<ExtractionFieldSpec> fields,
+        string? groundingContext = null,
+        CancellationToken ct = default) =>
+        ExtractCoreAsync(
+            _config.ApiKey,
+            _config.ModelId,
+            documentBytes,
+            contentType,
+            instructions,
+            fields,
+            groundingContext,
+            ct);
+
+    public Task<ExtractedFields> ExtractWorkspaceAsync(
+        WorkspaceLlmRuntimeCredential credential,
         byte[] documentBytes,
         string contentType,
         string instructions,
@@ -71,8 +118,36 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         string? groundingContext = null,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(credential);
+        if (!string.Equals(credential.Provider, ProviderKey, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"The workspace credential selects {credential.Provider}, not {ProviderKey}.");
+        }
+
+        return ExtractCoreAsync(
+            credential.ApiKey,
+            credential.ModelId,
+            documentBytes,
+            contentType,
+            instructions,
+            fields,
+            groundingContext,
+            ct);
+    }
+
+    private async Task<ExtractedFields> ExtractCoreAsync(
+        string? apiKey,
+        string? modelId,
+        byte[] documentBytes,
+        string contentType,
+        string instructions,
+        IReadOnlyList<ExtractionFieldSpec> fields,
+        string? groundingContext,
+        CancellationToken ct)
+    {
         // --- Deterministic no-op fallback (offline / unconfigured) ---
-        if (string.IsNullOrWhiteSpace(_config.ApiKey))
+        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(modelId))
         {
             WarnNoKeyOnce();
             return new ExtractedFields
@@ -140,20 +215,20 @@ public sealed class OpenAiLlmProvider : ILlmProvider
             }
             else
             {
-                var dataUri = $"data:{contentType};base64,{Convert.ToBase64String(documentBytes)}";
                 var imageDetail = string.IsNullOrWhiteSpace(_config.ImageDetail) ? "low" : _config.ImageDetail;
                 var promptText = ocrMode == ImageOcrRoutingMode.Hybrid && ImageOcrRouting.IsUseful(ocrText)
                     ? ImageOcrRouting.BuildHybridHint(ocrText!)
                     : "Extract the fields from the attached document.";
-                userContent = new object[]
+                var imageParts = BuildVisionImageParts(
+                    documentBytes,
+                    contentType,
+                    imageDetail);
+                var contentParts = new List<object>(imageParts.Count + 1)
                 {
-                    new { type = "text", text = promptText },
-                    new
-                    {
-                        type = "image_url",
-                        image_url = new { url = dataUri, detail = imageDetail }
-                    }
+                    new { type = "text", text = promptText }
                 };
+                contentParts.AddRange(imageParts);
+                userContent = contentParts;
             }
         }
 
@@ -170,7 +245,7 @@ public sealed class OpenAiLlmProvider : ILlmProvider
 
         var body = new
         {
-            model = _config.ModelId,
+            model = modelId,
             // The receipt schema asks for ~20 fields, a confidence per field, AND a line-items
             // array — at 1500 the tool-call JSON gets truncated (the model hits the cap before
             // finishing the function call), yielding an empty extraction. 4096 gives ample room.
@@ -184,9 +259,80 @@ public sealed class OpenAiLlmProvider : ILlmProvider
             tool_choice = new { type = "function", function = new { name = ToolName } }
         };
 
-        using var resp = await SendChecked(BuildRequest(body), ct);
+        using var resp = await SendChecked(BuildRequest(body, apiKey), ct);
         var json = await resp.Content.ReadAsStringAsync(ct);
         return ParseToolResult(json, fields);
+    }
+
+    private static IReadOnlyList<object> BuildVisionImageParts(
+        byte[] documentBytes,
+        string contentType,
+        string configuredDetail)
+    {
+        SKBitmap? decoded;
+        try
+        {
+            decoded = SKBitmap.Decode(documentBytes);
+        }
+        catch (ArgumentException)
+        {
+            decoded = null;
+        }
+
+        using var bitmap = decoded;
+        if (bitmap is null || bitmap.Width <= 0 || bitmap.Height <= bitmap.Width * 3)
+        {
+            return
+            [
+                BuildVisionImagePart(documentBytes, contentType, configuredDetail)
+            ];
+        }
+
+        // A low-detail vision request reduces an entire image to a single small viewport. For a
+        // camera app's vertically stitched multi-page document, that makes every page unreadable.
+        // Slice the image into overlapping, page-sized tiles and force high detail so the model
+        // receives the document at legible resolution instead of confidently guessing from the
+        // portfolio grounding context.
+        var tileHeight = Math.Max(bitmap.Width, (int)Math.Round(bitmap.Width * 1.25));
+        var overlap = Math.Max(32, bitmap.Width / 10);
+        var step = Math.Max(1, tileHeight - overlap);
+        var parts = new List<object>();
+
+        for (var y = 0; y < bitmap.Height; y += step)
+        {
+            var height = Math.Min(tileHeight, bitmap.Height - y);
+            using var tile = new SKBitmap(bitmap.Width, height, bitmap.ColorType, bitmap.AlphaType);
+            using (var canvas = new SKCanvas(tile))
+            {
+                canvas.Clear(SKColors.White);
+                canvas.DrawBitmap(
+                    bitmap,
+                    new SKRectI(0, y, bitmap.Width, y + height),
+                    new SKRect(0, 0, bitmap.Width, height));
+            }
+
+            using var image = SKImage.FromBitmap(tile);
+            using var encoded = image.Encode(SKEncodedImageFormat.Jpeg, 90);
+            parts.Add(BuildVisionImagePart(encoded.ToArray(), "image/jpeg", "high"));
+
+            if (y + height >= bitmap.Height)
+                break;
+        }
+
+        return parts;
+    }
+
+    private static object BuildVisionImagePart(
+        byte[] imageBytes,
+        string contentType,
+        string detail)
+    {
+        var dataUri = $"data:{contentType};base64,{Convert.ToBase64String(imageBytes)}";
+        return new
+        {
+            type = "image_url",
+            image_url = new { url = dataUri, detail }
+        };
     }
 
     public async Task<LlmToolResult> ChatWithToolsAsync(
@@ -482,13 +628,15 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         return result;
     }
 
-    private HttpRequestMessage BuildRequest(object body)
+    private HttpRequestMessage BuildRequest(object body, string? apiKey = null)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "v1/chat/completions")
         {
             Content = JsonContent.Create(body)
         };
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _config.ApiKey);
+        req.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            apiKey ?? _config.ApiKey);
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return req;
     }

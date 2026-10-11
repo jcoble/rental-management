@@ -23,7 +23,7 @@ public interface INativeSigningService
     /// <summary>
     /// Apply the signer's signature + consent. On the LAST signer this generates + stores the executed PDF
     /// (signatures + Certificate of Completion + SHA-256), completes the request, and updates the lease
-    /// (EsignStatus=Signed, SignedDocumentStoredFileId, Status=Active).
+    /// (agreement execution state, signed artifact, and lifecycle facts).
     /// </summary>
     Task<SignTokenResult<SignActionResponse>> SignAsync(
         string token, SubmitSignatureRequest request, string? ipAddress, string? userAgent, CancellationToken ct = default);

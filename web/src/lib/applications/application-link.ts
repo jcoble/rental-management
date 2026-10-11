@@ -1,4 +1,4 @@
-export interface UnitListingLinkContext {
+export interface RentalListingLinkContext {
 	propertyId: number;
 	unitId: number;
 }
@@ -20,7 +20,7 @@ function readPositiveInt(params: URLSearchParams, key: string): number | null {
 	return Number.isInteger(value) && value > 0 ? value : null;
 }
 
-export function readUnitListingLinkContext(params: URLSearchParams): UnitListingLinkContext | null {
+export function readRentalListingLinkContext(params: URLSearchParams): RentalListingLinkContext | null {
 	if (params.get('action') !== 'list-unit') return null;
 	const propertyId = readPositiveInt(params, 'propertyId');
 	const unitId = readPositiveInt(params, 'unitId');
@@ -31,7 +31,7 @@ export function readUnitListingLinkContext(params: URLSearchParams): UnitListing
 export function buildApplicationLinkUrl(
 	origin: string,
 	applyPath: string,
-	context: UnitListingLinkContext | null
+	context: RentalListingLinkContext | null
 ): string {
 	const fallbackOrigin = 'http://localhost';
 	const url = new URL(applyPath, origin || fallbackOrigin);

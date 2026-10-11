@@ -1,17 +1,18 @@
 /**
  * Forgot-password page server action.
  *
- * The API ALWAYS returns 200 regardless of whether an account exists, to
- * prevent account enumeration. We show the same generic success message
- * unconditionally after the action runs.
+ * The API returns 200 regardless of whether an account exists, to prevent account
+ * enumeration. Infrastructure failures are different: they must remain retryable
+ * and must not be presented as if an email was sent.
  */
 
 import { fail } from '@sveltejs/kit';
+import { createHash } from 'node:crypto';
 import type { Actions, PageServerLoad } from './$types';
-import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { serverPost } from '$lib/api/server-fetch';
 
-export const load: PageServerLoad = async () => {
-	return {};
+export const load: PageServerLoad = async ({ url }) => {
+	return { email: url.searchParams.get('email')?.trim() ?? '' };
 };
 
 export const actions: Actions = {
@@ -24,19 +25,41 @@ export const actions: Actions = {
 		}
 
 		try {
-			// We fire this request and ignore any non-network error — the API always
-			// returns 200 regardless of whether the account exists.
-			await fetch(`${SERVER_API_BASE_URL}/auth/forgot-password`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ email })
-			});
+			// One-minute intent buckets preserve the same key across an ambiguous retry without
+			// preventing the user from deliberately requesting another email later.
+			const operationKey = createHash('sha256')
+				.update(`${email}:${Math.floor(Date.now() / 60_000)}`)
+				.digest('hex');
+			const result = await serverPost(
+				'/auth/forgot-password',
+				undefined,
+				{ email },
+				{ headers: { 'Idempotency-Key': operationKey } }
+			);
+			if (result.networkError) {
+				return fail(503, {
+					error: 'Unable to connect to Rental Command. Please try again.',
+					sent: false,
+					email
+				});
+			}
+			if (result.status < 200 || result.status >= 300) {
+				return fail(503, {
+					error: 'Password recovery is temporarily unavailable. Please try again.',
+					sent: false,
+					email
+				});
+			}
 		} catch (err) {
 			console.error('Forgot password error:', err);
-			// Even on network error we show the generic message to avoid leaking info.
+			return fail(503, {
+				error: 'Unable to connect to Rental Command. Please try again.',
+				sent: false,
+				email
+			});
 		}
 
-		// Always show the generic success state.
+		// Show the neutral success state only after the API request completed successfully.
 		return { sent: true };
 	}
 };

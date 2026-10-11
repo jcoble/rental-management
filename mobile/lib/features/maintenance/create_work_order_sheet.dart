@@ -3,15 +3,18 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/models/models.dart' hide Vendor;
+import '../../core/models/models.dart';
+import '../../core/time/app_clock.dart';
 import '../../core/utils/date_wire.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../vendors/vendors_repository.dart';
-import 'work_order_form_shell.dart';
 import 'work_orders_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 Future<void> showCreateWorkOrderSheet({
   required BuildContext context,
@@ -23,7 +26,6 @@ Future<void> showCreateWorkOrderSheet({
   String? initialUnitLabel,
 }) {
   ref.read(propertiesForWoProvider.notifier).load();
-  ref.read(tenantsProvider.notifier).load();
 
   return showModalBottomSheet<void>(
     context: context,
@@ -65,6 +67,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   final _formKey = GlobalKey<FormState>();
   final _titleCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
+  final _technicianAccessCtrl = TextEditingController();
   final _estCostCtrl = TextEditingController();
 
   int? _selectedPropertyId;
@@ -81,6 +84,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   Uint8List? _photoBytes;
   String? _photoName;
   String? _photoContentType;
+  String? _photoUploadOperationId;
 
   bool _saving = false;
   String? _error;
@@ -114,6 +118,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   void dispose() {
     _titleCtrl.dispose();
     _descCtrl.dispose();
+    _technicianAccessCtrl.dispose();
     _estCostCtrl.dispose();
     super.dispose();
   }
@@ -123,23 +128,9 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
     return DateTime(date.year, date.month, date.day, time.hour, time.minute);
   }
 
-  static String _fmtDate(DateTime d) {
-    const months = [
-      '',
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return '${months[d.month]} ${d.day}, ${d.year}';
+  DateTime? _scheduledStart(DateTime? date, TimeOfDay? time) {
+    if (date == null) return null;
+    return _combine(date, time) ?? DateTime(date.year, date.month, date.day);
   }
 
   Property? _findProperty(List<Property> properties) {
@@ -152,21 +143,28 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   }
 
   Future<void> _pickScheduledDate() async {
-    final now = DateTime.now();
+    final now = await ref.read(appNowProvider.future);
+    if (!mounted) return;
     final picked = await showDatePicker(
       context: context,
-      initialDate: _scheduledDate ?? now,
+      initialDate: _scheduledDate ?? now.toLocal(),
       firstDate: DateTime(now.year - 1),
       lastDate: DateTime(now.year + 5),
     );
     if (picked == null || !mounted) return;
-    setState(() => _scheduledDate = picked);
+    setState(
+      () => _scheduledDate = DateTime(picked.year, picked.month, picked.day),
+    );
   }
 
   Future<void> _pickTime({required bool isStart}) async {
+    final now = await ref.read(appNowProvider.future);
+    if (!mounted) return;
     final picked = await showTimePicker(
       context: context,
-      initialTime: (isStart ? _startTime : _windowEndTime) ?? TimeOfDay.now(),
+      initialTime:
+          (isStart ? _startTime : _windowEndTime) ??
+          TimeOfDay.fromDateTime(now.toLocal()),
     );
     if (picked == null || !mounted) return;
     setState(() {
@@ -192,7 +190,33 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       _photoBytes = bytes;
       _photoName = picked.name;
       _photoContentType = _mimeFromExtension(picked.name);
+      _photoUploadOperationId = const Uuid().v4();
     });
+  }
+
+  Future<void> _pickPhotoSource() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('Take a photo'),
+              onTap: () => Navigator.of(sheetContext).pop(ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose from my photos'),
+              onTap: () => Navigator.of(sheetContext).pop(ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+    await _pickPhoto(source);
   }
 
   String _mimeFromExtension(String filename) {
@@ -203,8 +227,39 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
     return 'image/jpeg';
   }
 
+  String _tenantLabel(Tenant tenant) {
+    final fullName = tenant.fullName?.trim();
+    if (fullName != null && fullName.isNotEmpty) return fullName;
+    final name = '${tenant.firstName} ${tenant.lastName}'.trim();
+    return name.isEmpty ? 'Tenant #${tenant.id}' : name;
+  }
+
+  TenantListQuery? get _tenantQuery {
+    final propertyId = _selectedPropertyId;
+    if (propertyId == null) return null;
+    return TenantListQuery(
+      take: 200,
+      sort: 'name',
+      propertyId: propertyId,
+      unitId: _selectedUnitId,
+    );
+  }
+
+  void _clearSelectedTenantIfMissing(List<Tenant> tenants) {
+    final tenantId = _selectedTenantId;
+    if (tenantId == null || tenants.any((tenant) => tenant.id == tenantId)) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _selectedTenantId == tenantId) {
+        setState(() => _selectedTenantId = null);
+      }
+    });
+  }
+
   bool _validateArrivalWindow() {
-    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledFor = _scheduledStart(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
 
     if (scheduledFor != null &&
@@ -223,14 +278,14 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) {
-      throw StateError('Work order form validation failed.');
+      throw StateError('Repair form validation failed.');
     }
 
-    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledFor = _scheduledStart(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
 
     if (!_validateArrivalWindow()) {
-      throw StateError('Work order arrival window validation failed.');
+      throw StateError('Repair arrival window validation failed.');
     }
 
     setState(() {
@@ -245,6 +300,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
         'propertyId': _selectedPropertyId,
         'title': _titleCtrl.text.trim(),
         'description': _descCtrl.text.trim(),
+        'technicianAccessInstructions': _technicianAccessCtrl.text.trim(),
         'priority': _priority,
         'category': _category,
         'unitId': ?_selectedUnitId,
@@ -264,6 +320,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
           bytes: photoBytes,
           fileName: photoName,
           contentType: photoContentType,
+          clientOperationId: _photoUploadOperationId ??= const Uuid().v4(),
         );
       }
 
@@ -280,7 +337,10 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   @override
   Widget build(BuildContext context) {
     final propertiesAsync = ref.watch(propertiesForWoProvider);
-    final tenantsAsync = ref.watch(tenantsProvider);
+    final tenantQuery = _tenantQuery;
+    final tenantsAsync = tenantQuery == null
+        ? null
+        : ref.watch(tenantsPageProvider(tenantQuery));
     final vendorsAsync = ref.watch(vendorsProvider);
     final unitsAsync = _selectedPropertyId == null || _unitLocked
         ? null
@@ -327,6 +387,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
           onChanged: (v) => setState(() {
             _selectedPropertyId = v;
             _selectedUnitId = null;
+            _selectedTenantId = null;
           }),
           validator: (v) => v == null ? 'Please select a property' : null,
         );
@@ -378,37 +439,64 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
                   ),
                 ),
               ],
-              onChanged: (v) => setState(() => _selectedUnitId = v),
+              onChanged: (v) => setState(() {
+                _selectedUnitId = v;
+                _selectedTenantId = null;
+              }),
             ),
           );
 
-    final tenantField = tenantsAsync.when(
-      loading: () => const Padding(
-        padding: EdgeInsets.symmetric(vertical: 8),
-        child: LinearProgressIndicator(),
-      ),
-      error: (e, _) => Text(
-        'Could not load tenants: ${e is ApiException ? e.message : e}',
-        style: TextStyle(color: colorScheme.error, fontSize: 13),
-      ),
-      data: (tenants) => DropdownButtonFormField<int?>(
-        initialValue: _selectedTenantId,
-        decoration: const InputDecoration(labelText: 'Tenant (optional)'),
-        items: [
-          const DropdownMenuItem<int?>(value: null, child: Text('No tenant')),
-          ...tenants.map(
-            (t) => DropdownMenuItem<int?>(
-              value: t.id,
-              child: Text(
-                t.fullName ?? '${t.firstName} ${t.lastName}'.trim(),
-                overflow: TextOverflow.ellipsis,
-              ),
+    final tenantField = tenantsAsync == null
+        ? DropdownButtonFormField<int?>(
+            initialValue: null,
+            decoration: const InputDecoration(
+              labelText: 'Tenant (optional)',
+              hintText: 'Select a property first',
             ),
-          ),
-        ],
-        onChanged: (v) => setState(() => _selectedTenantId = v),
-      ),
-    );
+            items: const [],
+            onChanged: null,
+          )
+        : tenantsAsync.when(
+            loading: () => const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: LinearProgressIndicator(),
+            ),
+            error: (e, _) => Text(
+              'Could not load tenants: ${e is ApiException ? e.message : e}',
+              style: TextStyle(color: colorScheme.error, fontSize: 13),
+            ),
+            data: (page) {
+              final tenants = page.items;
+              _clearSelectedTenantIfMissing(tenants);
+              final visibleTenantId =
+                  _selectedTenantId != null &&
+                      tenants.any((tenant) => tenant.id == _selectedTenantId)
+                  ? _selectedTenantId
+                  : null;
+              return DropdownButtonFormField<int?>(
+                initialValue: visibleTenantId,
+                decoration: const InputDecoration(
+                  labelText: 'Tenant (optional)',
+                ),
+                items: [
+                  const DropdownMenuItem<int?>(
+                    value: null,
+                    child: Text('No tenant'),
+                  ),
+                  ...tenants.map(
+                    (t) => DropdownMenuItem<int?>(
+                      value: t.id,
+                      child: Text(
+                        _tenantLabel(t),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: (v) => setState(() => _selectedTenantId = v),
+              );
+            },
+          );
 
     final vendorField = vendorsAsync.when(
       loading: () => const Padding(
@@ -421,9 +509,15 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       ),
       data: (vendors) => DropdownButtonFormField<int?>(
         initialValue: _selectedVendorId,
-        decoration: const InputDecoration(labelText: 'Vendor (optional)'),
+        decoration: const InputDecoration(
+          labelText: "Who's fixing it?",
+          helperText: 'Leave this for later if you have not decided.',
+        ),
         items: [
-          const DropdownMenuItem<int?>(value: null, child: Text('No vendor')),
+          const DropdownMenuItem<int?>(
+            value: null,
+            child: Text('Not decided yet'),
+          ),
           ...vendors.map(
             (v) => DropdownMenuItem<int?>(
               value: v.id,
@@ -435,34 +529,202 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       ),
     );
 
+    final photoField = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_photoBytes != null) ...[
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.memory(
+              _photoBytes!,
+              height: 120,
+              fit: BoxFit.cover,
+              width: double.infinity,
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: _saving ? null : _pickPhotoSource,
+            icon: const Icon(Icons.photo_camera_outlined),
+            label: Text(_photoBytes == null ? 'Add a photo' : 'Replace photo'),
+          ),
+        ),
+      ],
+    );
+
+    final moreDetails = ExpansionTile(
+      key: const Key('work-order-more-details'),
+      title: const Text('More details'),
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(top: 4, bottom: 8),
+      expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _priority,
+                decoration: const InputDecoration(labelText: 'Priority'),
+                items: _priorities
+                    .map((p) => DropdownMenuItem(value: p, child: Text(p)))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) setState(() => _priority = v);
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _category,
+                decoration: const InputDecoration(labelText: 'Category'),
+                items: _categories
+                    .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) setState(() => _category = v);
+                },
+              ),
+            ),
+          ],
+        ),
+        gap,
+        InkWell(
+          onTap: _pickScheduledDate,
+          child: InputDecorator(
+            decoration: const InputDecoration(
+              labelText: 'Scheduled date (optional)',
+              suffixIcon: Icon(Icons.calendar_today_outlined),
+            ),
+            child: Text(
+              _scheduledDate == null ? 'Not scheduled' : dateFmt(_scheduledDate!),
+              style: TextStyle(
+                color: _scheduledDate == null
+                    ? colorScheme.onSurfaceVariant
+                    : colorScheme.onSurface,
+              ),
+            ),
+          ),
+        ),
+        gap,
+        Row(
+          children: [
+            Expanded(
+              child: InkWell(
+                onTap: _scheduledDate == null
+                    ? null
+                    : () => _pickTime(isStart: true),
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Start time',
+                    suffixIcon: Icon(Icons.schedule_outlined),
+                  ),
+                  child: Text(
+                    _startTime == null ? '--:--' : _startTime!.format(context),
+                    style: TextStyle(
+                      color: _startTime == null
+                          ? colorScheme.onSurfaceVariant
+                          : colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: InkWell(
+                onTap: _scheduledDate == null
+                    ? null
+                    : () => _pickTime(isStart: false),
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Arrival window end',
+                    suffixIcon: Icon(Icons.schedule_outlined),
+                  ),
+                  child: Text(
+                    _windowEndTime == null
+                        ? '--:--'
+                        : _windowEndTime!.format(context),
+                    style: TextStyle(
+                      color: _windowEndTime == null
+                          ? colorScheme.onSurfaceVariant
+                          : colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        gap,
+        TextFormField(
+          key: const Key('work-order-technician-access-field'),
+          controller: _technicianAccessCtrl,
+          maxLines: 3,
+          maxLength: 2000,
+          textInputAction: TextInputAction.newline,
+          decoration: const InputDecoration(
+            labelText: 'How to get in (optional)',
+            helperText:
+                'Entry, lockbox, pet, or contact notes that are safe to share '
+                'with whoever does the work.',
+          ),
+        ),
+        gap,
+        tenantField,
+        gap,
+        TextFormField(
+          key: const Key('work-order-estimated-cost-field'),
+          controller: _estCostCtrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            labelText: 'Estimated cost (optional)',
+            prefixText: '\$ ',
+          ),
+          validator: (v) {
+            final t = v?.trim() ?? '';
+            if (t.isEmpty) return null;
+            final parsed = double.tryParse(t);
+            if (parsed == null) return 'Enter a valid amount';
+            if (parsed < 0) return 'Cannot be negative';
+            return null;
+          },
+        ),
+      ],
+    );
+
     return Form(
       key: _formKey,
-      child: WorkOrderFormShell(
-        title: 'New Work Order',
-        saveLabel: 'Save Work Order',
+      child: TabbedFormSheet(
+        title: 'New repair',
+        saveLabel: 'Save repair',
         saving: _saving,
         error: _error,
         onSave: _submit,
         tabs: [
-          WorkOrderFormTabSpec(
-            label: 'Location',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [propertyField, gap, unitField],
-            ),
-          ),
-          WorkOrderFormTabSpec(
-            label: 'Issue',
+          TabbedFormStepSpec(
+            label: 'Repair',
+            validate: _validateArrivalWindow,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                propertyField,
+                gap,
+                unitField,
+                gap,
                 TextFormField(
                   key: const Key('work-order-title-field'),
                   controller: _titleCtrl,
                   textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(labelText: 'Title'),
+                  decoration: const InputDecoration(
+                    labelText: 'What happened?',
+                    hintText: 'Kitchen sink is leaking',
+                  ),
                   validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Title is required'
+                      ? 'Tell us what happened'
                       : null,
                 ),
                 gap,
@@ -471,212 +733,17 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
                   controller: _descCtrl,
                   maxLines: 3,
                   textInputAction: TextInputAction.newline,
-                  decoration: const InputDecoration(labelText: 'Description'),
+                  decoration: const InputDecoration(labelText: 'Details'),
                   validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Description is required'
+                      ? 'Add a few details'
                       : null,
                 ),
-              ],
-            ),
-          ),
-          WorkOrderFormTabSpec(
-            label: 'Schedule',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _priority,
-                        decoration: const InputDecoration(
-                          labelText: 'Priority',
-                        ),
-                        items: _priorities
-                            .map(
-                              (p) => DropdownMenuItem(value: p, child: Text(p)),
-                            )
-                            .toList(),
-                        onChanged: (v) {
-                          if (v != null) setState(() => _priority = v);
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _category,
-                        decoration: const InputDecoration(
-                          labelText: 'Category',
-                        ),
-                        items: _categories
-                            .map(
-                              (c) => DropdownMenuItem(value: c, child: Text(c)),
-                            )
-                            .toList(),
-                        onChanged: (v) {
-                          if (v != null) setState(() => _category = v);
-                        },
-                      ),
-                    ),
-                  ],
-                ),
                 gap,
-                InkWell(
-                  onTap: _pickScheduledDate,
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'Scheduled date (optional)',
-                      suffixIcon: Icon(Icons.calendar_today_outlined),
-                    ),
-                    child: Text(
-                      _scheduledDate == null
-                          ? 'Not scheduled'
-                          : _fmtDate(_scheduledDate!),
-                      style: TextStyle(
-                        color: _scheduledDate == null
-                            ? colorScheme.onSurfaceVariant
-                            : colorScheme.onSurface,
-                      ),
-                    ),
-                  ),
-                ),
-                gap,
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: _scheduledDate == null
-                            ? null
-                            : () => _pickTime(isStart: true),
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'Start time',
-                            suffixIcon: Icon(Icons.schedule_outlined),
-                          ),
-                          child: Text(
-                            _startTime == null
-                                ? '--:--'
-                                : _startTime!.format(context),
-                            style: TextStyle(
-                              color: _startTime == null
-                                  ? colorScheme.onSurfaceVariant
-                                  : colorScheme.onSurface,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          WorkOrderFormTabSpec(
-            label: 'Assign',
-            validate: _validateArrivalWindow,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: _scheduledDate == null
-                            ? null
-                            : () => _pickTime(isStart: false),
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'Arrival window end',
-                            suffixIcon: Icon(Icons.schedule_outlined),
-                          ),
-                          child: Text(
-                            _windowEndTime == null
-                                ? '--:--'
-                                : _windowEndTime!.format(context),
-                            style: TextStyle(
-                              color: _windowEndTime == null
-                                  ? colorScheme.onSurfaceVariant
-                                  : colorScheme.onSurface,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextFormField(
-                        key: const Key('work-order-estimated-cost-field'),
-                        controller: _estCostCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        decoration: const InputDecoration(
-                          labelText: 'Estimated cost (optional)',
-                          prefixText: '\$ ',
-                        ),
-                        validator: (v) {
-                          final t = v?.trim() ?? '';
-                          if (t.isEmpty) return null;
-                          final parsed = double.tryParse(t);
-                          if (parsed == null) return 'Enter a valid amount';
-                          if (parsed < 0) return 'Cannot be negative';
-                          return null;
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                gap,
-                tenantField,
+                photoField,
                 gap,
                 vendorField,
-              ],
-            ),
-          ),
-          WorkOrderFormTabSpec(
-            label: 'Attach',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (_photoBytes != null) ...[
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.memory(
-                      _photoBytes!,
-                      height: 140,
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _saving
-                            ? null
-                            : () => _pickPhoto(ImageSource.camera),
-                        icon: const Icon(Icons.camera_alt_outlined),
-                        label: Text(
-                          _photoBytes == null ? 'Take photo' : 'Retake',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _saving
-                            ? null
-                            : () => _pickPhoto(ImageSource.gallery),
-                        icon: const Icon(Icons.photo_library_outlined),
-                        label: const Text('Choose'),
-                      ),
-                    ),
-                  ],
-                ),
+                gap,
+                moreDetails,
               ],
             ),
           ),

@@ -20,7 +20,7 @@ public static class WorkerHealthThresholds
             ["ScanProcessingWorker"]          = (60,  300, 600),
             ["RentChargeWorker"]              = (120, 600, 1800),
             ["LateFeeWorker"]                 = (120, 600, 1800),
-            ["LeaseExpiryReminderWorker"]     = (120, 600, 1800),
+            ["TenantNoticeCandidateWorker"]   = (120, 600, 1800),
             // Long-cycle workers (poll hourly / 6h / 12h / daily) only emit an idle keep-alive
             // heartbeat every ~2 min (EngineWorkerBase.HeartbeatInterval), so liveness — not work
             // cadence — drives these thresholds. Loose enough to ride out a missed keep-alive or
@@ -42,7 +42,7 @@ public static class WorkerHealthThresholds
             ["ScanProcessingWorker"]          = 300,
             ["RentChargeWorker"]              = 600,
             ["LateFeeWorker"]                 = 600,
-            ["LeaseExpiryReminderWorker"]     = 600,
+            ["TenantNoticeCandidateWorker"]   = 600,
             ["AutopayChargeWorker"]           = 600,
             ["RecurringMaintenanceWorker"]    = 600,
             ["NoticeDraftWorker"]             = 600,
@@ -67,4 +67,11 @@ public static class WorkerHealthThresholds
     /// case-sensitive IN match is correct.
     /// </summary>
     public static readonly IReadOnlyList<string> KnownWorkerNames = Thresholds.Keys.ToList();
+
+    /// <summary>
+    /// The bounded set monitored for automatic restart. This is intentionally separate from the
+    /// broader health-check set: adding a worker to health reporting must not silently opt it into
+    /// watchdog restart behavior without a stuck threshold.
+    /// </summary>
+    public static readonly IReadOnlyList<string> WatchdogWorkerNames = WatchdogStuckSeconds.Keys.ToList();
 }

@@ -2,7 +2,7 @@ namespace RentalCommand.Core.Interfaces;
 
 /// <summary>
 /// Resolves who/where for a write, used by the audit interceptor to attribute each
-/// <see cref="Entities.AuditLog"/> row. HTTP requests supply the authenticated user; Engine
+/// <see cref="Entities.AtomicAuditLog"/> row. HTTP requests supply the authenticated user; Engine
 /// workers (no HttpContext) supply a system label. All members are null-safe.
 /// </summary>
 public interface ICurrentActor

@@ -53,12 +53,7 @@ test("every wizard step's settingsAnchor (the wizard→settings return) resolves
 });
 
 test('legacy section anchors map to a tab and are flagged as needing scroll-into-view', () => {
-	// The three anchors still emitted by the wizard-return path / old bookmarks.
-	for (const anchor of [
-		'settings-portfolio-basics',
-		'settings-notification-email',
-		'settings-notification-delivery',
-	]) {
+	for (const anchor of ['settings-portfolio-basics']) {
 		assert.ok(resolveSettingsTab(anchor, TAB_KEYS) !== null, `${anchor} must resolve to a tab`);
 		assert.ok(isLegacySettingsAnchor(anchor), `${anchor} must be flagged as a legacy anchor`);
 	}

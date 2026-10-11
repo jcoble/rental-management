@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
 	import { vendors } from '$lib/api/endpoints/vendors';
+	import { ApiError } from '$lib/api/client';
 	import type { Vendor } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -10,6 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StarRating from '$lib/components/shared/StarRating.svelte';
 	import { Star, Mail, Phone, MessageSquare, Pencil } from '@lucide/svelte';
@@ -70,13 +72,19 @@
 	}
 
 	// --- Text W-9 request ---
+	let requestW9OperationId = $state<string | null>(null);
 	const requestW9Mutation = createMutation(() => ({
-		mutationFn: () => vendors.requestW9(id),
+		mutationFn: () => vendors.requestW9(id, (requestW9OperationId ??= crypto.randomUUID())),
 		onSuccess: (res) => {
+			requestW9OperationId = null;
 			showSuccess(`W-9 request texted to ${res.sentTo}.`);
 		},
 		// The API returns 400 { error } when the vendor has no phone — surface it.
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			if (err instanceof ApiError && err.status >= 400 && err.status < 500
+				&& err.status !== 408 && err.status !== 429) requestW9OperationId = null;
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	// --- Toggle "W-9 on file" ---
@@ -151,7 +159,7 @@
 	</div>
 
 	{#if vendorQuery.isLoading}
-		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="vendor-detail-loading">Loading…</p>
+		<LoadingState label="Loading vendor details" variant="page" testid="vendor-detail-loading" />
 	{:else if vendorQuery.isError}
 		<p class="py-8 text-center text-sm text-destructive" data-testid="vendor-detail-error">Failed to load vendor.</p>
 	{:else if !vendor}
@@ -202,6 +210,11 @@
 			<Card.Content>
 				{#if scorecardQuery.isLoading}
 					<p class="py-4 text-sm text-muted-foreground" data-testid="vendor-scorecard-loading">Loading scorecard…</p>
+				{:else if scorecardQuery.isError}
+					<div class="flex items-center justify-between gap-4 py-4" data-testid="vendor-scorecard-error">
+						<p class="text-sm text-destructive">The scorecard could not be loaded.</p>
+						<Button variant="outline" size="sm" onclick={() => scorecardQuery.refetch()}>Try again</Button>
+					</div>
 				{:else if scorecard}
 					<div class="grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
 						<div>
@@ -226,9 +239,9 @@
 							<dd class="mt-1.5 font-mono text-2xl tabular-nums" data-testid="vendor-scorecard-jobs">{scorecard.jobsCompleted}</dd>
 						</div>
 						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg response time</dt>
+							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Average reply time</dt>
 							<dd class="mt-1.5 font-mono text-2xl tabular-nums" data-testid="vendor-scorecard-response">{fmtHours(scorecard.avgResponseHours)}</dd>
-							<p class="mt-1 text-xs text-muted-foreground">From the text-out to their DONE reply.</p>
+							<p class="mt-1 text-xs text-muted-foreground">Time from sending a job by text until the vendor confirms it is finished.</p>
 						</div>
 					</div>
 				{:else}
@@ -264,6 +277,21 @@
 					<div>
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Email</dt>
 						<dd class="mt-1 text-sm" data-testid="vendor-detail-email">{vendor.email || '—'}</dd>
+					</div>
+					<div>
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Website</dt>
+						<dd class="mt-1 truncate text-sm" data-testid="vendor-detail-website">
+							{#if vendor.website}
+								<a
+									href={vendor.website}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="text-primary underline underline-offset-4"
+								>{vendor.website.replace(/^https?:\/\//, '')}</a>
+							{:else}
+								—
+							{/if}
+						</dd>
 					</div>
 					<div class="sm:col-span-2 lg:col-span-3">
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Address</dt>

@@ -9,11 +9,15 @@
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import type { ScheduleEReport } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { formatExpenseCategory } from '$lib/accounting/expense-categories';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { FileText, Receipt, MessageSquare, AlertTriangle } from '@lucide/svelte';
+	import { ApiError } from '$lib/api/client';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const CURRENT_YEAR = new Date().getFullYear();
 	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
@@ -43,23 +47,23 @@
 	}));
 
 	const vendors1099 = $derived(vendor1099Query.data?.rows ?? []);
-	const vendorsNeedingW9 = $derived(vendors1099.filter((v) => v.needsW9).length);
+	const vendorsNeedingW9 = $derived(vendor1099Query.data?.needsW9Count ?? 0);
 
+	let w9OperationIds = $state<Record<number, string>>({});
 	const requestW9Mutation = createMutation(() => ({
-		mutationFn: (vendorId: number) => vendors.requestW9(vendorId),
-		onSuccess: (res) => showSuccess(`W-9 request texted to ${res.sentTo}.`),
+		mutationFn: ({ vendorId }: { vendorId: number }) =>
+			vendors.requestW9(vendorId, (w9OperationIds[vendorId] ??= crypto.randomUUID())),
+		onSuccess: (res, { vendorId }) => {
+			delete w9OperationIds[vendorId];
+			showSuccess(`W-9 request texted to ${res.sentTo}.`);
+		},
 		// 400 { error } when the vendor has no phone on file — surface it plainly.
-		onError: (err) => showError(apiErrorMessage(err))
+		onError: (err, { vendorId }) => {
+			if (err instanceof ApiError && err.status >= 400 && err.status < 500
+				&& err.status !== 408 && err.status !== 429) delete w9OperationIds[vendorId];
+			showError(apiErrorMessage(err));
+		}
 	}));
-
-	function money(value: number) {
-		return new Intl.NumberFormat('en-US', {
-			style: 'currency',
-			currency: 'USD',
-			minimumFractionDigits: 2,
-			maximumFractionDigits: 2
-		}).format(value || 0);
-	}
 
 	async function handleDownload() {
 		downloading = true;
@@ -85,7 +89,7 @@
 </script>
 
 <svelte:head>
-	<title>Tax Summary - Rental Command</title>
+	<title>Rental Tax Summary - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="tax-page">
@@ -93,19 +97,27 @@
 		<div>
 			<h1 class="flex items-center gap-2 text-2xl font-bold">
 				<Receipt class="h-6 w-6 text-primary" />
-				Tax summary (Schedule E)
+				Rental tax summary
 			</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
-				Estimated rental income and deductible expenses by property — for reference only,
-				not tax advice. Share with your accountant.
+				Estimate the rental income and expenses your accountant may use for Schedule E.
+				This is a reference, not tax advice.
 			</p>
-			<p class="mt-1 max-w-xl text-xs text-muted-foreground" data-testid="tax-basis-note">
-				Accrual basis: expenses count when <span class="font-medium">incurred</span> (any status),
-				by the date incurred. The
-				<a href="/owners-report" class="underline underline-offset-2">Owner Reports</a> statement
-				uses cash basis (paid expenses only), so the same property can show a different expense
-				total there.
-			</p>
+			<details class="mt-2 max-w-xl text-xs text-muted-foreground" data-testid="tax-basis-note">
+				<summary class="cursor-pointer font-medium">Why totals may differ from owner statements</summary>
+				<p class="mt-2">
+					This summary counts an expense when it is incurred. The
+					<a href="/owners-report" class="underline underline-offset-2">owner statements</a> count it when it is paid,
+					so the same property can show a different expense total.
+				</p>
+			</details>
+			<a
+				href="/docs/taxes-and-1099"
+				class="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+				data-testid="tax-help-link"
+			>
+				How tax reporting works
+			</a>
 		</div>
 		<div class="flex items-center gap-2">
 			<Select.Root type="single" bind:value={selectedYear}>
@@ -171,13 +183,12 @@
 		</Card.Header>
 		<Card.Content class="p-4">
 			{#if vendor1099Query.isLoading}
-				<p class="py-6 text-center text-sm text-muted-foreground" data-testid="vendors-1099-loading">
-					Loading vendors…
-				</p>
+				<LoadingState label="Loading 1099 vendors" variant="spinner" testid="vendors-1099-loading" />
 			{:else if vendor1099Query.isError}
-				<p class="py-6 text-center text-sm text-destructive" data-testid="vendors-1099-error">
-					Could not load the 1099 checklist.
-				</p>
+				<div class="flex flex-wrap items-center justify-center gap-3 py-6" role="alert" data-testid="vendors-1099-error">
+					<p class="text-sm text-destructive">Could not load the 1099 checklist.</p>
+					<Button size="sm" variant="outline" onclick={() => vendor1099Query.refetch()}>Retry checklist</Button>
+				</div>
 			{:else if vendors1099.length === 0}
 				<p class="py-6 text-center text-sm text-muted-foreground" data-testid="vendors-1099-empty">
 					No 1099-eligible vendors yet.
@@ -217,7 +228,7 @@
 											{v.vendorName}
 										</a>
 									</td>
-									<td class="py-2 pr-6 text-right tabular-nums">{money(v.totalPaid)}</td>
+									<td class="py-2 pr-6 text-right tabular-nums">{formatAccountingCurrency(v.totalPaid)}</td>
 									<td class="py-2 pr-4">
 										{#if v.w9OnFile}
 											<span
@@ -250,7 +261,8 @@
 											<Button
 												variant="outline"
 												size="sm"
-												onclick={() => requestW9Mutation.mutate(v.vendorId)}
+												onclick={() =>
+												requestW9Mutation.mutate({ vendorId: v.vendorId })}
 												disabled={requestW9Mutation.isPending}
 												data-testid="vendor-1099-request-w9-{v.vendorId}"
 											>
@@ -271,30 +283,36 @@
 	</Card.Root>
 
 	{#if scheduleEQuery.isLoading}
-		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="tax-loading">
-			Loading tax summary…
-		</p>
+		<LoadingState label="Loading tax summary" variant="page" testid="tax-loading" />
 	{:else if scheduleEQuery.isError}
-		<p class="py-12 text-center text-sm text-destructive" data-testid="tax-error">
-			Could not load tax data. Please try again.
-		</p>
-	{:else if !report || report.properties.length === 0}
+		<div class="flex flex-wrap items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="tax-error">
+			<p class="text-sm text-destructive">Could not load tax data.</p>
+			<Button size="sm" variant="outline" onclick={() => scheduleEQuery.refetch()}>Retry tax summary</Button>
+		</div>
+	{:else if !report || (report.properties.length === 0 && !report.unallocatedActivity.requiresAllocation)}
 		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="tax-empty">
 			No rental income or expense data for {selectedYear}.
 		</p>
 	{:else}
+		{#if report.unallocatedActivity.requiresAllocation}
+			<div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100" data-testid="tax-unallocated-warning">
+				<p class="font-semibold">Tax activity needs a property before filing</p>
+				<p class="mt-1">{report.unallocatedActivity.incomeEntryCount} income entries ({formatAccountingCurrency(report.unallocatedActivity.rentalIncome)}) and {report.unallocatedActivity.expenseCount} expenses ({formatAccountingCurrency(report.unallocatedActivity.totalExpenses)}) are not assigned to a property, so they are excluded from the Schedule E property lines below.</p>
+				<p class="mt-2 font-medium">Reconciled activity: {formatAccountingCurrency(report.reconciledTotalRentalIncome)} income − {formatAccountingCurrency(report.reconciledTotalExpenses)} expenses = {formatAccountingCurrency(report.reconciledNetIncome)} net.</p>
+			</div>
+		{/if}
 		<!-- Grand-total summary cards -->
 		<div class="mb-6 grid gap-4 sm:grid-cols-3" data-testid="tax-summary-cards">
 			<Card.Root class="gap-0 py-0" data-testid="tax-total-income">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Total rental income</p>
-					<p class="text-2xl font-bold text-[var(--success)]">{money(report.totalRentalIncome)}</p>
+					<p class="text-2xl font-bold text-[var(--success)]">{formatAccountingCurrency(report.totalRentalIncome)}</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="gap-0 py-0" data-testid="tax-total-expenses">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Total expenses</p>
-					<p class="text-2xl font-bold text-destructive">{money(report.totalExpenses)}</p>
+					<p class="text-2xl font-bold text-destructive">{formatAccountingCurrency(report.totalExpenses)}</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="gap-0 py-0" data-testid="tax-net-income">
@@ -305,7 +323,7 @@
 							? 'text-[var(--success)]'
 							: 'text-destructive'}"
 					>
-						{money(report.netIncome)}
+						{formatAccountingCurrency(report.netIncome)}
 					</p>
 				</Card.Content>
 			</Card.Root>
@@ -324,11 +342,11 @@
 						<div class="mb-3 grid gap-3 sm:grid-cols-3">
 							<div>
 								<p class="text-xs text-muted-foreground">Rental income</p>
-								<p class="text-lg font-semibold text-[var(--success)]">{money(property.rentalIncome)}</p>
+								<p class="text-lg font-semibold text-[var(--success)]">{formatAccountingCurrency(property.rentalIncome)}</p>
 							</div>
 							<div>
 								<p class="text-xs text-muted-foreground">Total expenses</p>
-								<p class="text-lg font-semibold text-destructive">{money(property.totalExpenses)}</p>
+								<p class="text-lg font-semibold text-destructive">{formatAccountingCurrency(property.totalExpenses)}</p>
 							</div>
 							<div>
 								<p class="text-xs text-muted-foreground">Net income</p>
@@ -337,7 +355,7 @@
 										? 'text-[var(--success)]'
 										: 'text-destructive'}"
 								>
-									{money(property.netIncome)}
+									{formatAccountingCurrency(property.netIncome)}
 								</p>
 							</div>
 						</div>
@@ -358,8 +376,8 @@
 										<tbody>
 											{#each property.expensesByCategory as item (item.category)}
 												<tr class="border-b border-border/50 last:border-0">
-													<td class="py-1.5 text-foreground">{item.category}</td>
-													<td class="py-1.5 text-right tabular-nums">{money(item.amount)}</td>
+													<td class="py-1.5 text-foreground">{formatExpenseCategory(item.category)}</td>
+													<td class="py-1.5 text-right tabular-nums">{formatAccountingCurrency(item.amount)}</td>
 												</tr>
 											{/each}
 										</tbody>

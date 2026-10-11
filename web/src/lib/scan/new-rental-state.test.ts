@@ -38,11 +38,18 @@ describe('new rental draft URL state', () => {
 });
 
 describe('createNewRentalPropertyForm', () => {
+	it('does not infer rental structure from the extracted property type', () => {
+		const form = createNewRentalPropertyForm();
+
+		assert.equal(form.rentalStructure, '');
+	});
+
 	it('includes hidden defaults required by the shared property schema', () => {
 		const form = createNewRentalPropertyForm();
 		Object.assign(form, {
 			name: 'Harbor View Apartments',
 			type: 'MultiFamily',
+			rentalStructure: 'MultiRental',
 			addressLine1: '1807 Harbor View Apartments',
 			city: 'Columbus',
 			state: 'OH',
@@ -102,6 +109,40 @@ describe('new rental lease prefill seeding', () => {
 		assert.doesNotMatch(source, /unitForm\.bedrooms\s*=\s*values\.unitBedrooms\s*\|\|\s*['"]0['"]/);
 		assert.doesNotMatch(source, /unitForm\.bathrooms\s*=\s*values\.unitBathrooms\s*\|\|\s*['"]0['"]/);
 	});
+
+	it('reviews and sends square feet when the guided import creates a unit', () => {
+		const source = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../components/scan/LeaseFirstImport.svelte'),
+			'utf8'
+		);
+
+		assert.match(source, /unitForm\.squareFeet = values\.unitSquareFeet/);
+		assert.match(source, /<UnitFields[\s\S]*testidPrefix="new-rental-unit"/);
+		assert.match(source, /o\.unitSquareFeet = Number\(unitForm\.squareFeet\)/);
+	});
+
+	it('sends the explicit rental structure when the guided import creates a property', () => {
+		const source = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../components/scan/LeaseFirstImport.svelte'),
+			'utf8'
+		);
+
+		assert.match(source, /if \(isCreatingProperty\) \{[\s\S]*?o\.propertyId = null;[\s\S]*?o\.rentalStructure = propertyForm\.rentalStructure;/);
+		assert.doesNotMatch(source, /rentalStructure\s*=\s*propertyForm\.type/);
+	});
+
+	it('requires and sends an explicit rental structure from the general lease scan', () => {
+		const source = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../../routes/(protected)/scan/[draftId]/+page.svelte'),
+			'utf8'
+		);
+
+		assert.match(source, /data-testid="scan-new-property-single-rental"/);
+		assert.match(source, /data-testid="scan-new-property-multi-rental"/);
+		assert.match(source, /!newPropertyRentalStructure/);
+		assert.match(source, /if \(isCreatingLeaseProperty\) \{[\s\S]*?overrides\['propertyId'\] = null;[\s\S]*?overrides\['rentalStructure'\] = newPropertyRentalStructure;/);
+		assert.doesNotMatch(source, /newPropertyRentalStructure\s*=.*propertyType/);
+	});
 });
 
 describe('new rental route shell', () => {
@@ -114,6 +155,26 @@ describe('new rental route shell', () => {
 		assert.match(source, /import LeaseFirstImport/);
 		assert.match(source, /<LeaseFirstImport[^>]*syncDraftToUrl/s);
 		assert.match(source, /parseNewRentalDraftId\(page\.url\.searchParams\)/);
+	});
+
+	it('passes all-properties creation authority into the standalone lease import', () => {
+		const routeSource = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../../routes/(protected)/scan/new-rental/+page.svelte'),
+			'utf8'
+		);
+		const componentSource = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../components/scan/LeaseFirstImport.svelte'),
+			'utf8'
+		);
+
+		assert.match(routeSource, /import \{ hasAllPropertiesRentalsManageAuthority \} from '\$lib\/auth\/property-authority';/);
+		assert.match(routeSource, /const currentAccess = \$derived\(page\.data\.access \?\? authState\.accessEnvelope \?\? null\);/);
+		assert.match(routeSource, /const canCreateProperty = \$derived\(hasAllPropertiesRentalsManageAuthority\(currentAccess\)\);/);
+		assert.match(routeSource, /<LeaseFirstImport[^>]*\{canCreateProperty\}/s);
+		assert.match(componentSource, /canCreateProperty = false/);
+		assert.match(componentSource, /if \(!canCreateProperty\) \{[\s\S]*propertyErrors = \{ propertyId: 'Choose an existing property\.' \};[\s\S]*return false;/);
+		assert.match(componentSource, /clearLabel=\{canCreateProperty \? 'Create new from the lease' : undefined\}/);
+		assert.match(componentSource, /\{#if canCreateProperty && isCreatingProperty\}/);
 	});
 
 	it('clears a failed standalone draft from the URL before returning to capture', () => {

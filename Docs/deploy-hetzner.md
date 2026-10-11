@@ -1,15 +1,58 @@
-# Deploying Rental Command to Hetzner (rc.coblesolutions.com)
+# Deploying Rental Command to Hetzner (rentalcommand.net)
 
 Production deploy of the full stack (Traefik + Postgres + API + Engine + Web) onto a
 single fresh Ubuntu box, behind Let's Encrypt TLS, with **same-origin** routing
-(`https://rc.coblesolutions.com/api/*` → API, everything else → web).
+(`https://rentalcommand.net/api/*` → API, everything else → web).
 
 The files this uses:
 
 - `deploy/docker-compose.prod.yml` — the production stack.
 - `deploy/.env.prod.example` — every variable, with notes on required vs optional.
+- `.github/workflows/deploy.yml` — explicit version-tag/manual deployment from a
+  GitHub-hosted runner. Ordinary branch pushes and merges never deploy.
 
 Target box: **49.13.236.209** (Hetzner, Ubuntu 24.04).
+
+## 2026-09-30: private workbox release path
+
+The current six-service release remains live on `49.13.236.209`. No application or
+database upgrade is part of this change. The replacement Rental stack on the European
+workbox is disabled until the DNS cutover, when the copied current release becomes live.
+Any intentional release of newer images is a separate later action.
+
+Future tag and manual releases connect to `100.86.236.69` over Tailscale, then use the
+dedicated `blackcolours` SSH key. Configure repository variables `TS_OAUTH_CLIENT_ID`
+and `TS_AUDIENCE`, plus environment secrets `WORKBOX_DEPLOY_SSH_KEY` and
+`WORKBOX_KNOWN_HOSTS`. Restrict the public key on the host to:
+
+```text
+restrict,command="sudo -n /usr/local/sbin/rental-hosted-deploy \"$SSH_ORIGINAL_COMMAND\""
+```
+
+Install `scripts/hosted-deploy.py` as `/usr/local/sbin/rental-hosted-deploy` and
+`deploy/docker-compose.workbox-migrate.yml` as
+`/srv/hosted/rental/compose.release.yml`, both owned by root. The hosted systemd unit
+continues to own the long-running stack and its custom topology; CI supplies only the
+validated image SHA and short-lived GHCR credentials.
+
+The root-owned, mode-600 `/srv/hosted/rental/release-secrets.json` must contain exactly:
+
+```json
+{
+  "Jwt__SecretKey": "...",
+  "ConnectionStrings__MigratorConnection": "...",
+  "ConnectionStrings__DefaultConnection": "...",
+  "ConnectionStrings__EngineConnection": "..."
+}
+```
+
+Before the first workbox release, retain the existing owner connection as the migrator,
+create distinct login passwords for `rentalcommand_api` and `rentalcommand_engine`, and
+put their connection strings in the matching fields above. Reuse the existing JWT secret.
+The guarded release pulls all three images before stopping the unit, starts only the
+existing Postgres container for migration, and writes the updated root-only authoritative
+compose config only after migration succeeds. The first live CI proof remains pending the
+workbox identity setup, DNS decision, and an owner-authorized merge.
 
 ---
 
@@ -19,18 +62,20 @@ Point an **A record** at the box, then wait for it to resolve before deploying
 (Let's Encrypt validates over the public DNS + port 443):
 
 ```
-A   rc.coblesolutions.com   →   49.13.236.209
+A       rentalcommand.net       →   49.13.236.209
+CNAME   www.rentalcommand.net   →   rentalcommand.net
 ```
 
 Verify from your laptop:
 
 ```bash
-dig +short rc.coblesolutions.com   # should print 49.13.236.209
+dig +short rentalcommand.net   # should print 49.13.236.209
 ```
 
-No `www`, no `api.` subdomain — Rental Command is single-host on purpose (its auth uses
+No `api.` subdomain — Rental Command is single-host on purpose (its auth uses
 httpOnly cookies first-party to the web origin plus a same-origin `/api/auth/refresh`
-proxy, so the API must live under the same host as the web app).
+proxy, so the API must live under the same host as the web app). `www` should redirect
+to the apex host so sessions and app links stay canonical.
 
 ## 2. Firewall (Hetzner Cloud)
 
@@ -63,23 +108,25 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin do
 docker --version && docker compose version   # confirm both work
 ```
 
-## 4. Get the code onto the box
+## 4. Create the deployment directory
 
 ```bash
-mkdir -p /opt/rentalcommand
-git clone https://github.com/jcoble/rental-management.git /opt/rentalcommand
-cd /opt/rentalcommand
+mkdir -p /opt/rental-command/deploy
+cd /opt/rental-command
 ```
 
-(Or `scp`/`rsync` the repo up if it isn't on a remote you can clone. The build is from
-source via the in-repo `Dockerfile.*`, so the whole repo needs to be present.)
+The production box does not clone or compile the repository. The deploy workflow builds
+the API, Engine, and Web images on a GitHub-hosted runner, pushes them to GHCR, and copies
+the production compose file into this directory before pulling the selected images.
 
 ## 5. Configure the environment
 
 ```bash
-cp deploy/.env.prod.example .env
 nano .env
 ```
+
+Use `deploy/.env.prod.example` from the repository as the field reference. The `.env`
+file itself exists only on the production box and is never copied by the deploy workflow.
 
 Fill in **at minimum** the required values:
 
@@ -87,13 +134,13 @@ Fill in **at minimum** the required values:
 - `POSTGRES_PASSWORD` — generate: `openssl rand -base64 32`
 - `JWT_SECRET_KEY` — generate: `openssl rand -base64 48`
   (the API refuses to start if this is missing, under 32 chars, or the dev placeholder).
-- `DOMAIN` / `APP_WEB_BASE_URL` — already set to `rc.coblesolutions.com`; leave them.
+- `DOMAIN` / `APP_WEB_BASE_URL` — already set to `rentalcommand.net`; leave them.
 
 Then the integrations you actually want on day one (all optional, all gated off until set):
 
 - **AI scanning** — `ASSISTANT_API_KEY` (OpenAI key, with `ASSISTANT_MODEL_ID=gpt-4o`).
   This powers the flagship scan→draft feature; without it the app runs but can't scan.
-- **Email** — either SendGrid (`SENDGRID_*`) or Zoho SMTP (see §8).
+- **Email** — either SendGrid (`SENDGRID_*`) or Google Workspace/Gmail SMTP (see §8).
 - **SMS** — `SIGNALWIRE_*` (preferred) for tenant texts. Only fires when `NOTIFY_TENANTS=true`.
 - **Stripe** — `STRIPE_*` (LIVE keys) for online rent payments.
 - **Google sign-in** — `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (see §7).
@@ -101,14 +148,19 @@ Then the integrations you actually want on day one (all optional, all gated off 
 > `.env` lives next to the compose file's working dir and is gitignored — it never gets
 > committed. Keep a copy of the secrets in your password manager.
 
-## 6. Launch
+## 6. Deploy
 
 ```bash
-docker compose -f deploy/docker-compose.prod.yml up -d --build
+# Release a specific commit by pushing a version tag:
+git tag vX.Y.Z
+git push origin vX.Y.Z
+
+# Or use GitHub: Actions -> Deploy -> Run workflow (optionally enter a ref).
 ```
 
-First run builds all three images from source (a few minutes) and Traefik requests the
-TLS cert. **Migrations apply automatically on boot** — both the API and the Engine run
+The workflow builds and pushes all three images, then the production box pulls and starts
+them; it never builds application images locally. Traefik requests the TLS cert on the first
+run. **Migrations apply automatically on boot** — both the API and the Engine run
 the EF Core migrations themselves, serialized behind a shared PostgreSQL advisory lock so
 they never race. There is no separate migration step.
 
@@ -133,26 +185,27 @@ subdomain, the **authorized redirect URI** to register in the Google Cloud conso
 exactly:
 
 ```
-https://rc.coblesolutions.com/auth/google/callback
+https://rentalcommand.net/auth/google/callback
 ```
 
-Add `https://rc.coblesolutions.com` under *Authorized JavaScript origins* too. Until both
+Add `https://rentalcommand.net` under *Authorized JavaScript origins* too. Until both
 this and `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set, the "Sign in with Google"
 button returns 501 and the rest of auth (email/password) works normally.
 
-## 8. Flip email to Zoho (optional)
+## 8. Flip email to Google Workspace SMTP (optional)
 
-SendGrid is the default transport. To send over an authenticated Zoho mailbox instead
-(better DMARC alignment if the sending domain's DKIM/SPF lives at Zoho), set in `.env`:
+SendGrid is the default transport. For early testing on `rentalcommand.net`, Google
+Workspace/Gmail authenticated SMTP is the fastest path: create an app password for
+`jcoble@rentalcommand.net`, then set:
 
 ```
 EMAIL_TRANSPORT=Smtp
-SMTP_HOST=smtp.zoho.com
-SMTP_PORT=465
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
 SMTP_USE_SSL=true
-SMTP_USERNAME=you@yourdomain.com
-SMTP_PASSWORD=<Zoho app-specific password>
-SMTP_FROM_EMAIL=you@yourdomain.com
+SMTP_USERNAME=jcoble@rentalcommand.net
+SMTP_PASSWORD=<Google app password>
+SMTP_FROM_EMAIL=jcoble@rentalcommand.net
 SMTP_FROM_NAME=Rental Command
 ```
 
@@ -162,26 +215,28 @@ Then re-apply:
 docker compose -f deploy/docker-compose.prod.yml up -d engine
 ```
 
-(Email is sent from the **engine** via the outbox dispatcher; only it needs the SMTP
-creds. Use a Zoho *app-specific password*, not the account password, and port 465 with
-SSL-on-connect.)
+(Email is sent from the **engine** via the outbox dispatcher. Use a provider-issued
+app-specific password, not the normal account password. If app passwords are blocked
+later, Google Workspace SMTP relay is also supported: use `smtp-relay.gmail.com:587`,
+allow the VPS IP `49.13.236.209` in Workspace Admin, and leave `SMTP_USERNAME` /
+`SMTP_PASSWORD` blank.)
 
 ## 9. Verify
 
 ```bash
 # Health endpoint (served by the API through the /api… same-origin route):
-curl -fsS https://rc.coblesolutions.com/health
+curl -fsS https://rentalcommand.net/health
 # → {"status":"ok"}
 
 # TLS cert is real (Let's Encrypt), not self-signed:
-echo | openssl s_client -servername rc.coblesolutions.com \
-  -connect rc.coblesolutions.com:443 2>/dev/null | openssl x509 -noout -issuer -dates
+echo | openssl s_client -servername rentalcommand.net \
+  -connect rentalcommand.net:443 2>/dev/null | openssl x509 -noout -issuer -dates
 
 # HTTP redirects to HTTPS:
-curl -sI http://rc.coblesolutions.com | grep -i location   # → https://rc.coblesolutions.com/
+curl -sI http://rentalcommand.net | grep -i location   # → https://rentalcommand.net/
 ```
 
-Then load **https://rc.coblesolutions.com** in a browser — the SvelteKit app should serve
+Then load **https://rentalcommand.net** in a browser — the SvelteKit app should serve
 over a valid padlock, and login / API calls (which go to `/api` on the same origin) should
 work. If the cert is missing, check `docker compose ... logs traefik` (usually DNS not yet
 propagated or port 443 not open).
@@ -189,11 +244,13 @@ propagated or port 443 not open).
 ## Operations cheatsheet
 
 ```bash
-cd /opt/rentalcommand
+cd /opt/rental-command
 
-# Update to latest code:
-git pull
-docker compose -f deploy/docker-compose.prod.yml up -d --build
+# Deploy a release from the repository checkout on your workstation:
+git tag vX.Y.Z
+git push origin vX.Y.Z
+
+# Or run Actions -> Deploy -> Run workflow for an explicit manual deploy.
 
 # Logs / restart one service:
 docker compose -f deploy/docker-compose.prod.yml logs -f web
@@ -201,7 +258,7 @@ docker compose -f deploy/docker-compose.prod.yml restart engine
 
 # Manual DB backup (data lives in the `rentalcommand-postgres` volume):
 docker exec rentalcommand-postgres pg_dump -U rentalcommand_app rentalcommand \
-  | gzip > /opt/rentalcommand/backup-$(date +%F).sql.gz
+  | gzip > /opt/rental-command/backup-$(date +%F).sql.gz
 
 # Inspect the issued cert:
 docker exec rentalcommand-traefik cat /letsencrypt/acme.json | head

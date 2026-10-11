@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
 	buildApplicationLinkUrl,
-	readUnitListingLinkContext,
+	readRentalListingLinkContext,
 	resolveApplyHomeSelection,
 } from './application-link.ts';
 
 describe('application link unit context', () => {
 	test('reads the Unit Command Center list-unit action context from the URL', () => {
-		const context = readUnitListingLinkContext(
+		const context = readRentalListingLinkContext(
 			new URLSearchParams('action=list-unit&propertyId=12&unitId=34')
 		);
 
@@ -16,10 +16,10 @@ describe('application link unit context', () => {
 	});
 
 	test('ignores incomplete or unrelated application URL params', () => {
-		assert.equal(readUnitListingLinkContext(new URLSearchParams('propertyId=12&unitId=34')), null);
-		assert.equal(readUnitListingLinkContext(new URLSearchParams('action=list-unit&unitId=34')), null);
-		assert.equal(readUnitListingLinkContext(new URLSearchParams('action=list-unit&propertyId=12')), null);
-		assert.equal(readUnitListingLinkContext(new URLSearchParams('action=list-unit&propertyId=0&unitId=34')), null);
+		assert.equal(readRentalListingLinkContext(new URLSearchParams('propertyId=12&unitId=34')), null);
+		assert.equal(readRentalListingLinkContext(new URLSearchParams('action=list-unit&unitId=34')), null);
+		assert.equal(readRentalListingLinkContext(new URLSearchParams('action=list-unit&propertyId=12')), null);
+		assert.equal(readRentalListingLinkContext(new URLSearchParams('action=list-unit&propertyId=0&unitId=34')), null);
 	});
 
 	test('adds property and unit params to a generated public apply URL', () => {

@@ -17,7 +17,7 @@ call recorded.
 - **Stray `target_entity_type`** — ✅ removed from Application, WorkOrder, **and** Lease/Loan extraction schemas (consistency).
 - **Client/server validation parity** — ✅ added max-length / upper bounds to `propertySchema`/`unitSchema` mirroring the server DTO limits. 16/16 tests.
 - **Unit status UI** — ✅ occupancy is lease-driven, so fixed the misleading help text (no conflicting manual field). Noted: `UnitStatus` has `Reserved`/`Offline` if you ever want a manual-status feature.
-- **Portal-access provisioning** — ✅ new `TenantPortalProvisioningService` + staff `POST /tenants/{id}/portal-access` (IDOR-scoped) + "Grant portal access" button. **Live-verified**: endpoint wired (404 guard). Limitation: grants the shared seed `TenantPassword`; a per-tenant invite/reset-link flow is a future enhancement.
+- **Resident access** — superseded by the canonical relationship-scoped household grant/revoke commands. A tenant directory record never creates login authority; an effective `LeaseManagementParty` grant atomically creates the login, access context, `TenantUserAccess`, audit, and invitation outbox.
 - **Team-member invite email** (user-reported) — ✅ `AdminUsersController` now sends an invite via `OutboxAuthEmailSender`. **Live-verified**: SendGrid accepted it (HTTP 202), subject "You've been added to Rental Command". Same plaintext-temp-password caveat as portal access.
 
 ## Decide-and-document — my call (no code change)
@@ -31,7 +31,5 @@ call recorded.
 - **Pre-existing worktrees** — committed each inactive worktree's WIP to its branch (nothing lost) and removed 7 of them (disk freed); left the **live** `tsk-382` (active session) untouched. Restore any with `git worktree add <path> <branch>`.
 
 ## Future enhancements I deliberately did NOT build (flagged, your call)
-- A secure **per-recipient invite / set-password link** flow (for both team members and portal tenants),
-  replacing the shared/temporary plaintext password. The current behavior matches the existing design.
-- Wiring `IAuditTrailService` into the portal-access grant (currently ILogger only).
+- A secure **per-recipient set-password link** flow for team members and residents, replacing temporary plaintext passwords in invitation emails.
 - Manual unit status (Reserved/Offline) UI, reconciled with lease-driven occupancy.

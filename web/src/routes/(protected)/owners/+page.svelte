@@ -16,7 +16,8 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
-	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { formErrorsFromApiError } from '$lib/forms/form-errors';
+	import { Plus, Pencil, Trash2, UserCheck, UserX } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -24,12 +25,15 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { WIZARD_STEPS } from '$lib/onboarding/wizard-steps';
+	import { withBlanksAsEmpty } from '$lib/utils/with-blanks-as-empty';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
 
 	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
+	const ownerDescription = WIZARD_STEPS.find((step) => step.key === 'owner')?.explanation ?? 'The owner is the person or company that legally holds the property.';
 
 	// Search / sort / page persisted in the URL so they survive navigating away and back. Sort/page seed
 	// the server-side DataGrid query so owners are filtered/sorted/paged in SQL.
@@ -73,6 +77,7 @@
 	let ownerStep = $state(0);
 	let completedOwnerSteps = $state<number[]>([]);
 	let ownerDeleteTarget = $state<Owner | null>(null);
+	let ownerPortalRevokeTarget = $state<Owner | null>(null);
 
 	const ownerSteps: FormStepperStep[] = [
 		{ id: 'identity', label: 'Identity', description: 'Name and tax info' },
@@ -97,7 +102,19 @@
 			closeOwnerForm();
 			invalidateOwners();
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			const validationErrors = formErrorsFromApiError(err);
+			if (Object.keys(validationErrors).length > 0) {
+				ownerErrors = validationErrors;
+				const firstErrorStep = firstOwnerErrorStep(validationErrors);
+				if (firstErrorStep >= 0) {
+					ownerStep = firstErrorStep;
+					markOwnerStepInvalid(firstErrorStep);
+				}
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	const deleteOwnerMutation = createMutation(() => ({
@@ -105,6 +122,25 @@
 		onSuccess: () => {
 			showSuccess('Owner deleted.');
 			ownerDeleteTarget = null;
+			invalidateOwners();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const activatePortalMutation = createMutation(() => ({
+		mutationFn: (id: number) => owners.activatePortalAccess(id),
+		onSuccess: (result) => {
+			showSuccess(result.message);
+			invalidateOwners();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const revokePortalMutation = createMutation(() => ({
+		mutationFn: (id: number) => owners.revokePortalAccess(id),
+		onSuccess: (result) => {
+			showSuccess(result.message);
+			ownerPortalRevokeTarget = null;
 			invalidateOwners();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -188,11 +224,21 @@
 			return;
 		}
 		ownerErrors = {};
-		saveOwnerMutation.mutate({ id: editingOwnerId, data: { portfolioId, ...result.data } });
+		saveOwnerMutation.mutate({
+			id: editingOwnerId,
+			data: { portfolioId, ...(editingOwnerId == null ? result.data : withBlanksAsEmpty(result.data)) }
+		});
 	}
 
 	const ownersList = $derived(ownersQuery.data?.items ?? []);
 	const ownersTotalCount = $derived(ownersQuery.data?.totalCount ?? 0);
+	const hasOwnerSearch = $derived(ownerSearch.trim().length > 0);
+	const ownerEmptyMessage = $derived(hasOwnerSearch ? 'No owners match this search.' : 'No owners yet.');
+	const ownerEmptyDescription = $derived(
+		hasOwnerSearch
+			? 'Try a different name, email, phone number, or tax ID.'
+			: 'Add the people or organizations that own your rentals.'
+	);
 
 	// --- Owner columns ---
 	const ownerColumns: ColumnDef<Owner>[] = [
@@ -224,6 +270,13 @@
 			accessor: (o) => o.phone ?? '—',
 		},
 		{
+			key: 'portal',
+			title: 'Portal',
+			mobileRole: 'meta',
+			accessor: (o) => o.hasPendingOwnerPortalInvitation ? 'Pending invitation' : o.hasActiveOwnerPortalAccess ? 'Active' : 'Not active',
+			cell: ownerPortalCell,
+		},
+		{
 			key: 'actions',
 			title: '',
 			mobileRole: 'hidden',
@@ -236,6 +289,65 @@
 
 {#snippet ownerNameCell(o: Owner)}
 	<span data-testid="owner-name">{o.name}</span>
+{/snippet}
+
+{#snippet ownerPortalCell(o: Owner)}
+	<div class="flex items-center gap-2" onclick={(e) => e.stopPropagation()} role="none">
+		{#if o.hasPendingOwnerPortalInvitation}
+			<span class="text-xs font-medium text-amber-700" data-testid="owner-portal-pending">Pending invitation</span>
+			<button
+				type="button"
+				data-testid="owner-portal-retry-invitation"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Retry owner portal invitation"
+				disabled={activatePortalMutation.isPending}
+				title="Retry owner portal invitation"
+				onclick={(e) => { e.stopPropagation(); activatePortalMutation.mutate(o.id); }}
+			>
+				<UserCheck class="h-3.5 w-3.5" />
+				Retry
+			</button>
+			<button
+				type="button"
+				data-testid="owner-portal-revoke"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border border-destructive/40 px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Revoke owner portal invitation"
+				disabled={revokePortalMutation.isPending}
+				title="Revoke owner portal invitation"
+				onclick={(e) => { e.stopPropagation(); ownerPortalRevokeTarget = o; }}
+			>
+				<UserX class="h-3.5 w-3.5" />
+				Revoke
+			</button>
+		{:else if o.hasActiveOwnerPortalAccess}
+			<span class="text-xs font-medium text-emerald-700" data-testid="owner-portal-active">Active</span>
+			<button
+				type="button"
+				data-testid="owner-portal-revoke"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border border-destructive/40 px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Revoke owner portal access"
+				disabled={revokePortalMutation.isPending}
+				title="Revoke owner portal access"
+				onclick={(e) => { e.stopPropagation(); ownerPortalRevokeTarget = o; }}
+			>
+				<UserX class="h-3.5 w-3.5" />
+				Revoke
+			</button>
+		{:else}
+			<button
+				type="button"
+				data-testid="owner-portal-activate"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Activate owner portal access"
+				disabled={!o.email || o.isPrimary || activatePortalMutation.isPending}
+				title={!o.email ? 'Add an owner email before activation' : o.isPrimary ? 'Primary owners use the management account' : 'Activate owner portal access'}
+				onclick={(e) => { e.stopPropagation(); activatePortalMutation.mutate(o.id); }}
+			>
+				<UserCheck class="h-3.5 w-3.5" />
+				Activate
+			</button>
+		{/if}
+	</div>
 {/snippet}
 
 {#snippet ownerActionsCell(o: Owner)}
@@ -254,6 +366,12 @@
 			data-testid="owner-delete"
 			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
 			aria-label="Delete owner"
+			disabled={(o.assignedPropertyCount ?? 0) > 0 || o.hasActiveOwnerPortalAccess || o.hasPendingOwnerPortalInvitation}
+			title={(o.assignedPropertyCount ?? 0) > 0
+				? 'Reassign or clear this owner’s properties before deleting'
+				: o.hasActiveOwnerPortalAccess || o.hasPendingOwnerPortalInvitation
+					? 'Revoke owner portal access before deleting'
+					: 'Delete owner'}
 			onclick={(e) => { e.stopPropagation(); ownerDeleteTarget = o; }}
 		>
 			<Trash2 class="h-3.5 w-3.5" />
@@ -271,17 +389,25 @@
 		band
 		art={9}
 		tone="violet"
-		eyebrow="Settings"
+		eyebrow="Rentals"
 		title="Owners"
-		description="Ownership entities consumed by owner statements. Service providers live under Vendors."
+		description={ownerDescription}
 		data-testid="owners-header"
 	/>
 
+	{#if ownersQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="owners-list-error">
+			<p class="font-medium text-destructive">Could not load owners.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. No owner records have been changed.</p>
+			<Button class="mt-4" variant="outline" onclick={() => ownersQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={ownersList}
 		columns={ownerColumns}
 		loading={ownersQuery.isLoading || ownersQuery.isFetching}
-		emptyMessage="No owners found."
+		emptyMessage={ownerEmptyMessage}
+		emptyDescription={ownerEmptyDescription}
 		getRowKey={(o) => o.id}
 		getRowTestId={() => 'owner-row'}
 		onRowClick={(o) => goto(`/owners/${o.id}`)}
@@ -304,6 +430,7 @@
 			</Button>
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>
 
 <Dialog.Root open={showOwnerForm} onOpenChange={(v) => { if (!v) closeOwnerForm(); }}>
@@ -390,4 +517,17 @@
 	testid="owner-delete"
 	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate(ownerDeleteTarget.id)}
 	oncancel={() => (ownerDeleteTarget = null)}
+/>
+
+<ConfirmDialog
+	open={ownerPortalRevokeTarget !== null}
+	title="Revoke owner portal access"
+	message={ownerPortalRevokeTarget
+		? `Revoke portal access for "${ownerPortalRevokeTarget.name}"? Any pending activation link will stop working.`
+		: ''}
+	confirmLabel="Revoke access"
+	busy={revokePortalMutation.isPending}
+	testid="owner-portal-revoke"
+	onconfirm={() => ownerPortalRevokeTarget && revokePortalMutation.mutate(ownerPortalRevokeTarget.id)}
+	oncancel={() => (ownerPortalRevokeTarget = null)}
 />

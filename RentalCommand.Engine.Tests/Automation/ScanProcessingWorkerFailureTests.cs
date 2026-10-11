@@ -2,12 +2,18 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
+using RentalCommand.Data.Scanning;
 using RentalCommand.Engine.Workers;
 using RentalCommand.TestCommon;
 
@@ -27,6 +33,10 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     private readonly SqliteConnection _conn;
     private readonly ServiceProvider _provider;
     private readonly StubLlmProvider _llm = new();
+    private readonly StubUsageEvidenceRecorder _usage = new();
+    private readonly StubWorkspaceCredentialResolver _credentials = new();
+    private readonly AssistantConfig _assistant = new();
+    private readonly StubHostEnvironment _environment = new();
 
     public ScanProcessingWorkerFailureTests()
     {
@@ -44,14 +54,47 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         // Scoped so each DI scope (including the worker's child fail-path scope) gets a fresh
         // DbContext over the one shared in-memory connection — matching production scoping.
         services.AddScoped<RentalCommandDbContext>(_ => new ScanTestDbContext(options));
+        services.AddScoped<IScanProcessingClaimStore, TestScanProcessingClaimStore>();
+        services.AddScoped<IWriteExecutor, TestJobStepWriteExecutor>();
         services.AddSingleton<ILlmProvider>(_llm);
+        services.AddSingleton<IWorkspaceLlmExtractionProvider>(_llm);
+        services.AddSingleton<IWorkspaceLlmCredentialResolver>(_credentials);
+        services.AddSingleton<ILlmUsageEvidenceRecorder>(_usage);
+        services.AddSingleton<IOptions<AssistantConfig>>(Options.Create(_assistant));
+        services.AddSingleton<IHostEnvironment>(_environment);
         services.AddSingleton<IFileStorage, StubFileStorage>();
         services.AddSingleton<IDataUpdateService, StubDataUpdateService>();
+        services.AddSingleton(TimeProvider.System);
         _provider = services.BuildServiceProvider();
 
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         db.Database.EnsureCreated();
+        db.Database.ExecuteSqlRaw("""
+            CREATE VIEW "vw_lease_management_lifecycle" AS
+            SELECT management."PortfolioId" AS "PortfolioId",
+                   management."Id" AS "LeaseManagementId",
+                   'Occupied' AS "Lifecycle",
+                   agreement."Id" AS "CurrentAgreementId",
+                   party."TenantId" AS "CurrentPrimaryTenantId",
+                   trim(tenant."FirstName" || ' ' || tenant."LastName") AS "CurrentPrimaryTenantName"
+            FROM "LeaseManagements" AS management
+            LEFT JOIN "LeaseManagementParties" AS party
+              ON party."PortfolioId" = management."PortfolioId"
+             AND party."LeaseManagementId" = management."Id"
+             AND party."Role" = 'PrimaryTenant'
+             AND party."EffectiveThrough" IS NULL
+            LEFT JOIN "Tenants" AS tenant
+              ON tenant."PortfolioId" = party."PortfolioId"
+             AND tenant."Id" = party."TenantId"
+            LEFT JOIN "LeaseAgreements" AS agreement
+              ON agreement."PortfolioId" = management."PortfolioId"
+             AND agreement."LeaseManagementId" = management."Id"
+             AND agreement."VoidedAtUtc" IS NULL
+             AND agreement."DraftCanceledAtUtc" IS NULL
+            WHERE management."CanceledAtUtc" IS NULL
+              AND management."AccountClosedAtUtc" IS NULL
+            """);
         db.Portfolios.Add(new Portfolio
         {
             Id = 1,
@@ -60,6 +103,16 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             TimeZone = "UTC",
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
+        });
+        db.Users.Add(new ApplicationUser
+        {
+            Id = 1,
+            UserName = "scan-worker@example.test",
+            NormalizedUserName = "SCAN-WORKER@EXAMPLE.TEST",
+            Email = "scan-worker@example.test",
+            NormalizedEmail = "SCAN-WORKER@EXAMPLE.TEST",
+            DisplayName = "Scan Worker",
+            CreatedAt = DateTime.UtcNow,
         });
         db.SaveChanges();
     }
@@ -73,6 +126,71 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     // -----------------------------------------------------------------------
     // Pure decision: GetExtractionFailureReason
     // -----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("Development", "claude-cli", true)]
+    [InlineData("Development", "anthropic", false)]
+    [InlineData("Production", "claude-cli", false)]
+    public void ShouldUseDevelopmentSubscriptionProvider_RequiresDevelopmentAndClaudeCli(
+        string environmentName,
+        string provider,
+        bool expected)
+    {
+        ScanProcessingWorker.ShouldUseDevelopmentSubscriptionProvider(
+                environmentName,
+                provider)
+            .Should()
+            .Be(expected);
+    }
+
+    [Theory]
+    [InlineData("Development", "claude-cli", 210)]
+    [InlineData("Development", "anthropic", 90)]
+    [InlineData("Production", "claude-cli", 90)]
+    public void ResolveStepTimeout_AllowsClaudeCliToFinishBeforeItsOwnTimeout(
+        string environmentName,
+        string provider,
+        int expectedSeconds)
+    {
+        ScanProcessingWorker.ResolveStepTimeout(environmentName, provider)
+            .Should()
+            .Be(TimeSpan.FromSeconds(expectedSeconds));
+    }
+
+    [Theory]
+    [InlineData("Development", "claude-cli", 240)]
+    [InlineData("Development", "anthropic", 120)]
+    [InlineData("Production", "claude-cli", 120)]
+    public void ResolveClaimLease_OutlivesTheSelectedStepTimeout(
+        string environmentName,
+        string provider,
+        int expectedSeconds)
+    {
+        ScanProcessingWorker.ResolveClaimLease(environmentName, provider)
+            .Should()
+            .Be(TimeSpan.FromSeconds(expectedSeconds));
+    }
+
+    [Fact]
+    public async Task Cycle_DevelopmentClaudeCli_BypassesWorkspaceApiCredential()
+    {
+        _environment.EnvironmentName = Environments.Development;
+        _assistant.Provider = "claude-cli";
+        _assistant.ModelId = "sonnet";
+        _credentials.Credential = null;
+        var draftId = SeedPendingDraft();
+        _llm.Result = Extracted(("total", "42.00"));
+
+        await RunCycleAsync();
+
+        var draft = await ReloadAsync(draftId);
+        draft.Status.Should().Be("Reviewing");
+        draft.ModelId.Should().Be("test-model");
+        _llm.LastCredential.Should().BeNull();
+        _usage.Receipts.Should().ContainSingle(receipt =>
+            receipt.Provider == "claude-cli" &&
+            receipt.EstimatedCostUsd == 0m);
+    }
 
     [Fact]
     public void GetExtractionFailureReason_AllFieldsBlank_ReturnsNoFieldsReason()
@@ -173,6 +291,9 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     {
         var draftId = SeedPendingDraft();
         _llm.Result = Extracted(("vendor_name", "Apex Plumbing"), ("total", "84.20"));
+        _llm.Result.InputTokens = 120;
+        _llm.Result.OutputTokens = 30;
+        _llm.Result.TokensUsed = 150;
 
         await RunCycleAsync();
 
@@ -181,6 +302,33 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         draft.FailureReason.Should().BeNull();
         draft.ExtractedFields.Should().NotBeNull();
         draft.ExtractedFields!.Should().Contain("Apex Plumbing");
+        _llm.LastCredential.Should().NotBeNull();
+        _llm.LastCredential!.PortfolioId.Should().Be(1);
+        _llm.LastCredential.ApiKey.Should().Be("workspace-test-key");
+        _usage.Receipts.Should().ContainSingle(receipt =>
+            receipt.PortfolioId == 1 &&
+            receipt.Provider == "test" &&
+            receipt.ModelId == "test-model" &&
+            receipt.Feature == "scan.extraction" &&
+            receipt.InputUnits == 120 &&
+            receipt.OutputUnits == 30 &&
+            receipt.LatencyMilliseconds >= 0 &&
+            receipt.EstimatedCostUsd > 0);
+    }
+
+    [Fact]
+    public async Task Cycle_MissingWorkspaceCredential_MarksFailedWithoutSharedFallback()
+    {
+        var draftId = SeedPendingDraft();
+        _credentials.Credential = null;
+
+        await RunCycleAsync();
+
+        var draft = await ReloadAsync(draftId);
+        draft.Status.Should().Be("Failed");
+        draft.FailureReason.Should().Contain("configure a workspace OpenAI or Anthropic credential");
+        _llm.ExtractCalls.Should().Be(0);
+        _usage.Receipts.Should().BeEmpty();
     }
 
     [Fact]
@@ -211,6 +359,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             lineItemsJson.Should().Contain("\"amount\":250.00");
         }
         _llm.ExtractCalls.Should().Be(2);
+        _usage.Receipts.Should().HaveCount(2);
         _llm.Instructions.Should().HaveCount(2);
         _llm.Instructions[1].Should().Contain("line item");
         _llm.Instructions[1].Should().Contain("amount");
@@ -234,14 +383,18 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         draft.FailureReason.Should().BeNull();
         draft.ExtractedFields.Should().Contain("Washer hose");
         _llm.ExtractCalls.Should().Be(2);
+        _usage.Receipts.Should().HaveCount(2);
+        _usage.Receipts[1].Feature.Should().Be("scan.quality-repair");
+        _usage.Receipts[1].InputUnits.Should().Be(0);
+        _usage.Receipts[1].OutputUnits.Should().Be(0);
     }
 
     [Fact]
     public async Task Cycle_LeaseWithZeroBedBath_BlanksInvalidUnitCountsBeforeReview()
     {
-        var draftId = SeedPendingDraft(targetEntityType: "Lease");
+        var draftId = SeedPendingDraft(targetEntityType: "LeaseAgreement");
         _llm.Result = Extracted(
-            ("target_entity_type", "Lease"),
+            ("target_entity_type", "LeaseAgreement"),
             ("tenant_name", "Dana Brooks"),
             ("property_address", "742 Evergreen St"),
             ("unit_number", "3C"),
@@ -260,7 +413,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     }
 
     [Fact]
-    public async Task Cycle_WorkOrderExtraction_GroundingContextIncludesActiveLeases()
+    public async Task Cycle_WorkOrderExtraction_GroundingContextIncludesCurrentLeaseRelationship()
     {
         using (var scope = _provider.CreateScope())
         {
@@ -282,6 +435,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             db.Units.Add(new Unit
             {
                 Id = 20,
+                PortfolioId = 1,
                 PropertyId = 10,
                 UnitNumber = "1A",
                 Bedrooms = 2,
@@ -299,21 +453,70 @@ public class ScanProcessingWorkerFailureTests : IDisposable
                 CreatedAt = now,
                 UpdatedAt = now,
             });
-            db.Leases.Add(new Lease
+            db.LeaseManagements.Add(new LeaseManagement
             {
                 Id = 40,
+                PublicId = Guid.NewGuid(),
                 PortfolioId = 1,
                 PropertyId = 10,
                 UnitId = 20,
+                RelationshipNumber = "QA-2026-001-1A",
+                PossessionGivenAtUtc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                CreatedByUserId = 1,
+                RowVersion = Guid.NewGuid(),
+            });
+            db.TenantAccounts.Add(new TenantAccount
+            {
+                Id = 41,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                LeaseManagementId = 40,
+                AccountNumber = "TA-QA-2026-001-1A",
+                Currency = "USD",
+                OpenedAtUtc = now,
+                CreatedAtUtc = now,
+                CreatedByUserId = 1,
+            });
+            db.LeaseManagementParties.Add(new LeaseManagementParty
+            {
+                Id = 42,
+                PortfolioId = 1,
+                LeaseManagementId = 40,
                 TenantId = 30,
-                LeaseNumber = "QA-2026-001-1A",
-                Status = Core.Enums.LeaseStatus.Active,
-                StartDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                EndDate = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                MonthlyRent = 1125m,
-                SecurityDeposit = 1125m,
-                CreatedAt = now,
-                UpdatedAt = now,
+                Role = Core.Enums.LeaseManagementPartyRole.PrimaryTenant,
+                EffectiveFrom = new DateOnly(2026, 1, 1),
+                ChangeReason = "Canonical grounding fixture",
+                CreatedAtUtc = now,
+                CreatedByUserId = 1,
+            });
+            db.LeaseAgreements.Add(new LeaseAgreement
+            {
+                Id = 43,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                LeaseManagementId = 40,
+                VersionNumber = 1,
+                AgreementNumber = "QA-2026-001-1A",
+                ChangeType = Core.Enums.LeaseAgreementChangeType.Initial,
+                TermType = Core.Enums.LeaseAgreementTermType.FixedTerm,
+                TermStartOn = new DateOnly(2026, 1, 1),
+                TermEndOn = new DateOnly(2027, 1, 1),
+                GoverningFromOn = new DateOnly(2026, 1, 1),
+                BaseRentAmount = 1125m,
+                RentDueDay = 1,
+                SecurityDepositObligation = 1125m,
+                LateFeeAmount = 0m,
+                GracePeriodDays = 0,
+                Currency = "USD",
+                TermsSchemaVersion = 1,
+                TermsPayload = "{}",
+                DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                    1, 1, now),
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                CreatedByUserId = 1,
             });
             db.SaveChanges();
         }
@@ -327,8 +530,10 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         await RunCycleAsync();
 
         _llm.LastGroundingContext.Should().NotBeNullOrWhiteSpace();
-        _llm.LastGroundingContext.Should().Contain("\"leases\"");
+        _llm.LastGroundingContext.Should().Contain("\"leaseManagements\"");
         _llm.LastGroundingContext.Should().Contain("\"id\":40");
+        _llm.LastGroundingContext.Should().Contain("\"leaseAgreementId\":43");
+        _llm.LastGroundingContext.Should().Contain("\"relationshipNumber\":\"QA-2026-001-1A\"");
         _llm.LastGroundingContext.Should().Contain("QA-2026-001-1A");
         _llm.LastGroundingContext.Should().Contain("\"unitId\":20");
         _llm.LastGroundingContext.Should().Contain("\"tenantId\":30");
@@ -392,15 +597,16 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     {
         public TestableScanProcessingWorker(IServiceProvider sp)
             : base(sp, NullLogger<ScanProcessingWorker>.Instance) { }
-
-        public Task<int> RunOneCycleAsync(IServiceProvider scoped, CancellationToken ct)
-            => ExecuteCycleAsync(scoped, ct);
     }
 
-    private sealed class StubLlmProvider : ILlmProvider
+    private sealed class StubLlmProvider :
+        ILlmProvider,
+        IWorkspaceLlmExtractionProvider
     {
+        public string ProviderKey => "test";
         public ExtractedFields Result { get; set; } = new();
         public Queue<object> Results { get; } = new();
+        public WorkspaceLlmRuntimeCredential? LastCredential { get; private set; }
         public string? LastGroundingContext { get; private set; }
         public List<string> Instructions { get; } = new();
         public int ExtractCalls { get; private set; }
@@ -423,6 +629,25 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             return Task.FromResult((ExtractedFields)next);
         }
 
+        public Task<ExtractedFields> ExtractWorkspaceAsync(
+            WorkspaceLlmRuntimeCredential credential,
+            byte[] documentBytes,
+            string contentType,
+            string instructions,
+            IReadOnlyList<ExtractionFieldSpec> fields,
+            string? groundingContext = null,
+            CancellationToken ct = default)
+        {
+            LastCredential = credential;
+            return ExtractAsync(
+                documentBytes,
+                contentType,
+                instructions,
+                fields,
+                groundingContext,
+                ct);
+        }
+
         public Task<string> ChatAsync(string prompt, CancellationToken ct = default)
             => Task.FromResult(string.Empty);
 
@@ -431,6 +656,67 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             IReadOnlyList<LlmToolSpec> tools, CancellationToken ct = default)
             => Task.FromResult(new LlmToolResult("end", null, Array.Empty<LlmToolCall>(), 0, 0, "test-model"));
     }
+
+    private sealed class StubWorkspaceCredentialResolver : IWorkspaceLlmCredentialResolver
+    {
+        public WorkspaceLlmRuntimeCredential? Credential { get; set; } =
+            new(1, "test", "test-model", "workspace-test-key");
+
+        public Task<WorkspaceLlmRuntimeCredential?> ResolveActiveAsync(
+            int portfolioId,
+            CancellationToken ct = default) =>
+            Task.FromResult<WorkspaceLlmRuntimeCredential?>(
+                Credential is null
+                    ? null
+                    : Credential with { PortfolioId = portfolioId });
+    }
+
+    private sealed class StubHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "RentalCommand.Engine.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public IFileProvider ContentRootFileProvider { get; set; } = null!;
+    }
+
+    private sealed class StubUsageEvidenceRecorder : ILlmUsageEvidenceRecorder
+    {
+        public List<UsageReceipt> Receipts { get; } = [];
+
+        public Task RecordUsageAsync(
+            int portfolioId,
+            string provider,
+            string modelId,
+            string feature,
+            int latencyMilliseconds,
+            int inputUnits,
+            int outputUnits,
+            decimal estimatedCostUsd,
+            CancellationToken ct = default,
+            string? usageEventIdentity = null)
+        {
+            Receipts.Add(new UsageReceipt(
+                portfolioId,
+                provider,
+                modelId,
+                feature,
+                latencyMilliseconds,
+                inputUnits,
+                outputUnits,
+                estimatedCostUsd));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record UsageReceipt(
+        int PortfolioId,
+        string Provider,
+        string ModelId,
+        string Feature,
+        int LatencyMilliseconds,
+        int InputUnits,
+        int OutputUnits,
+        decimal EstimatedCostUsd);
 
     private sealed class StubFileStorage : IFileStorage
     {
@@ -451,6 +737,122 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
     }
+
+    /// <summary>
+    /// SQLite-compatible test boundary for the worker's PostgreSQL claim store. Candidate filtering,
+    /// ordering, and paging remain database-side; the fake only substitutes the PostgreSQL-specific
+    /// SKIP LOCKED statement that SQLite cannot execute.
+    /// </summary>
+    private sealed class TestScanProcessingClaimStore : IScanProcessingClaimStore
+    {
+        private readonly RentalCommandDbContext _db;
+
+        public TestScanProcessingClaimStore(RentalCommandDbContext db) => _db = db;
+
+        public async Task<IReadOnlyList<ScanProcessingClaim>> ClaimAsync(
+            string claimOwner,
+            TimeSpan leaseDuration,
+            int batchSize,
+            CancellationToken ct = default)
+        {
+            var nowUtc = DateTime.UtcNow;
+            var candidates = await _db.ScanDrafts
+                .Where(d => d.Status == "Pending")
+                .OrderBy(d => d.CreatedAt)
+                .ThenBy(d => d.Id)
+                .Take(batchSize)
+                .ToListAsync(ct);
+
+            foreach (var draft in candidates)
+            {
+                draft.Status = "Processing";
+                draft.ProcessingClaimOwner = claimOwner;
+                draft.ProcessingClaimToken = Guid.NewGuid();
+                draft.ProcessingClaimExpiresAtUtc = nowUtc.Add(leaseDuration);
+                draft.ProcessingAttemptCount++;
+                draft.ProcessingLastAttemptAtUtc = nowUtc;
+                draft.FailureReason = null;
+            }
+
+            await _db.SaveChangesAsync(ct);
+
+            return candidates.Select(d => new ScanProcessingClaim(
+                d.Id,
+                d.PortfolioId,
+                d.FilePath,
+                d.SourceStoredFileId,
+                d.TargetEntityType,
+                d.ProcessingClaimOwner!,
+                d.ProcessingClaimToken!.Value)).ToList();
+        }
+
+    }
+
+    /// <summary>
+    /// SQLite substitute for the PostgreSQL terminal-write callback. The worker still constructs and
+    /// submits the real command through IWriteExecutor; only the provider-specific SQL is replaced.
+    /// </summary>
+    private sealed class TestJobStepWriteExecutor(RentalCommandDbContext db) : IWriteExecutor
+    {
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string stepKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            var command = write.Request.Should().BeOfType<ScanProcessingTerminalCommand>().Subject;
+            stepKey.Should().Be(ScanProcessingTerminalWrite.StepKey(command));
+
+            var draft = await Owned(command).SingleOrDefaultAsync(ct);
+            var applied = draft is not null;
+            if (draft is not null)
+            {
+                if (command.Status == "Reviewing")
+                {
+                    var result = command.ReviewingResult!;
+                    draft.ExtractedFields = result.ExtractedFields;
+                    draft.FailureReason = null;
+                    draft.ModelId = result.ModelId;
+                    draft.TokensUsed = result.TokensUsed;
+                    draft.CostUsd = result.CostUsd;
+                    draft.TargetEntityType = result.TargetEntityType;
+                }
+                else
+                {
+                    draft.FailureReason = command.FailureReason;
+                }
+
+                draft.Status = command.Status;
+                draft.ReviewedAt = command.ReviewedAtUtc;
+                ClearClaim(draft);
+                await db.SaveChangesAsync(ct);
+            }
+
+            var resultValue = new ScanProcessingTerminalResult(
+                applied, command.DraftId, command.Status);
+            return new AtomicCommandOutcome<TResult>(
+                (TResult)(object)resultValue,
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid());
+        }
+
+        private IQueryable<ScanDraft> Owned(ScanProcessingTerminalCommand command) =>
+            db.ScanDrafts.Where(d =>
+                d.Id == command.DraftId &&
+                d.PortfolioId == command.PortfolioId &&
+                d.Status == "Processing" &&
+                d.ProcessingClaimOwner == command.ClaimOwner &&
+                d.ProcessingClaimToken == command.ClaimToken &&
+                d.ProcessingClaimExpiresAtUtc > DateTime.UtcNow);
+
+        private static void ClearClaim(ScanDraft draft)
+        {
+            draft.ProcessingClaimOwner = null;
+            draft.ProcessingClaimToken = null;
+            draft.ProcessingClaimExpiresAtUtc = null;
+        }
+    }
 }
 
 /// <summary>
@@ -458,33 +860,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
 /// TEXT and drops Postgres-only table configuration the worker's queries don't need, mirroring
 /// <see cref="SqliteTestContext"/>'s approach.
 /// </summary>
-internal sealed class ScanTestDbContext : RentalCommandDbContext
+internal sealed class ScanTestDbContext : SqliteCompatibleRentalCommandDbContext
 {
     public ScanTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<SecurityDepositHolding>().Property(e => e.DeductionsJson).HasColumnType("TEXT");
-
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-        modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
-
-        modelBuilder.Entity<Payment>()
-            .HasIndex(p => new { p.LeaseId, p.PaymentType, p.PeriodKey })
-            .IsUnique()
-            .HasFilter(null);
-
-        modelBuilder.Entity<AutopayEnrollment>()
-            .HasIndex(e => e.LeaseId)
-            .IsUnique()
-            .HasFilter(null);
-    }
 }

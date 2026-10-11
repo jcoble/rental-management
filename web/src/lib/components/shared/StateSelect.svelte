@@ -127,6 +127,10 @@
 		if (isOpen || cancelNextClose || pickedThisSession) return;
 		commitTypedInput(inputValue);
 	}
+
+	function scrollInputIntoView(event: FocusEvent) {
+		(event.currentTarget as HTMLElement).scrollIntoView({ block: 'center', behavior: 'smooth' });
+	}
 </script>
 
 <Combobox.Root
@@ -145,6 +149,7 @@
 		aria-label={placeholder}
 		onkeydown={handleKeydown}
 		onblur={handleBlur}
+		onfocus={scrollInputIntoView}
 	/>
 	<Combobox.Content>
 		{#each filtered as item (item.value)}

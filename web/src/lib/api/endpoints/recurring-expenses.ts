@@ -1,5 +1,10 @@
 import { api } from '../client';
-import { buildListQuery, type ListParams } from '../list-params';
+import { idempotentMutation } from '../idempotency';
+import {
+	buildRecurringExpenseListPagePath,
+	buildRecurringExpenseListPath,
+	type RecurringExpenseListParams
+} from './recurring-expense-list-path';
 
 /** How often a recurring-expense template materializes into an expense row. */
 export type RecurringExpenseFrequency = 'Monthly' | 'Quarterly' | 'Annual';
@@ -29,14 +34,35 @@ export interface RecurringExpense {
 	testId: string;
 }
 
+export interface RecurringExpenseListResponse {
+	items: RecurringExpense[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 export const recurringExpenses = {
-	list: (params?: ListParams & { propertyId?: number }) => {
-		const { propertyId, ...list } = params ?? {};
-		return api.get<RecurringExpense[]>(`/recurring-expenses${buildListQuery(list, { propertyId })}`);
-	},
+	list: (params?: RecurringExpenseListParams) =>
+		api.get<RecurringExpense[]>(buildRecurringExpenseListPath(params)),
+	listPage: (params?: RecurringExpenseListParams) =>
+		api.get<RecurringExpenseListResponse>(buildRecurringExpenseListPagePath(params)),
 	get: (id: number) => api.get<RecurringExpense>(`/recurring-expenses/${id}`),
-	create: (data: Record<string, unknown>) => api.post<RecurringExpense>('/recurring-expenses', data),
+	create: (data: Record<string, unknown>) =>
+		idempotentMutation(`recurring-expenses:create:${JSON.stringify(data)}`, (key) =>
+			api.post<RecurringExpense>('/recurring-expenses', data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	update: (id: number, data: Record<string, unknown>) =>
-		api.patch<RecurringExpense>(`/recurring-expenses/${id}`, data),
-	remove: (id: number) => api.delete(`/recurring-expenses/${id}`)
+		idempotentMutation(`recurring-expenses:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<RecurringExpense>(`/recurring-expenses/${id}`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	remove: (id: number) =>
+		idempotentMutation(`recurring-expenses:delete:${id}`, (key) =>
+			api.delete(`/recurring-expenses/${id}`, {
+				headers: { 'Idempotency-Key': key }
+			})
+		)
 };

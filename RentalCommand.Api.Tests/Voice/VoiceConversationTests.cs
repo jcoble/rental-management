@@ -1,9 +1,20 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Scanning;
+using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Voice;
@@ -12,25 +23,75 @@ namespace RentalCommand.Api.Tests.Voice;
 /// The slot-filling "Tell me" conversation: speak a partial expense, get asked
 /// for the missing field, answer it, and reach a complete draft.
 /// </summary>
-public class VoiceConversationTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name3)]
+public class VoiceConversationTests : IAsyncLifetime
 {
-    private readonly SqliteTestContext _ctx = new();
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly Mock<ILlmProvider> _llm = new();
     private readonly Mock<IAudioTranscriptionService> _transcriber = new();
     private readonly Mock<IFileStorage> _storage = new();
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private WorkspaceReadScope _scope;
+    private ServiceProvider _services = null!;
+    private AsyncServiceScope _serviceScope;
 
-    public void Dispose() => _ctx.Dispose();
+    public VoiceConversationTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(VoiceConversationTests));
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseNpgsql(
+                    _ctx.Db.Database.GetDbConnection(),
+                    contextOwnsConnection: false)
+                .UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+        _serviceScope = _services.CreateAsyncScope();
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _serviceScope.DisposeAsync();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
+    }
 
     private VoiceIntakeService CreateSut() => new(
-        _ctx.Db,
+        _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+        _serviceScope.ServiceProvider.GetRequiredService<IWriteExecutor>(),
         _llm.Object,
         _transcriber.Object,
         _storage.Object,
-        NullLogger<VoiceIntakeService>.Instance);
+        NullLogger<VoiceIntakeService>.Instance,
+        TimeProvider.System);
 
     [Fact]
     public async Task Conversation_FillsMissingAmount_ThenCompletes()
     {
+        var now = DateTime.UtcNow;
+        _ctx.Db.Properties.Add(new Property
+        {
+            Id = 5,
+            PortfolioId = _scope.PortfolioId,
+            Name = "123 Main",
+            AddressLine1 = "123 Main St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43004",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
         // Base classification (no "forty" in the transcript yet): an expense with
         // property + category but no amount.
         _llm.Setup(x => x.ChatAsync(
@@ -54,12 +115,14 @@ public class VoiceConversationTests : IDisposable
             """);
 
         var sut = CreateSut();
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         var draft = await sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: [],
             contentType: null,
             providedTranscript: "Log a plumbing expense for 123 Main.",
+            operationKey: "voice-conversation-create",
             ct: CancellationToken.None);
 
         var turn1 = ScanDraftResponse.FromEntity(draft).WithVoiceSlots();
@@ -68,12 +131,15 @@ public class VoiceConversationTests : IDisposable
         turn1.MissingRequired.Should().Contain("amount");
         turn1.NextPrompt.Should().Be("How much was it?");
 
+        _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()
+            .ChangeTracker.Clear();
         var answered = await sut.AnswerAsync(
-            portfolioId: 1,
+            scope: _scope,
             draftId: draft.Id,
             audioBytes: [],
             contentType: null,
             providedTranscript: "forty dollars",
+            operationKey: "voice-conversation-answer",
             ct: CancellationToken.None);
 
         var turn2 = ScanDraftResponse.FromEntity(answered).WithVoiceSlots();
@@ -98,12 +164,14 @@ public class VoiceConversationTests : IDisposable
             """);
 
         var sut = CreateSut();
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         var draft = await sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: [],
             contentType: null,
             providedTranscript: "Tenant called about a leaky faucet.",
+            operationKey: "voice-unsupported-create",
             ct: CancellationToken.None);
 
         draft.TargetEntityType.Should().Be("Expense");
@@ -138,22 +206,27 @@ public class VoiceConversationTests : IDisposable
             """);
 
         var sut = CreateSut();
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         var draft = await sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: [],
             contentType: null,
             providedTranscript: "Tenant called about a leaky faucet.",
+            operationKey: "voice-ambiguous-create",
             ct: CancellationToken.None);
 
         ScanDraftResponse.FromEntity(draft).WithVoiceSlots().Ambiguous.Should().BeTrue();
 
+        _serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>()
+            .ChangeTracker.Clear();
         var answered = await sut.AnswerAsync(
-            portfolioId: 1,
+            scope: _scope,
             draftId: draft.Id,
             audioBytes: [],
             contentType: null,
             providedTranscript: "The plumber invoice was forty dollars.",
+            operationKey: "voice-ambiguous-answer",
             ct: CancellationToken.None);
 
         var turn = ScanDraftResponse.FromEntity(answered).WithVoiceSlots();
@@ -167,13 +240,15 @@ public class VoiceConversationTests : IDisposable
     public async Task Answer_UnknownDraft_Throws()
     {
         var sut = CreateSut();
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         var act = () => sut.AnswerAsync(
-            portfolioId: 1,
+            scope: _scope,
             draftId: 999,
             audioBytes: [],
             contentType: null,
             providedTranscript: "forty dollars",
+            operationKey: "voice-unknown-answer",
             ct: CancellationToken.None);
 
         await act.Should().ThrowAsync<KeyNotFoundException>();

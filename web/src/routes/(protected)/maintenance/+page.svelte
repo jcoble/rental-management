@@ -4,6 +4,7 @@
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import { inspections } from '$lib/api/endpoints/inspections';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { units } from '$lib/api/endpoints/units';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import type { InspectionTemplate, InspectionTemplateInput, InspectionType, WorkOrder } from '$lib/types';
@@ -12,18 +13,21 @@
 	import { workOrderSchema, inspectionSchema, parseForm } from '$lib/schemas';
 	import { localInputToOffsetIso } from '$lib/utils/date';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
-	import { Copy, Pencil, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
+	import { ChevronDown, Copy, Pencil, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -38,6 +42,23 @@
 	const WO_STATUSES = ['New', 'Scheduled', 'InProgress', 'WaitingParts', 'Completed', 'Cancelled'];
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
 	const INSPECTION_TYPES: InspectionType[] = ['Routine', 'MoveIn', 'MoveOut', 'AnnualSafety'];
+	const INSPECTION_TYPE_LABELS: Record<InspectionType, string> = {
+		Routine: 'Routine',
+		MoveIn: 'Move-in',
+		MoveOut: 'Move-out',
+		AnnualSafety: 'Annual safety'
+	};
+
+	function inspectionTypeLabel(type: InspectionType) {
+		return INSPECTION_TYPE_LABELS[type] ?? type;
+	}
+
+	function inspectionDate(value: string) {
+		const date = new Date(value);
+		return Number.isNaN(date.getTime())
+			? value
+			: date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+	}
 
 	// Work-order search / status / priority / sort / page persisted in the URL so they survive navigating
 	// away and back. The main work-order grid is server-side so these controls feed the SQL query instead
@@ -46,6 +67,8 @@
 	let woSearch = $state(readGridParam(initialParams, 'q'));
 	let woStatusFilter = $state(readGridParam(initialParams, 'status'));
 	let woPriorityFilter = $state(readGridParam(initialParams, 'priority'));
+	let woFrom = $state(readGridParam(initialParams, 'from'));
+	let woTo = $state(readGridParam(initialParams, 'to'));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedWoSearch = debounced(() => woSearch, 300);
@@ -56,6 +79,8 @@
 		woSearch;
 		woStatusFilter;
 		woPriorityFilter;
+		woFrom;
+		woTo;
 		if (!filterResetPrimed) {
 			filterResetPrimed = true;
 			return;
@@ -65,7 +90,7 @@
 
 	$effect(() => {
 		syncGridUrl(
-			{ q: woSearch, status: woStatusFilter, priority: woPriorityFilter, sort: gridSort, page: gridPage },
+			{ q: woSearch, status: woStatusFilter, priority: woPriorityFilter, from: woFrom, to: woTo, sort: gridSort, page: gridPage },
 			{ page: 1 }
 		);
 	});
@@ -78,6 +103,8 @@
 			debouncedWoSearch.value,
 			woStatusFilter,
 			woPriorityFilter,
+			woFrom,
+			woTo,
 			gridSort,
 			gridPage,
 			PAGE_SIZE,
@@ -86,19 +113,55 @@
 			search: debouncedWoSearch.value,
 			status: woStatusFilter || undefined,
 			priority: woPriorityFilter || undefined,
+			// The work-order grid date range filters on RequestedAt (when the request came in).
+			requestedFrom: woFrom || undefined,
+			requestedTo: woTo || undefined,
 			sort: gridSort || undefined,
 			skip: (gridPage - 1) * PAGE_SIZE,
 			take: PAGE_SIZE,
 		}),
 	}));
 	const inspectionsQuery = createQuery(() => ({ queryKey: ['inspections', portfolioId], queryFn: () => inspections.list(portfolioId) }));
-	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
+	async function loadTenantOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await tenants.listPage(portfolioId, { ...params, sort: 'lastName' });
+		return {
+			...result,
+			items: result.items.map((tenant) => ({
+				id: tenant.id,
+				label: tenant.fullName || `${tenant.firstName} ${tenant.lastName}`,
+				description: tenant.email || tenant.phone || null
+			}))
+		};
+	}
+	async function loadVendorOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await vendors.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((vendor) => ({
+				id: vendor.id,
+				label: vendor.name,
+				description: vendor.serviceType || vendor.email || vendor.phone || null
+			}))
+		};
+	}
 
 	// --- Work order form/dialog ---
 	const emptyWo = {
 		propertyId: '',
 		title: '',
 		description: '',
+		technicianAccessInstructions: '',
 		priority: 'Normal',
 		category: 'General',
 		unitId: '',
@@ -112,26 +175,27 @@
 	let editingWoId = $state<number | null>(null);
 	let woForm = $state({ ...emptyWo });
 	let woErrors = $state<Record<string, string>>({});
-	let woStep = $state(0);
-	let completedWoSteps = $state<number[]>([]);
+	// One screen: the four things the landlord always knows are on the face of the dialog and
+	// everything else waits under a collapsed "More details" disclosure.
+	let woMoreOpen = $state(false);
+	let lastSavedRepair = $state<{ id: number; unitId: number | null; title: string } | null>(null);
 	let woDeleteTarget = $state<WorkOrder | null>(null);
+	let selectedWoPropertyLabel = $state<string | null>(null);
+	let selectedWoUnitLabel = $state<string | null>(null);
+	let selectedWoTenantLabel = $state<string | null>(null);
+	let selectedWoVendorLabel = $state<string | null>(null);
 
-	const woSteps: FormStepperStep[] = [
-		{ id: 'issue', label: 'Issue', description: 'Title and details' },
-		{ id: 'triage', label: 'Triage', description: 'Priority and type' },
-		{ id: 'location', label: 'Location', description: 'Property and unit' },
-		{ id: 'schedule', label: 'Schedule', description: 'Visit window' },
-		{ id: 'people', label: 'People', description: 'Tenant and vendor' },
-		{ id: 'budget', label: 'Budget', description: 'Estimated cost' },
+	/** Fields that live under "More details" — an error in any of them opens the disclosure. */
+	const WO_MORE_FIELDS = [
+		'priority',
+		'category',
+		'scheduledFor',
+		'scheduledWindowEnd',
+		'technicianAccessInstructions',
+		'tenantId',
+		'vendorId',
+		'estimatedCost',
 	];
-	const woStepFields = [
-		['title', 'description'],
-		['priority', 'category'],
-		['propertyId', 'unitId'],
-		['scheduledFor', 'scheduledWindowEnd'],
-		['tenantId', 'vendorId'],
-		['estimatedCost'],
-	] as const;
 
 	function clearWoError(field: string) {
 		const next = clearFieldError(woErrors, field);
@@ -165,14 +229,22 @@
 
 	// Optional work-order context. Tenants/vendors load only while the form is open; units are
 	// fetched per selected property so the Unit dropdown only offers units of that property.
-	const tenantsQuery = createQuery(() => ({ queryKey: ['tenants', portfolioId], queryFn: () => tenants.list(portfolioId, { take: 200 }), enabled: showWoForm }));
-	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }), enabled: showWoForm }));
 	const woPropertyId = $derived(woForm.propertyId ? Number(woForm.propertyId) : null);
-	const woUnitsQuery = createQuery(() => ({
-		queryKey: ['units', woPropertyId],
-		queryFn: () => properties.listUnits(woPropertyId as number),
-		enabled: showWoForm && woPropertyId != null,
-	}));
+	async function loadWoUnitOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await units.listWithHealthPage({
+			...params,
+			propertyId: woPropertyId ?? undefined,
+			sort: 'unitNumber'
+		});
+		return {
+			...result,
+			items: result.items.map((unit) => ({
+				id: unit.id,
+				label: `Unit ${unit.unitNumber}`,
+				description: unit.status
+			}))
+		};
+	}
 
 	function invalidateWo() {
 		queryClient.invalidateQueries({ queryKey: ['work-orders', portfolioId] });
@@ -181,8 +253,13 @@
 	const saveWoMutation = createMutation(() => ({
 		mutationFn: ({ id, data }: { id: number | null; data: Record<string, unknown> }) =>
 			id == null ? workOrders.create(data) : workOrders.update(id, data),
-		onSuccess: (_r, vars) => {
-			showSuccess(vars.id == null ? 'Work order created.' : 'Work order updated.');
+		onSuccess: (saved, vars) => {
+			showSuccess(vars.id == null ? 'Repair saved.' : 'Repair updated.');
+			// Scheduling and assigning happen on the repair itself, so offer a way straight there.
+			lastSavedRepair =
+				vars.id == null && saved
+					? { id: saved.id, unitId: saved.unitId ?? null, title: saved.title }
+					: null;
 			closeWoForm();
 			invalidateWo();
 		},
@@ -192,7 +269,7 @@
 	const deleteWoMutation = createMutation(() => ({
 		mutationFn: (id: number) => workOrders.delete(id),
 		onSuccess: () => {
-			showSuccess('Work order deleted.');
+			showSuccess('Repair deleted.');
 			woDeleteTarget = null;
 			invalidateWo();
 		},
@@ -203,8 +280,12 @@
 		editingWoId = null;
 		woForm = { ...emptyWo };
 		woErrors = {};
-		woStep = 0;
-		completedWoSteps = [];
+		woMoreOpen = false;
+		lastSavedRepair = null;
+		selectedWoPropertyLabel = null;
+		selectedWoUnitLabel = null;
+		selectedWoTenantLabel = null;
+		selectedWoVendorLabel = null;
 		showWoForm = true;
 	}
 	function openEditWo(wo: WorkOrder) {
@@ -213,6 +294,7 @@
 			propertyId: String(wo.propertyId),
 			title: wo.title,
 			description: wo.description,
+			technicianAccessInstructions: wo.technicianAccessInstructions ?? '',
 			priority: wo.priority,
 			category: wo.category,
 			unitId: wo.unitId != null ? String(wo.unitId) : '',
@@ -224,16 +306,23 @@
 			estimatedCost: wo.estimatedCost != null ? String(wo.estimatedCost) : '',
 		};
 		woErrors = {};
-		woStep = 0;
-		completedWoSteps = [];
+		// Editing an existing repair usually means changing something beyond the essentials.
+		woMoreOpen = true;
+		selectedWoPropertyLabel = wo.propertyName ?? null;
+		selectedWoUnitLabel = wo.unitNumber ? `Unit ${wo.unitNumber}` : null;
+		selectedWoTenantLabel = wo.tenantName ?? null;
+		selectedWoVendorLabel = wo.vendorName ?? null;
 		showWoForm = true;
 	}
 	function closeWoForm() {
 		showWoForm = false;
 		editingWoId = null;
 		woErrors = {};
-		woStep = 0;
-		completedWoSteps = [];
+		woMoreOpen = false;
+		selectedWoPropertyLabel = null;
+		selectedWoUnitLabel = null;
+		selectedWoTenantLabel = null;
+		selectedWoVendorLabel = null;
 	}
 	function workOrderWindowErrors(): Record<string, string> {
 		if (woForm.scheduledFor && woForm.scheduledWindowEnd) {
@@ -245,48 +334,13 @@
 		}
 		return {};
 	}
-	function woStepErrorFields(step: number, errors: Record<string, string>) {
-		const visibleFields = new Set<string>(woStepFields[step] ?? []);
-		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
-	}
-	function firstWoErrorStep(errors: Record<string, string>) {
-		return woStepFields.findIndex((fields) => fields.some((field) => errors[field]));
-	}
-	function markWoStepInvalid(step: number) {
-		completedWoSteps = completedWoSteps.filter((completedStep) => completedStep < step);
-	}
-	function validateWoStep(step: number) {
-		const result = parseForm(workOrderSchema, woForm);
-		const allErrors = { ...(result.errors ?? {}), ...workOrderWindowErrors() };
-		const currentErrors = Object.fromEntries(woStepErrorFields(step, allErrors));
-		const currentFields = new Set<string>(woStepFields[step] ?? []);
-		const nextErrors = Object.fromEntries(Object.entries(woErrors).filter(([field]) => !currentFields.has(field)));
-		woErrors = { ...nextErrors, ...currentErrors };
-		const isValid = Object.keys(currentErrors).length === 0;
-		if (!isValid) markWoStepInvalid(step);
-		return isValid;
-	}
-	function nextWoStep() {
-		if (!validateWoStep(woStep)) return;
-		if (completedWoSteps.includes(woStep)) {
-			woStep = Math.min(woStep + 1, woSteps.length - 1);
-			return;
-		}
-		completedWoSteps = [...completedWoSteps, woStep];
-		window.setTimeout(() => {
-			woStep = Math.min(woStep + 1, woSteps.length - 1);
-		}, 260);
-	}
 	function submitWo() {
 		const result = parseForm(workOrderSchema, woForm);
 		const errors = { ...(result.errors ?? {}), ...workOrderWindowErrors() };
 		if (Object.keys(errors).length > 0) {
 			woErrors = errors;
-			const firstErrorStep = firstWoErrorStep(errors);
-			if (firstErrorStep >= 0) {
-				woStep = firstErrorStep;
-				markWoStepInvalid(firstErrorStep);
-			}
+			// Never hide a problem: if something under "More details" needs fixing, open it.
+			if (WO_MORE_FIELDS.some((field) => errors[field])) woMoreOpen = true;
 			return;
 		}
 		if (!result.data) return;
@@ -307,6 +361,7 @@
 	let inspectionErrors = $state<Record<string, string>>({});
 	let inspectionStep = $state(0);
 	let completedInspectionSteps = $state<number[]>([]);
+	let selectedInspectionPropertyLabel = $state<string | null>(null);
 	const inspectionSteps: FormStepperStep[] = [
 		{ id: 'where', label: 'Where', description: 'Property and type' },
 		{ id: 'checklist', label: 'Checklist', description: 'Template and inspector' },
@@ -335,6 +390,7 @@
 		inspectionErrors = {};
 		inspectionStep = 0;
 		completedInspectionSteps = [];
+		selectedInspectionPropertyLabel = null;
 		showInspectionForm = true;
 	}
 
@@ -344,6 +400,7 @@
 		inspectionErrors = {};
 		inspectionStep = 0;
 		completedInspectionSteps = [];
+		selectedInspectionPropertyLabel = null;
 	}
 
 	function inspectionStepErrorFields(step: number, errors: Record<string, string>) {
@@ -649,14 +706,14 @@
 
 {#snippet headerActions()}
 	<div class="flex flex-wrap gap-2">
-		<Button data-testid="work-order-create-button" onclick={openCreateWo}><Plus class="h-4 w-4" /> New Work Order</Button>
+		<Button data-testid="work-order-create-button" onclick={openCreateWo}><Plus class="h-4 w-4" /> New Repair</Button>
 		<Button data-testid="inspection-create-button" variant="outline" onclick={openInspectionForm}><ShieldCheck class="h-4 w-4" /> Inspection</Button>
 		<Button data-testid="recurring-maintenance-link" variant="outline" onclick={() => goto('/maintenance/recurring')}><RefreshCw class="h-4 w-4" /> Recurring</Button>
 	</div>
 {/snippet}
 
 <svelte:head>
-	<title>Work Orders - Rental Command</title>
+	<title>Repairs - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="maintenance-page">
@@ -666,18 +723,35 @@
 		art={7}
 		tone="coral"
 		eyebrow="Work"
-		title="Work Orders"
-		description="Track resident requests, vendor execution, and compliance checks."
+		title="Repairs"
+		description="Manage repair requests, assignments, inspections, and recurring work."
 		actions={headerActions}
 		data-testid="maintenance-header"
 	/>
+
+	{#if lastSavedRepair}
+		<div
+			class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3 text-sm"
+			data-testid="repair-saved-banner"
+		>
+			<span>Saved “{lastSavedRepair.title}”. Set a date or pick who will fix it whenever you are ready.</span>
+			<Button
+				variant="outline"
+				size="sm"
+				data-testid="repair-schedule-link"
+				onclick={() => goto(recordHref('workOrder', lastSavedRepair!))}
+			>
+				Schedule or assign someone →
+			</Button>
+		</div>
+	{/if}
 
 	<!-- Work Orders DataGrid -->
 	<DataGrid
 		data={woList}
 		columns={woColumns}
 		loading={workOrdersQuery.isLoading || workOrdersQuery.isFetching}
-		emptyMessage="No work orders found."
+		emptyMessage="No repairs found."
 		onRowClick={(wo) => goto(recordHref('workOrder', wo))}
 		getRowKey={(wo) => wo.id}
 		data-testid="work-orders-list"
@@ -691,37 +765,50 @@
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2 min-w-0">
-				<SearchInput bind:value={woSearch} placeholder="Search work orders…" testid="work-order-search" />
+				<SearchInput bind:value={woSearch} placeholder="Search repairs…" testid="work-order-search" />
 			</div>
 			<Select.Root type="single" bind:value={woStatusFilter}>
 				<Select.Trigger class="w-40 shrink-0" data-testid="work-order-status-filter">
-					{woStatusFilter ? woStatusFilter : 'All statuses'}
+					{woStatusFilter ? formatStatusLabel(woStatusFilter) : 'All statuses'}
 				</Select.Trigger>
 				<Select.Content>
 					<Select.Item value="" label="All statuses">All statuses</Select.Item>
 					{#each WO_STATUSES as s}
-						<Select.Item value={s} label={s}>{s}</Select.Item>
+						<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>
 					{/each}
 				</Select.Content>
 			</Select.Root>
 			<Select.Root type="single" bind:value={woPriorityFilter}>
 				<Select.Trigger class="w-36 shrink-0" data-testid="work-order-priority-filter">
-					{woPriorityFilter ? woPriorityFilter : 'All priorities'}
+					{woPriorityFilter ? formatStatusLabel(woPriorityFilter) : 'All priorities'}
 				</Select.Trigger>
 				<Select.Content>
 					<Select.Item value="" label="All priorities">All priorities</Select.Item>
 					{#each WO_PRIORITIES as p}
-						<Select.Item value={p} label={p}>{p}</Select.Item>
+						<Select.Item value={p} label={formatStatusLabel(p)}>{formatStatusLabel(p)}</Select.Item>
 					{/each}
 				</Select.Content>
 			</Select.Root>
+			<RangeDatePicker
+				bind:start={woFrom}
+				bind:end={woTo}
+				presets
+				placeholder="All dates"
+				align="end"
+				testid="work-order-date-range"
+			/>
 		{/snippet}
 	</DataGrid>
 
 	<div class="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
-		<Card.Root class="gap-0 py-0">
+		<Card.Root id="inspections" class="scroll-mt-6 gap-0 py-0">
 			<Card.Header class="border-b border-border px-4 py-3">
-				<Card.Title class="text-base font-semibold">Inspections</Card.Title>
+				<div class="flex items-center justify-between gap-3">
+					<Card.Title class="text-base font-semibold">Inspections</Card.Title>
+					<span class="text-xs text-muted-foreground" data-testid="inspection-list-range">
+						{inspectionsQuery.isLoading ? 'Loading…' : `${(inspectionsQuery.data || []).length} shown`}
+					</span>
+				</div>
 			</Card.Header>
 			<Card.Content class="max-h-[55vh] space-y-2 overflow-y-auto p-3" data-testid="inspections-list">
 				{#if (inspectionsQuery.data || []).length === 0}
@@ -735,10 +822,10 @@
 						onclick={() => goto('/maintenance/inspections/' + inspection.id)}
 					>
 						<div class="flex items-center justify-between gap-2">
-							<p class="font-medium">{inspection.type} · {inspection.propertyName}</p>
+							<p class="font-medium">{inspectionTypeLabel(inspection.type)} · {inspection.propertyName}</p>
 							<StatusBadge status={inspection.status} />
 						</div>
-						<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(inspection.scheduledFor).toLocaleString()}</p>
+						<p class="font-mono tabular-nums text-xs text-muted-foreground">{inspectionDate(inspection.scheduledFor)}</p>
 					</button>
 				{/each}
 			</Card.Content>
@@ -749,11 +836,16 @@
 				<div class="flex items-center justify-between gap-2">
 					<div>
 						<Card.Title class="text-base font-semibold">Checklist templates</Card.Title>
-						<p class="text-xs text-muted-foreground">Custom checklists are editable; built-ins are copyable</p>
+						<p class="text-xs text-muted-foreground">Edit your own templates or copy a built-in one to customize it.</p>
 					</div>
-					<Button data-testid="inspection-template-create-button" size="sm" variant="outline" onclick={openNewTemplate}>
-						<Plus class="h-4 w-4" /> New
-					</Button>
+					<div class="flex items-center gap-2">
+						<span class="text-xs text-muted-foreground" data-testid="inspection-template-list-range">
+							{templatesQuery.isLoading ? 'Loading…' : `${templateOptions.length} shown`}
+						</span>
+						<Button data-testid="inspection-template-create-button" size="sm" variant="outline" onclick={openNewTemplate}>
+							<Plus class="h-4 w-4" /> New
+						</Button>
+					</div>
 				</div>
 			</Card.Header>
 			<Card.Content class="max-h-[55vh] space-y-2 overflow-y-auto p-3" data-testid="inspection-template-list">
@@ -768,7 +860,7 @@
 								<div class="min-w-0">
 									<p class="truncate font-medium">{template.name}</p>
 									<p class="mt-1 text-xs text-muted-foreground">
-										{template.inspectionType} · {template.items.length} question{template.items.length === 1 ? '' : 's'}
+										{inspectionTypeLabel(template.inspectionType)} · {template.items.length} question{template.items.length === 1 ? '' : 's'}
 										{template.isBuiltIn ? ' · built-in' : ''}
 									</p>
 								</div>
@@ -825,162 +917,151 @@
 >
 	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
 		<Dialog.Header>
-			<Dialog.Title>{editingWoId == null ? 'New Work Order' : 'Edit Work Order'}</Dialog.Title>
+			<Dialog.Title>{editingWoId == null ? 'Report a repair' : 'Edit repair'}</Dialog.Title>
 		</Dialog.Header>
-		<FormStepper steps={woSteps} bind:currentStep={woStep} completedSteps={completedWoSteps} testid="work-order-stepper">
-			<div class="space-y-4" data-testid="work-order-form">
-				{#if woStep === 0}
+		<div class="space-y-4" data-testid="work-order-form">
+			<div class="space-y-4" data-testid="repair-essentials">
+				<div class="grid gap-3 sm:grid-cols-2">
 					<div>
-						<span class="mb-1 block text-xs font-medium text-muted-foreground">Issue title</span>
-						<Input data-testid="work-order-title-input" bind:value={woForm.title} placeholder="Issue title" />
-						{#if woErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="work-order-title-error">{woErrors.title}</p>{/if}
-					</div>
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Description</span>
-							<textarea data-testid="work-order-description-input" bind:value={woForm.description} rows={4} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Description"></textarea>
-							{#if woErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="work-order-description-error">{woErrors.description}</p>{/if}
-						</div>
-					{:else if woStep === 1}
-						<div class="grid gap-3 sm:grid-cols-2">
-							<div>
-								<span class="mb-1 block text-xs font-medium text-muted-foreground">Priority</span>
-							<Select.Root type="single" bind:value={woForm.priority}>
-								<Select.Trigger class="w-full" data-testid="work-order-priority-input">
-									{woForm.priority || 'Priority'}
-								</Select.Trigger>
-								<Select.Content>
-									{#each WO_PRIORITIES as p}
-										<Select.Item value={p} label={p}>{p}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Category</span>
-							<Input data-testid="work-order-category-input" bind:value={woForm.category} placeholder="Category" />
-								{#if woErrors.category}<p class="mt-1 text-xs text-destructive" data-testid="work-order-category-error">{woErrors.category}</p>{/if}
-							</div>
-						</div>
-					{:else if woStep === 2}
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Property</span>
-							<Select.Root
-							type="single"
-							value={woForm.propertyId}
-							onValueChange={(v) => {
-								woForm.propertyId = v;
+						<RemoteRecordSelect
+							queryKey={['work-order-property', portfolioId]}
+							label="Which rental?"
+							bind:value={woForm.propertyId}
+							selectedLabel={selectedWoPropertyLabel}
+							placeholder="Select property"
+							searchPlaceholder="Search properties…"
+							emptyLabel="No matching properties"
+							required
+							loadPage={loadPropertyOptions}
+							onValueChange={(_value, option) => {
+								selectedWoPropertyLabel = option?.label ?? null;
 								woForm.unitId = '';
+								selectedWoUnitLabel = null;
 							}}
-						>
-							<Select.Trigger class="w-full" data-testid="work-order-property-input">
-								{woForm.propertyId
-									? ((propertiesQuery.data || []).find((p) => String(p.id) === woForm.propertyId)?.name ?? 'Select property')
-									: 'Select property'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="Select property">Select property</Select.Item>
-								{#each propertiesQuery.data || [] as property}
-									<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
+							testid="work-order-property-input"
+						/>
 						{#if woErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="work-order-property-error">{woErrors.propertyId}</p>{/if}
 					</div>
 					<div>
-						<label for="work-order-unit" class="mb-1 block text-xs font-medium text-muted-foreground">Unit (optional)</label>
-						<Select.Root type="single" bind:value={woForm.unitId} disabled={woPropertyId == null}>
-							<Select.Trigger id="work-order-unit" class="w-full" data-testid="work-order-unit-input">
-								{woForm.unitId
-									? ((woUnitsQuery.data || []).find((u) => String(u.id) === woForm.unitId)?.unitNumber ?? 'Select unit')
-									: woPropertyId == null
-										? 'Select a property first'
-										: 'No specific unit'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="No specific unit">No specific unit</Select.Item>
-								{#each woUnitsQuery.data || [] as unit (unit.id)}
-									<Select.Item value={String(unit.id)} label={unit.unitNumber}>Unit {unit.unitNumber}</Select.Item>
-								{/each}
-							</Select.Content>
-							</Select.Root>
-						</div>
-					{:else if woStep === 3}
+						<RemoteRecordSelect
+							queryKey={['work-order-unit', portfolioId, woPropertyId]}
+							label="Unit (optional)"
+							bind:value={woForm.unitId}
+							selectedLabel={selectedWoUnitLabel}
+							placeholder={woPropertyId == null ? 'Select a property first' : 'No specific unit'}
+							clearLabel="No specific unit"
+							searchPlaceholder="Search units…"
+							emptyLabel="No matching units"
+							disabled={woPropertyId == null}
+							loadPage={loadWoUnitOptions}
+							onValueChange={(_value, option) => (selectedWoUnitLabel = option?.label ?? null)}
+							testid="work-order-unit-input"
+						/>
+					</div>
+				</div>
+				<div>
+					<span class="mb-1 block text-xs font-medium text-muted-foreground">What's wrong?</span>
+					<Input data-testid="work-order-title-input" bind:value={woForm.title} placeholder="Kitchen sink is leaking" />
+					{#if woErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="work-order-title-error">{woErrors.title}</p>{/if}
+				</div>
+				<div>
+					<span class="mb-1 block text-xs font-medium text-muted-foreground">Details</span>
+					<textarea data-testid="work-order-description-input" bind:value={woForm.description} rows={4} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="What is happening, and since when?"></textarea>
+					{#if woErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="work-order-description-error">{woErrors.description}</p>{/if}
+				</div>
+			</div>
+
+			<div class="border-t border-border pt-3">
+				<button
+					type="button"
+					class="flex w-full items-center justify-between rounded px-1 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+					aria-expanded={woMoreOpen}
+					aria-controls="repair-more-details"
+					onclick={() => (woMoreOpen = !woMoreOpen)}
+					data-testid="repair-more-details-toggle"
+				>
+					<span>More details</span>
+					<ChevronDown class="h-4 w-4 transition-transform {woMoreOpen ? 'rotate-180' : ''}" />
+				</button>
+				{#if woMoreOpen}
+					<div id="repair-more-details" class="space-y-4 pt-2" data-testid="repair-more-details">
 						<div class="grid gap-3 sm:grid-cols-2">
 							<div>
-								<label for="work-order-scheduled" class="mb-1 block text-xs font-medium text-muted-foreground">Scheduled start</label>
+								<span class="mb-1 block text-xs font-medium text-muted-foreground">How urgent?</span>
+								<Select.Root type="single" bind:value={woForm.priority}>
+									<Select.Trigger class="w-full" data-testid="work-order-priority-input">
+										{woForm.priority ? formatStatusLabel(woForm.priority) : 'How urgent?'}
+									</Select.Trigger>
+									<Select.Content>
+										{#each WO_PRIORITIES as p}
+											<Select.Item value={p} label={formatStatusLabel(p)}>{formatStatusLabel(p)}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							<div>
+								<span class="mb-1 block text-xs font-medium text-muted-foreground">Kind of work</span>
+								<Input data-testid="work-order-category-input" bind:value={woForm.category} placeholder="Plumbing, heating, electrical…" />
+								{#if woErrors.category}<p class="mt-1 text-xs text-destructive" data-testid="work-order-category-error">{woErrors.category}</p>{/if}
+							</div>
+						</div>
+						<div class="grid gap-3 sm:grid-cols-2">
+							<div>
+								<label for="work-order-scheduled" class="mb-1 block text-xs font-medium text-muted-foreground">Arrives on</label>
 								<DateTimePicker id="work-order-scheduled" testid="work-order-scheduled-input" bind:value={woForm.scheduledFor} />
 								{#if woErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="work-order-scheduled-error">{woErrors.scheduledFor}</p>{/if}
 							</div>
 							<div>
-								<label for="work-order-window-end" class="mb-1 block text-xs font-medium text-muted-foreground">Arrival window end</label>
+								<label for="work-order-window-end" class="mb-1 block text-xs font-medium text-muted-foreground">Arrival window ends</label>
 								<DateTimePicker id="work-order-window-end" testid="work-order-window-end-input" bind:value={woForm.scheduledWindowEnd} />
 								{#if woErrors.scheduledWindowEnd}<p class="mt-1 text-xs text-destructive" data-testid="work-order-window-end-error">{woErrors.scheduledWindowEnd}</p>{/if}
 							</div>
 						</div>
-				{:else if woStep === 4}
-					<div class="grid gap-3 sm:grid-cols-2">
 						<div>
-							<label for="work-order-tenant" class="mb-1 block text-xs font-medium text-muted-foreground">Tenant (optional)</label>
-							<Select.Root type="single" bind:value={woForm.tenantId}>
-								<Select.Trigger id="work-order-tenant" class="w-full" data-testid="work-order-tenant-input">
-									{woForm.tenantId
-										? ((tenantsQuery.data || []).find((t) => String(t.id) === woForm.tenantId)?.fullName
-											?? (() => {
-												const t = (tenantsQuery.data || []).find((t) => String(t.id) === woForm.tenantId);
-												return t ? `${t.firstName} ${t.lastName}`.trim() : 'No tenant';
-											})())
-										: 'No tenant'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="" label="No tenant">No tenant</Select.Item>
-									{#each tenantsQuery.data || [] as tenant (tenant.id)}
-										<Select.Item value={String(tenant.id)} label={tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`.trim()}>
-											{tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`.trim()}
-										</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
+							<label for="work-order-technician-access" class="mb-1 block text-xs font-medium text-muted-foreground">How to get in (optional)</label>
+							<textarea id="work-order-technician-access" data-testid="work-order-technician-access-input" bind:value={woForm.technicianAccessInstructions} rows={3} maxlength={2000} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Entry instructions, lockbox location, pets, or who to call"></textarea>
+							<p class="mt-1 text-xs text-muted-foreground">Only the person doing the repair sees this. Leave out money and anything else about the tenant.</p>
+						</div>
+						<div class="grid gap-3 sm:grid-cols-2">
+							<RemoteRecordSelect
+								queryKey={['work-order-tenant', portfolioId]}
+								label="Tenant (optional)"
+								bind:value={woForm.tenantId}
+								selectedLabel={selectedWoTenantLabel}
+								placeholder="No tenant"
+								clearLabel="No tenant"
+								searchPlaceholder="Search tenants…"
+								emptyLabel="No matching tenants"
+								loadPage={loadTenantOptions}
+								onValueChange={(_value, option) => (selectedWoTenantLabel = option?.label ?? null)}
+								testid="work-order-tenant-input"
+							/>
+							<RemoteRecordSelect
+								queryKey={['work-order-vendor', portfolioId]}
+								label="Who will fix it (optional)"
+								bind:value={woForm.vendorId}
+								selectedLabel={selectedWoVendorLabel}
+								placeholder="Nobody yet"
+								clearLabel="Nobody yet"
+								searchPlaceholder="Search vendors…"
+								emptyLabel="No matching vendors"
+								loadPage={loadVendorOptions}
+								onValueChange={(_value, option) => (selectedWoVendorLabel = option?.label ?? null)}
+								testid="work-order-vendor-input"
+							/>
 						</div>
 						<div>
-							<label for="work-order-vendor" class="mb-1 block text-xs font-medium text-muted-foreground">Vendor (optional)</label>
-							<Select.Root type="single" bind:value={woForm.vendorId}>
-								<Select.Trigger id="work-order-vendor" class="w-full" data-testid="work-order-vendor-input">
-									{woForm.vendorId
-										? ((vendorsQuery.data || []).find((v) => String(v.id) === woForm.vendorId)?.name ?? 'No vendor')
-										: 'No vendor'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="" label="No vendor">No vendor</Select.Item>
-									{#each vendorsQuery.data || [] as vendor (vendor.id)}
-										<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
+							<label for="work-order-est-cost" class="mb-1 block text-xs font-medium text-muted-foreground">What you expect it to cost (optional)</label>
+							<Input id="work-order-est-cost" data-testid="work-order-estimated-cost-input" type="text" inputmode="decimal" mask="currency" bind:value={woForm.estimatedCost} placeholder="0.00" />
+							{#if woErrors.estimatedCost}<p class="mt-1 text-xs text-destructive" data-testid="work-order-estimated-cost-error">{woErrors.estimatedCost}</p>{/if}
 						</div>
-					</div>
-				{:else}
-					<div>
-						<label for="work-order-est-cost" class="mb-1 block text-xs font-medium text-muted-foreground">Estimated cost (optional)</label>
-						<Input id="work-order-est-cost" data-testid="work-order-estimated-cost-input" type="text" inputmode="decimal" mask="currency" bind:value={woForm.estimatedCost} placeholder="0.00" />
-						{#if woErrors.estimatedCost}<p class="mt-1 text-xs text-destructive" data-testid="work-order-estimated-cost-error">{woErrors.estimatedCost}</p>{/if}
 					</div>
 				{/if}
 			</div>
-		</FormStepper>
+		</div>
 		<Dialog.Footer>
 			<Button data-testid="work-order-form-cancel" variant="outline" onclick={closeWoForm}>Cancel</Button>
-			{#if woStep > 0}
-				<Button data-testid="work-order-step-back" variant="outline" onclick={() => (woStep = Math.max(woStep - 1, 0))}>Back</Button>
-				{/if}
-				{#if woStep < woSteps.length - 1}
-					<StepperNextButton
-						testid="work-order-step-next"
-						onclick={nextWoStep}
-						complete={completedWoSteps.includes(woStep)}
-					/>
-				{:else}
-				<Button data-testid="work-order-form-save" onclick={submitWo} disabled={saveWoMutation.isPending}>{saveWoMutation.isPending ? 'Saving…' : 'Save work order'}</Button>
-			{/if}
+			<Button data-testid="work-order-form-save" onclick={submitWo} disabled={saveWoMutation.isPending}>{saveWoMutation.isPending ? 'Saving…' : 'Save repair'}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
@@ -1003,28 +1084,28 @@
 			<div class="space-y-4" data-testid="inspection-form">
 				{#if inspectionStep === 0}
 					<div>
-						<Select.Root type="single" bind:value={inspectionForm.propertyId}>
-							<Select.Trigger class="w-full" data-testid="inspection-property-input">
-								{inspectionForm.propertyId
-									? ((propertiesQuery.data || []).find((p) => String(p.id) === inspectionForm.propertyId)?.name ?? 'Select property')
-									: 'Select property'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="Select property">Select property</Select.Item>
-								{#each propertiesQuery.data || [] as property}
-									<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
+						<RemoteRecordSelect
+							queryKey={['inspection-property', portfolioId]}
+							label="Property"
+							bind:value={inspectionForm.propertyId}
+							selectedLabel={selectedInspectionPropertyLabel}
+							placeholder="Select property"
+							searchPlaceholder="Search properties…"
+							emptyLabel="No matching properties"
+							required
+							loadPage={loadPropertyOptions}
+							onValueChange={(_value, option) => (selectedInspectionPropertyLabel = option?.label ?? null)}
+							testid="inspection-property-input"
+						/>
 						{#if inspectionErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="inspection-property-error">{inspectionErrors.propertyId}</p>{/if}
 					</div>
 					<Select.Root type="single" bind:value={inspectionForm.type}>
 						<Select.Trigger class="w-full" data-testid="inspection-type-input">
-							{inspectionForm.type || 'Select type'}
+							{inspectionForm.type ? inspectionTypeLabel(inspectionForm.type as InspectionType) : 'Select type'}
 						</Select.Trigger>
 						<Select.Content>
 							{#each INSPECTION_TYPES as type}
-								<Select.Item value={type} label={type}>{type}</Select.Item>
+								<Select.Item value={type} label={inspectionTypeLabel(type)}>{inspectionTypeLabel(type)}</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>
@@ -1113,11 +1194,11 @@
 					<label for="inspection-template-type" class="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
 					<Select.Root type="single" bind:value={templateForm.inspectionType}>
 						<Select.Trigger id="inspection-template-type" class="w-full" data-testid="inspection-template-type-input">
-							{templateForm.inspectionType}
+							{templateForm.inspectionType ? inspectionTypeLabel(templateForm.inspectionType as InspectionType) : 'Select type'}
 						</Select.Trigger>
 						<Select.Content>
 							{#each INSPECTION_TYPES as type}
-								<Select.Item value={type} label={type}>{type}</Select.Item>
+								<Select.Item value={type} label={inspectionTypeLabel(type)}>{inspectionTypeLabel(type)}</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>
@@ -1199,7 +1280,7 @@
 
 <ConfirmDialog
 	open={woDeleteTarget !== null}
-	title="Delete work order"
+	title="Delete repair"
 	message={woDeleteTarget ? `Delete "${woDeleteTarget.title}"?` : ''}
 	busy={deleteWoMutation.isPending}
 	testid="work-order-delete"

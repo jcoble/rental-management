@@ -7,47 +7,59 @@ const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'u
 describe('staff create dialog validation clearing', () => {
 	it('clears property and tenant form errors as corrected fields change', () => {
 		const propertiesPage = source('../../routes/(protected)/properties/+page.svelte');
-		const tenantsPage = source('../../routes/(protected)/tenants/+page.svelte');
+		const tenantFields = source('../components/forms/TenantFields.svelte');
 
 		assert.match(propertiesPage, /function clearPropertyError\(field: string\)/);
 		assert.match(propertiesPage, /clearPropertyError\('name'\)/);
 		assert.match(propertiesPage, /clearPropertyError\('addressLine1'\)/);
 		assert.match(propertiesPage, /clearPropertyError\('postalCode'\)/);
-		assert.match(tenantsPage, /function clearTenantError\(field: string\)/);
-		assert.match(tenantsPage, /clearTenantError\('firstName'\)/);
-		assert.match(tenantsPage, /clearTenantError\('lastName'\)/);
-		assert.match(tenantsPage, /clearTenantError\('email'\)/);
+		assert.match(tenantFields, /function clearTenantError\(field: string\)/);
+		assert.match(tenantFields, /clearTenantError\('firstName'\)/);
+		assert.match(tenantFields, /clearTenantError\('lastName'\)/);
+		assert.match(tenantFields, /clearTenantError\('email'\)/);
 	});
 
-	it('clears lease, work-order, inspection, and recurring task errors as corrected fields change', () => {
-		const leasesPage = source('../../routes/(protected)/leases/+page.svelte');
+	it('clears work-order, inspection, and recurring task errors as corrected fields change', () => {
 		const maintenancePage = source('../../routes/(protected)/maintenance/+page.svelte');
-		const recurringPage = source('../../routes/(protected)/maintenance/recurring/+page.svelte');
+		const recurringDialog = source('../components/maintenance/RecurringMaintenanceFormDialog.svelte');
 
-		assert.match(leasesPage, /function clearLeaseError\(field: string\)/);
-		assert.match(leasesPage, /clearLeaseError\('propertyId'\)/);
-		assert.match(leasesPage, /clearLeaseError\('tenantId'\)/);
-		assert.match(leasesPage, /clearLeaseError\('monthlyRent'\)/);
 		assert.match(maintenancePage, /function clearWoError\(field: string\)/);
 		assert.match(maintenancePage, /clearWoError\('title'\)/);
 		assert.match(maintenancePage, /clearInspectionError\('scheduledFor'\)/);
-		assert.match(recurringPage, /function clearRecurringError\(field: string\)/);
-		assert.match(recurringPage, /clearRecurringError\('nextDueDate'\)/);
+		assert.match(recurringDialog, /function clearRecurringError\(field: string\)/);
+		assert.match(recurringDialog, /clearRecurringError\('nextDueDate'\)/);
 	});
 
-	it('clears vendor, accounting expense, and unit rent errors as corrected fields change', () => {
-		const vendorsPage = source('../../routes/(protected)/vendors/+page.svelte');
+	it('keeps vendor and expense clearing while tenant-money sheets own canonical validation', () => {
+		const vendorFields = source('../components/forms/VendorFields.svelte');
 		const accountingPage = source('../../routes/(protected)/accounting/+page.svelte');
 		const rentTab = source('../components/unit/tabs/RentTab.svelte');
+		const tenantLedgerPanel = source('../components/accounting/TenantLedgerPanel.svelte');
+		const paymentSheet = source('../components/accounting/RecordPaymentSheet.svelte');
+		const chargeSheet = source('../components/accounting/OneTimeChargeSheet.svelte');
+		const creditSheet = source('../components/accounting/TenantCreditSheet.svelte');
+		const recurringSheet = source('../components/accounting/RecurringChargeSheet.svelte');
 
-		assert.match(vendorsPage, /function clearVendorError\(field: string\)/);
-		assert.match(vendorsPage, /clearVendorError\('name'\)/);
-		assert.match(vendorsPage, /clearVendorError\('serviceType'\)/);
+		assert.match(vendorFields, /function clearVendorError\(field: string\)/);
+		assert.match(vendorFields, /clearVendorError\('name'\)/);
+		assert.match(vendorFields, /clearVendorError\('serviceType'\)/);
 		assert.match(accountingPage, /function clearExpenseError\(field: string\)/);
 		assert.match(accountingPage, /clearExpenseError\('description'\)/);
 		assert.match(accountingPage, /clearExpenseError\('amount'\)/);
-		assert.match(rentTab, /function clearCreateError\(field: string\)/);
-		assert.match(rentTab, /clearCreateError\('amount'\)/);
-		assert.match(rentTab, /clearCreateError\('dueDate'\)/);
+		assert.match(rentTab, /TenantLedgerPanel/);
+		assert.doesNotMatch(rentTab, /clearCreateError/);
+		for (const sheet of ['RecordPaymentSheet', 'OneTimeChargeSheet', 'TenantCreditSheet', 'RecurringChargeSheet']) {
+			assert.match(tenantLedgerPanel, new RegExp(`import ${sheet}`));
+		}
+		for (const [sheet, fields] of [
+			[paymentSheet, ['amount', 'effectiveOn', 'method']],
+			[chargeSheet, ['amount', 'effectiveOn', 'dueOn', 'description']],
+			[creditSheet, ['amount', 'effectiveOn', 'reason']],
+			[recurringSheet, ['displayName', 'amount', 'category', 'start', 'end', 'dueDay']]
+		] as const) {
+			assert.match(sheet, /function validate\(\): boolean/);
+			assert.match(sheet, /errors = \{\}/);
+			for (const field of fields) assert.match(sheet, new RegExp(`errors\\.${field}`));
+		}
 	});
 });

@@ -10,101 +10,54 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public static class LedgerExplanation
 {
-    /// <summary>
-    /// Explanation for a payment ledger entry.
-    /// </summary>
-    /// <param name="paymentType">Rent, SecurityDeposit, LateFee, Utility, Other.</param>
-    /// <param name="status">The payment's collection status.</param>
-    /// <param name="amount">The payment amount (always positive here).</param>
-    /// <param name="dueDate">When the charge was due.</param>
-    /// <param name="paidDate">When it was paid, if paid.</param>
-    /// <param name="method">How it was paid (check, card, etc.), if known.</param>
-    /// <param name="daysPastDueWhenLate">
-    /// For late fees, how many days rent was past due when the fee was added, if derivable; otherwise null.
-    /// </param>
-    public static string ForPayment(
-        PaymentType paymentType,
-        PaymentStatus status,
+    /// <summary>Plain-English explanation for one immutable canonical tenant-ledger entry.</summary>
+    public static string ForTenantLedgerEntry(
+        TenantLedgerEntryType entryType,
+        TenantLedgerDirection direction,
         decimal amount,
-        DateTime dueDate,
-        DateTime? paidDate,
-        string? method,
-        int? daysPastDueWhenLate = null)
+        DateOnly effectiveOn,
+        DateOnly? dueOn,
+        string? paymentMethodSummary,
+        string? description)
     {
         var money = Money(amount);
+        var effectiveDate = effectiveOn.ToDateTime(TimeOnly.MinValue);
+        var dueDate = (dueOn ?? effectiveOn).ToDateTime(TimeOnly.MinValue);
+        var byMethod = string.IsNullOrWhiteSpace(paymentMethodSummary)
+            ? string.Empty
+            : $" by {paymentMethodSummary.Trim().ToLowerInvariant()}";
 
-        // A collected payment reads as a receipt, regardless of what it paid for.
-        if (status == PaymentStatus.Paid)
+        return entryType switch
         {
-            var when = (paidDate ?? dueDate);
-            var byMethod = string.IsNullOrWhiteSpace(method) ? "" : $" by {method.Trim().ToLowerInvariant()}";
-            return paymentType switch
-            {
-                PaymentType.SecurityDeposit => $"Security deposit of {money} received{byMethod} on {ShortDate(when)}.",
-                PaymentType.LateFee => $"Late fee of {money} paid{byMethod} on {ShortDate(when)}.",
-                PaymentType.Utility => $"Utility payment of {money} received{byMethod} on {ShortDate(when)}.",
-                _ => $"Payment of {money} received{byMethod} on {ShortDate(when)}.",
-            };
-        }
-
-        if (status == PaymentStatus.Refunded)
-            return $"{money} refunded to the tenant.";
-        if (status == PaymentStatus.Waived)
-            return $"{Label(paymentType)} of {money} was waived (forgiven, not owed).";
-        if (status == PaymentStatus.Failed)
-            return $"A {money} payment attempt failed and did not go through.";
-
-        // Otherwise this is a charge that is still owed (Scheduled / Partial / Late).
-        var owedSuffix = status switch
-        {
-            PaymentStatus.Partial => " (partially paid, balance still owed)",
-            PaymentStatus.Late => " — now past due",
-            _ => "",
-        };
-
-        return paymentType switch
-        {
-            PaymentType.Rent =>
-                $"Rent for {MonthYear(dueDate)} — {money} due {ShortDate(dueDate)}{owedSuffix}.",
-            PaymentType.SecurityDeposit =>
-                $"Security deposit of {money} due {ShortDate(dueDate)}{owedSuffix}.",
-            PaymentType.LateFee =>
-                daysPastDueWhenLate is int d && d > 0
-                    ? $"Late fee of {money} — added because rent was {d} day{(d == 1 ? "" : "s")} past due."
-                    : $"Late fee of {money} — added because rent was paid late.",
-            PaymentType.Utility =>
-                $"Utility charge of {money} due {ShortDate(dueDate)}{owedSuffix}.",
-            _ =>
-                $"Charge of {money} due {ShortDate(dueDate)}{owedSuffix}.",
+            TenantLedgerEntryType.OpeningBalance => ForOpeningBalance(
+                direction == TenantLedgerDirection.Credit ? -amount : amount, effectiveDate),
+            TenantLedgerEntryType.RentCharge =>
+                $"Rent for {MonthYear(dueDate)} — {money} due {ShortDate(dueDate)}.",
+            TenantLedgerEntryType.AddendumCharge =>
+                $"Agreement addendum charge of {money} due {ShortDate(dueDate)}.",
+            TenantLedgerEntryType.LateFeeCharge =>
+                $"Late fee of {money} due {ShortDate(dueDate)}.",
+            TenantLedgerEntryType.DepositCharge =>
+                $"Security deposit charge of {money} due {ShortDate(dueDate)}.",
+            TenantLedgerEntryType.ManualCharge =>
+                $"Charge of {money} due {ShortDate(dueDate)}: {ReadableDescription(description)}.",
+            TenantLedgerEntryType.PaymentReceipt =>
+                $"Payment of {money} received{byMethod} on {ShortDate(effectiveDate)}.",
+            TenantLedgerEntryType.Credit =>
+                $"Credit of {money} posted on {ShortDate(effectiveDate)}: {ReadableDescription(description)}.",
+            TenantLedgerEntryType.Adjustment =>
+                $"Account adjustment of {money} posted on {ShortDate(effectiveDate)}: {ReadableDescription(description)}.",
+            TenantLedgerEntryType.Refund =>
+                $"Refund of {money} posted on {ShortDate(effectiveDate)}.",
+            TenantLedgerEntryType.TransferIn =>
+                $"Balance transfer of {money} received on {ShortDate(effectiveDate)}.",
+            TenantLedgerEntryType.TransferOut =>
+                $"Balance transfer of {money} sent on {ShortDate(effectiveDate)}.",
+            TenantLedgerEntryType.Reversal =>
+                $"Reversal of {money} posted on {ShortDate(effectiveDate)}: {ReadableDescription(description)}.",
+            _ => $"{ReadableDescription(description)} — {money} posted on {ShortDate(effectiveDate)}.",
         };
     }
-
-    /// <summary>
-    /// Explanation for the companion payment line shown alongside a Partial charge — the cash collected
-    /// so far against a partially-paid charge. The charge line carries the full bill; this line is a
-    /// receipt for what has come in, and names the remainder still owed so the two read together.
-    /// </summary>
-    public static string ForPartialCollected(
-        PaymentType paymentType,
-        decimal amountPaid,
-        decimal fullAmount,
-        DateTime? paidDate,
-        DateTime dueDate,
-        string? method)
-    {
-        var collected = Money(amountPaid);
-        var remaining = Money(fullAmount - amountPaid);
-        var when = paidDate ?? dueDate;
-        var byMethod = string.IsNullOrWhiteSpace(method) ? "" : $" by {method.Trim().ToLowerInvariant()}";
-        return paymentType switch
-        {
-            PaymentType.SecurityDeposit => $"Security deposit of {collected} received{byMethod} on {ShortDate(when)} — {remaining} still owed.",
-            PaymentType.LateFee => $"Late fee of {collected} paid{byMethod} on {ShortDate(when)} — {remaining} still owed.",
-            PaymentType.Utility => $"Utility payment of {collected} received{byMethod} on {ShortDate(when)} — {remaining} still owed.",
-            _ => $"Payment of {collected} received{byMethod} on {ShortDate(when)} — {remaining} still owed.",
-        };
-    }
-
     /// <summary>
     /// Explanation for an expense ledger entry (money the landlord paid out — vendors, repairs, etc.).
     /// </summary>
@@ -156,15 +109,6 @@ public static class LedgerExplanation
             : $"Bank withdrawal of {money}{who} on {ShortDate(date)}, not yet matched to an expense.";
     }
 
-    private static string Label(PaymentType type) => type switch
-    {
-        PaymentType.Rent => "Rent",
-        PaymentType.SecurityDeposit => "Security deposit",
-        PaymentType.LateFee => "Late fee",
-        PaymentType.Utility => "Utility charge",
-        _ => "Charge",
-    };
-
     private static string CategoryLabel(ScheduleECategory category) =>
         category == ScheduleECategory.Other ? "expenses" : category.ToString().ToLowerInvariant();
 
@@ -178,4 +122,7 @@ public static class LedgerExplanation
     private static string LongDate(DateTime date) => date.ToString("MMM d, yyyy");
 
     private static string MonthYear(DateTime date) => date.ToString("MMMM yyyy");
+
+    private static string ReadableDescription(string? description) =>
+        string.IsNullOrWhiteSpace(description) ? "tenant account entry" : description.Trim().TrimEnd('.');
 }

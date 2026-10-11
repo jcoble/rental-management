@@ -36,11 +36,22 @@ class _AddressAutocompleteFieldState extends ConsumerState<AddressAutocompleteFi
   int _seq = 0;
 
   @override
+  void initState() {
+    super.initState();
+    _focusNode.addListener(_removeOverlayOnFocusLoss);
+  }
+
+  @override
   void dispose() {
     _debounce?.cancel();
+    _focusNode.removeListener(_removeOverlayOnFocusLoss);
     _removeOverlay();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _removeOverlayOnFocusLoss() {
+    if (!_focusNode.hasFocus) _removeOverlay();
   }
 
   void _onChanged(String value) {

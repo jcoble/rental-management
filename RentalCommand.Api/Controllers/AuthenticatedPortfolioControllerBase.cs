@@ -1,28 +1,35 @@
-using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Imaging;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Base for controllers that operate within a single portfolio's tenant scope. Reads the
-/// portfolio and user identity from JWT claims (never from request parameters). The user id is an
-/// int (matching <c>ApplicationUser</c>) encoded as the <c>sub</c>/<see cref="ClaimTypes.NameIdentifier"/> claim.
+/// Base for controllers that operate within one selected workspace. The compact JWT coordinates
+/// are validated against the current session/context/revision by middleware; controllers consume
+/// that database-backed result rather than trusting a portfolio or relationship claim.
 /// </summary>
 [Authorize]
 public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
 {
+    protected static bool TryValidateIdempotencyKey(string? raw, out string key)
+    {
+        key = raw?.Trim() ?? string.Empty;
+        return key.Length is > 0 and <= 128;
+    }
+
     /// <summary>
-    /// Portfolio id from the <c>portfolioId</c> claim. Throws when the claim is missing or
-    /// unparseable so a request with no portfolio scope can never run a tenant-scoped query with
+    /// Portfolio id from the validated active access context. Throws when the context is missing so
+    /// a request with no workspace scope can never run a tenant-scoped query with
     /// <c>portfolioId == 0</c> (which would read across tenants). Use <see cref="TryGetPortfolioId"/>
     /// for code paths that legitimately tolerate an unscoped caller.
     /// </summary>
-    /// <exception cref="MissingAuthContextException">The <c>portfolioId</c> claim is absent or invalid.</exception>
+    /// <exception cref="MissingAuthContextException">The canonical access context is absent or invalid.</exception>
     protected int GetPortfolioId()
     {
         if (!TryGetPortfolioId(out var id))
@@ -34,14 +41,15 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     }
 
     /// <summary>
-    /// Attempts to read the <c>portfolioId</c> claim without throwing. Returns <c>false</c> (and
+    /// Attempts to read the validated workspace without throwing. Returns <c>false</c> (and
     /// <paramref name="portfolioId"/> = 0) when the caller has no portfolio scope.
     /// </summary>
     protected bool TryGetPortfolioId(out int portfolioId)
     {
-        var claim = User.FindFirst("portfolioId");
-        if (claim != null && int.TryParse(claim.Value, out portfolioId))
+        if (HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) &&
+            value is ActiveAccessContext accessContext)
         {
+            portfolioId = accessContext.PortfolioId;
             return true;
         }
 
@@ -52,28 +60,64 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     /// <summary>Int user id parsed from the <c>sub</c>/NameIdentifier claim.</summary>
     protected int GetUserId()
     {
-        var claim = User.FindFirst(ClaimTypes.NameIdentifier);
-        if (claim == null || !int.TryParse(claim.Value, out var userId))
+        if (!HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) ||
+            value is not ActiveAccessContext accessContext)
         {
             throw new MissingAuthContextException("Invalid user context");
         }
 
-        return userId;
+        return accessContext.UserId;
     }
 
-    protected IEnumerable<string> GetRoles() =>
-        User.FindAll(ClaimTypes.Role).Select(c => c.Value);
+    /// <summary>The validated context id used for relationship-scoped record authorization.</summary>
+    protected int GetAccessContextId()
+    {
+        if (!HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) ||
+            value is not ActiveAccessContext accessContext)
+        {
+            throw new MissingAuthContextException("Invalid access context");
+        }
+
+        return accessContext.AccessContextId;
+    }
+
+    /// <summary>The database-validated access context installed by canonical auth middleware.</summary>
+    protected ActiveAccessContext GetActiveAccessContext()
+    {
+        if (!HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) ||
+            value is not ActiveAccessContext accessContext)
+        {
+            throw new MissingAuthContextException("Invalid access context");
+        }
+
+        return accessContext;
+    }
 
     /// <summary>
-    /// Tenant id from the <c>tenantId</c> claim, or <c>null</c> when the caller is not a tenant
-    /// (landlord/staff/owner). Used to constrain otherwise portfolio-wide management reads to a
-    /// tenant's own records when a tenant calls them.
+    /// Attempts to consume the database-validated access context while preserving fail-closed
+    /// controller paths that return <c>Forbid()</c> when canonical middleware state is absent.
     /// </summary>
-    protected int? GetTenantIdOrNull()
+    protected bool TryGetActiveAccessContext(out ActiveAccessContext accessContext)
     {
-        var claim = User.FindFirst("tenantId");
-        return claim != null && int.TryParse(claim.Value, out var tenantId) ? tenantId : null;
+        try
+        {
+            accessContext = GetActiveAccessContext();
+            return true;
+        }
+        catch (MissingAuthContextException)
+        {
+            accessContext = null!;
+            return false;
+        }
     }
+
+    /// <summary>
+    /// True when the validated context has a Team membership. This is only a relationship-shape
+    /// signal; endpoint admission still belongs to canonical capability authorization.
+    /// </summary>
+    protected bool HasWorkspaceMembership() =>
+        HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) &&
+        value is ActiveAccessContext { WorkspaceMembershipId: not null };
 
     // Content types we trust to render inline; anything else downloads as octet-stream so an uploaded
     // html/svg can't execute on the app origin. Shared by every scanned-document endpoint.
@@ -85,9 +129,10 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     /// <summary>
     /// Serves the original scanned document a record was created from: the latest <c>StoredFile</c>
     /// re-keyed to (<paramref name="entityType"/>, <paramref name="entityId"/>) by
-    /// <c>ScanService.FinalizeDraft</c>. When <paramref name="thumb"/> is set and the file is an image,
+    /// the atomic scan-confirm finalizer. When <paramref name="thumb"/> is set and the file is an image,
     /// returns a resized JPEG preview. Inline for known-safe types, attachment otherwise. The lookup is
-    /// portfolio-scoped (from the JWT claim), so it can't reach another tenant's file (IDOR-safe).
+    /// portfolio-scoped through the validated canonical context, so it can't reach another workspace's
+    /// file (IDOR-safe).
     /// </summary>
     protected async Task<IActionResult> ServeEntityScanAsync(
         RentalCommandDbContext db, IFileStorage files, string entityType, int entityId, bool thumb, CancellationToken ct)

@@ -12,6 +12,7 @@ import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
 import { serverGet } from '$lib/api/server-fetch';
 import type { SandboxState } from '$lib/types';
+import { canAccessRoute, CAPABILITY, safeLandingForAccess } from '$lib/auth/experience-policy';
 
 // Routes that are part of the first-login flow itself — never gate these (would loop).
 const ONBOARDING_GATE_PATHS = ['/choose-setup', '/setting-up'];
@@ -27,14 +28,26 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		throw redirect(303, `/login?redirectTo=${encodeURIComponent(redirectTo)}`);
 	}
 
-	if (locals.user.roles?.includes('Tenant') && !locals.user.roles.some((r) => ['Admin', 'Manager', 'Agent'].includes(r))) {
-		throw redirect(303, '/portal');
+	if (!locals.access) {
+		throw redirect(303, '/logout');
+	}
+	const activeExperience = locals.access.selectedContext.activeExperience;
+	const effectiveCapabilities = new Set(
+		locals.access.navigation.find((entry) => entry.experience === activeExperience)?.capabilityKeys ?? []
+	);
+	if (!canAccessRoute(url.pathname, activeExperience, effectiveCapabilities)) {
+		throw redirect(303, safeLandingForAccess(locals.access) ?? '/logout');
 	}
 
 	// First-login Sandbox-vs-Live gate (staff only; portal users already redirected above). Skip the
 	// gate's own pages to avoid a redirect loop. The lookup is one cheap portfolio row and is inert
 	// (returns onboardingChoicePending=false) once the user has chosen.
-	if (locals.accessToken && !ONBOARDING_GATE_PATHS.includes(url.pathname)) {
+	if (
+		locals.accessToken &&
+		activeExperience === 'Management' &&
+		effectiveCapabilities.has(CAPABILITY.rentalsManage) &&
+		!ONBOARDING_GATE_PATHS.includes(url.pathname)
+	) {
 		const { data: sandbox } = await serverGet<SandboxState>(
 			'/portfolio/sandbox-state',
 			locals.accessToken
@@ -47,6 +60,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 	return {
 		user: locals.user,
 		accessToken: locals.accessToken,
-		accessTokenExpiration: locals.accessTokenExpiration ?? null
+		accessTokenExpiration: locals.accessTokenExpiration ?? null,
+		access: locals.access
 	};
 };

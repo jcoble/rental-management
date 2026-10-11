@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_exception.dart';
 import '../api/dio_client.dart';
+import '../api/idempotent_mutation.dart';
 import 'auth_interceptor.dart';
 import 'auth_models.dart';
 import 'token_store.dart';
@@ -33,11 +34,19 @@ class AuthRepository {
   ///
   /// On success, persists the access token and the refresh token extracted from
   /// the `Set-Cookie` response header.
-  Future<LoginResponse> login(String email, String password) async {
+  Future<LoginResponse> login(
+    String email,
+    String password, {
+    int? accessContextId,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/auth/login',
-        data: {'email': email, 'password': password},
+        data: {
+          'email': email,
+          'password': password,
+          'accessContextId': ?accessContextId,
+        },
         options: Options(headers: {clientTypeHeader: mobileClientType}),
       );
 
@@ -64,9 +73,23 @@ class AuthRepository {
         accessToken: loginResponse.accessToken,
         refreshToken: refreshToken,
       );
+      await _tokenStore.saveAccessEnvelope(loginResponse.access.toJson());
 
       return loginResponse;
     } on DioException catch (e) {
+      final body = e.response?.data;
+      if (e.response?.statusCode == 409 &&
+          body is Map &&
+          body['code'] == 'ACCESS_CONTEXT_REQUIRED') {
+        final choices = (body['contexts'] as List<dynamic>? ?? const [])
+            .map(
+              (item) => EffectiveAccessContextOption.fromJson(
+                Map<String, dynamic>.from(item as Map),
+              ),
+            )
+            .toList(growable: false);
+        throw AccessContextSelectionRequiredException(choices);
+      }
       throw ApiException.fromDioException(e);
     }
   }
@@ -83,19 +106,26 @@ class AuthRepository {
     required String password,
     required String displayName,
   }) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/auth/register',
-        data: {
-          'email': email,
-          'password': password,
-          'displayName': displayName,
-        },
-      );
-      return RegisterResult.fromJson(response.data ?? const {});
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    final request = {
+      'email': email,
+      'password': password,
+      'displayName': displayName,
+    };
+    return IdempotentMutation.run(
+      'auth:register:${Object.hash(email, password, displayName)}',
+      (operationKey) async {
+        try {
+          final response = await _dio.post<Map<String, dynamic>>(
+            '/auth/register',
+            data: request,
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+          return RegisterResult.fromJson(response.data ?? const {});
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
   }
 
   /// Signs in with a Google **id_token** obtained on-device via `google_sign_in`.
@@ -133,6 +163,7 @@ class AuthRepository {
         accessToken: loginResponse.accessToken,
         refreshToken: refreshToken,
       );
+      await _tokenStore.saveAccessEnvelope(loginResponse.access.toJson());
 
       return loginResponse;
     } on DioException catch (e) {
@@ -146,14 +177,17 @@ class AuthRepository {
   /// of whether the email exists (no account enumeration). Throws
   /// [ApiException] only on transport/server errors.
   Future<void> forgotPassword(String email) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/forgot-password',
-        data: {'email': email},
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run('auth:forgot-password:$email', (operationKey) async {
+      try {
+        await _dio.post<Map<String, dynamic>>(
+          '/auth/forgot-password',
+          data: {'email': email},
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        );
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
+      }
+    });
   }
 
   /// Re-sends the email-verification message via `POST /auth/resend-verification`.
@@ -162,14 +196,17 @@ class AuthRepository {
   /// of whether the email exists or is already verified (no account enumeration).
   /// Throws [ApiException] only on transport/server errors.
   Future<void> resendVerification(String email) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/resend-verification',
-        data: {'email': email},
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run('auth:resend-verification:$email', (operationKey) async {
+      try {
+        await _dio.post<Map<String, dynamic>>(
+          '/auth/resend-verification',
+          data: {'email': email},
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        );
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
+      }
+    });
   }
 
   /// Confirms an email address via `POST /auth/confirm-email` using the `userId`
@@ -178,14 +215,20 @@ class AuthRepository {
     required String userId,
     required String token,
   }) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/confirm-email',
-        data: {'userId': userId, 'token': token},
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run(
+      'auth:confirm-email:${Object.hash(userId, token)}',
+      (operationKey) async {
+        try {
+          await _dio.post<Map<String, dynamic>>(
+            '/auth/confirm-email',
+            data: {'userId': userId, 'token': token},
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
   }
 
   /// Completes a password reset via `POST /auth/reset-password` using the
@@ -196,14 +239,20 @@ class AuthRepository {
     required String token,
     required String newPassword,
   }) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/reset-password',
-        data: {'userId': userId, 'token': token, 'newPassword': newPassword},
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run(
+      'auth:reset-password:${Object.hash(userId, token, newPassword)}',
+      (operationKey) async {
+        try {
+          await _dio.post<Map<String, dynamic>>(
+            '/auth/reset-password',
+            data: {'userId': userId, 'token': token, 'newPassword': newPassword},
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
   }
 
   /// Changes the signed-in user's password via `POST /auth/change-password`
@@ -213,14 +262,24 @@ class AuthRepository {
     required String currentPassword,
     required String newPassword,
   }) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/change-password',
-        data: {'currentPassword': currentPassword, 'newPassword': newPassword},
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    final request = {
+      'currentPassword': currentPassword,
+      'newPassword': newPassword,
+    };
+    await IdempotentMutation.run(
+      'auth:change-password:${Object.hash(currentPassword, newPassword)}',
+      (operationKey) async {
+        try {
+          await _dio.post<Map<String, dynamic>>(
+            '/auth/change-password',
+            data: request,
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
   }
 
   /// Fetches the current authenticated user via `GET /auth/me`.
@@ -239,6 +298,92 @@ class AuthRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  Future<AccessEnvelope> currentAccess() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/auth/access');
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty access response from server.',
+        );
+      }
+      final access = AccessEnvelope.fromJson(data);
+      await _tokenStore.saveAccessEnvelope(access.toJson());
+      return access;
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<EffectiveAccessContextOption>> contexts() async {
+    try {
+      final response = await _dio.get<List<dynamic>>('/auth/contexts');
+      return (response.data ?? const [])
+          .map(
+            (item) => EffectiveAccessContextOption.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<AccessContextSwitchResponse> selectContext(int accessContextId) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/auth/contexts/select',
+        data: {'accessContextId': accessContextId},
+      );
+      final result = AccessContextSwitchResponse.fromJson(
+        response.data ?? <String, dynamic>{},
+      );
+      final refreshToken = await _tokenStore.getRefreshToken();
+      if (refreshToken == null) {
+        throw const ApiException(
+          statusCode: 401,
+          message: 'Session expired. Please sign in again.',
+        );
+      }
+      await _tokenStore.saveTokens(
+        accessToken: result.accessToken,
+        refreshToken: refreshToken,
+      );
+      await _tokenStore.saveAccessEnvelope(result.access.toJson());
+      return result;
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<AccessEnvelope> selectExperience(
+    WorkspaceExperience experience,
+  ) => IdempotentMutation.run('auth:experience:${experience.name}', (
+    operationKey,
+  ) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/auth/experience/select',
+        data: {'experience': experience.name},
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty access response from server.',
+        );
+      }
+      final access = AccessEnvelope.fromJson(data);
+      await _tokenStore.saveAccessEnvelope(access.toJson());
+      return access;
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  });
 
   /// Logs out by revoking the server-side refresh token and clearing local storage.
   Future<void> logout() async {
@@ -260,9 +405,16 @@ class AuthRepository {
   }
 }
 
+class AccessContextSelectionRequiredException extends ApiException {
+  const AccessContextSelectionRequiredException(this.contexts)
+    : super(statusCode: 409, message: 'Select a workspace to continue.');
+  final List<EffectiveAccessContextOption> contexts;
+}
+
 /// Internal counter incremented by [AuthInterceptor] when a refresh fails.
 /// The [authControllerProvider] listens to this and calls logout().
 final logoutSignalProvider = _LogoutSignalNotifier.provider;
+final accessChangeSignalProvider = _AccessChangeSignalNotifier.provider;
 
 class _LogoutSignalNotifier extends Notifier<int> {
   static final provider = NotifierProvider<_LogoutSignalNotifier, int>(
@@ -273,6 +425,20 @@ class _LogoutSignalNotifier extends Notifier<int> {
   int build() => 0;
 
   void signal() => state++;
+}
+
+class _AccessChangeSignalNotifier extends Notifier<AccessEnvelope?> {
+  static final provider =
+      NotifierProvider<_AccessChangeSignalNotifier, AccessEnvelope?>(
+        _AccessChangeSignalNotifier.new,
+      );
+
+  @override
+  AccessEnvelope? build() => null;
+
+  void signal(Map<String, dynamic> json) {
+    state = AccessEnvelope.fromJson(json);
+  }
 }
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
@@ -290,6 +456,9 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
       // Signal logout — the auth controller's listener handles the state change.
       ref.read(logoutSignalProvider.notifier).signal();
     },
+    onAccessChanged: (access) {
+      ref.read(accessChangeSignalProvider.notifier).signal(access);
+    },
   );
 
   // Outermost: measures total wall-clock time including the auth interceptor.
@@ -298,6 +467,11 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 
   return AuthRepository(dio: baseDio, tokenStore: tokenStore);
 });
+
+final accessContextsProvider =
+    FutureProvider.autoDispose<List<EffectiveAccessContextOption>>((ref) {
+      return ref.watch(authRepositoryProvider).contexts();
+    });
 
 Dio _buildRefreshDio(Dio source) {
   final dio = Dio(source.options.copyWith());

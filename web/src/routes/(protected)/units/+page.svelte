@@ -9,13 +9,14 @@
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import { getUnitsEmptyStateCopy } from '$lib/units/unit-list-state';
-	import { Home } from '@lucide/svelte';
-	import * as Select from '$lib/components/ui/select';
+	import { getUnitsEmptyStateCopy } from '$lib/unit/unit-list-state';
+	import { Home, Plus } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { Button } from '$lib/components/ui/button';
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
@@ -56,10 +57,17 @@
 			}),
 	}));
 
-	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId],
-		queryFn: () => properties.list(portfolioId, { take: 200 }),
-	}));
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}${property.city ? `, ${property.city}` : ''}${property.state ? `, ${property.state}` : ''}`
+			}))
+		};
+	}
 
 	const list = $derived(unitsQuery.data?.items ?? []);
 	const totalCount = $derived(unitsQuery.data?.totalCount ?? 0);
@@ -70,7 +78,7 @@
 	// uses internally) so the colors flip correctly in dark/light — never raw Tailwind palette literals.
 	const stageMap: Record<string, { label?: string; class: string }> = {
 		Active: { class: 'm3-tone-chip border m3-tone--success' },
-		Renewal: { class: 'm3-tone-chip border m3-tone--warning' },
+		Renewal: { label: 'Renewal due', class: 'm3-tone-chip border m3-tone--warning' },
 		'Move-Out': { class: 'm3-tone-chip border m3-tone--error' },
 		Lease: { class: 'm3-tone-chip border m3-tone--info' },
 		Vacant: { class: 'm3-tone-chip border m3-tone--info' },
@@ -81,7 +89,6 @@
 		{ key: 'unitNumber', title: 'Unit', sortable: true, mobileRole: 'title', accessor: (u) => `Unit ${u.unitNumber}` },
 		{ key: 'propertyName', title: 'Property', sortable: true, mobileRole: 'subtitle' },
 		{ key: 'status', title: 'Status', mobileRole: 'badge', cell: statusCell },
-		{ key: 'simpleStage', title: 'Stage', mobileRole: 'meta', cell: stageCell },
 		{ key: 'openWorkOrderCount', title: 'Open repairs', format: 'number', sortable: true, mobileRole: 'metric', align: 'right' },
 		{ key: 'leaseEndsInDays', title: 'Lease ends', mobileRole: 'meta', accessor: (u) => leaseEndsLabel(u.leaseEndsInDays) },
 		{ key: 'docsNeedingReviewCount', title: 'Docs', format: 'number', mobileRole: 'meta', align: 'right' },
@@ -91,34 +98,44 @@
 	function leaseEndsLabel(days?: number): string {
 		if (days == null) return '—';
 		if (days === 0) return 'Today';
-		return `${days}d`;
+		if (days < 0) return `${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago`;
+		return `In ${days} day${days === 1 ? '' : 's'}`;
 	}
 </script>
 
 {#snippet statusCell(unit: UnitHealth)}
-	<StatusBadge status={unit.status} />
-{/snippet}
-
-{#snippet stageCell(unit: UnitHealth)}
-	<StatusBadge status={unit.simpleStage} map={stageMap} />
+	<div class="flex flex-wrap items-center gap-1.5">
+		<StatusBadge status={unit.status} />
+		{#if unit.simpleStage && unit.simpleStage !== unit.status && unit.simpleStage !== 'Active'}
+			<StatusBadge status={unit.simpleStage} map={stageMap} />
+		{/if}
+	</div>
 {/snippet}
 
 <svelte:head>
 	<title>Units - Rental Command</title>
 </svelte:head>
 
-<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="units-page">
+	<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="units-page">
 	<PageHeader
 		class="mb-4"
 		band
 		art={6}
 		tone="sky"
+		density="compact"
 		eyebrow="Rentals"
 		title="Units"
-		description="Every unit at a glance. Open a unit for its full story."
+		description="Choose a unit to manage its lease, residents, money, maintenance, documents, and history."
 		data-testid="units-header"
 	/>
 
+	{#if unitsQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="units-list-error">
+			<p class="font-medium text-destructive">Could not load units.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. The rentals list is temporarily unavailable.</p>
+			<Button class="mt-4" variant="outline" onclick={() => unitsQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={list}
 		{columns}
@@ -144,18 +161,26 @@
 				<div class="max-w-sm flex-1">
 					<SearchInput bind:value={search} placeholder="Search units…" testid="unit-search" />
 				</div>
-				<Select.Root type="single" bind:value={propertyFilter}>
-					<Select.Trigger class="w-[200px]" data-testid="unit-property-filter">
-						{propertiesQuery.data?.find((p) => String(p.id) === propertyFilter)?.name ?? 'All properties'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="All properties">All properties</Select.Item>
-						{#each propertiesQuery.data ?? [] as property}
-							<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+				<Button href="/properties?coach=open-property-for-units" variant="outline" class="shrink-0 gap-2" data-testid="unit-create-button">
+					<Plus class="h-4 w-4" />
+					New unit
+				</Button>
+				<div class="w-[240px]">
+					<RemoteRecordSelect
+						queryKey={['unit-property-filter', portfolioId]}
+						label="Property"
+						bind:value={propertyFilter}
+						selectedLabel={propertyFilter ? `Property #${propertyFilter}` : null}
+						placeholder="All properties"
+						clearLabel="All properties"
+						searchPlaceholder="Search properties…"
+						emptyLabel="No matching properties"
+						loadPage={loadPropertyOptions}
+						testid="unit-property-filter"
+					/>
+				</div>
 			</div>
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>

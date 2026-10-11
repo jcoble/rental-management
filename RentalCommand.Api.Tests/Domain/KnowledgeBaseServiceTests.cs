@@ -221,6 +221,19 @@ public sealed class KnowledgeBaseServiceTests : IDisposable
     }
 
     [Fact]
+    public void RealKnowledgeBase_SearchAiProvider_ReturnsAiProviderArticle()
+    {
+        var directory = FindRepositoryKnowledgeBaseDirectory();
+        var sut = new KnowledgeBaseService(directory, NullLogger<KnowledgeBaseService>.Instance);
+
+        var results = sut.Search("AI provider", max: 5);
+
+        results.Should().NotBeEmpty();
+        results[0].Slug.Should().Be("ai-provider");
+        results[0].Title.Should().Be("AI Provider");
+    }
+
+    [Fact]
     public void MissingDirectory_DoesNotThrow_AndReturnsEmpty()
     {
         var sut = new KnowledgeBaseService(
@@ -229,5 +242,18 @@ public sealed class KnowledgeBaseServiceTests : IDisposable
         sut.ListArticles().Should().BeEmpty();
         sut.Search("anything", 5).Should().BeEmpty();
         sut.GetArticle("anything").Should().BeNull();
+    }
+
+    private static string FindRepositoryKnowledgeBaseDirectory()
+    {
+        var current = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (current is not null)
+        {
+            var candidate = Path.Combine(current.FullName, "RentalCommand.Api", "KnowledgeBase");
+            if (Directory.Exists(candidate)) return candidate;
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate RentalCommand.Api/KnowledgeBase.");
     }
 }

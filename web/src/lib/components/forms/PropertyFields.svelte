@@ -19,13 +19,15 @@
 		autoFilled,
 		confidence,
 		section = 'all',
+		rentalStructureLocked = false,
 		testidPrefix = 'property'
 	}: {
-		form: { name: string; type: string; addressLine1: string; addressLine2: string; city: string; state: string; postalCode: string; ownerEntityId: string };
+		form: { name: string; type: string; rentalStructure: string; addressLine1: string; addressLine2: string; city: string; state: string; postalCode: string; ownerEntityId: string };
 		errors?: Record<string, string>;
 		autoFilled?: Set<string>;
 		confidence?: Record<string, number>;
 		section?: 'all' | 'identity' | 'address';
+		rentalStructureLocked?: boolean;
 		testidPrefix?: string;
 	} = $props();
 
@@ -36,6 +38,30 @@
 
 <div class="grid gap-3 md:grid-cols-2" data-testid={`${testidPrefix}-fields`}>
 	{#if show('identity')}
+	<fieldset class="md:col-span-2">
+		<legend class="mb-1 text-xs font-medium text-muted-foreground">How many rentals are at this address?</legend>
+		{#if rentalStructureLocked}
+			<p class="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+				{form.rentalStructure === 'SingleRental' ? 'One rental' : 'Multiple rentals'}
+				<span class="mt-1 block text-xs text-muted-foreground">Change this through Guided Setup so the underlying Units stay consistent.</span>
+			</p>
+		{:else}
+		<div class="grid gap-2 sm:grid-cols-2">
+			<label class="cursor-pointer rounded-lg border p-3 transition-colors {form.rentalStructure === 'SingleRental' ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted/40'}">
+				<input class="sr-only" type="radio" name={`${testidPrefix}-rental-structure`} value="SingleRental" bind:group={form.rentalStructure} data-testid={`${testidPrefix}-single-rental`} />
+				<span class="block text-sm font-semibold">One rental</span>
+				<span class="mt-1 block text-xs text-muted-foreground">One house, condo, townhome, or other rentable space.</span>
+			</label>
+			<label class="cursor-pointer rounded-lg border p-3 transition-colors {form.rentalStructure === 'MultiRental' ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted/40'}">
+				<input class="sr-only" type="radio" name={`${testidPrefix}-rental-structure`} value="MultiRental" bind:group={form.rentalStructure} data-testid={`${testidPrefix}-multi-rental`} />
+				<span class="block text-sm font-semibold">Multiple rentals</span>
+				<span class="mt-1 block text-xs text-muted-foreground">A duplex, apartment building, or other address with separate rentals.</span>
+			</label>
+		</div>
+		{/if}
+		{#if errors.rentalStructure}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-rental-structure-error`}>{errors.rentalStructure}</p>{/if}
+	</fieldset>
+
 	<div class="md:col-span-2">
 		<div class="mb-1 flex items-center gap-2">
 			<span class="text-xs font-medium text-muted-foreground">Name</span>

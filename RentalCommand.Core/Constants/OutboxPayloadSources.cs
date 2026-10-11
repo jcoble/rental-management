@@ -10,4 +10,7 @@ public static class OutboxPayloadSources
     /// Native lease e-sign signing-link email. The signer is resolved from the lease tenant.
     /// </summary>
     public const string LeaseEsignSigningLink = "lease-esign-signing-link";
+
+    /// <summary>FCRA adverse-action notice delivery to a rental applicant.</summary>
+    public const string AdverseActionNotice = "adverse-action-notice";
 }

@@ -12,30 +12,19 @@ test.describe('Maintenance', () => {
 	test('creates a work order against a property', async ({ page }) => {
 		const title = unique('Leaky Faucet');
 
-		await expect(page.getByRole('button', { name: /new work order/i })).toHaveCount(1);
 		await page.getByTestId('work-order-create-button').click();
 		await expect(page.getByTestId('work-order-form')).toBeVisible();
 
-		await expect(page.getByTestId('work-order-form-save')).toHaveCount(0);
-		await page.getByTestId('work-order-title-input').fill(title);
-		await page.getByTestId('work-order-description-input').fill('Kitchen sink drips overnight.');
-		await page.getByTestId('work-order-step-next').click();
-		await expect(page.getByTestId('work-order-category-input')).toBeVisible();
-		await page.getByTestId('work-order-step-next').click();
-		await expect(page.getByTestId('work-order-property-input')).toBeVisible();
-
-		// Pick a real property from the shadcn Select dropdown — the first option is the
-		// "Select property" placeholder (empty value), so skip it.
+		// Pick a real property from the dropdown — the first option is the "Select property"
+		// placeholder (empty value), so skip it.
 		await page.getByTestId('work-order-property-input').click();
 		const realProperties = page.getByRole('option').filter({ hasNotText: 'Select property' });
 		const optionCount = await realProperties.count();
-		test.skip(optionCount === 0, 'No properties seeded to attach a work order to');
+		test.skip(optionCount === 0, 'No properties seeded to attach a repair to');
 		await realProperties.first().click();
 
-		await page.getByTestId('work-order-step-next').click();
-		await expect(page.getByTestId('work-order-scheduled-input-date')).toBeVisible();
-		await page.getByTestId('work-order-step-next').click();
-		await expect(page.getByTestId('work-order-vendor-input')).toBeVisible();
+		await page.getByTestId('work-order-title-input').fill(title);
+		await page.getByTestId('work-order-description-input').fill('Kitchen sink drips overnight.');
 
 		await page.getByTestId('work-order-form-save').click();
 

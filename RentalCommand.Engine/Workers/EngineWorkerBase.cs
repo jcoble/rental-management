@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using RentalCommand.Core.Time;
 using RentalCommand.Engine.Services;
 
 namespace RentalCommand.Engine.Workers;
@@ -14,7 +15,7 @@ namespace RentalCommand.Engine.Workers;
 /// - Graceful shutdown on the host's stopping token.
 /// - Heartbeat reporting to <see cref="EngineStatusReporter"/> on every successful cycle.
 /// - Error reporting to <see cref="EngineStatusReporter"/> on cycle failure.
-/// - Structured error logging that never lets one bad cycle kill the worker.
+/// - Per-worker restart with bounded exponential backoff after a failed cycle.
 ///
 /// Single-instance safety (the PostgreSQL advisory lock) is enforced once at host
 /// startup in Program.cs; the lock is released on graceful shutdown there. Workers
@@ -22,6 +23,10 @@ namespace RentalCommand.Engine.Workers;
 /// </summary>
 public abstract class EngineWorkerBase : BackgroundService
 {
+    private static readonly TimeSpan InitialFailureBackoff = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan MaximumFailureBackoff = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan FailureBackoffResetPeriod = TimeSpan.FromMinutes(5);
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger _logger;
 
@@ -44,6 +49,16 @@ public abstract class EngineWorkerBase : BackgroundService
     {
         _logger.LogInformation("{WorkerName} starting (poll interval {Interval})", WorkerName, PollInterval);
 
+        if (!await WaitForSimulationClockStartupAsync(stoppingToken))
+        {
+            _logger.LogInformation("{WorkerName} stopped before simulation clock startup completed", WorkerName);
+            return;
+        }
+
+        var consecutiveFailures = 0;
+        DateTimeOffset? lastFailureAt = null;
+        var succeededSinceLastFailure = false;
+
         // Record start in the heartbeat table so the health check and watchdog
         // see this worker immediately rather than waiting for the first cycle.
         try
@@ -60,6 +75,7 @@ public abstract class EngineWorkerBase : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             int itemsProcessed = 0;
+            TimeSpan? restartDelay = null;
 
             try
             {
@@ -83,6 +99,7 @@ public abstract class EngineWorkerBase : BackgroundService
                 // Report successful heartbeat after every cycle (healthy or idle).
                 var reporter = scope.ServiceProvider.GetRequiredService<EngineStatusReporter>();
                 await reporter.ReportHeartbeatAsync(WorkerName, stoppingToken, processedDelta: itemsProcessed);
+                succeededSinceLastFailure = true;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -91,8 +108,16 @@ public abstract class EngineWorkerBase : BackgroundService
             }
             catch (OperationCanceledException)
             {
-                // Per-cycle timeout (not a shutdown). Log and report.
-                _logger.LogWarning("{WorkerName} cycle timed out after {Timeout}", WorkerName, StepTimeout);
+                // Per-cycle timeout (not a shutdown). Log, report, and restart this worker.
+                restartDelay = RegisterFailure(
+                    ref consecutiveFailures,
+                    ref lastFailureAt,
+                    ref succeededSinceLastFailure);
+                _logger.LogWarning(
+                    "{WorkerName} cycle timed out after {Timeout}; restarting this worker in {RestartDelay}",
+                    WorkerName,
+                    StepTimeout,
+                    restartDelay);
 
                 try
                 {
@@ -109,7 +134,15 @@ public abstract class EngineWorkerBase : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "{WorkerName} error in cycle", WorkerName);
+                restartDelay = RegisterFailure(
+                    ref consecutiveFailures,
+                    ref lastFailureAt,
+                    ref succeededSinceLastFailure);
+                _logger.LogError(
+                    ex,
+                    "{WorkerName} failed; restarting this worker in {RestartDelay}",
+                    WorkerName,
+                    restartDelay);
 
                 try
                 {
@@ -121,6 +154,20 @@ public abstract class EngineWorkerBase : BackgroundService
                 {
                     _logger.LogWarning(reportEx, "{WorkerName} failed to report error", WorkerName);
                 }
+            }
+
+            if (restartDelay is { } delay)
+            {
+                try
+                {
+                    await Task.Delay(delay, TimeProvider.System, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                continue;
             }
 
             // Wait for the next cycle, emitting idle keep-alive heartbeats so a long
@@ -135,12 +182,98 @@ public abstract class EngineWorkerBase : BackgroundService
         _logger.LogInformation("{WorkerName} stopped", WorkerName);
     }
 
+    private static TimeSpan RegisterFailure(
+        ref int consecutiveFailures,
+        ref DateTimeOffset? lastFailureAt,
+        ref bool succeededSinceLastFailure)
+    {
+        var now = TimeProvider.System.GetUtcNow();
+        if (lastFailureAt is { } previousFailure
+            && succeededSinceLastFailure
+            && now - previousFailure >= FailureBackoffResetPeriod)
+        {
+            consecutiveFailures = 0;
+        }
+
+        consecutiveFailures = Math.Min(consecutiveFailures + 1, 7);
+        lastFailureAt = now;
+        succeededSinceLastFailure = false;
+
+        var multiplier = 1 << (consecutiveFailures - 1);
+        var delay = InitialFailureBackoff * multiplier;
+        return delay <= MaximumFailureBackoff ? delay : MaximumFailureBackoff;
+    }
+
     /// <summary>
     /// Maximum gap between liveness heartbeats while a worker is idle between cycles. Kept well
     /// under the watchdog's staleness thresholds so a worker with a long <see cref="PollInterval"/>
     /// still reports "alive" regularly (only a genuine hang then goes stale).
     /// </summary>
     protected virtual TimeSpan HeartbeatInterval => TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// In simulation-enabled hosts, the ambient <see cref="TimeProvider"/> starts with a safe default
+    /// real-clock state until the persisted <c>SimulationClock</c> row is loaded. Engine workers mutate
+    /// durable rows, so they must not run a cycle until that first persisted state is authoritative.
+    /// </summary>
+    private async Task<bool> WaitForSimulationClockStartupAsync(CancellationToken stoppingToken)
+    {
+        IClockStateProvider? clockState;
+        try
+        {
+            clockState = _serviceProvider.GetService<IClockStateProvider>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "{WorkerName} failed to resolve simulation clock state provider", WorkerName);
+            return false;
+        }
+
+        if (clockState is null || clockState.HasLoadedPersistedState)
+        {
+            return true;
+        }
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await clockState.EnsureInitializedAsync(stoppingToken);
+                _logger.LogInformation("{WorkerName} loaded persisted simulation clock state before first cycle", WorkerName);
+                return true;
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{WorkerName} is waiting for persisted simulation clock state before processing", WorkerName);
+
+                try
+                {
+                    using var scope = _serviceProvider.CreateScope();
+                    var reporter = scope.ServiceProvider.GetRequiredService<EngineStatusReporter>();
+                    await reporter.ReportErrorAsync(ex, WorkerName, stoppingToken);
+                }
+                catch (Exception reportEx)
+                {
+                    _logger.LogWarning(reportEx, "{WorkerName} failed to report simulation clock startup error", WorkerName);
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), TimeProvider.System, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Sleeps for <see cref="PollInterval"/>, broken into <see cref="HeartbeatInterval"/> slices,

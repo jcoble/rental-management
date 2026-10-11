@@ -1,17 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../core/models/models.dart';
-
-const _months = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-];
+import '../../core/presentation/formatting.dart';
 
 String formatTimelineMoment(DateTime d) {
   final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
   final m = d.minute.toString().padLeft(2, '0');
   final ampm = d.hour < 12 ? 'AM' : 'PM';
-  return '${_months[d.month]} ${d.day}, ${d.year} · $h:$m $ampm';
+  return '${dateFmt(d)} · $h:$m $ampm';
 }
 
 /// Human-readable label for a WorkOrderStatus enum value.
@@ -53,8 +49,9 @@ class WorkOrderTimeline extends StatelessWidget {
             Expanded(
               child: Text(
                 'No status history yet.',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: cs.onSurfaceVariant),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
               ),
             ),
           ],
@@ -104,12 +101,15 @@ class _TimelineRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dotColor =
-        isFirst ? colorScheme.primary : colorScheme.outlineVariant;
-    final transition = event.fromStatus == null
+    final dotColor = isFirst ? colorScheme.primary : colorScheme.outlineVariant;
+    final isEditEvent =
+        event.fromStatus != null && event.fromStatus == event.toStatus;
+    final transition = isEditEvent
+        ? 'Repair updated'
+        : event.fromStatus == null
         ? 'Created as ${workOrderStatusLabel(event.toStatus)}'
         : '${workOrderStatusLabel(event.fromStatus!)} → '
-            '${workOrderStatusLabel(event.toStatus)}';
+              '${workOrderStatusLabel(event.toStatus)}';
 
     return IntrinsicHeight(
       child: Row(
@@ -132,10 +132,7 @@ class _TimelineRow extends StatelessWidget {
               ),
               if (!isLast)
                 Expanded(
-                  child: Container(
-                    width: 2,
-                    color: colorScheme.outlineVariant,
-                  ),
+                  child: Container(width: 2, color: colorScheme.outlineVariant),
                 ),
             ],
           ),
@@ -161,22 +158,26 @@ class _TimelineRow extends StatelessWidget {
                           event.changedByLabel!.isNotEmpty)
                         event.changedByLabel!,
                     ].join(' · '),
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: colorScheme.onSurfaceVariant),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
                   ),
                   if (event.note != null && event.note!.isNotEmpty) ...[
                     const SizedBox(height: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 8),
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
                         color: colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
                         event.note!,
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: colorScheme.onSurface),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurface,
+                        ),
                       ),
                     ),
                   ],

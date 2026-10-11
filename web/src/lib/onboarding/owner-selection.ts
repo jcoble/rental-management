@@ -4,6 +4,7 @@ type OwnerLike = {
 	id: number | string;
 	name?: string | null;
 	ownerEntityType?: OwnerEntityType | string | null;
+	isPrimary?: boolean;
 	email?: string | null;
 	taxId?: string | null;
 };
@@ -30,7 +31,7 @@ export function ownerEntityIdForOnboarding({
 		return selectedOwnerId;
 	}
 
-	const owner = createdOwner ?? existingOwners?.[0] ?? null;
+	const owner = createdOwner ?? existingOwners?.find((candidate) => candidate.isPrimary) ?? existingOwners?.[0] ?? null;
 	return owner ? String(owner.id) : '';
 }
 

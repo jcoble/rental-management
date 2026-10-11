@@ -13,6 +13,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { ArrowDown, ArrowUp, Camera, Check, ClipboardCheck, Download, Edit2, Minus, Plus, Save, Trash2, X } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -25,6 +26,15 @@
 	}));
 
 	const inspection = $derived(inspectionQuery.data);
+	const inspectionTypeLabels: Record<string, string> = {
+		MoveIn: 'Move-in',
+		MoveOut: 'Move-out',
+		AnnualSafety: 'Annual safety',
+		Routine: 'Routine'
+	};
+	const inspectionTypeLabel = $derived(
+		inspection ? (inspectionTypeLabels[inspection.type] ?? inspection.type) : 'Inspection'
+	);
 	const isCompleted = $derived(inspection?.status === 'Completed');
 	const readOnly = $derived(isCompleted);
 	const orderedItems = $derived.by(() =>
@@ -287,7 +297,7 @@
 		uploadingPhotoFor = item.id;
 		try {
 			// 1. Upload the file as an Inspection document → returns a stored file (id).
-			const doc = await documents.upload('Inspection', id, file);
+			const doc = await documents.upload('Inspection', id, file, undefined, crypto.randomUUID());
 			// 2. Attach that stored file to this checklist item.
 			const updated = await inspections.setItemPhoto(id, item.id, doc.id);
 			patchItemInCache(updated);
@@ -335,8 +345,16 @@
 		},
 	}));
 
-	// Combine the just-completed result with any IDs already on a reloaded inspection.
-	const createdWorkOrderIds = $derived(completeResult?.createdWorkOrderIds ?? []);
+	// Keep follow-up work orders visible after reload. The completion response provides them
+	// immediately; the durable item relationship is the source of truth on later visits.
+	const createdWorkOrderIds = $derived.by(() => [
+		...new Set([
+			...(completeResult?.createdWorkOrderIds ?? []),
+			...(inspection?.items ?? [])
+				.map((item) => item.spawnedWorkOrderId)
+				.filter((workOrderId): workOrderId is number => typeof workOrderId === 'number' && workOrderId > 0),
+		]),
+	]);
 
 	// --- Report download ---
 	let downloadingReport = $state(false);
@@ -354,7 +372,9 @@
 	function formatDate(val: string | undefined | null): string {
 		if (!val) return '—';
 		const d = new Date(val);
-		return isNaN(d.getTime()) ? val : d.toLocaleString();
+		return isNaN(d.getTime())
+			? val
+			: d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 	}
 
 	const RESULT_BADGE: Record<string, { class: string }> = {
@@ -366,21 +386,21 @@
 </script>
 
 <svelte:head>
-	<title>{inspection ? `${inspection.type} inspection` : 'Inspection'} - Rental Command</title>
+	<title>{inspection ? `${inspectionTypeLabel} inspection` : 'Inspection'} - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-24" data-testid="inspection-detail-page">
 	<div class="mb-4">
 		<PageBreadcrumb
 			crumbs={[
-				{ label: 'Work Orders', href: '/maintenance' },
-				{ label: inspection ? `${inspection.type} inspection` : 'Inspection' },
+				{ label: 'Repairs', href: '/maintenance' },
+				{ label: inspection ? `${inspectionTypeLabel} inspection` : 'Inspection' },
 			]}
 		/>
 	</div>
 
 	{#if inspectionQuery.isLoading}
-		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="inspection-detail-loading">Loading…</p>
+		<LoadingState label="Loading inspection details" variant="page" testid="inspection-detail-loading" />
 	{:else if inspectionQuery.isError}
 		<p class="py-8 text-center text-sm text-destructive" data-testid="inspection-detail-error">Failed to load inspection.</p>
 	{:else if !inspection}
@@ -390,7 +410,7 @@
 		<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
 			<div class="space-y-2">
 				<div class="flex flex-wrap items-center gap-2">
-					<h1 class="text-2xl font-bold" data-testid="inspection-detail-title">{inspection.type} inspection</h1>
+					<h1 class="text-2xl font-bold" data-testid="inspection-detail-title">{inspectionTypeLabel} inspection</h1>
 					<StatusBadge status={inspection.status} />
 				</div>
 				<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
@@ -465,7 +485,7 @@
 					</p>
 					{#if createdWorkOrderIds.length > 0}
 						<p class="mt-2">
-							Created {createdWorkOrderIds.length} work order{createdWorkOrderIds.length === 1 ? '' : 's'} for the failed items:
+							Created {createdWorkOrderIds.length} repair{createdWorkOrderIds.length === 1 ? '' : 's'} for the failed items:
 						</p>
 						<div class="mt-1 flex flex-wrap gap-2" data-testid="inspection-created-work-orders">
 							{#each createdWorkOrderIds as woId (woId)}
@@ -474,7 +494,7 @@
 									class="m3-tone-chip border m3-tone--success rounded px-2 py-1 text-xs font-medium"
 									data-testid="inspection-work-order-link-{woId}"
 								>
-									Work order #{woId}
+									Repair #{woId}
 								</a>
 							{/each}
 						</div>
@@ -780,7 +800,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Complete this inspection?</Dialog.Title>
 			<Dialog.Description>
-				We'll lock the checklist, generate a PDF report, and open work orders for any items marked
+				We'll lock the checklist, generate a PDF report, and open repairs for any items marked
 				<span class="font-medium">Fail</span>. This can't be undone.
 			</Dialog.Description>
 		</Dialog.Header>

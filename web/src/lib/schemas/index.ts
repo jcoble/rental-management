@@ -18,20 +18,31 @@ const optionalText = z
 	.transform((v) => (v.length ? v : null))
 	.nullable()
 	.optional();
-const optionalEmail = z
-	.string()
-	.trim()
-	.transform((v) => (v.length ? v : null))
-	.nullable()
-	.refine((v) => v === null || z.string().email().safeParse(v).success, 'Enter a valid email')
-	.optional();
-const optionalUrl = z
-	.string()
-	.trim()
-	.transform((v) => (v.length ? v : null))
-	.nullable()
-	.refine((v) => v === null || z.string().url().safeParse(v).success, 'Enter a valid URL')
-	.optional();
+const optionalEmailMax = (label: string, max: number) =>
+	z
+		.string()
+		.trim()
+		.max(max, `${label} must be ${max} characters or fewer`)
+		.transform((v) => (v.length ? v : null))
+		.nullable()
+		.refine((v) => v === null || z.string().email().safeParse(v).success, 'Enter a valid email')
+		.optional();
+const optionalEmail = optionalEmailMax('Email', 200);
+const optionalUrlMax = (label: string, max: number) =>
+	z
+		.string()
+		.trim()
+		.max(max, `${label} must be ${max} characters or fewer`)
+		.transform((v) => (v.length ? v : null))
+		.nullable()
+		.refine((v) => v === null || z.string().url().safeParse(v).success, 'Enter a valid URL')
+		.optional();
+const optionalUrl = optionalUrlMax('Website', 500);
+
+/** Keep the error-clearing effects in entity forms aligned with the email schema. */
+export function isOptionalEmailValid(value: unknown): boolean {
+	return optionalEmail.safeParse(value ?? '').success;
+}
 /**
  * Optional free text with an upper length bound mirroring a server MaxLength.
  * Behaves like {@link optionalText} ('' → null, missing key tolerated) but rejects
@@ -151,6 +162,10 @@ const optionalNonNegative = (label: string) =>
 			)
 			.optional()
 	);
+const optionalWholeNumberMax = (label: string, max: number) =>
+	optionalNonNegative(label)
+		.refine((v) => v === undefined || v === null || Number.isInteger(v), `${label} must be a whole number`)
+		.refine((v) => v === undefined || v === null || v <= max, `${label} cannot exceed ${max.toLocaleString()}`);
 
 // Lengths mirror the server data annotations on Create/UpdatePropertyRequest (PropertyDtos.cs):
 // Name 200, AddressLine1/2 250, City/State 100, PostalCode 20 — so an over-long value is caught
@@ -158,33 +173,70 @@ const optionalNonNegative = (label: string) =>
 export const propertySchema = z.object({
 	name: required('Name').max(200, 'Name must be 200 characters or fewer'),
 	type: z.string(),
+	rentalStructure: z.enum(['SingleRental', 'MultiRental'], {
+		error: 'Choose whether this address is one rental or contains multiple rentals'
+	}),
 	status: z.string(),
 	addressLine1: required('Address').max(250, 'Address must be 250 characters or fewer'),
 	addressLine2: optionalTextMax('Apt / Suite / Unit #', 250),
 	city: required('City').max(100, 'City must be 100 characters or fewer'),
 	state: required('State').max(100, 'State must be 100 characters or fewer'),
 	postalCode: required('ZIP').max(20, 'ZIP must be 20 characters or fewer'),
-	// The property's owner is an OwnerEntity (the API validates ownerEntityId against OwnerEntities;
-	// ownerId is the legacy Owners table). owners.list() returns OwnerEntities, so this is their id.
+	// Form-only selection used to construct a canonical PropertyOwnership mutation. It is never
+	// emitted as a direct Property field.
 	ownerEntityId: idString,
 });
 
-export const unitSchema = z.object({
-	// unitNumber: server [MaxLength(50)]
-	unitNumber: required('Unit number').max(50, 'Unit number must be 50 characters or fewer'),
-	// bedrooms/bathrooms: server [Range(0, 99)] — non-negative, max 99
-	bedrooms: nonNegativeNumeric('Bedrooms').refine((v) => v <= 99, 'Bedrooms cannot exceed 99'),
-	bathrooms: nonNegativeNumeric('Bathrooms').refine((v) => v <= 99, 'Bathrooms cannot exceed 99'),
-	// marketRent: server [Range(0, 99999999)] — can be 0 for a vacant/unlisted unit
-	marketRent: nonNegativeNumeric('Market rent').refine((v) => v <= 99999999, 'Market rent cannot exceed 99,999,999'),
+export const propertyOperationsSchema = z.object({
+	yearBuilt: optionalNonNegative('Year built')
+		.refine((v) => v === undefined || v === null || Number.isInteger(v), 'Year built must be a whole number')
+		.refine((v) => v === undefined || v === null || (v >= 1800 && v <= 2200), 'Year built must be 1800-2200'),
+	managementFeePercent: optionalNonNegative('Management fee')
+		.refine((v) => v === undefined || v === null || v <= 100, 'Management fee must be 0-100'),
+	notes: optionalTextMax('Notes', 2000),
 });
 
+const RESIDENTIAL_PROPERTY_TYPES = new Set(['SingleFamily', 'MultiFamily', 'Condo', 'Townhome']);
+
+export function isResidentialDwellingType(propertyType: string | null | undefined): boolean {
+	// Unknown/omitted types stay residential so a form never silently drops required dwelling data.
+	return propertyType == null || propertyType === '' || RESIDENTIAL_PROPERTY_TYPES.has(propertyType);
+}
+
+export function unitSchemaForPropertyType(propertyType?: string | null) {
+	const residential = isResidentialDwellingType(propertyType);
+	const bedrooms = residential
+		? nonNegativeNumeric('Bedrooms').refine((v) => v <= 99, 'Bedrooms cannot exceed 99')
+		: optionalNonNegative('Bedrooms').refine((v) => v == null || v <= 99, 'Bedrooms cannot exceed 99');
+	const bathrooms = residential
+		? nonNegativeNumeric('Bathrooms').refine((v) => v <= 99, 'Bathrooms cannot exceed 99')
+		: optionalNonNegative('Bathrooms').refine((v) => v == null || v <= 99, 'Bathrooms cannot exceed 99');
+
+	return z.object({
+		// unitNumber: server [MaxLength(50)]
+		unitNumber: required('Unit number').max(50, 'Unit number must be 50 characters or fewer'),
+		// floorPlan: server [MaxLength(100)]
+		floorPlan: optionalTextMax('Floor plan', 100),
+		// Beds/baths are required only for residential dwelling property types.
+		bedrooms,
+		bathrooms,
+		// squareFeet: server nullable int [Range(0, 99999)]
+		squareFeet: optionalWholeNumberMax('Square feet', 99999),
+		// marketRent: server [Range(0, 99999999)] — can be 0 for a vacant/unlisted unit
+		marketRent: nonNegativeNumeric('Market rent').refine((v) => v <= 99999999, 'Market rent cannot exceed 99,999,999'),
+		// notes: server [MaxLength(2000)]
+		notes: optionalTextMax('Notes', 2000),
+	});
+}
+
+export const unitSchema = unitSchemaForPropertyType('MultiFamily');
+
 export const tenantSchema = z.object({
-	firstName: required('First name'),
-	lastName: required('Last name'),
+	firstName: required('First name').max(100, 'First name must be 100 characters or fewer'),
+	lastName: required('Last name').max(100, 'Last name must be 100 characters or fewer'),
 	email: optionalEmail,
-	phone: optionalText,
-	emergencyContact: optionalText,
+	phone: optionalTextMax('Phone', 50),
+	emergencyContact: optionalTextMax('Emergency contact', 200),
 });
 
 export const leaseSchema = z.object({
@@ -205,86 +257,18 @@ export const leaseSchema = z.object({
 	lateFeeAmount: nonNegativeNumeric('Late fee'),
 	// rentDueDay: server [Range(1, 31)]
 	rentDueDay: numericString('Due day').refine((v) => v >= 1 && v <= 31, 'Due day must be between 1 and 31'),
-	rentTrackingStartMode: z
-		.enum(['BackfillFromLeaseStart', 'ForwardOnly', 'CustomCutoffDate', 'OpeningBalanceOnly'])
-		.optional()
-		.default('ForwardOnly'),
-	rentTrackingStartDate: optionalText,
-	openingBalanceAmount: optionalNumeric('Opening balance'),
-	openingBalanceAsOfDate: optionalText,
-	openingBalanceNote: optionalTextMax('Opening balance note', 2000),
 	status: z.string(),
 	notes: optionalText,
 });
 
-export function leaseRentTrackingErrors(value: {
-	status?: unknown;
-	rentTrackingStartMode?: unknown;
-	rentTrackingStartDate?: unknown;
-	openingBalanceAmount?: unknown;
-	openingBalanceAsOfDate?: unknown;
-	openingBalanceNote?: unknown;
-}): Record<string, string> {
-	if (
-		value.status === 'Active' &&
-		value.rentTrackingStartMode === 'CustomCutoffDate' &&
-		!String(value.rentTrackingStartDate ?? '').trim()
-	) {
-		return { rentTrackingStartDate: 'Cutoff date is required' };
-	}
-
-	if (value.status === 'Active' && value.rentTrackingStartMode === 'OpeningBalanceOnly') {
-		const amount = String(value.openingBalanceAmount ?? '').trim();
-		const asOfDate = String(value.openingBalanceAsOfDate ?? '').trim();
-		const note = String(value.openingBalanceNote ?? '').trim();
-		if ((asOfDate || note) && !amount) {
-			return { openingBalanceAmount: 'Opening balance amount is required' };
-		}
-		if (amount && !asOfDate) {
-			return { openingBalanceAsOfDate: 'As-of date is required' };
-		}
-	}
-
-	return {};
-}
-
-export const paymentSchema = z
-	.object({
-		leaseId: numericString('Lease'),
-		// amount: server [Range(0.01, 99999999)] — must be > 0
-		amount: positiveNumeric('Amount'),
-		// amountPaid: only meaningful when status === 'Partial'. '' → null; otherwise coerced to a
-		// number. The cross-field invariant (0 < amountPaid < amount when Partial) is enforced below in
-		// .superRefine, mirroring PaymentService.NormalizeAmountPaid on the server (a bad value 400s).
-		amountPaid: optionalNonNegative('Amount paid'),
-		dueDate: required('Due date'),
-		paymentType: z.string(),
-		status: z.string(),
-		paidDate: optionalText,
-		method: optionalText,
-		externalReference: optionalText,
-		notes: optionalText,
-	})
-	.superRefine((val, ctx) => {
-		// Partial-payment split: the server requires an Amount paid strictly between 0 and the full
-		// Amount. Surface that inline (keyed to `amountPaid`) so the user fixes it before submit rather
-		// than bouncing off a 400. For any non-Partial status amountPaid is irrelevant (it's dropped on
-		// submit), so we don't validate it.
-		if (val.status !== 'Partial') return;
-		const paid = val.amountPaid;
-		if (paid == null) {
-			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amountPaid'], message: 'Amount paid is required for a partial payment' });
-			return;
-		}
-		if (paid <= 0) {
-			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amountPaid'], message: 'Amount paid must be greater than zero' });
-			return;
-		}
-		// `amount` may be NaN if its own field failed; only compare once it's a real number.
-		if (!Number.isNaN(val.amount) && paid >= val.amount) {
-			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amountPaid'], message: 'Amount paid must be less than the full amount' });
-		}
-	});
+/**
+ * Record-application-fee form for the application's pre-tenancy financial account.
+ */
+export const applicationFeeSchema = z.object({
+	amount: positiveNumeric('Amount'),
+	method: optionalText,
+	effectiveOn: optionalText,
+});
 
 export const expenseSchema = z.object({
 	description: required('Description'),
@@ -351,6 +335,7 @@ export const workOrderSchema = z.object({
 	propertyId: numericString('Property'),
 	title: required('Title'),
 	description: required('Description'),
+	technicianAccessInstructions: optionalText,
 	priority: z.string(),
 	category: required('Category'),
 	// Optional maintenance context (all blank → null). unitId is filtered to the chosen property
@@ -442,6 +427,48 @@ export const recurringExpenseSchema = z.object({
 	notes: optionalText,
 });
 
+export const capitalAssetSchema = z.object({
+	description: required('Description').max(500, 'Description must be 500 characters or fewer'),
+	costBasis: positiveNumeric('Cost basis'),
+	inServiceDate: required('In-service date'),
+	method: z.enum(['StraightLine', 'Macrs']),
+	recoveryYears: positiveNumeric('Recovery years').refine((v) => v <= 40, 'Recovery years cannot exceed 40'),
+	convention: z.enum(['MidMonth', 'HalfYear']),
+	accumulatedDepreciation: optionalNonNegative('Accumulated depreciation'),
+});
+
+export const propertyDispositionSchema = z.object({
+	closedOnDate: required('Close date'),
+	salePrice: positiveNumeric('Sale price'),
+	sellingCosts: optionalNonNegative('Selling costs').transform((v) => v ?? 0),
+	buyerName: optionalTextMax('Buyer', 200),
+	memo: optionalTextMax('Memo', 1000),
+});
+
+export const evictionCaseSchema = z.object({
+	status: z.enum(['Draft', 'NoticeServed', 'Filed', 'HearingScheduled', 'Judgment', 'MoveOut', 'Settled', 'Dismissed']),
+	filedOnDate: optionalText,
+	hearingDate: optionalText,
+	courtName: optionalTextMax('Court', 200),
+	caseNumber: optionalTextMax('Case number', 100),
+	resolution: optionalTextMax('Resolution', 500),
+	notes: optionalTextMax('Notes', 1000),
+});
+
+export const evictionCaseEventSchema = z.object({
+	eventType: z.enum(['NoticeServed', 'Filed', 'HearingScheduled', 'Judgment', 'MoveOut', 'Settlement', 'Dismissal', 'PaymentPlan', 'Note']),
+	eventDate: required('Event date'),
+	notes: optionalTextMax('Notes', 1000),
+});
+
+export const capitalizeExpenseSchema = z.object({
+	inServiceDate: required('In-service date'),
+	method: z.enum(['StraightLine', 'Macrs']),
+	recoveryYears: positiveNumeric('Recovery years').refine((v) => v <= 40, 'Recovery years cannot exceed 40'),
+	convention: z.enum(['MidMonth', 'HalfYear']),
+	description: optionalTextMax('Description', 500),
+});
+
 // Property depreciation basis (optional inline fields on the property edit form).
 export const propertyBasisSchema = z
 	.object({
@@ -458,61 +485,63 @@ export const propertyBasisSchema = z
 	});
 
 export const appointmentSchema = z.object({
-	title: required('Title'),
+	title: required('Title').max(200, 'Title must be 200 characters or fewer'),
 	type: z.string(),
 	status: z.string(),
 	scheduledStart: required('Start time'),
 	scheduledEnd: optionalText,
 	propertyId: idString,
+	unitId: idString,
 	tenantId: idString,
-	prospectName: optionalText,
+	workOrderId: idString,
+	prospectName: optionalTextMax('Prospect name', 200),
 	// prospectEmail: server [EmailAddress] optional
 	prospectEmail: optionalEmail,
-	assignedTo: optionalText,
+	assignedTo: optionalTextMax('Assigned to', 120),
+}).superRefine((value, context) => {
+	if (value.scheduledEnd == null) return;
+	const start = Date.parse(value.scheduledStart);
+	const end = Date.parse(value.scheduledEnd);
+	if (Number.isFinite(start) && Number.isFinite(end) && end <= start) {
+		context.addIssue({
+			code: 'custom',
+			path: ['scheduledEnd'],
+			message: 'The end time must be after the start time'
+		});
+	}
 });
 
 export const ownerSchema = z.object({
 	name: required('Name'),
 	ownerEntityType: z.string(),
-	taxId: optionalText,
-	addressLine1: optionalText,
-	addressLine2: optionalText,
-	city: optionalText,
-	state: optionalText,
-	postalCode: optionalText,
-	phone: optionalText,
+	taxId: optionalTextMax('Tax ID', 50),
+	addressLine1: optionalTextMax('Address', 250),
+	addressLine2: optionalTextMax('Address line 2', 250),
+	city: optionalTextMax('City', 120),
+	state: optionalTextMax('State', 60),
+	postalCode: optionalTextMax('ZIP', 20),
+	phone: optionalTextMax('Phone', 50),
 	// email: server [EmailAddress] optional
-	email: optionalEmail,
+	email: optionalEmailMax('Email', 254),
 });
 
 export const vendorSchema = z.object({
-	name: required('Name'),
-	serviceType: required('Service type'),
-	addressLine1: optionalText,
-	city: optionalText,
-	state: optionalText,
-	postalCode: optionalText,
+	name: required('Name').max(200, 'Name must be 200 characters or fewer'),
+	serviceType: required('Service type').max(120, 'Service type must be 120 characters or fewer'),
+	addressLine1: optionalTextMax('Address', 250),
+	city: optionalTextMax('City', 120),
+	state: optionalTextMax('State', 60),
+	postalCode: optionalTextMax('ZIP', 20),
 	// email: server [EmailAddress] optional
 	email: optionalEmail,
-	phone: optionalText,
-	website: optionalUrl,
+	phone: optionalTextMax('Phone', 50),
+	website: optionalUrlMax('Website', 500),
 	is1099Eligible: z.boolean(),
 	w9OnFile: z.boolean(),
 	preferred: z.boolean(),
 });
 
-/**
- * New security deposit holding: lease is required; amount is optional (defaults
- * to the lease's deposit amount server-side) but if provided must be > 0.
- */
-export const newDepositHoldingSchema = z.object({
-	leaseId: numericString('Lease'),
-	// amount is optional — blank means "use the lease default"
-	amount: optionalNonNegative('Amount'),
-	notes: optionalText,
-});
-
-/** Deduction to add to an existing deposit holding. */
+/** Deduction to append to an existing canonical deposit account. */
 export const depositDeductionSchema = z.object({
 	reason: required('Reason'),
 	// deduction amounts must be > 0

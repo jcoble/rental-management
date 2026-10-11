@@ -33,6 +33,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="RentalCommand.Data.Tests" />
+    <InternalsVisibleTo Include="RentalCommand.Api.Tests" />
+    <InternalsVisibleTo Include="RentalCommand.IntegrationTests" />
   </ItemGroup>
 
 </Project>

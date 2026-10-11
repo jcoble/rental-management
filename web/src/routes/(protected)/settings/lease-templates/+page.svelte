@@ -1,0 +1,566 @@
+<script lang="ts">
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import {
+		FileText,
+		Upload,
+		ExternalLink,
+		PenLine,
+		RefreshCw,
+		Signature,
+		CheckCircle2,
+		AlertCircle,
+		ChevronDown,
+	} from '@lucide/svelte';
+	import {
+		documentTemplates,
+		type DocumentTemplate,
+		type DocumentTemplateFieldCatalogItem,
+		type DocumentTemplateSignerRole,
+	} from '$lib/api/endpoints/document-templates';
+	import { documentFileHref } from '$lib/api/endpoints/documents';
+	import { idempotentMutation } from '$lib/api/idempotency';
+	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { Badge } from '$lib/components/ui/badge';
+	import LeaseTemplateDesigner from '$lib/components/document-templates/LeaseTemplateDesigner.svelte';
+	import * as Card from '$lib/components/ui/card';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
+
+	const queryClient = useQueryClient();
+
+	const templatesQuery = createQuery(() => ({
+		queryKey: ['document-templates', 'lease', 'page', 0, 20],
+		queryFn: () =>
+			documentTemplates.listPage({
+				kind: 'Lease',
+				sort: '-updatedAt',
+				take: 20,
+			}),
+	}));
+
+	const catalogQuery = createQuery(() => ({
+		queryKey: ['document-template-field-catalog', 'Lease'],
+		queryFn: () => documentTemplates.fieldCatalog('Lease'),
+	}));
+
+	const templates = $derived(templatesQuery.data?.items ?? []);
+	const totalCount = $derived(templatesQuery.data?.totalCount ?? 0);
+	const hasTemplates = $derived(templates.length > 0);
+
+	let selectedFile = $state<File | null>(null);
+	let templateName = $state('');
+	let templateDescription = $state('');
+	let fileInput = $state<HTMLInputElement | null>(null);
+	let designerTemplateId = $state<number | null>(null);
+	let activatingTemplateId = $state<number | null>(null);
+	// The lease PDF that was just uploaded, so the page can walk the landlord straight
+	// from "upload" to "place the fields" to "looks right" the very first time.
+	let firstRunTemplateId = $state<number | null>(null);
+
+	const isFirstRun = $derived(
+		!templatesQuery.isLoading && !templatesQuery.isError && (!hasTemplates || firstRunTemplateId !== null)
+	);
+	const firstRunTemplate = $derived(templates.find((template) => template.id === firstRunTemplateId) ?? null);
+
+	const catalogGroups = $derived.by(() => {
+		const groups = new Map<DocumentTemplateSignerRole, DocumentTemplateFieldCatalogItem[]>();
+		for (const item of catalogQuery.data ?? []) {
+			const current = groups.get(item.signerRole) ?? [];
+			current.push(item);
+			groups.set(item.signerRole, current);
+		}
+		return Array.from(groups.entries()).map(([role, items]) => ({ role, items }));
+	});
+
+	const uploadMutation = createMutation(() => ({
+		mutationFn: () => {
+			if (!selectedFile) {
+				throw new Error('Select a PDF lease template first.');
+			}
+			const name = templateName.trim();
+			if (!name) {
+				throw new Error('Template name is required.');
+			}
+			return idempotentMutation(
+				`document-template:upload:${selectedFile.name}:${selectedFile.size}:${selectedFile.lastModified}:${name}:${templateDescription}`,
+				(operationKey) =>
+					documentTemplates.uploadLeasePdf(
+						selectedFile!,
+						{
+							name,
+							description: templateDescription.trim() || undefined,
+							defaultForPortfolio: false
+						},
+						operationKey
+					)
+			);
+		},
+		onSuccess: (template) => {
+			showSuccess(`${template.name} uploaded.`);
+			designerTemplateId = template.id;
+			if (!hasTemplates) firstRunTemplateId = template.id;
+			selectedFile = null;
+			templateName = '';
+			templateDescription = '';
+			if (fileInput) fileInput.value = '';
+			queryClient.invalidateQueries({ queryKey: ['document-templates'] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Lease template upload failed.')),
+	}));
+
+	const activateTemplateMutation = createMutation(() => ({
+		mutationFn: (template: DocumentTemplate) => {
+			activatingTemplateId = template.id;
+			return idempotentMutation(`document-template:${template.id}:activate`, (operationKey) =>
+				documentTemplates.update(
+					template.id,
+					{
+						status: 'Active',
+						defaultForPortfolio: true
+					},
+					operationKey
+				)
+			);
+		},
+		onSuccess: (template) => {
+			showSuccess(`${template.name} is now the lease form we use.`);
+			if (firstRunTemplateId === template.id) {
+				firstRunTemplateId = null;
+				designerTemplateId = null;
+			}
+			queryClient.invalidateQueries({ queryKey: ['document-templates'] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Could not activate lease template.')),
+		onSettled: () => {
+			activatingTemplateId = null;
+		},
+	}));
+
+	function handleFileSelected(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0] ?? null;
+		selectedFile = file;
+		if (file && !templateName.trim()) {
+			templateName = file.name.replace(/\.pdf$/i, '').replaceAll('-', ' ').replaceAll('_', ' ');
+		}
+	}
+
+	function submitUpload() {
+		if (!selectedFile) {
+			showError('Select a PDF lease template first.');
+			return;
+		}
+		const fileLooksLikePdf =
+			selectedFile.type === 'application/pdf' ||
+			selectedFile.name.toLowerCase().endsWith('.pdf');
+		if (!fileLooksLikePdf) {
+			showError('Only PDF lease templates are supported right now.');
+			return;
+		}
+		uploadMutation.mutate();
+	}
+
+	function activateDefault(template: DocumentTemplate) {
+		if (template.fieldCount === 0) {
+			showError('Put at least one field on the lease before using it.');
+			return;
+		}
+		activateTemplateMutation.mutate(template);
+	}
+
+	function confirmSuggestedPlacement() {
+		if (firstRunTemplate) activateDefault(firstRunTemplate);
+	}
+
+	function statusVariant(status: DocumentTemplate['status']): 'default' | 'secondary' | 'outline' {
+		if (status === 'Active') return 'default';
+		if (status === 'Draft') return 'secondary';
+		return 'outline';
+	}
+
+	function renderModeLabel(mode: DocumentTemplate['renderMode']) {
+		return mode === 'Overlay' ? 'Exact PDF overlay' : 'Drafted lease';
+	}
+
+	function formatSigner(role: DocumentTemplateSignerRole) {
+		switch (role) {
+			case 'Tenant':
+				return 'Tenant';
+			case 'Landlord':
+				return 'Landlord';
+			case 'CoTenant':
+				return 'Co-tenant';
+			default:
+				return 'Auto-filled';
+		}
+	}
+
+	function formatDateTime(value: string | null | undefined) {
+		if (!value) return '—';
+		return new Intl.DateTimeFormat('en-US', {
+			month: 'short',
+			day: 'numeric',
+			year: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit',
+		}).format(new Date(value));
+	}
+
+	function fieldSummary(template: DocumentTemplate) {
+		if (template.fieldCount === 0) return 'No fields placed yet';
+		return `${template.fieldCount} field${template.fieldCount === 1 ? '' : 's'} placed`;
+	}
+
+	function isActiveDefault(template: DocumentTemplate) {
+		return template.status === 'Active' && template.defaultForPortfolio;
+	}
+</script>
+
+<svelte:head>
+	<title>Lease settings - Rental Command</title>
+</svelte:head>
+
+{#snippet headerActions()}
+	<Button href="/leases" variant="outline" class="gap-1.5" data-testid="lease-templates-back-to-leases">
+		<FileText class="h-4 w-4" />
+		Leases
+	</Button>
+{/snippet}
+
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="lease-templates-page">
+	<PageHeader
+		class="mb-6"
+		band
+		art={5}
+		tone="amber"
+		eyebrow="Settings"
+		title="Lease settings"
+		description="Give us the lease form you already use. We fill it in for you and send it out to be signed."
+		actions={headerActions}
+		data-testid="lease-templates-header"
+	/>
+
+	{#snippet uploadCard()}
+		<Card.Root class="h-fit" data-testid="lease-template-upload-card">
+			<Card.Header>
+				<Card.Title class="text-base">Upload landlord PDF</Card.Title>
+				<Card.Description>Add the lease form you want Rental Command to fill and send.</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-5">
+				<div class="space-y-2">
+					<label for="lease-template-file" class="text-sm font-medium">1. Choose the lease PDF</label>
+					<Input
+						id="lease-template-file"
+						bind:ref={fileInput}
+						type="file"
+						accept="application/pdf,.pdf"
+						class="hidden"
+						onchange={handleFileSelected}
+						data-testid="lease-template-file-input"
+					/>
+					<Button
+						variant="outline"
+						class="w-full justify-start gap-2"
+						onclick={() => fileInput?.click()}
+						data-testid="lease-template-file-button"
+					>
+						<Upload class="h-4 w-4" />
+						{selectedFile ? 'Choose a different PDF' : 'Choose PDF'}
+					</Button>
+					<p
+						class="rounded-md bg-muted/45 px-3 py-2 text-xs text-muted-foreground"
+						data-testid="lease-template-selected-file"
+					>
+						{selectedFile
+							? `${selectedFile.name} · ${Math.ceil(selectedFile.size / 1024).toLocaleString()} KB`
+							: 'No PDF selected'}
+					</p>
+				</div>
+
+				<div class="space-y-2">
+					<label for="lease-template-name" class="text-sm font-medium">2. Give it a clear name</label>
+					<Input
+						id="lease-template-name"
+						bind:value={templateName}
+						placeholder="Standard residential lease"
+						maxlength={200}
+						data-testid="lease-template-name-input"
+					/>
+				</div>
+
+				<div class="space-y-2">
+					<label for="lease-template-description" class="text-sm font-medium">Notes <span class="font-normal text-muted-foreground">(optional)</span></label>
+					<textarea
+						id="lease-template-description"
+						bind:value={templateDescription}
+						maxlength="2000"
+						rows="3"
+						class="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+						placeholder="Use for annual renewals, single-family rentals, etc."
+						data-testid="lease-template-description-input"
+					></textarea>
+				</div>
+
+				<Button
+					class="w-full gap-1.5"
+					onclick={submitUpload}
+					disabled={uploadMutation.isPending || !selectedFile}
+					data-testid="lease-template-upload-submit"
+				>
+					<Upload class="h-4 w-4" />
+					{uploadMutation.isPending ? 'Uploading…' : '3. Upload and place fields'}
+				</Button>
+			</Card.Content>
+		</Card.Root>
+	{/snippet}
+
+	{#snippet libraryList()}
+		<section class="space-y-4" aria-labelledby="lease-template-library-heading">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<div>
+					<h2 id="lease-template-library-heading" class="text-lg font-semibold tracking-tight">Template Library</h2>
+					<p class="text-sm text-muted-foreground">
+						{totalCount === 1 ? '1 lease template' : `${totalCount} lease templates`} in this portfolio.
+					</p>
+				</div>
+				<Button
+					variant="outline"
+					size="sm"
+					class="gap-1.5"
+					onclick={() => templatesQuery.refetch()}
+					disabled={templatesQuery.isFetching}
+					data-testid="lease-template-refresh"
+				>
+					<RefreshCw class="h-4 w-4 {templatesQuery.isFetching ? 'animate-spin' : ''}" />
+					Refresh
+				</Button>
+			</div>
+
+			{#if templatesQuery.isLoading}
+				<div class="grid gap-3" data-testid="lease-template-loading">
+					{#each Array.from({ length: 3 }) as _}
+						<div class="h-28 animate-pulse rounded-lg bg-muted/40"></div>
+					{/each}
+				</div>
+			{:else if templatesQuery.isError}
+				<div class="rounded-lg border border-destructive/30 bg-destructive/5 p-4" data-testid="lease-template-error">
+					<div class="flex items-center gap-2 text-sm font-medium text-destructive">
+						<AlertCircle class="h-4 w-4" />
+						Template library is unavailable.
+					</div>
+					<Button variant="outline" size="sm" class="mt-3" onclick={() => templatesQuery.refetch()}>Retry</Button>
+				</div>
+			{:else if !hasTemplates}
+				<div class="rounded-lg border border-dashed border-border bg-muted/20 p-8 text-center" data-testid="lease-template-empty">
+					<FileText class="mx-auto h-8 w-8 text-muted-foreground" />
+					<h3 class="mt-3 text-sm font-semibold">No lease templates yet</h3>
+					<p class="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+						Upload the landlord's PDF lease to create the first reusable template.
+					</p>
+				</div>
+			{:else}
+				<div class="grid gap-3" data-testid="lease-template-list">
+					{#each templates as template (template.id)}
+						<article class="rounded-lg bg-card p-4" data-testid={template.testId}>
+							<div class="flex flex-wrap items-start justify-between gap-3">
+								<div class="min-w-0 flex-1">
+									<div class="flex flex-wrap items-center gap-2">
+										<h3 class="truncate text-base font-semibold">{template.name}</h3>
+										<Badge variant={statusVariant(template.status)}>{formatStatusLabel(template.status)}</Badge>
+										{#if template.defaultForPortfolio}
+											<Badge variant="outline" class="gap-1">
+												<CheckCircle2 class="h-3 w-3" />
+												Default
+											</Badge>
+										{/if}
+									</div>
+									<p class="mt-1 text-sm text-muted-foreground">
+										{template.description || renderModeLabel(template.renderMode)}
+									</p>
+								</div>
+								<div class="flex shrink-0 flex-wrap gap-2">
+									{#if template.originalStoredFileId}
+										<Button
+											href={documentFileHref(template.originalStoredFileId)}
+											target="_blank"
+											rel="noopener noreferrer"
+											variant="outline"
+											size="sm"
+											class="gap-1.5"
+											data-testid="lease-template-source-{template.id}"
+										>
+											<ExternalLink class="h-4 w-4" />
+											Source PDF
+										</Button>
+									{/if}
+									<Button
+										variant="outline"
+										size="sm"
+										class="gap-1.5"
+										onclick={() => (designerTemplateId = template.id)}
+										data-testid="lease-template-designer-{template.id}"
+									>
+										<PenLine class="h-4 w-4" />
+										Design fields
+									</Button>
+									{#if !isActiveDefault(template)}
+										<Button
+											size="sm"
+											class="gap-1.5"
+											onclick={() => activateDefault(template)}
+											disabled={activateTemplateMutation.isPending || template.fieldCount === 0}
+											title={template.fieldCount === 0 ? 'Place fields before activating this template.' : 'Use this PDF for new lease agreements'}
+											data-testid="lease-template-use-default-{template.id}"
+										>
+											<CheckCircle2 class="h-4 w-4" />
+											{activatingTemplateId === template.id ? 'Saving…' : 'Use as default'}
+										</Button>
+									{/if}
+								</div>
+							</div>
+							<div class="mt-4 grid gap-2 text-sm sm:grid-cols-3">
+								<div class="rounded-md bg-muted/30 px-3 py-2">
+									<p class="text-xs text-muted-foreground">Field placement</p>
+									<p class="font-medium">{fieldSummary(template)}</p>
+								</div>
+								<div class="rounded-md bg-muted/30 px-3 py-2">
+									<p class="text-xs text-muted-foreground">Mode</p>
+									<p class="font-medium">{renderModeLabel(template.renderMode)}</p>
+								</div>
+								<div class="rounded-md bg-muted/30 px-3 py-2">
+									<p class="text-xs text-muted-foreground">Updated</p>
+									<p class="font-medium">{formatDateTime(template.updatedAtUtc)}</p>
+								</div>
+							</div>
+						</article>
+					{/each}
+				</div>
+			{/if}
+		</section>
+	{/snippet}
+
+	{#snippet designerPanel()}
+		{#if designerTemplateId}
+			<section aria-label="Where each answer goes on your lease">
+				<LeaseTemplateDesigner
+					templateId={designerTemplateId}
+					catalog={catalogQuery.data ?? []}
+					onClose={() => (designerTemplateId = null)}
+				/>
+			</section>
+		{/if}
+	{/snippet}
+
+	{#snippet fieldCatalog()}
+	<section class="space-y-4" aria-labelledby="lease-template-fields-heading" data-testid="lease-template-field-catalog">
+		<div>
+			<h2 id="lease-template-fields-heading" class="text-lg font-semibold tracking-tight">Information we fill in</h2>
+			<p class="text-sm text-muted-foreground">
+				These are the merge and signature fields available for lease templates.
+			</p>
+		</div>
+
+		{#if catalogQuery.isLoading}
+			<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+				{#each Array.from({ length: 4 }) as _}
+					<div class="h-20 animate-pulse rounded-lg bg-muted/40"></div>
+				{/each}
+			</div>
+		{:else if catalogQuery.isError}
+			<div class="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+				Field catalog is unavailable.
+			</div>
+		{:else}
+			<div class="grid gap-3 md:grid-cols-2">
+				{#each catalogGroups as group}
+					<details class="group rounded-lg bg-card px-4 py-3">
+						<summary class="flex cursor-pointer list-none items-center gap-2">
+							<span class="inline-grid h-8 w-8 place-items-center rounded-md bg-muted text-muted-foreground">
+								{#if group.role === 'None'}
+									<FileText class="h-4 w-4" />
+								{:else}
+									<Signature class="h-4 w-4" />
+								{/if}
+							</span>
+							<span class="min-w-0 flex-1">
+								<span class="block font-semibold">{formatSigner(group.role)}</span>
+								<span class="block text-xs text-muted-foreground">
+									{group.items.length} available {group.items.length === 1 ? 'field' : 'fields'}
+								</span>
+							</span>
+							<ChevronDown class="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+						</summary>
+						<div class="mt-3 space-y-2 border-t border-border/50 pt-3">
+							{#each group.items as field (field.fieldKey)}
+								<div class="rounded-md bg-muted/25 px-3 py-2">
+									<div class="flex items-center justify-between gap-2">
+										<p class="text-sm font-medium">{field.label}</p>
+										{#if field.requiredForSignature}
+											<Badge variant="outline">Required</Badge>
+										{/if}
+									</div>
+									<p class="mt-1 text-xs text-muted-foreground">{field.description}</p>
+								</div>
+							{/each}
+						</div>
+					</details>
+				{/each}
+			</div>
+		{/if}
+	</section>
+	{/snippet}
+
+	{#if isFirstRun}
+		<!-- First time here: one job on the screen — hand over the lease form you already use. -->
+		<div class="mx-auto max-w-2xl space-y-6" data-testid="lease-template-first-run">
+			<div>
+				<h2 class="text-lg font-semibold tracking-tight">Upload the lease form you already use</h2>
+				<p class="mt-1 text-sm text-muted-foreground">
+					A PDF of your own lease. Nothing changes about the wording — we just learn where each
+					answer goes so we can type it for you.
+				</p>
+			</div>
+			{@render uploadCard()}
+
+			{#if firstRunTemplate}
+				<section class="space-y-4" data-testid="lease-template-suggested-placement">
+					<div>
+						<h2 class="text-lg font-semibold tracking-tight">Suggested field placement</h2>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Drag each item from the list onto the blank it belongs in — the tenant's name, the
+							rent, the signature line — then confirm below.
+						</p>
+					</div>
+					{@render designerPanel()}
+					<Button
+						class="w-full gap-1.5"
+						onclick={confirmSuggestedPlacement}
+						disabled={activateTemplateMutation.isPending}
+						data-testid="lease-template-looks-right"
+					>
+						<CheckCircle2 class="h-4 w-4" />
+						{activateTemplateMutation.isPending ? 'Saving…' : 'Looks right — use this lease'}
+					</Button>
+				</section>
+			{/if}
+
+			<details class="rounded-lg bg-card px-4 py-3" data-testid="lease-template-advanced">
+				<summary class="cursor-pointer text-sm font-medium">Advanced editing</summary>
+				<div class="mt-4 space-y-8">
+					{@render libraryList()}
+					{@render fieldCatalog()}
+				</div>
+			</details>
+		</div>
+	{:else}
+		<div class="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
+			{@render uploadCard()}
+			{@render libraryList()}
+		</div>
+
+		<div class="mt-6">{@render designerPanel()}</div>
+		<div class="mt-8">{@render fieldCatalog()}</div>
+	{/if}
+</div>

@@ -1,4 +1,5 @@
 using FluentAssertions;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Services;
 
 namespace RentalCommand.Core.Tests;
@@ -19,6 +20,15 @@ public class DepreciationCalculatorTests
         decimal? manual = null,
         decimal accumulated = 0m) =>
         new(purchase, land, inService, manual, accumulated);
+
+    [Fact]
+    public void RecoveryClassConstants_AreExpectedTaxLives()
+    {
+        RecoveryClass.ResidentialBuilding.Should().Be(27.5m);
+        RecoveryClass.LandImprovement.Should().Be(15m);
+        RecoveryClass.Appliance.Should().Be(5m);
+        RecoveryClass.Furniture.Should().Be(7m);
+    }
 
     // ── Full year (after the first) ─────────────────────────────────────────────────────────────
 
@@ -156,5 +166,61 @@ public class DepreciationCalculatorTests
         var basis = Basis(purchase: 275_000m, land: null, inService: new DateTime(2020, 1, 1));
 
         DepreciationCalculator.AnnualForYear(basis, 2024).Amount.Should().Be(10_000m);
+    }
+
+    [Fact]
+    public void StraightLine_FiveYear_MidMonth_FirstYear()
+    {
+        var result = DepreciationCalculator.AnnualForYear(
+            5_000m,
+            new DateTime(2025, 7, 1),
+            DepreciationMethod.StraightLine,
+            RecoveryClass.Appliance,
+            DepreciationConvention.MidMonth,
+            0m,
+            2025);
+
+        result.Amount.Should().Be(458.33m);
+        result.IsFirstYearEstimate.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Macrs_FiveYear_HalfYear_Year1()
+    {
+        var result = DepreciationCalculator.AnnualForYear(
+            10_000m,
+            new DateTime(2025, 8, 1),
+            DepreciationMethod.Macrs,
+            RecoveryClass.Appliance,
+            DepreciationConvention.HalfYear,
+            0m,
+            2025);
+
+        result.Amount.Should().Be(2_000m);
+        result.IsFirstYearEstimate.Should().BeTrue();
+    }
+
+    [Fact]
+    public void UnrecapturedSec1250Gain_IsMinOfGainAndAccumulatedDepreciation()
+    {
+        DepreciationCalculator.UnrecapturedSec1250Gain(40_000m, 9_000m).Should().Be(9_000m);
+        DepreciationCalculator.UnrecapturedSec1250Gain(5_000m, 9_000m).Should().Be(5_000m);
+        DepreciationCalculator.UnrecapturedSec1250Gain(-3_000m, 9_000m).Should().Be(0m);
+    }
+
+    [Fact]
+    public void ResidentialDelegation_IsUnchanged()
+    {
+        var basis = Basis(inService: new DateTime(2020, 3, 1));
+
+        DepreciationCalculator.AnnualForYear(basis, 2021).Amount.Should().Be(
+            DepreciationCalculator.AnnualForYear(
+                240_000m,
+                new DateTime(2020, 3, 1),
+                DepreciationMethod.StraightLine,
+                RecoveryClass.ResidentialBuilding,
+                DepreciationConvention.MidMonth,
+                0m,
+                2021).Amount);
     }
 }

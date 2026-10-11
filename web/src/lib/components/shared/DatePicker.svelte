@@ -1,7 +1,7 @@
 <!--
   DatePicker — date-only picker (typeable input + shadcn Calendar in a Popover).
 
-  A drop-in replacement for `<input type="date">`. Binds a plain ISO `yyyy-MM-dd`
+  A drop-in replacement for the native date input. Binds a plain ISO `yyyy-MM-dd`
   string (or "" for empty). NO time, NO timezone: a calendar date has no tz, so we
   never do tz math here — the API layer pins date-only fields to UTC on the wire.
 
@@ -25,8 +25,11 @@
     disabled?   boolean
     min?        string  ISO `yyyy-MM-dd` — earliest selectable date (inclusive).
     max?        string  ISO `yyyy-MM-dd` — latest selectable date (inclusive).
+    todayValue? string  ISO `yyyy-MM-dd` — override for the Today shortcut.
+    showToday?  boolean show the Today shortcut. Default true.
     testid?     string  applied as data-testid on the text input for E2E.
     id?         string  id for the text input (label `for=` association).
+    invalid?    boolean (bindable) reflects invalid typed or out-of-range text.
 -->
 <script lang="ts">
 	import { Calendar } from '$lib/components/ui/calendar';
@@ -36,9 +39,9 @@
 	import {
 		formatIsoToUsInput,
 		maskDateInput,
-		parseCompleteLooseDate,
-		parseLooseDate
+		parseCompleteLooseDate
 	} from '$lib/utils/parse-date';
+	import { commitDatePickerText, datePickerYearOptions } from './date-picker-state';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
 	import {
 		CalendarDate,
@@ -50,20 +53,26 @@
 
 	let {
 		value = $bindable(''),
+		invalid = $bindable(false),
 		onchange,
 		placeholder = 'MM/DD/YYYY',
 		disabled = false,
 		min,
 		max,
+		todayValue,
+		showToday = true,
 		testid,
 		id
 	}: {
 		value?: string;
+		invalid?: boolean;
 		onchange?: (iso: string) => void;
 		placeholder?: string;
 		disabled?: boolean;
 		min?: string;
 		max?: string;
+		todayValue?: string;
+		showToday?: boolean;
 		testid?: string;
 		id?: string;
 	} = $props();
@@ -73,7 +82,6 @@
 	// Text the user is currently typing. Re-synced from `value` whenever the bound
 	// value changes from the outside (form load, calendar pick, clear).
 	let text = $state(formatIsoToUsInput(value));
-	let invalid = $state(false);
 	let lastSyncedValue = $state(value);
 
 	$effect(() => {
@@ -102,13 +110,7 @@
 
 	// Year range for the year dropdown. Default reaches back to 1900 (so dates of
 	// birth are reachable). When min/max are supplied, honor them as boundaries.
-	const years = $derived.by(() => {
-		const now = new Date().getUTCFullYear();
-		const lo = minDate ? minDate.year : 1900;
-		const hi = maxDate ? maxDate.year : now + 10;
-		if (lo > hi) return [hi];
-		return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
-	});
+	const years = $derived(datePickerYearOptions(minDate?.year, maxDate?.year));
 
 	function commit(iso: string) {
 		if (iso === value) return;
@@ -125,21 +127,10 @@
 
 	// ---- Text input ----------------------------------------------------------
 	function commitText() {
-		const raw = text.trim();
-		if (raw === '') {
-			invalid = false;
-			text = '';
-			commit('');
-			return;
-		}
-		const iso = parseLooseDate(raw);
-		if (iso && isInRange(iso)) {
-			invalid = false;
-			text = formatIsoToUsInput(iso); // normalize what the user typed
-			commit(iso);
-		} else {
-			invalid = true;
-		}
+		const next = commitDatePickerText(text, value, { min, max });
+		invalid = next.invalid;
+		text = next.text;
+		commit(next.value);
 	}
 
 	function handleTextInput(e: Event) {
@@ -190,7 +181,7 @@
 	}
 
 	function setToday() {
-		const iso = today(getLocalTimeZone()).toString();
+		const iso = todayValue?.trim() || today(getLocalTimeZone()).toString();
 		if (!isInRange(iso)) {
 			invalid = true;
 			return;
@@ -202,7 +193,7 @@
 	}
 </script>
 
-<div class="relative">
+<div class="date-picker-shell relative w-full min-w-0">
 	<input
 		{id}
 		type="text"
@@ -217,25 +208,27 @@
 		onblur={commitText}
 		onkeydown={handleKeydown}
 		class={cn(
-			'm3-field-surface h-11 w-full rounded-[var(--m3-shape-large)] bg-transparent py-2 pl-3 pr-[6.5rem] text-left text-sm font-normal text-foreground outline-none',
+			'date-picker-input m3-field-surface h-11 w-full min-w-0 rounded-[var(--m3-shape-large)] bg-transparent py-2 pl-3 pr-[6.5rem] text-left text-sm font-normal text-foreground outline-none',
 			'placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
 			invalid && 'ring-2 ring-destructive'
 		)}
 	/>
-	<div class="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
-		<button
-			type="button"
-			{disabled}
-			aria-label="Use today's date"
-			data-testid={testid ? `${testid}-today` : undefined}
-			onclick={setToday}
-			class={cn(
-				buttonVariants({ variant: 'ghost', size: 'sm' }),
-				'h-8 px-2 text-xs text-muted-foreground hover:bg-transparent'
-			)}
-		>
-			Today
-		</button>
+	<div class="date-picker-actions absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
+		{#if showToday}
+			<button
+				type="button"
+				{disabled}
+				aria-label="Use today's date"
+				data-testid={testid ? `${testid}-today` : undefined}
+				onclick={setToday}
+				class={cn(
+					buttonVariants({ variant: 'ghost', size: 'sm' }),
+					'date-picker-today h-8 whitespace-nowrap px-2 text-xs text-muted-foreground hover:bg-transparent'
+				)}
+			>
+				<span class="date-picker-today-label">Today</span>
+			</button>
+		{/if}
 		<Popover.Root bind:open>
 			<Popover.Trigger
 				{disabled}
@@ -244,7 +237,7 @@
 				data-testid={testid ? `${testid}-calendar-trigger` : undefined}
 				class={cn(
 					buttonVariants({ variant: 'ghost', size: 'icon' }),
-					'size-9 text-muted-foreground hover:bg-transparent'
+					'date-picker-calendar-trigger size-9 shrink-0 text-muted-foreground hover:bg-transparent'
 				)}
 			>
 				<CalendarIcon class="size-4 shrink-0 opacity-70" />
@@ -268,3 +261,54 @@
 		Enter a date as MM/DD/YYYY
 	</p>
 {/if}
+
+<style>
+	/* The text input owns the date text. Keep the actions in the field without
+	 * stealing so much inline space that a narrow two-column form only shows a
+	 * punctuation mark. */
+	.date-picker-shell {
+		container: date-picker / inline-size;
+		min-inline-size: 0;
+	}
+
+	@container date-picker (max-width: 12rem) {
+		.date-picker-input {
+			/* Give the formatted date text the field's inline space first. */
+			padding-left: 0.625rem;
+			padding-right: 2.75rem !important;
+			font-size: 0.8125rem;
+		}
+
+		.date-picker-today {
+			display: none;
+		}
+
+		:global(.date-picker-calendar-trigger) {
+			height: 2rem !important;
+			width: 2rem !important;
+		}
+
+		.date-picker-actions {
+			gap: 0;
+			right: 0.25rem;
+		}
+	}
+
+	@container date-picker (max-width: 8rem) {
+		.date-picker-input {
+			padding-left: 0.375rem;
+			padding-right: 2.25rem !important;
+			font-size: 0.75rem;
+			letter-spacing: -0.01em;
+		}
+
+		:global(.date-picker-calendar-trigger) {
+			height: 1.75rem !important;
+			width: 1.75rem !important;
+		}
+
+		.date-picker-actions {
+			right: 0;
+		}
+	}
+</style>

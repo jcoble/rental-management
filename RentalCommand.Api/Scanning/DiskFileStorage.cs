@@ -28,6 +28,33 @@ public sealed class DiskFileStorage : IFileStorage
         return key;
     }
 
+    public async Task UploadAtAsync(
+        Stream content,
+        string storagePath,
+        string fileName,
+        string contentType,
+        CancellationToken ct = default)
+    {
+        var full = ResolveWithinBase(storagePath);
+        var temporary = $"{full}.{Guid.NewGuid():N}.uploading";
+        try
+        {
+            await using (var stream = new FileStream(
+                temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                bufferSize: 81920, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await content.CopyToAsync(stream, ct);
+                await stream.FlushAsync(ct);
+            }
+
+            File.Move(temporary, full, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+    }
+
     public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)
     {
         var full = ResolveWithinBase(path);

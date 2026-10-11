@@ -17,7 +17,7 @@ namespace RentalCommand.Api.Scanning;
 /// </summary>
 public static class LoanExtractionSchema
 {
-    public const string PromptId = "mortgage-statement-to-loan-v1";
+    public const string PromptId = "mortgage-statement-to-loan-v2";
 
     public const string Instructions =
         "You are extracting the key terms of a US residential MORTGAGE from a monthly mortgage statement " +
@@ -26,9 +26,11 @@ public static class LoanExtractionSchema
         "lender is the name of the lender / servicer / bank that holds the mortgage (e.g. 'Rocket Mortgage', " +
         "'Wells Fargo Home Mortgage'). " +
         "original_amount is the ORIGINAL loan amount at origination (the closing disclosure's 'Loan Amount', " +
-        "or a statement's 'original principal'); current_balance is the CURRENT outstanding principal balance " +
-        "(a monthly statement's 'principal balance' / 'outstanding principal' / 'unpaid principal balance'). " +
-        "Both are decimal numbers with no currency symbol. " +
+        "or a statement's 'original principal'); for monthly statements, current_balance is the statement's " +
+        "OPENING unpaid principal balance before the reviewed payment is applied. " +
+        "Both are decimal numbers with no currency symbol. For monthly statements, also extract the exact " +
+        "payment breakdown: statement_principal_amount, statement_interest_amount, statement_escrow_amount, " +
+        "statement_total_amount, and statement_effective_date (payment posted date / payment date / due date). " +
         "annual_interest_rate_pct is the annual interest rate as a PERCENT number, e.g. 6.5 for 6.5% (never a " +
         "fraction like 0.065). " +
         "term_months is the amortization term in MONTHS: if the document states the term in years (e.g. a 30-year " +
@@ -59,7 +61,17 @@ public static class LoanExtractionSchema
         new ExtractionFieldSpec("original_amount", "number",
             "Original loan amount at origination (closing disclosure 'Loan Amount' or original principal), as a decimal number with no currency symbol."),
         new ExtractionFieldSpec("current_balance", "number",
-            "Current outstanding principal balance (statement 'principal balance' / 'unpaid principal balance'), as a decimal number. Leave empty on a closing disclosure where only the original amount is shown."),
+            "Opening unpaid principal balance before this statement payment is applied, as a decimal number. Leave empty on a closing disclosure where only the original amount is shown."),
+        new ExtractionFieldSpec("statement_principal_amount", "number",
+            "Exact principal portion of this statement payment, as a decimal number with no currency symbol."),
+        new ExtractionFieldSpec("statement_interest_amount", "number",
+            "Exact interest portion of this statement payment, as a decimal number with no currency symbol."),
+        new ExtractionFieldSpec("statement_escrow_amount", "number",
+            "Exact escrow portion of this statement payment, as a decimal number with no currency symbol. Use 0 if none."),
+        new ExtractionFieldSpec("statement_total_amount", "number",
+            "Exact total cash paid on this statement: principal + interest + escrow, as a decimal number with no currency symbol."),
+        new ExtractionFieldSpec("statement_effective_date", "date",
+            "Payment posted date, payment date, or due date for this statement in ISO 8601 (YYYY-MM-DD). Leave empty if absent."),
         new ExtractionFieldSpec("annual_interest_rate_pct", "number",
             "Annual interest rate as a PERCENT number, e.g. 6.5 for 6.5% (never a fraction like 0.065)."),
         new ExtractionFieldSpec("term_months", "integer",

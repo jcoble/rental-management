@@ -8,9 +8,8 @@ namespace RentalCommand.Core.Interfaces;
 public interface IPushSender
 {
     /// <summary>
-    /// Delivers a push to one registered device. <paramref name="data"/> carries the deep-link
-    /// payload (e.g. <c>{"actionUrl":"/payments/123","type":"RentConfirmation"}</c>) the mobile
-    /// client routes on when the user taps the notification.
+    /// Delivers a push to one registered device. <paramref name="data"/> may carry a serialized,
+    /// access-bound <c>navigationIntent</c>. It never carries a URL or route string.
     /// </summary>
     /// <returns>
     /// True if the message was accepted by the provider. False on a fail-soft suppression
@@ -22,13 +21,14 @@ public interface IPushSender
         string title,
         string body,
         IReadOnlyDictionary<string, string>? data,
+        RentalCommand.Core.Outbox.NotificationDeliveryContext delivery,
         CancellationToken ct = default);
 }
 
 /// <summary>Outcome of one push send. <see cref="TokenInvalid"/> signals the token should be pruned.</summary>
-public sealed record PushSendResult(bool Sent, bool TokenInvalid)
+public sealed record PushSendResult(bool Sent, bool TokenInvalid, string? ProviderMessageId)
 {
-    public static readonly PushSendResult Suppressed = new(false, false);
-    public static PushSendResult Ok() => new(true, false);
-    public static PushSendResult Invalid() => new(false, true);
+    public static readonly PushSendResult Suppressed = new(false, false, null);
+    public static PushSendResult Ok(string providerMessageId) => new(true, false, providerMessageId);
+    public static PushSendResult Invalid() => new(false, true, null);
 }

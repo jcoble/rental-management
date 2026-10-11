@@ -133,7 +133,7 @@ class ApiException implements Exception {
         return 'Too many requests. Try again shortly.';
       default:
         if (statusCode >= 500) {
-          return 'The server encountered an error. Please try again.';
+          return 'Something went wrong. Please try again.';
         }
         return 'Request failed ($statusCode).';
     }

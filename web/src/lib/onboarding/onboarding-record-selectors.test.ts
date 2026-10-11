@@ -12,7 +12,7 @@ function onboardingPageSource(): string {
 describe('onboarding record selectors', () => {
 	it('renders the owner record selector above the owner fields', () => {
 		const source = onboardingPageSource();
-		const selector = source.indexOf('data-testid="onboarding-owner-record-select"');
+		const selector = source.indexOf('testid="onboarding-owner-record-select"');
 		const nameField = source.indexOf('data-testid="onboarding-owner-name"');
 
 		assert.ok(selector > -1, 'owner record selector should be rendered');
@@ -23,7 +23,7 @@ describe('onboarding record selectors', () => {
 
 	it('renders the property record selector above the property fields', () => {
 		const source = onboardingPageSource();
-		const selector = source.indexOf('data-testid="onboarding-property-record-select"');
+		const selector = source.indexOf('testid="onboarding-property-record-select"');
 		const nameField = source.indexOf('data-testid="onboarding-property-name"');
 
 		assert.ok(selector > -1, 'property record selector should be rendered');

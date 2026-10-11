@@ -3,15 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/push/notification_routing.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'notification_models.dart';
 import 'notifications_repository.dart';
 
 /// Landlord notification inbox: paginated list of notifications with unread
 /// emphasis, severity icons, relative timestamps, pull-to-refresh and
-/// mark-all-read. Tapping a row marks it read and navigates via its
-/// `actionUrl`.
+/// mark-all-read. Tapping a row resolves its access-bound typed intent.
 class NotificationsInboxScreen extends ConsumerStatefulWidget {
   const NotificationsInboxScreen({super.key});
 
@@ -54,7 +56,14 @@ class _NotificationsInboxScreenState
     // A14: PUSH the target detail screen onto the stack (not `go`, which
     // REPLACES it) so the detail screen keeps a working back button and the
     // user lands back here on `pop()` instead of being stranded.
-    final route = resolveNotificationRoute(n.actionUrl);
+    final authority = ref.read(authControllerProvider);
+    final route = authority is AuthStateAuthenticated
+        ? n.navigationIntent?.resolveFor(
+                authority,
+                nowUtc: DateTime.now().toUtc(),
+              ) ??
+              '/'
+        : '/';
     context.push(route);
   }
 
@@ -72,6 +81,12 @@ class _NotificationsInboxScreenState
         context,
         title: const Text('Notifications'),
         actions: [markAllReadButton],
+      ),
+      floatingActionButton: MobileQuickActionFab(
+        heroTag: 'notifications-fab',
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: Column(
         children: [
@@ -93,9 +108,14 @@ class _NotificationsInboxScreenState
                   return ListView.separated(
                     controller: _scrollController,
                     physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                     itemCount: items.length + (hasMore ? 1 : 0),
-                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    separatorBuilder: (_, index) {
+                      if (index >= items.length - 1) {
+                        return const SizedBox(height: 12);
+                      }
+                      return const MobileM3ListDivider();
+                    },
                     itemBuilder: (context, index) {
                       if (index >= items.length) {
                         return const Padding(
@@ -105,6 +125,10 @@ class _NotificationsInboxScreenState
                       }
                       return _NotificationTile(
                         notification: items[index],
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          index,
+                          items.length,
+                        ),
                         onTap: () => _open(items[index]),
                       );
                     },
@@ -120,9 +144,14 @@ class _NotificationsInboxScreenState
 }
 
 class _NotificationTile extends StatelessWidget {
-  const _NotificationTile({required this.notification, required this.onTap});
+  const _NotificationTile({
+    required this.notification,
+    required this.position,
+    required this.onTap,
+  });
 
   final AppNotification notification;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   @override
@@ -132,51 +161,57 @@ class _NotificationTile extends StatelessWidget {
     final unread = !notification.isRead;
     final (icon, tint) = _severityVisual(notification.severity, cs);
 
-    return ListTile(
+    return MobileM3ListItem(
+      position: position,
       onTap: onTap,
-      leading: CircleAvatar(
+      promoted: unread,
+      leading: MobileM3LeadingIcon(
+        icon: icon,
         backgroundColor: tint.withValues(alpha: 0.16),
         foregroundColor: tint,
-        child: Icon(icon, size: 20),
       ),
       title: Text(
         notification.title.isEmpty ? notification.type : notification.title,
-        style: theme.textTheme.bodyLarge?.copyWith(
+        style: theme.textTheme.titleSmall?.copyWith(
           fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
         ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (notification.message.isNotEmpty)
-            Text(
-              notification.message,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: cs.onSurfaceVariant,
-              ),
-            ),
-          const SizedBox(height: 2),
+      supporting: [
+        if (notification.message.isNotEmpty)
           Text(
-            _relativeTime(notification.createdAt),
-            style: theme.textTheme.labelSmall?.copyWith(
+            notification.message,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(
               color: cs.onSurfaceVariant,
             ),
           ),
-        ],
-      ),
-      trailing: unread
-          ? Container(
+        Text(
+          _relativeTime(notification.createdAt),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: cs.onSurfaceVariant,
+          ),
+        ),
+      ],
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (unread) ...[
+            Container(
               width: 10,
               height: 10,
               decoration: BoxDecoration(
                 color: cs.primary,
                 shape: BoxShape.circle,
               ),
-            )
-          : null,
-      tileColor: unread ? cs.primary.withValues(alpha: 0.04) : null,
+            ),
+            const SizedBox(width: 12),
+          ],
+          Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+        ],
+      ),
     );
   }
 }

@@ -1,20 +1,30 @@
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
-using RentalCommand.Core.Entities;
-
 namespace RentalCommand.Api.Services.Domain;
 
-/// <summary>Data needed to render a residential lease agreement PDF (kept provider-agnostic).</summary>
-public sealed class LeaseAgreementData
+/// <summary>
+/// Immutable snapshot of the legal terms and presentation values needed to render an agreement.
+/// This deliberately contains no tracked entity references, so rendering cannot depend on the
+/// retired mutable <c>Lease</c> aggregate or observe later database changes.
+/// </summary>
+public sealed record LeaseAgreementRenderData
 {
-    public required Lease Lease { get; init; }
+    public required int PropertyId { get; init; }
+    public required string AgreementNumber { get; init; }
+    public required DateOnly TermStartOn { get; init; }
+    public DateOnly? TermEndOn { get; init; }
+    public required decimal BaseRentAmount { get; init; }
+    public required decimal SecurityDepositObligation { get; init; }
+    public required decimal LateFeeAmount { get; init; }
+    public required int RentDueDay { get; init; }
 
     /// <summary>Landlord / management company name (the lessor on the agreement).</summary>
     public string LandlordName { get; init; } = string.Empty;
 
     /// <summary>Tenant full name (the lessee).</summary>
     public string TenantName { get; init; } = string.Empty;
+    public string TenantEmail { get; init; } = string.Empty;
 
     /// <summary>Property name + full address line for the "premises" recital.</summary>
     public string PropertyName { get; init; } = string.Empty;
@@ -36,7 +46,7 @@ public sealed class LeaseAgreementData
 /// <summary>Renders a clean standard residential lease agreement PDF via QuestPDF.</summary>
 public interface ILeaseAgreementPdfGenerator
 {
-    byte[] Generate(LeaseAgreementData data);
+    byte[] Generate(LeaseAgreementRenderData data);
 }
 
 /// <inheritdoc cref="ILeaseAgreementPdfGenerator"/>
@@ -55,7 +65,7 @@ public sealed class LeaseAgreementPdfGenerator : ILeaseAgreementPdfGenerator
     private static readonly string Accent = Colors.Blue.Darken2;
     private static readonly string MutedColor = Colors.Grey.Darken1;
 
-    public byte[] Generate(LeaseAgreementData data)
+    public byte[] Generate(LeaseAgreementRenderData data)
     {
         var document = Document.Create(container =>
         {
@@ -74,7 +84,7 @@ public sealed class LeaseAgreementPdfGenerator : ILeaseAgreementPdfGenerator
         return document.GeneratePdf();
     }
 
-    private static void ComposeHeader(IContainer container, LeaseAgreementData data)
+    private static void ComposeHeader(IContainer container, LeaseAgreementRenderData data)
     {
         container.Column(col =>
         {
@@ -84,9 +94,8 @@ public sealed class LeaseAgreementPdfGenerator : ILeaseAgreementPdfGenerator
         });
     }
 
-    private static void ComposeContent(IContainer container, LeaseAgreementData data)
+    private static void ComposeContent(IContainer container, LeaseAgreementRenderData data)
     {
-        var lease = data.Lease;
         var rules = StateLeaseRules.For(data.State);
         var premises = string.IsNullOrWhiteSpace(data.UnitNumber)
             ? data.PropertyAddress
@@ -115,22 +124,24 @@ public sealed class LeaseAgreementPdfGenerator : ILeaseAgreementPdfGenerator
                 "The Premises are to be used solely as a private residence for the Tenant and the Tenant's immediate family.");
 
             Clause(col, 2, "Term",
-                $"The lease term begins on {Date(lease.StartDate)} and ends on {Date(lease.EndDate)}, unless terminated earlier " +
-                "in accordance with this Agreement. Upon expiration, this Agreement does not automatically renew unless agreed in writing by both parties.");
+                data.TermEndOn is { } termEnd
+                    ? $"The lease term begins on {Date(data.TermStartOn)} and ends on {Date(termEnd)}, unless terminated earlier " +
+                      "in accordance with this Agreement. Upon expiration, this Agreement does not automatically renew unless agreed in writing by both parties."
+                    : $"The lease term begins on {Date(data.TermStartOn)} and continues month-to-month until terminated in accordance with this Agreement and applicable law.");
 
             Clause(col, 3, "Rent",
-                $"The Tenant agrees to pay monthly rent of {Money(lease.MonthlyRent)}, due on the {Ordinal(lease.RentDueDay)} day of each month. " +
+                $"The Tenant agrees to pay monthly rent of {Money(data.BaseRentAmount)}, due on the {Ordinal(data.RentDueDay)} day of each month. " +
                 "Rent shall be paid to the Landlord at the address designated by the Landlord, without demand, deduction, or set-off.");
 
             Clause(col, 4, "Late Charges",
-                (lease.LateFeeAmount > 0m
-                    ? $"If rent is not received by the Landlord within the grace period allowed by applicable law, the Tenant shall pay a late charge of {Money(lease.LateFeeAmount)}. "
+                (data.LateFeeAmount > 0m
+                    ? $"If rent is not received by the Landlord within the grace period allowed by applicable law, the Tenant shall pay a late charge of {Money(data.LateFeeAmount)}. "
                     : "If rent is not paid when due, the Tenant may be subject to late charges as permitted by applicable law. ")
                 + rules.LateFeeText);
 
             Clause(col, 5, "Security Deposit",
-                lease.SecurityDeposit > 0m
-                    ? $"The Tenant shall pay a security deposit of {Money(lease.SecurityDeposit)} prior to occupancy. {rules.DepositReturnText}"
+                data.SecurityDepositObligation > 0m
+                    ? $"The Tenant shall pay a security deposit of {Money(data.SecurityDepositObligation)} prior to occupancy. {rules.DepositReturnText}"
                     : $"No security deposit is required under this Agreement, except as the parties may otherwise agree in writing. {rules.DepositReturnText}");
 
             Clause(col, 6, "Utilities",
@@ -166,20 +177,21 @@ public sealed class LeaseAgreementPdfGenerator : ILeaseAgreementPdfGenerator
         });
     }
 
-    private static void ComposeTerms(IContainer container, LeaseAgreementData data, string premises)
+    private static void ComposeTerms(IContainer container, LeaseAgreementRenderData data, string premises)
     {
-        var lease = data.Lease;
         container.Border(1).BorderColor(Colors.Grey.Lighten1).Padding(10).Column(col =>
         {
             col.Spacing(3);
             TermRow(col, "Landlord", string.IsNullOrWhiteSpace(data.LandlordName) ? "—" : data.LandlordName);
             TermRow(col, "Tenant", string.IsNullOrWhiteSpace(data.TenantName) ? "—" : data.TenantName);
             TermRow(col, "Premises", premises);
-            TermRow(col, "Lease Number", string.IsNullOrWhiteSpace(lease.LeaseNumber) ? "—" : lease.LeaseNumber);
-            TermRow(col, "Term", $"{Date(lease.StartDate)} to {Date(lease.EndDate)}");
-            TermRow(col, "Monthly Rent", $"{Money(lease.MonthlyRent)} (due the {Ordinal(lease.RentDueDay)} of each month)");
-            TermRow(col, "Security Deposit", Money(lease.SecurityDeposit));
-            TermRow(col, "Late Fee", lease.LateFeeAmount > 0m ? Money(lease.LateFeeAmount) : "—");
+            TermRow(col, "Lease Number", string.IsNullOrWhiteSpace(data.AgreementNumber) ? "—" : data.AgreementNumber);
+            TermRow(col, "Term", data.TermEndOn is { } termEnd
+                ? $"{Date(data.TermStartOn)} to {Date(termEnd)}"
+                : $"{Date(data.TermStartOn)} to month-to-month");
+            TermRow(col, "Monthly Rent", $"{Money(data.BaseRentAmount)} (due the {Ordinal(data.RentDueDay)} of each month)");
+            TermRow(col, "Security Deposit", Money(data.SecurityDepositObligation));
+            TermRow(col, "Late Fee", data.LateFeeAmount > 0m ? Money(data.LateFeeAmount) : "—");
         });
     }
 
@@ -233,7 +245,7 @@ public sealed class LeaseAgreementPdfGenerator : ILeaseAgreementPdfGenerator
     /// Renders the "Required Disclosures" section: always an explicit in-body legal disclaimer, plus the
     /// federal lead-based-paint disclosure for properties built before 1978.
     /// </summary>
-    private static void ComposeDisclosures(IContainer container, LeaseAgreementData data, StateLeaseRules rules)
+    private static void ComposeDisclosures(IContainer container, LeaseAgreementRenderData data, StateLeaseRules rules)
     {
         var requiresLeadDisclosure = data.YearBuilt is { } year && year < 1978;
 
@@ -295,7 +307,7 @@ public sealed class LeaseAgreementPdfGenerator : ILeaseAgreementPdfGenerator
 
     private static string Money(decimal value) => value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
 
-    private static string Date(DateTime value) => value.ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture);
+    private static string Date(DateOnly value) => value.ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture);
 
     private static string Ordinal(int day)
     {

@@ -10,13 +10,14 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { workOrderSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { money } from '../money';
-	import { formatDateOnly } from '$lib/utils/date';
+import { formatDateOnly } from '$lib/utils/date';
+import { formatStatusLabel } from '$lib/utils/status-labels';
 	import {
 		defaultWorkOrderReceiptScanContext,
 		workOrderReceiptScanContext
 	} from '$lib/components/unit/maintenance-actions';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
@@ -25,6 +26,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { Wrench, Receipt, Plus, X, ExternalLink, ArrowLeft } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		dashboard,
@@ -137,12 +139,12 @@
 
 	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
 	function openWorkOrder(id: number) {
-		goto('/units/' + unitId + '?tab=maintenance&wo=' + id, { keepFocus: true, noScroll: true });
+		goto('/units/' + unitId + '?tab=maintenance&view=work-orders&wo=' + id, { keepFocus: true, noScroll: true });
 	}
 
 	// Clearing the selection drops ?wo= (replaceState — it's a peer of the list, not a new history step).
 	function clearSelection() {
-		goto('/units/' + unitId + '?tab=maintenance', { replaceState: true, keepFocus: true, noScroll: true });
+		goto('/units/' + unitId + '?tab=maintenance&view=work-orders', { replaceState: true, keepFocus: true, noScroll: true });
 	}
 
 	// ── Inline "new work order" form (reuses workOrderSchema + the app's form conventions) ──
@@ -181,7 +183,7 @@
 	const createMut = createMutation(() => ({
 		mutationFn: (data: Record<string, unknown>) => workOrdersApi.create(data),
 		onSuccess: () => {
-			showSuccess('Work order created.');
+			showSuccess('Repair created.');
 			closeCreate();
 			invalidate();
 		},
@@ -241,7 +243,7 @@
 {#if selectedWo}
 	<!-- Folded work-order detail: the same <WorkOrderDetail> the generic /maintenance/[id] page mounts. -->
 	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="wo-back-to-list">
-		<ArrowLeft class="h-4 w-4" /> Back to work orders
+		<ArrowLeft class="h-4 w-4" /> Back to repairs
 	</Button>
 	<WorkOrderDetail
 		workOrderId={selectedWo}
@@ -252,14 +254,14 @@
 {:else}
 	<div class="flex flex-wrap justify-end gap-2">
 		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="maintenance-create">
-			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> New work order{/if}
+			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> New repair{/if}
 		</Button>
 	</div>
 
 	<!-- Inline new-ticket form. -->
 	{#if showCreate}
 		<div class="rounded-xl border border-border bg-muted/20 p-4" data-testid="maintenance-create-form">
-			<h3 class="mb-3 text-sm font-semibold">New work order</h3>
+			<h3 class="mb-3 text-sm font-semibold">New repair</h3>
 				<FormStepper steps={createSteps} bind:currentStep={createStep} completedSteps={completedCreateSteps} testid="maintenance-create-stepper">
 					<div class="space-y-3">
 						{#if createStep === 0}
@@ -278,9 +280,9 @@
 							<div>
 								<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-priority">Priority</label>
 								<Select.Root type="single" bind:value={createForm.priority}>
-									<Select.Trigger id="wo-priority" class="w-full" data-testid="maintenance-priority-input">{createForm.priority}</Select.Trigger>
+									<Select.Trigger id="wo-priority" class="w-full" data-testid="maintenance-priority-input">{formatStatusLabel(createForm.priority)}</Select.Trigger>
 									<Select.Content>
-										{#each WO_PRIORITIES as p}<Select.Item value={p} label={p}>{p}</Select.Item>{/each}
+										{#each WO_PRIORITIES as p}<Select.Item value={p} label={formatStatusLabel(p)}>{formatStatusLabel(p)}</Select.Item>{/each}
 									</Select.Content>
 								</Select.Root>
 							</div>
@@ -315,9 +317,14 @@
 
 	<!-- Work orders as compact cards; the full edit/assign/close lives on the WO detail page. -->
 	{#if workOrdersQuery.isLoading}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading work orders…</p>
+		<LoadingState label="Loading repairs" testid="unit-work-orders-loading" />
+	{:else if workOrdersQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-work-orders-error">
+			<p class="text-sm font-medium text-destructive">Repairs could not be loaded.</p>
+			<Button class="mt-3" variant="outline" size="sm" onclick={() => workOrdersQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if workOrderList.length === 0}
-		<DetailCard title="No work orders" icon={Wrench} accent="muted" testid="maintenance-empty">
+		<DetailCard title="No repairs" icon={Wrench} accent="muted" testid="maintenance-empty">
 			<p class="text-sm text-muted-foreground">Create a ticket when something needs fixing, or scan a vendor invoice.</p>
 		</DetailCard>
 	{:else}
@@ -333,7 +340,7 @@
 						<dl class="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
 							<div><dt class="text-muted-foreground">Category</dt><dd>{w.category}</dd></div>
 							<div><dt class="text-muted-foreground">Requested</dt><dd>{formatDateOnly(w.requestedAt)}</dd></div>
-							<div><dt class="text-muted-foreground">Cost</dt><dd>{money(w.actualCost ?? w.estimatedCost ?? 0)}</dd></div>
+							<div><dt class="text-muted-foreground">Cost</dt><dd>{formatAccountingCurrency(w.actualCost ?? w.estimatedCost ?? 0)}</dd></div>
 						</dl>
 						<div class="mt-3 flex flex-wrap justify-end gap-2">
 							<Button
@@ -345,7 +352,7 @@
 								Scan receipt
 							</Button>
 							<Button variant="outline" size="sm" class="gap-1" onclick={() => openWorkOrder(w.id)} data-testid="maintenance-open-{w.id}">
-								Open work order <ExternalLink class="h-3 w-3" />
+								Open repair <ExternalLink class="h-3 w-3" />
 							</Button>
 						</div>
 					</div>
@@ -370,14 +377,21 @@
 				data-testid="maintenance-scan-receipt"
 			>Scan receipt</button>
 		{/snippet}
-		{#if workOrderReceipts.length === 0}
+		{#if expensesQuery.isLoading}
+			<LoadingState label="Loading work-order receipts" testid="maintenance-receipts-loading" />
+		{:else if expensesQuery.isError}
+			<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="maintenance-receipts-error">
+				<p class="text-sm font-medium text-destructive">Work-order receipts could not be loaded.</p>
+				<Button class="mt-3" variant="outline" size="sm" onclick={() => expensesQuery.refetch()}>Try again</Button>
+			</div>
+		{:else if workOrderReceipts.length === 0}
 			<p class="text-sm text-muted-foreground">No work-order receipts yet. Snap a receipt to link it to a job.</p>
 		{:else}
 			<ul class="divide-y text-sm">
 				{#each workOrderReceipts as e (e.id)}
 					<li class="flex items-center justify-between py-1.5">
 						<span class="truncate">{formatDateOnly(e.incurredAt)} · {e.description}</span>
-						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={e.status} />{money(e.amount)}</span>
+						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={e.status} />{formatAccountingCurrency(e.amount)}</span>
 					</li>
 				{/each}
 			</ul>

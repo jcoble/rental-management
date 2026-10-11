@@ -5,13 +5,23 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using RentalCommand.Api.Extensions;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Services.Sms;
+using RentalCommand.Api.Simulation;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Notifications;
+using RentalCommand.Engine;
+using RentalCommand.Engine.Extensions;
 using RentalCommand.Engine.HealthChecks;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
@@ -20,7 +30,12 @@ using RentalCommand.Engine.Workers;
 // Every DB-written DateTime in the Engine is either DateTime.UtcNow-derived or
 // explicitly constructed with DateTimeKind.Utc (see RentChargeService). This matches
 // the API project which also runs without the legacy switch.
+// QuestPDF Community license (free for small businesses / OSS) — required before any PDF is generated.
+QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+
 var builder = Host.CreateApplicationBuilder(args);
+var simulationEnabled = SimulationGate.IsEnabled(builder.Configuration, builder.Environment);
+var commandBridgeOnly = builder.Configuration.GetValue<bool>("Simulation:CommandBridgeOnly");
 
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("RentalCommand");
 var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
@@ -33,36 +48,62 @@ if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException(
         "Missing connection string 'DefaultConnection'. Set it in appsettings.json or via configuration.");
+if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("MigratorConnection")))
+{
+    throw new InvalidOperationException(
+        "ConnectionStrings:MigratorConnection must not be available to the long-running Engine process.");
+}
 
-// Unified audit trail: the Engine has no HttpContext, so it attributes audit rows to "system".
-// The scoped interceptor is resolved from the same scope as the DbContext (the (sp, options)
-// overload) and auto-records IAuditable CRUD that workers perform.
+RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ValidateRuntimeConnectionString(
+    connectionString,
+    RentalCommand.Data.Security.DatabaseRuntimeIdentity.EngineRole,
+    allowDevelopmentDefault: builder.Environment.IsDevelopment());
+
+// Atomic commands attribute Engine mutations to the system actor inside the canonical audit scope.
 builder.Services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
     RentalCommand.Data.Auditing.SystemCurrentActor>();
-builder.Services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
-    RentalCommand.Data.Auditing.AuditScope>();
-builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
 
-// Row-Level Security backstop (audit M-1): the Engine operates across all portfolios, so its RLS
-// interceptor always sets app.is_admin = true (no HTTP context, no single portfolio). It sets the
-// same session GUCs the tenant_isolation policies read, mirroring EdiPlatform's Engine.
+// The Engine's direct restricted database identity is the sole cross-workspace authority. It never
+// receives or sets a mutable administrator/bypass flag.
 builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
+builder.Services.AddAtomicPersistenceKernel();
+// Shared Api-namespace services hosted in the Engine (notifications, e-sign, notices,
+// conversations, LLM credentials) use the shared atomic write executor.
+builder.Services.AddGeneratedInfrastructureStores();
+builder.Services.AddPendingFileUploadStore();
 
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
-        .AddInterceptors(
-            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
-            sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
+        .UseAtomicPersistenceKernel(sp)
+        .AddInterceptors(sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
 
-// DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP/Zoho or SendGrid email,
+// --- Master simulation clock (TSK-615) ---
+// Same ambient TimeProvider + IAppTimeZoneProvider registration as the API so both processes agree on
+// "now". Production / flag-off binds TimeProvider.System (real clock). The Engine has no auth handlers,
+// so it does not pin any framework auth clock.
+builder.Services.AddSimulationClock(builder.Configuration, builder.Environment);
+
+// DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP or SendGrid email,
 // config-selected; logs when unconfigured).
-builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
+builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();
+builder.Services.AddScoped<RentalCommand.Data.Outbox.IOutboxClaimStore, RentalCommand.Data.Outbox.OutboxClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Scanning.IScanProcessingClaimStore,
+    RentalCommand.Data.Scanning.ScanProcessingClaimStore>();
+builder.Services.AddScoped<
+    RentalCommand.Core.Scanning.IScanConfirmationTargetWriter,
+    RentalCommand.Data.Scanning.ProductionScanConfirmationTargetWriter>();
+builder.Services.AddScoped<RentalCommand.Data.Simulation.ISimWorkerCommandClaimStore,
+    RentalCommand.Data.Simulation.SimWorkerCommandClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Accounting.IAccountingConnectionClaimStore,
+    RentalCommand.Data.Accounting.AccountingConnectionClaimStore>();
+builder.Services.AddScoped<AccountingPostingService>();
+builder.Services.AddScoped<ChartOfAccountsSeedService>();
 // SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".
 builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
 // Pluggable SMS providers (BYO per-portfolio; platform-env fallback). Shared registration with the
 // API; the dispatcher resolves the portfolio's chosen provider then dispatches to the matching impl.
 builder.Services.AddSmsProviders();
-builder.Services.AddHttpClient<INotificationChannel, RoutingNotificationChannel>();
+builder.Services.AddNotificationDeliveryChannel(builder.Configuration);
 // Push (FCM HTTP v1 via FirebaseAdmin). Singleton: the FirebaseApp is a process-global. Fail-soft
 // when no Push:* credential is configured — the outbox worker still marks push messages sent.
 builder.Services.Configure<PushConfig>(builder.Configuration.GetSection(PushConfig.SectionName));
@@ -73,6 +114,26 @@ builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(Uplo
 builder.Services.Configure<NotificationsConfig>(builder.Configuration.GetSection(NotificationsConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 builder.Services.AddSingleton<IImageTextExtractor, TesseractImageTextExtractor>();
+builder.Services.AddHttpClient<OpenAiLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.openai.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddHttpClient<AnthropicLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.anthropic.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddScoped<IWorkspaceLlmExtractionProvider>(sp =>
+    sp.GetRequiredService<OpenAiLlmProvider>());
+builder.Services.AddScoped<IWorkspaceLlmExtractionProvider>(sp =>
+    sp.GetRequiredService<AnthropicLlmProvider>());
+builder.Services.AddScoped<IWorkspaceAuthorizationEvaluator, WorkspaceAuthorizationEvaluator>();
+builder.Services.AddScoped<IWorkspaceLlmCredentialService, WorkspaceLlmCredentialService>();
+builder.Services.AddScoped<IWorkspaceLlmCredentialResolver>(sp =>
+    sp.GetRequiredService<IWorkspaceLlmCredentialService>());
+builder.Services.AddScoped<ILlmUsageEvidenceRecorder>(sp =>
+    sp.GetRequiredService<IWorkspaceLlmCredentialService>());
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>(c =>
@@ -105,42 +166,70 @@ else // default: openai
     });
 }
 builder.Services.AddScoped<IFileStorage, DiskFileStorage>();
-builder.Services.AddSingleton<IDataUpdateService, EngineDataUpdateService>();
+builder.Services.AddScoped<PendingFileUploadCleanupService>();
+// Native e-sign execution is shared with the API. Signatures are committed before PDF/blob work;
+// this service lets the Engine finish any durable ExecutionPending request after a transient failure.
+builder.Services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdfGenerator,
+    RentalCommand.Api.Services.Esign.ExecutedLeasePdfGenerator>();
+builder.Services.AddScoped<RentalCommand.Api.Services.Esign.INativeEsignExecutionService,
+    RentalCommand.Api.Services.Esign.NativeEsignExecutionService>();
+builder.Services.AddScoped<RentalCommand.Data.Esign.INativeEsignExecutionClaimStore,
+    RentalCommand.Data.Esign.NativeEsignExecutionClaimStore>();
+builder.Services.AddScoped<NativeEsignReconciliationService>();
+builder.Services.AddScoped<RentalCommand.Data.Payments.IProviderInboxClaimStore,
+    RentalCommand.Data.Payments.ProviderInboxClaimStore>();
+builder.Services.AddScoped<ProviderInboxReconciliationService>();
+builder.Services.AddScoped<RentalCommand.Data.Automation.IScheduledAutomationClaimStore,
+    RentalCommand.Data.Automation.ScheduledAutomationClaimStore>();
+// Realtime backplane (TSK-624): the Engine can't reach the API's in-memory SignalR hub, so it
+// publishes each entity change as a Postgres NOTIFY on its own pooled connection. The API-hosted
+// EntityChangeListener LISTENs and re-broadcasts to the hub. Shared NpgsqlDataSource so publishes
+// reuse a dedicated pool rather than opening a raw connection per event.
+builder.Services.AddSingleton(_ => new NpgsqlDataSourceBuilder(connectionString).Build());
+builder.Services.AddSingleton<IDataUpdateService, NotifyDataUpdateService>();
+builder.Services.AddSingleton<RentalCommand.Api.Services.RealtimeInvalidationQueue>();
+builder.Services.AddSingleton<IRealtimeInvalidationQueue>(sp =>
+    sp.GetRequiredService<RentalCommand.Api.Services.RealtimeInvalidationQueue>());
 
 // Phase 4 automation services (gated by Notifications flags; financial ones default OFF).
 builder.Services.AddScoped<IRentChargeService, RentChargeService>();
 builder.Services.AddScoped<IDebtServiceService, DebtServiceService>();
 builder.Services.AddScoped<IRecurringExpenseGenerationService, RecurringExpenseGenerationService>();
+builder.Services.AddScoped<
+    IRecurringTenantChargeGenerationService,
+    RecurringTenantChargeGenerationService>();
 builder.Services.AddScoped<IRecurringMaintenanceService, RecurringMaintenanceService>();
 // Online-payments autopay charging (gated: no-op unless Stripe is configured).
 builder.Services.Configure<StripeConfig>(builder.Configuration.GetSection(StripeConfig.SectionName));
+builder.Services.AddOptions<InteractivePaymentReconciliationOptions>()
+    .Bind(builder.Configuration.GetSection(InteractivePaymentReconciliationOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<InteractivePaymentReconciliationOptions>,
+    InteractivePaymentReconciliationOptionsValidator>();
+builder.Services.AddScoped<RentalCommand.Api.Services.Payments.IInteractivePaymentProviderClient,
+    RentalCommand.Api.Services.Payments.StripeInteractivePaymentProviderClient>();
 builder.Services.AddScoped<IAutopayChargeService, AutopayChargeService>();
+builder.Services.AddScoped<IAutopayProviderClient, StripeAutopayProviderClient>();
+builder.Services.AddScoped<InteractivePaymentReconciliationService>();
 builder.Services.AddScoped<ILateFeeService, LateFeeService>();
-builder.Services.AddScoped<ILeaseExpiryReminderService, LeaseExpiryReminderService>();
+builder.Services.AddScoped<ITenantNoticeCandidateGenerationService, TenantNoticeCandidateGenerationService>();
+builder.Services.AddScoped<ITenantNoticeDraftSetStore, TenantNoticeDraftSetStore>();
 builder.Services.AddScoped<IDailyBriefingService, DailyBriefingService>();
 builder.Services.AddScoped<IDailyBriefingDeliveryService, DailyBriefingDeliveryService>();
-builder.Services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
+builder.Services.AddScoped<IMessagingProviderSettingsResolver, MessagingProviderSettingsResolver>();
 
-// Lease Lifecycle Autopilot: proactively draft renewal/late/move-out notices for one-tap approval.
-// Reuses the Api's NoticeDraftService (LLM copy + de-dup idempotency) — the same code the manual
-// "Generate" button runs. ConversationService is its constructor dependency (only used by the
-// approve path, which the worker never invokes; the Engine already provides IDataUpdateService).
-// ConversationService's own constructor needs IFairHousingReviewService, so the Engine MUST register
-// it too. Development host builds validate the whole DI graph on Build(), so a missing registration
-// here crashes the entire Engine on boot — killing every worker (outbox/scan dispatch, debt service,
-// late-fee sweep, notices), not just the notice path. FairHousingReviewService's only dependency is
-// ILlmProvider, which the Engine already registers for scan extraction, so this adds no further graph.
+// Tenant-notice work is drafted by one PostgreSQL set command, then Auto policies use the same
+// canonical approval/outbox command as the API. The Engine does not use the manual draft façade.
 builder.Services.AddScoped<IFairHousingReviewService, FairHousingReviewService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
-builder.Services.AddScoped<INoticeDraftService, NoticeDraftService>();
+builder.Services.AddScoped<INotificationFoundationService, NotificationFoundationService>();
 builder.Services.AddScoped<INoticeDraftGenerationService, NoticeDraftGenerationService>();
 
-// Accounting-integration pull worker dependencies (provider-agnostic). The Engine does not call
-// AddDomainServices(), so the import engine + provider resolver/settings + the provider set are
-// registered explicitly here; AddAccountingProviders() (shared with the API) also binds QuickBooks
-// creds + registers each IAccountingProvider via AddHttpClient. IDataProtection is configured above
-// with the same SetApplicationName/keys path as the API, so tokens encrypted by the API decrypt here.
-builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingProviderResolver>();
+// Accounting-integration pull worker dependencies. The Engine does not call AddDomainServices(), so
+// the import engine + provider settings + the provider set are registered explicitly here;
+// AddAccountingProviders() (shared with the API) also binds QuickBooks creds + registers the
+// IAccountingProvider via AddHttpClient. IDataProtection is configured above with the same
+// SetApplicationName/keys path as the API, so tokens encrypted by the API decrypt here.
 builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingAppSettingsResolver>();
 builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingImportService>();
 // Shared token refresh+persist service — used by the import path's refresh-on-401 AND the token-refresh worker.
@@ -151,28 +240,10 @@ builder.Services.AddAccountingProviders();
 // Scoped (it opens its own scope per call to isolate DB access).
 builder.Services.AddScoped<EngineStatusReporter>();
 
-// Workers (each is its own BackgroundService).
-builder.Services.AddHostedService<OutboxDispatchWorker>();
-builder.Services.AddHostedService<ScanProcessingWorker>();
-builder.Services.AddHostedService<RentChargeWorker>();
-builder.Services.AddHostedService<DebtServiceWorker>();
-builder.Services.AddHostedService<RecurringExpenseWorker>();
-builder.Services.AddHostedService<AutopayChargeWorker>();
-builder.Services.AddHostedService<RecurringMaintenanceWorker>();
-builder.Services.AddHostedService<LateFeeWorker>();
-builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
-builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
-builder.Services.AddHostedService<NoticeDraftWorker>();
-// Continuous accounting pull: imports each Connected + PullEnabled connection's deltas into the domain.
-builder.Services.AddHostedService<AccountingPullWorker>();
-// Proactive token refresh: rotates access tokens before expiry so the continuous pull never dies on a stale token.
-builder.Services.AddHostedService<AccountingTokenRefreshWorker>();
-
-// Watcher: monitors the advisory lock connection; triggers graceful shutdown if a newer Engine takes over.
-builder.Services.AddHostedService<AdvisoryLockWatcherService>();
-
-// Watchdog: monitors worker heartbeats; warns (and ultimately restarts) if any worker is stuck.
-builder.Services.AddHostedService<WorkerWatchdogService>();
+// Command-bridge-only mode is a dev/simulation safety surface: it retains the clock refresher
+// registered by AddSimulationClock, the command bridge, its status reporting, and the single-instance
+// advisory-lock watcher. Every autonomous worker and dispatcher remains unstarted.
+builder.Services.AddEngineHostedServices(simulationEnabled, commandBridgeOnly);
 
 // Health check over the heartbeat table. The Engine has no HTTP port, so there is no
 // endpoint to scrape — the registration keeps parity with EdiPlatform and lets the check
@@ -182,41 +253,9 @@ builder.Services.AddHealthChecks()
 
 var host = builder.Build();
 
-// --- Self-migrate ---
-// The Engine applies EF Core migrations itself so it no longer depends on the API having
-// created the schema. Both the API and Engine self-migrate on startup, so the migration runs
-// under a shared PostgreSQL advisory lock (DatabaseMigrator) — concurrent MigrateAsync calls
-// would otherwise race on a fresh batch and crash one process. Done BEFORE acquiring the worker
-// advisory lock so the schema (incl. the heartbeat table the watchdog reads) exists first.
-{
-    var migrateLogger = host.Services.GetRequiredService<ILogger<Program>>();
-    const int maxMigrateAttempts = 30;
-    for (var attempt = 1; attempt <= maxMigrateAttempts; attempt++)
-    {
-        try
-        {
-            using var scope = host.Services.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            // Advisory-locked so the Engine and API don't apply a fresh migration batch concurrently.
-            await DatabaseMigrator.MigrateWithLockAsync(db);
-            migrateLogger.LogInformation("Engine applied database migrations (or none pending).");
-            break;
-        }
-        catch (Exception ex) when (attempt < maxMigrateAttempts)
-        {
-            migrateLogger.LogWarning(
-                "Database not ready for migration yet (attempt {Attempt}/{Max}): {Message}. Retrying in 2s…",
-                attempt, maxMigrateAttempts, ex.Message);
-            await Task.Delay(TimeSpan.FromSeconds(2));
-        }
-    }
-}
-
-// --- Single-instance safety: PostgreSQL advisory lock TAKEOVER ---
-// A new Engine instance KILLS any existing holder and wins the lock, so a restart/redeploy
-// always succeeds rather than getting stuck behind a zombie process. The dedicated, non-pooled
-// connection is held open for the host's lifetime; AdvisoryLockWatcherService monitors it and
-// triggers graceful shutdown if a still-newer Engine later terminates it.
+// --- Single-instance safety: PostgreSQL advisory lock ---
+// The dedicated non-pooled connection already uses the direct restricted Engine login. A new Engine
+// waits for the prior holder instead of retaining owner authority merely to terminate it.
 var logger = host.Services.GetRequiredService<ILogger<Program>>();
 
 var lockConnString = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ToString();
@@ -231,6 +270,9 @@ for (var attempt = 1; attempt <= maxDbAttempts; attempt++)
     {
         lockConnection = new NpgsqlConnection(lockConnString);
         await lockConnection.OpenAsync();
+        await RentalCommand.Data.Security.DatabaseRuntimeIdentity.ValidateOpenedConnectionAsync(
+            lockConnection,
+            RentalCommand.Data.Security.DatabaseRuntimeIdentity.EngineRole);
         break;
     }
     catch (Exception ex) when (attempt < maxDbAttempts)
@@ -248,29 +290,20 @@ if (lockConnection is null)
     return;
 }
 
-// If another Engine currently holds the advisory lock, terminate its backend so we can take over.
-await using (var checkCmd = lockConnection.CreateCommand())
+var acquiredImmediately = false;
+await using (var tryLockCmd = lockConnection.CreateCommand())
 {
-    checkCmd.CommandText =
-        $"SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND classid = 0 " +
-        $"AND objid = {Program.AdvisoryLockKey} AND granted = true";
-    var existingPid = await checkCmd.ExecuteScalarAsync();
-    if (existingPid != null)
-    {
-        logger.LogWarning(
-            "Another Engine instance detected (DB PID {Pid}). Terminating it to take over the advisory lock…",
-            existingPid);
-        await using var killCmd = lockConnection.CreateCommand();
-        killCmd.CommandText = $"SELECT pg_terminate_backend({existingPid})";
-        await killCmd.ExecuteScalarAsync();
-        await Task.Delay(1000); // give the old backend time to die and release the lock
-        Program.LockContested = true;
-    }
+    tryLockCmd.CommandText = $"SELECT pg_try_advisory_lock({Program.AdvisoryLockKey})";
+    acquiredImmediately = (bool?)await tryLockCmd.ExecuteScalarAsync() == true;
 }
 
-// Acquire the advisory lock (blocking — succeeds now that any prior holder is gone).
-await using (var lockCmd = lockConnection.CreateCommand())
+if (!acquiredImmediately)
 {
+    Program.LockContested = true;
+    logger.LogWarning(
+        "Another Engine holds advisory lock {LockKey}; waiting for it to stop.",
+        Program.AdvisoryLockKey);
+    await using var lockCmd = lockConnection.CreateCommand();
     lockCmd.CommandText = $"SELECT pg_advisory_lock({Program.AdvisoryLockKey})";
     await lockCmd.ExecuteScalarAsync();
 }
@@ -304,39 +337,6 @@ lifetime.ApplicationStopping.Register(() =>
     Program.AdvisoryLockHeld = false;
 });
 
-// --- Crash-recovery: re-arm scans stranded mid-extraction by a previous crash ---
-// ScanProcessingWorker atomically claims a draft Pending → Processing before calling the
-// LLM. If a prior Engine crashed / was killed (incl. the advisory-lock takeover above) after
-// that claim but before reaching a terminal state, the draft is left in "Processing" — a state
-// the worker never polls, so it would be invisible and unconfirmable forever. We run this only
-// AFTER the advisory lock is held, so single-instance is guaranteed: no other Engine can
-// legitimately own a "Processing" row, making every such row a genuine crash victim safe to
-// reset to "Pending" for a fresh attempt. Only "Processing" is touched — "Confirming" is the
-// API's mid-confirm claim and must be left alone.
-try
-{
-    using var recoveryScope = host.Services.CreateScope();
-    var recoveryDb = recoveryScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-    var reset = await recoveryDb.Database.ExecuteSqlRawAsync(
-        "UPDATE \"ScanDrafts\" SET \"Status\" = 'Pending', \"ReviewedAt\" = NULL WHERE \"Status\" = 'Processing'");
-    if (reset > 0)
-    {
-        logger.LogWarning(
-            "Crash-recovery: reset {Count} scan draft(s) stranded in 'Processing' back to 'Pending' for reprocessing.",
-            reset);
-    }
-    else
-    {
-        logger.LogInformation("Crash-recovery: no scan drafts were stranded in 'Processing'.");
-    }
-}
-catch (Exception ex)
-{
-    // Non-fatal: the worker's in-process failure handling still drives live timeouts/exceptions
-    // to 'Failed'. Don't block startup if this one-shot sweep fails (e.g. transient DB hiccup).
-    logger.LogError(ex, "Crash-recovery sweep for stranded 'Processing' scan drafts failed; continuing startup.");
-}
-
 await host.RunAsync();
 
 /// <summary>
@@ -359,7 +359,7 @@ public partial class Program
         set => _advisoryLockHeld = value;
     }
 
-    /// <summary>True if this instance had to terminate a prior holder to take over.</summary>
+    /// <summary>True if this instance encountered and waited for a prior lock holder.</summary>
     internal static bool LockContested
     {
         get => _lockContested;

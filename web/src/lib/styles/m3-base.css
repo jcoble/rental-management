@@ -269,6 +269,18 @@
 	.m3-motion-reveal-list > *:nth-child(5) { animation-delay: 112ms; }
 	.m3-motion-reveal-list > *:nth-child(n + 6) { animation-delay: 140ms; }
 
+	.datagrid-sort-control {
+		display: inline-flex;
+		min-height: 44px;
+		min-width: 44px;
+		align-items: center;
+		gap: 4px;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+	}
+
 	.m3-motion-cascade > * {
 		animation: m3-motion-enter-quick
 			var(--m3-motion-duration-medium-3, 350ms)

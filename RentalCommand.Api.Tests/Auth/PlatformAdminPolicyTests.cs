@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authorization;
@@ -6,119 +7,197 @@ using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Entities;
+using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
 
 /// <summary>
-/// Security invariant for the platform-operator gate (F6 / TSK-212): the Engine Health endpoint —
-/// and any future surface using the <c>PlatformAdmin</c> policy — must reject ordinary landlord
-/// <c>Admin</c>s. Every landlord holds the Admin role on their OWN portfolio, so the Admin role is
-/// NOT a platform credential; only an email on the <c>PlatformAdmin:Emails</c> allowlist is.
-///
-/// These exercise the REAL authorization pipeline (the policy registered by
-/// <see cref="PlatformAdminPolicy.Register"/>, evaluated by ASP.NET's <see cref="IAuthorizationService"/>)
-/// rather than merely asserting the attribute is present, and run hermetically (no DB / app boot).
+/// Security contract for the platform-operator gate. Authorization starts from the canonical
+/// numeric JWT subject and resolves the current ApplicationUser email; bearer email and role claims
+/// are never authority.
 /// </summary>
-public class PlatformAdminPolicyTests
+public sealed class PlatformAdminPolicyTests
 {
-    private const string SuperAdminEmail = "operator@platform.example";
-
-    private static IAuthorizationService BuildAuthService(params string[] allowlistEmails)
-    {
-        var allowlist = PlatformAdminPolicy.BuildAllowlist(
-            new PlatformAdminOptions { Emails = allowlistEmails });
-
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddAuthorization(options => PlatformAdminPolicy.Register(options, allowlist));
-        return services.BuildServiceProvider().GetRequiredService<IAuthorizationService>();
-    }
-
-    private static ClaimsPrincipal User(string? email, params string[] roles)
-    {
-        var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, "42") };
-        if (email is not null)
-        {
-            claims.Add(new Claim(ClaimTypes.Email, email));
-        }
-        claims.AddRange(roles.Select(r => new Claim(ClaimTypes.Role, r)));
-        return new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
-    }
+    private const string PlatformOperatorEmail = "operator@platform.example";
 
     [Fact]
-    public async Task LandlordAdmin_NotOnAllowlist_IsDenied()
+    public async Task AllowlistedDatabaseEmail_IsAllowedFromCanonicalSubject()
     {
-        // A normal customer landlord: authenticated, holds the Admin role on their portfolio, but
-        // their email is NOT on the platform allowlist. They must NOT pass the platform gate.
-        var auth = BuildAuthService(SuperAdminEmail);
-        var landlord = User("landlord@example.com", "Admin");
+        using var sqlite = new SqliteTestContext();
+        var user = SeedUser(sqlite.Db, PlatformOperatorEmail);
+        using var provider = BuildServices(sqlite.Db, PlatformOperatorEmail);
 
-        var result = await auth.AuthorizeAsync(landlord, resource: null, PlatformAdminPolicy.Name);
-
-        result.Succeeded.Should().BeFalse(
-            "the Admin role is per-portfolio and must never grant access to platform-operator surfaces");
-    }
-
-    [Fact]
-    public async Task AllowlistedEmail_IsAllowed()
-    {
-        // Positive control: an allowlisted operator passes — proving the policy isn't always-deny.
-        var auth = BuildAuthService(SuperAdminEmail);
-        var op = User(SuperAdminEmail, "Admin");
-
-        var result = await auth.AuthorizeAsync(op, resource: null, PlatformAdminPolicy.Name);
+        var result = await AuthorizeAsync(provider, CanonicalPrincipal(user.Id));
 
         result.Succeeded.Should().BeTrue();
     }
 
     [Fact]
-    public async Task AllowlistedEmail_IsCaseInsensitive()
+    public async Task AllowlistedDatabaseEmail_IsCaseInsensitive()
     {
-        var auth = BuildAuthService(SuperAdminEmail);
-        var op = User(SuperAdminEmail.ToUpperInvariant(), "Admin");
+        using var sqlite = new SqliteTestContext();
+        var user = SeedUser(sqlite.Db, PlatformOperatorEmail.ToUpperInvariant());
+        using var provider = BuildServices(sqlite.Db, PlatformOperatorEmail);
 
-        var result = await auth.AuthorizeAsync(op, resource: null, PlatformAdminPolicy.Name);
+        var result = await AuthorizeAsync(provider, CanonicalPrincipal(user.Id));
 
-        result.Succeeded.Should().BeTrue("the allowlist is compared case-insensitively");
+        result.Succeeded.Should().BeTrue();
     }
 
     [Fact]
-    public async Task EmptyAllowlist_DeniesEveryone_FailClosed()
+    public async Task ForgedEmailAndRoleClaims_CannotReplaceDatabaseAuthority()
     {
-        // When PLATFORM_ADMIN_EMAILS is unset (empty allowlist), the gate fails closed: no one,
-        // not even the email that would otherwise be an operator, is a platform admin.
-        var auth = BuildAuthService(/* no emails */);
-        var wouldBeOperator = User(SuperAdminEmail, "Admin");
+        using var sqlite = new SqliteTestContext();
+        var user = SeedUser(sqlite.Db, "workspace-user@example.test");
+        using var provider = BuildServices(sqlite.Db, PlatformOperatorEmail);
+        var principal = CanonicalPrincipal(user.Id,
+        [
+            new Claim(ClaimTypes.Email, PlatformOperatorEmail),
+            new Claim(ClaimTypes.Role, "PlatformAdmin"),
+        ]);
 
-        var result = await auth.AuthorizeAsync(wouldBeOperator, resource: null, PlatformAdminPolicy.Name);
-
-        result.Succeeded.Should().BeFalse("an empty allowlist must grant no platform access");
-    }
-
-    [Fact]
-    public async Task AuthenticatedUserWithNoEmailClaim_IsDenied()
-    {
-        var auth = BuildAuthService(SuperAdminEmail);
-        var noEmail = User(email: null, "Admin");
-
-        var result = await auth.AuthorizeAsync(noEmail, resource: null, PlatformAdminPolicy.Name);
+        var result = await AuthorizeAsync(provider, principal);
 
         result.Succeeded.Should().BeFalse();
     }
 
     [Fact]
-    public void EngineStatusController_IsGatedByPlatformAdminPolicy()
+    public async Task EmptyAllowlist_DeniesEveryoneFailClosed()
     {
-        // The platform-internal Engine Health endpoint must carry the PlatformAdmin policy — guards
-        // against a future edit silently swapping it back to a plain [Authorize(Roles="Admin")].
-        var authorize = typeof(AdminEngineStatusController)
+        using var sqlite = new SqliteTestContext();
+        var user = SeedUser(sqlite.Db, PlatformOperatorEmail);
+        using var provider = BuildServices(sqlite.Db);
+
+        var result = await AuthorizeAsync(provider, CanonicalPrincipal(user.Id));
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not-an-integer")]
+    [InlineData("0")]
+    public async Task MissingOrInvalidCanonicalSubject_IsDenied(string? subject)
+    {
+        using var sqlite = new SqliteTestContext();
+        SeedUser(sqlite.Db, PlatformOperatorEmail);
+        using var provider = BuildServices(sqlite.Db, PlatformOperatorEmail);
+        Claim[] claims = subject is null
+            ? []
+            : [new Claim(JwtRegisteredClaimNames.Sub, subject)];
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"));
+
+        var result = await AuthorizeAsync(provider, principal);
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MappedJwtSubject_UsesTheSameCanonicalDatabaseLookup()
+    {
+        using var sqlite = new SqliteTestContext();
+        var user = SeedUser(sqlite.Db, PlatformOperatorEmail);
+        using var provider = BuildServices(sqlite.Db, PlatformOperatorEmail);
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "Test"));
+
+        var result = await AuthorizeAsync(provider, principal);
+
+        result.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task DeletedCanonicalUser_IsDeniedEvenWithAllowlistedEmailClaim()
+    {
+        using var sqlite = new SqliteTestContext();
+        using var provider = BuildServices(sqlite.Db, PlatformOperatorEmail);
+        var principal = CanonicalPrincipal(987654,
+            [new Claim(ClaimTypes.Email, PlatformOperatorEmail)]);
+
+        var result = await AuthorizeAsync(provider, principal);
+
+        result.Succeeded.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(typeof(AdminEngineStatusController))]
+    [InlineData(typeof(AdminAuditController))]
+    public void PlatformOperatorControllers_AreGatedByPlatformAdminPolicy(Type controllerType)
+    {
+        var authorizeAttributes = controllerType
             .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
             .Cast<AuthorizeAttribute>()
-            .SingleOrDefault();
+            .ToArray();
 
-        authorize.Should().NotBeNull();
-        authorize!.Policy.Should().Be(PlatformAdminPolicy.Name);
-        authorize.Roles.Should().BeNullOrEmpty(
-            "platform surfaces must be email-allowlist gated, never role-gated (no Admin-OR-superadmin fallback)");
+        // AdminAuditController also inherits the ordinary authenticated-workspace gate. ASP.NET
+        // combines inherited and concrete Authorize attributes, so that extra requirement is
+        // intentional; the security contract is that exactly one of the combined gates is the
+        // stronger platform policy and none can substitute a legacy role claim.
+        authorizeAttributes
+            .Should().ContainSingle(attribute => attribute.Policy == PlatformAdminPolicy.Name);
+        authorizeAttributes.Should().OnlyContain(attribute =>
+            string.IsNullOrWhiteSpace(attribute.Roles));
+    }
+
+    private static ServiceProvider BuildServices(
+        RentalCommandDbContext db,
+        params string[] allowlistEmails)
+    {
+        var allowlist = PlatformAdminPolicy.BuildAllowlist(
+            new PlatformAdminOptions { Emails = allowlistEmails });
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(db);
+        services.AddAuthorization(options => PlatformAdminPolicy.Register(options, allowlist));
+        services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
+        return services.BuildServiceProvider();
+    }
+
+    private static async Task<AuthorizationResult> AuthorizeAsync(
+        IServiceProvider provider,
+        ClaimsPrincipal principal)
+    {
+        using var scope = provider.CreateScope();
+        var authorization = scope.ServiceProvider.GetRequiredService<IAuthorizationService>();
+        return await authorization.AuthorizeAsync(
+            principal, resource: null, PlatformAdminPolicy.Name);
+    }
+
+    private static ClaimsPrincipal CanonicalPrincipal(
+        int userId,
+        IEnumerable<Claim>? additionalClaims = null)
+    {
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, userId.ToString()),
+        };
+        if (additionalClaims is not null)
+        {
+            claims.AddRange(additionalClaims);
+        }
+
+        return new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"));
+    }
+
+    private static ApplicationUser SeedUser(RentalCommandDbContext db, string email)
+    {
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = "Platform Operator",
+            EmailConfirmed = true,
+            CreatedAt = DateTime.UtcNow,
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+        };
+        db.Users.Add(user);
+        db.SaveChanges();
+        return user;
     }
 }

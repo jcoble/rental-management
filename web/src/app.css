@@ -253,12 +253,13 @@
   --m3-control-border: color-mix(in srgb, var(--m3c-outline) 64%, transparent);
   --m3-control-shadow: inset 0 0 0 1px color-mix(in srgb, var(--m3c-outline-variant) 100%, transparent),
     0 1px 3px rgb(24 24 27 / 0.12);
-  /* Visible hairlines in light (depth from borders + tone, not shadow). */
-  --m3-card-border-strength: 46%;
-  --m3-card-hover-border-strength: 64%;
+  /* Filled surfaces provide hierarchy by default. Reserve visible outlines for components that
+     explicitly choose the outlined variant rather than drawing a box around every card. */
+  --m3-card-border-strength: 0%;
+  --m3-card-hover-border-strength: 0%;
   --m3-tonal-border-strength: 72%;
   --m3-tonal-plain-border-strength: 44%;
-  --m3-data-border-strength: 56%;
+  --m3-data-border-strength: 28%;
   --m3-elevation-1: 0 1px 2px rgb(24 24 27 / 0.07), 0 1px 3px rgb(24 24 27 / 0.05);
   --m3-elevation-2: 0 3px 8px rgb(24 24 27 / 0.08), 0 1px 3px rgb(24 24 27 / 0.06);
   --m3-elevation-3: 0 8px 18px rgb(24 24 27 / 0.10), 0 2px 5px rgb(24 24 27 / 0.07);
@@ -383,6 +384,11 @@
 
   .m3-page-frame {
     @apply box-border h-full overflow-y-auto px-4 pb-20 pt-4 sm:px-6;
+    scrollbar-gutter: stable;
+  }
+
+  .m3-route-transition {
+    scrollbar-gutter: stable;
   }
 
   .m3-surface-panel {
@@ -621,8 +627,6 @@
 
   .m3-route-transition {
     height: 100%;
-    animation: m3-route-enter var(--m3-motion-duration-long-1) var(--m3-motion-easing-expressive, cubic-bezier(0.18, 1.08, 0.18, 1)) both;
-    transform-origin: 50% 38%;
   }
 
   .m3-card {
@@ -760,14 +764,23 @@
   }
 
   .m3-tabs-list {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.125rem;
     min-height: 48px;
-    border-radius: var(--m3-shape-extra-large);
-    background: var(--m3c-surface-container);
+    padding: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--m3c-outline-variant) 44%, transparent);
+    border-radius: 0;
+    background: transparent;
   }
 
   .m3-tabs-trigger {
-    min-height: 40px;
-    border-radius: var(--m3-shape-extra-large);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    padding-inline: 1.125rem;
+    border-radius: var(--m3-shape-medium) var(--m3-shape-medium) 0 0;
     color: var(--app-text-secondary);
     transition:
       color var(--m3-motion-duration-short-3) var(--m3-motion-easing-standard),
@@ -777,8 +790,13 @@
   }
 
   .m3-tabs-trigger[data-state='active'] {
-    background: var(--m3c-secondary-container);
-    color: var(--m3c-on-secondary-container);
+    background: color-mix(in srgb, var(--m3c-secondary-container) 30%, transparent);
+    color: var(--m3c-primary);
+    box-shadow: inset 0 -3px 0 var(--m3c-primary);
+  }
+
+  .m3-tabs-trigger:hover {
+    background: color-mix(in srgb, var(--m3c-on-surface) 7%, transparent);
   }
 
   .m3-field-surface {
@@ -907,12 +925,13 @@
       0 10px 30px -16px rgb(0 0 0 / 0.55);
   }
 
-  /* Menu / popover / select panels — a touch more opaque so list text stays crisp;
-     !important to override the components' bg-popover / border / shadow utilities. */
+  /* Menu / popover / select panels are a fully opaque surface. These panels often sit over
+     tenant names, balances, and dialog controls; transparency makes the options unreadable. */
   .m3-glass-pop {
-    background: color-mix(in srgb, var(--m3c-surface-container-high) 60%, transparent) !important;
-    backdrop-filter: blur(24px) saturate(1.5);
-    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+    background: var(--m3c-surface-container-high) !important;
+    background-color: var(--m3c-surface-container-high) !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     border-color: color-mix(in srgb, var(--m3c-on-surface) 12%, transparent) !important;
     box-shadow:
       inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent),
@@ -933,6 +952,13 @@
     border-radius: var(--m3-shape-extra-large);
     background: var(--m3c-surface-container-high);
     box-shadow: var(--m3-elevation-3);
+    isolation: isolate;
+  }
+
+  /* Right-pinned DataGrid columns retain a readable surface while the rest of the table scrolls. */
+  .datagrid-pinned-right {
+    background: var(--m3c-surface-container, var(--card)) !important;
+    box-shadow: -1px 0 0 color-mix(in srgb, var(--m3c-on-surface) 12%, transparent);
   }
 
   .m3-dialog-content[data-state='open'] {

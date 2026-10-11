@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'notification_models.dart';
 
 /// Notification inbox + unread-count API calls.
@@ -50,7 +51,13 @@ class NotificationsRepository {
 
   Future<void> markRead(int id) async {
     try {
-      await _dio.post<void>('/notifications/$id/read');
+      await IdempotentMutation.run(
+        'notifications:read:$id',
+        (operationKey) => _dio.post<void>(
+          '/notifications/$id/read',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -58,7 +65,13 @@ class NotificationsRepository {
 
   Future<void> markAllRead() async {
     try {
-      await _dio.post<void>('/notifications/read-all');
+      await IdempotentMutation.run(
+        'notifications:read-all',
+        (operationKey) => _dio.post<void>(
+          '/notifications/read-all',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -110,6 +123,7 @@ class InboxNotifier extends Notifier<AsyncValue<List<AppNotification>>> {
 
   bool _hasMore = true;
   bool _loadingMore = false;
+  int _requestGeneration = 0;
 
   bool get hasMore => _hasMore;
 
@@ -123,13 +137,16 @@ class InboxNotifier extends Notifier<AsyncValue<List<AppNotification>>> {
       ref.read(notificationsRepositoryProvider);
 
   Future<void> load() async {
+    final generation = ++_requestGeneration;
     state = const AsyncValue.loading();
     _hasMore = true;
     try {
       final page = await _repo.list(skip: 0, take: _pageSize);
+      if (generation != _requestGeneration) return;
       _hasMore = page.length == _pageSize;
       state = AsyncValue.data(page);
     } on ApiException catch (e) {
+      if (generation != _requestGeneration) return;
       state = AsyncValue.error(e, StackTrace.current);
     }
   }

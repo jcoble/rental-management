@@ -1,63 +1,54 @@
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
 /// Pins OwnerStatementService's DB-side aggregation (L-10): the per-property rental-income and expense
 /// totals are summed in SQL, not by materializing payment/expense rows and grouping in memory. Runs
-/// against the real (SQLite) query engine so a query that fails to translate — or that drifts from the
+/// against the migrated PostgreSQL schema so a query that fails to translate — or that drifts from the
 /// expected values — is caught. The per-owner report totals are the sum of the rounded per-line values
 /// (so the statement foots to the cent); the heavy payment/expense aggregation still runs in SQL.
 /// </summary>
-public class OwnerStatementServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name4)]
+public class OwnerStatementServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int Year = 2026;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _commands = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly OwnerStatementService _sut;
+    private MigratedPostgreSqlTestContext _context = null!;
+    private RentalCommandDbContext _db = null!;
+    private OwnerStatementService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public OwnerStatementServiceTests()
+    public OwnerStatementServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
-
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new OwnerStatementRecordingCommandInterceptor(_commands))
-            .Options;
-
-        _db = new OwnerStatementTestDbContext(options);
-        _db.Database.EnsureCreated();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        _sut = new OwnerStatementService(_db);
+        _fixture = fixture;
     }
 
-    public void Dispose()
+    public async Task InitializeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        _context = await _fixture.CreateContextAsync(
+            [new OwnerStatementRecordingCommandInterceptor(_commands)]);
+        _db = _context.Db;
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(OwnerStatementServiceTests));
+        await _context.ActivateApiScopeAsync(_scope);
+
+        _sut = new OwnerStatementService(_db, TimeProvider.System);
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _context.DisposeAsync();
     }
 
     [Fact]
@@ -86,7 +77,7 @@ public class OwnerStatementServiceTests : IDisposable
 
         _commands.Clear();
 
-        var report = await _sut.GetForOwnerAsync(PortfolioId, owner.Id, Year, CancellationToken.None);
+        var report = await _sut.GetForOwnerAsync(_scope, owner.Id, Year, CancellationToken.None);
 
         report.Should().NotBeNull();
         report!.Properties.Should().HaveCount(2);
@@ -107,6 +98,12 @@ public class OwnerStatementServiceTests : IDisposable
         report.TotalExpenses.Should().Be(450m);         // 300 + 150
         report.TotalManagementFee.Should().Be(240m);
         report.TotalNetToOwner.Should().Be(2610m);      // 1860 + 750
+        report.TotalDistributed.Should().Be(0m);
+        report.Undistributed.Should().Be(2610m);
+        report.ZeroPropertyCount.Should().Be(0);
+        report.NonZeroPropertyCount.Should().Be(2);
+        lineA.HasBalance.Should().BeTrue();
+        lineB.HasBalance.Should().BeTrue();
 
         var propertyLineSql = _commands.FirstOrDefault(sql =>
             sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
@@ -125,6 +122,102 @@ public class OwnerStatementServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetForOwnerAsync_ReturnsDbOwnedZeroDisclosureFacts()
+    {
+        var owner = SeedOwner("Disclosure Holdings");
+        var active = SeedProperty(owner.Id, "Active Property", managementFeePercent: 10m);
+        SeedRent(SeedLease(active, "L-ACTIVE"), 1000m, paidInYear: true);
+        SeedProperty(owner.Id, "Empty Property", managementFeePercent: 10m);
+
+        _commands.Clear();
+
+        var report = await _sut.GetForOwnerAsync(_scope, owner.Id, Year, CancellationToken.None);
+
+        report.Should().NotBeNull();
+        report!.ZeroPropertyCount.Should().Be(1);
+        report.NonZeroPropertyCount.Should().Be(1);
+        report.Properties.Single(p => p.PropertyName == "Active Property").HasBalance.Should().BeTrue();
+        report.Properties.Single(p => p.PropertyName == "Empty Property").HasBalance.Should().BeFalse();
+        _commands.Should().Contain(command =>
+            command.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("ROUND", StringComparison.OrdinalIgnoreCase),
+            "zero/non-zero disclosure counts must be projected by the owner statement SQL");
+    }
+
+    [Fact]
+    public async Task GetForOwnerAsync_SubtractsOwnerDistributionsWithoutCountingThemAsExpenses()
+    {
+        var owner = SeedOwner("Distribution Holdings");
+        var prop = SeedProperty(owner.Id, "Willow Fourplex", managementFeePercent: 10m);
+        SeedRent(SeedLease(prop, "L-D"), 2000m, paidInYear: true);
+        SeedExpense(prop.Id, 300m);
+        SeedOwnerDistribution(owner.Id, 1000m, propertyId: prop.Id);
+        SeedOwnerDistribution(owner.Id, 250m);
+        SeedOwnerDistribution(owner.Id, 500m, year: Year - 1, propertyId: prop.Id);
+
+        var otherOwner = SeedOwner("Other Owner");
+        SeedOwnerDistribution(otherOwner.Id, 750m);
+
+        _commands.Clear();
+
+        var report = await _sut.GetForOwnerAsync(_scope, owner.Id, Year, CancellationToken.None);
+
+        report.Should().NotBeNull();
+        report!.TotalIncome.Should().Be(2000m);
+        report.TotalExpenses.Should().Be(300m, "owner payouts are distributions, not operating expenses");
+        report.TotalManagementFee.Should().Be(200m);
+        report.TotalNetToOwner.Should().Be(1500m);
+        report.TotalDistributed.Should().Be(1250m,
+            "propertyless distributions are visible when every property for the owner is authorized");
+        report.Undistributed.Should().Be(250m);
+
+        _commands.Should().Contain(command =>
+            command.Contains("FROM \"OwnerDistributions\"", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "recorded owner distributions must be summed in SQL, not materialized and summed in memory");
+    }
+
+    [Fact]
+    public async Task OwnerDistributions_SelectedPropertyScope_IncludesOnlyLinkedAuthorizedProperty()
+    {
+        var owner = SeedOwner("Mixed Scope Holdings");
+        var allowed = SeedProperty(owner.Id, "Allowed Property", managementFeePercent: 1m);
+        SeedRent(SeedLease(allowed, "L-ALLOWED"), 333.33m, paidInYear: true);
+        var decoy = SeedProperty(owner.Id, "Decoy Property", managementFeePercent: 10m);
+        SeedRent(SeedLease(decoy, "L-DECOY"), 5_000m, paidInYear: true);
+
+        SeedOwnerDistribution(owner.Id, 100m, propertyId: allowed.Id);
+        SeedOwnerDistribution(owner.Id, 900m, propertyId: decoy.Id);
+        SeedOwnerDistribution(owner.Id, 700m);
+
+        var selectedScope = SeedSelectedPropertyScope(allowed.Id);
+        await _context.ActivateApiScopeAsync(selectedScope);
+        _commands.Clear();
+
+        var report = await _sut.GetForOwnerAsync(selectedScope, owner.Id, Year, CancellationToken.None);
+        var summaries = await _sut.ListOwnersWithNetAsync(selectedScope, Year, CancellationToken.None);
+
+        report.Should().NotBeNull();
+        var line = report!.Properties.Should().ContainSingle().Subject;
+        line.PropertyId.Should().Be(allowed.Id);
+        line.ManagementFee.Should().Be(3.33m);
+        report.TotalManagementFee.Should().Be(line.ManagementFee);
+        report.TotalNetToOwner.Should().Be(line.NetToOwner);
+        report.TotalDistributed.Should().Be(100m,
+            "the decoy-property and unattributed distributions are outside selected-property authority");
+
+        var summary = summaries.Should().ContainSingle().Subject;
+        summary.OwnerId.Should().Be(owner.Id);
+        summary.TotalDistributed.Should().Be(100m);
+
+        _commands.Should().Contain(command =>
+            command.Contains("FROM \"OwnerDistributions\"", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("PropertyId", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "distribution property authorization and totals must stay in the translated SQL query");
+    }
+
+    [Fact]
     public async Task GetForOwnerAsync_TotalsReconcileWithRoundedPerLineFees()
     {
         // Two properties whose per-line management fee carries a sub-cent fraction that rounds DOWN:
@@ -140,7 +233,8 @@ public class OwnerStatementServiceTests : IDisposable
         var propB = SeedProperty(owner.Id, "Cent B", managementFeePercent: 1m);
         SeedRent(SeedLease(propB, "L-B"), 333.34m, paidInYear: true);
 
-        var report = await _sut.GetForOwnerAsync(PortfolioId, owner.Id, Year, CancellationToken.None);
+        _commands.Clear();
+        var report = await _sut.GetForOwnerAsync(_scope, owner.Id, Year, CancellationToken.None);
 
         report.Should().NotBeNull();
         var lineA = report!.Properties.Single(p => p.PropertyName == "Cent A");
@@ -154,6 +248,11 @@ public class OwnerStatementServiceTests : IDisposable
         report.TotalIncome.Should().Be(666.67m);
         report.TotalNetToOwner.Should().Be(660.01m);
         report.TotalNetToOwner.Should().Be(lineA.NetToOwner + lineB.NetToOwner);
+
+        _commands.Should().ContainSingle(command =>
+            command.Contains("round", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("sum", StringComparison.OrdinalIgnoreCase),
+            "display-line rounding and report totals must both execute in the database query");
     }
 
     [Fact]
@@ -172,21 +271,85 @@ public class OwnerStatementServiceTests : IDisposable
 
         _commands.Clear();
 
-        var summaries = await _sut.ListOwnersWithNetAsync(PortfolioId, Year, CancellationToken.None);
+        var summaries = await _sut.ListOwnersWithNetAsync(_scope, Year, CancellationToken.None);
 
         summaries.Should().HaveCount(2);
         // Owner1: 2000 income - 500 expenses - 200 mgmt (10%) = 1300.
         summaries.Single(s => s.OwnerName == "Acme Holdings").NetToOwner.Should().Be(1300m);
         // Owner2: 1000 income - 250 expenses - 0 mgmt = 750.
         summaries.Single(s => s.OwnerName == "Beta Estates").NetToOwner.Should().Be(750m);
+        summaries.Single(s => s.OwnerName == "Acme Holdings").Undistributed.Should().Be(1300m);
+        summaries.Single(s => s.OwnerName == "Beta Estates").Undistributed.Should().Be(750m);
 
-        var ownerSummarySql = _commands.FirstOrDefault(sql =>
-            sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(command =>
+            command.Contains("TenantLedgerAllocations", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "owner income must be grouped and summed per owner in its bounded SQL statement");
+        _commands.Should().Contain(command =>
+            command.Contains("Expenses", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "owner expenses must be grouped and summed per owner in their bounded SQL statement");
+    }
 
-        ownerSummarySql.Should().NotBeNull("owner net summaries must group and sum per owner in SQL");
+    [Fact]
+    public async Task ListOwnersWithNetAsync_UsesBoundedSqlStatements()
+    {
+        var owner1 = SeedOwner("Acme Holdings");
+        var owner2 = SeedOwner("Beta Estates");
+        SeedProperty(owner1.Id, "Maple Duplex", managementFeePercent: 10m);
+        SeedProperty(owner2.Id, "Oak Cottage", managementFeePercent: 0m);
+
+        _commands.Clear();
+
+        await _sut.ListOwnersWithNetAsync(_scope, Year, CancellationToken.None);
+
+        _commands.Should().HaveCountLessThanOrEqualTo(5);
+        _commands.Should().OnlyContain(sql => sql.Length < 20_000,
+            "owner-statement reads must remain bounded as the portfolio grows");
+        _commands.Should().NotContain(sql =>
+                sql.Contains("TenantLedgerAllocations", StringComparison.Ordinal) &&
+                sql.Contains("OwnerDistributions", StringComparison.Ordinal),
+            "owner net and distribution totals must execute as separate set-based statements");
+    }
+
+    [Fact]
+    public async Task ListOwnersWithNetAsync_IncludesDistributedAndUndistributedFromGroupedSql()
+    {
+        var owner1 = SeedOwner("Acme Holdings");
+        var owner2 = SeedOwner("Beta Estates");
+
+        var p1 = SeedProperty(owner1.Id, "Maple Duplex", managementFeePercent: 10m);
+        SeedRent(SeedLease(p1, "L-1"), 2000m, paidInYear: true);
+        SeedExpense(p1.Id, 500m);
+        SeedOwnerDistribution(owner1.Id, 300m, propertyId: p1.Id);
+        SeedOwnerDistribution(owner1.Id, 999m, year: Year - 1, propertyId: p1.Id);
+
+        var p2 = SeedProperty(owner2.Id, "Oak Cottage", managementFeePercent: 0m);
+        SeedRent(SeedLease(p2, "L-2"), 1000m, paidInYear: true);
+        SeedExpense(p2.Id, 250m);
+        SeedOwnerDistribution(owner2.Id, 100m, propertyId: p2.Id);
+
+        _commands.Clear();
+
+        var summaries = await _sut.ListOwnersWithNetAsync(_scope, Year, CancellationToken.None);
+
+        var acme = summaries.Single(s => s.OwnerName == "Acme Holdings");
+        acme.NetToOwner.Should().Be(1300m);
+        acme.TotalDistributed.Should().Be(300m);
+        acme.Undistributed.Should().Be(1000m);
+
+        var beta = summaries.Single(s => s.OwnerName == "Beta Estates");
+        beta.NetToOwner.Should().Be(750m);
+        beta.TotalDistributed.Should().Be(100m);
+        beta.Undistributed.Should().Be(650m);
+
+        _commands.Should().Contain(command =>
+            command.Contains("FROM \"OwnerDistributions\"", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "distribution totals per owner must be grouped and summed in SQL");
     }
 
     [Fact]
@@ -205,7 +368,7 @@ public class OwnerStatementServiceTests : IDisposable
 
         _commands.Clear();
 
-        var total = await _sut.GetTotalNetToOwnersAsync(PortfolioId, Year, CancellationToken.None);
+        var total = await _sut.GetTotalNetToOwnersAsync(_scope, Year, CancellationToken.None);
 
         total.Should().Be(2050m);
         _commands.Should().Contain(command =>
@@ -216,6 +379,74 @@ public class OwnerStatementServiceTests : IDisposable
     }
 
     // ── seed helpers ───────────────────────────────────────────────────────────────────────────
+    private WorkspaceReadScope SeedSelectedPropertyScope(int propertyId)
+    {
+        var now = DateTime.UtcNow;
+        var email = $"owner-statement-selected-{Guid.NewGuid():N}@example.test";
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = "Selected Property Owner Reporter",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == RoleProfileKeys.PropertyManager).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignment = assignment,
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+        });
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+
+        _db.AddRange(assignment, session);
+        _db.SaveChanges();
+
+        return new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
+    }
+
     private OwnerEntity SeedOwner(string name)
     {
         var owner = new OwnerEntity
@@ -235,7 +466,6 @@ public class OwnerStatementServiceTests : IDisposable
         var property = new Property
         {
             PortfolioId = PortfolioId,
-            OwnerEntityId = ownerId,
             Name = name,
             AddressLine1 = "1 Main",
             City = "Columbus",
@@ -247,10 +477,21 @@ public class OwnerStatementServiceTests : IDisposable
         };
         _db.Properties.Add(property);
         _db.SaveChanges();
+        _db.PropertyOwnerships.Add(new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            OwnerEntityId = ownerId,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            StatementRecipientName = "Owner",
+            PayeeName = "Owner",
+        });
+        _db.SaveChanges();
         return property;
     }
 
-    private Lease SeedLease(Property property, string leaseNumber)
+    private TenantAccount SeedLease(Property property, string leaseNumber)
     {
         var unit = new Unit
         {
@@ -268,41 +509,131 @@ public class OwnerStatementServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
-        var lease = new Lease
+        _db.AddRange(unit, tenant);
+        _db.SaveChanges();
+        var management = new LeaseManagement
         {
             PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = leaseNumber,
-            Status = LeaseStatus.Active,
-            StartDate = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            EndDate = new DateTime(Year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            MonthlyRent = 1000m,
-            SecurityDeposit = 1000m,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = leaseNumber,
+            PlannedPossessionAtUtc = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            PossessionGivenAtUtc = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 1,
+            RowVersion = Guid.NewGuid(),
         };
-        _db.Leases.Add(lease);
+        _db.LeaseManagements.Add(management);
         _db.SaveChanges();
-        return lease;
+        var account = new TenantAccount
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{management.Id}",
+            Currency = "USD",
+            OpenedAtUtc = management.PossessionGivenAtUtc!.Value,
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 1,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = new DateOnly(Year, 1, 1),
+            ChangeReason = "Owner statement test",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 1,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = leaseNumber,
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = new DateOnly(Year, 1, 1),
+            TermEndOn = new DateOnly(Year, 12, 31),
+            GoverningFromOn = new DateOnly(Year, 1, 1),
+            BaseRentAmount = 1_000m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1_000m,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId, 1, DateTime.UtcNow),
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 1,
+        };
+        _db.AddRange(account, party, agreement);
+        _db.SaveChanges();
+        _db.MarkFullyExecuted(
+            agreement,
+            party,
+            tenant,
+            actorUserId: 1,
+            executedAtUtc: management.PossessionGivenAtUtc.Value);
+        return account;
     }
 
-    private void SeedRent(Lease lease, decimal amount, bool paidInYear, int? year = null)
+    private void SeedRent(TenantAccount account, decimal amount, bool paidInYear, int? year = null)
     {
         var y = year ?? Year;
         var paidDate = new DateTime(y, 6, 15, 0, 0, 0, DateTimeKind.Utc);
-        _db.Payments.Add(new Payment
+        var agreementId = _db.LeaseAgreements
+            .Where(agreement => agreement.LeaseManagementId == account.LeaseManagementId)
+            .Select(agreement => agreement.Id)
+            .Single();
+        var charge = new TenantLedgerEntry
         {
             PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = paidInYear ? PaymentStatus.Paid : PaymentStatus.Scheduled,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
             Amount = amount,
-            DueDate = paidDate,
-            PaidDate = paidInYear ? paidDate : null,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(paidDate),
+            DueOn = DateOnly.FromDateTime(paidDate),
+            PostedAtUtc = paidDate,
+            Description = "Rent",
+            BusinessKey = $"rent:{Guid.NewGuid():N}",
+            LeaseAgreementId = agreementId,
+            CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(charge);
+        _db.SaveChanges();
+        if (!paidInYear) return;
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(paidDate),
+            PostedAtUtc = paidDate,
+            Description = "Payment received",
+            BusinessKey = $"receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(receipt);
+        _db.SaveChanges();
+        _db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = amount,
+            AllocatedAtUtc = paidDate,
+            BusinessKey = $"allocation:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
         });
         _db.SaveChanges();
     }
@@ -312,6 +643,7 @@ public class OwnerStatementServiceTests : IDisposable
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Property,
             PropertyId = propertyId,
             Description = "Repair",
             Category = ScheduleECategory.Repairs,
@@ -323,25 +655,26 @@ public class OwnerStatementServiceTests : IDisposable
         });
         _db.SaveChanges();
     }
-}
 
-internal sealed class OwnerStatementTestDbContext : RentalCommandDbContext
-{
-    public OwnerStatementTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    private void SeedOwnerDistribution(int ownerEntityId, decimal amount, int? year = null, int? propertyId = null)
     {
-        base.OnModelCreating(modelBuilder);
-        // Map Postgres jsonb columns to TEXT so EnsureCreated works on SQLite.
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<Payment>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-        modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
+        var y = year ?? Year;
+        var now = DateTime.UtcNow;
+        _db.OwnerDistributions.Add(new OwnerDistribution
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityId = ownerEntityId,
+            PropertyId = propertyId,
+            Date = new DateTime(y, 7, 1, 0, 0, 0, DateTimeKind.Utc),
+            Amount = amount,
+            Method = DistributionMethod.Ach,
+            Status = OwnerDistributionStatus.Approved,
+            ApprovedAt = now,
+            ApprovedBusinessDate = new DateTime(y, 7, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
     }
 }
 

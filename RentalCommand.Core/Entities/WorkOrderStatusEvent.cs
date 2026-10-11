@@ -3,10 +3,9 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
-/// One immutable entry in a <see cref="WorkOrder"/>'s status timeline (Received → Assigned → In
-/// Progress → Done). Written on create (an initial <c>null → status</c> event) and on every status
-/// change, in the same save as the work-order mutation so the stream never diverges from the current
-/// status. Read by landlord/staff (work-order detail) and by the owning tenant (portal detail).
+/// One immutable entry in a <see cref="WorkOrder"/>'s activity stream. Status rows are written on
+/// create and status changes; comment/edit rows share the same atomic stream so tenant and staff
+/// detail can project one canonical timeline without a parallel comment table.
 /// </summary>
 public class WorkOrderStatusEvent
 {
@@ -20,6 +19,12 @@ public class WorkOrderStatusEvent
     /// <summary>The status the work order moved into.</summary>
     public WorkOrderStatus ToStatus { get; set; }
 
+    /// <summary>Stable activity category, for example Status, Comment, or Edit.</summary>
+    public string Kind { get; set; } = "Status";
+
+    /// <summary>Visibility gate for role-aware detail projection. Public rows are tenant-visible.</summary>
+    public string Visibility { get; set; } = "Public";
+
     /// <summary>Optional free-text note supplied with the change (e.g. "parts ordered").</summary>
     public string? Note { get; set; }
 
@@ -30,6 +35,9 @@ public class WorkOrderStatusEvent
     public string? ChangedByLabel { get; set; }
 
     public DateTime CreatedAtUtc { get; set; }
+
+    /// <summary>Original invalid timestamp preserved when chronology repair moves a display event forward.</summary>
+    public DateTime? ChronologyRepairOriginalCreatedAtUtc { get; set; }
 
     public WorkOrder? WorkOrder { get; set; }
 }

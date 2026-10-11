@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/api/dio_client.dart';
 import '../../core/models/models.dart';
+import '../../core/time/app_clock.dart';
+import '../../core/utils/date_wire.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../properties/properties_repository.dart';
+import '../tenants/tenants_repository.dart';
 import 'appointments_repository.dart';
 import 'appointments_shared.dart';
 import 'appointment_detail_screen.dart';
@@ -457,7 +459,6 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
 
     Future.microtask(() {
       ref.read(propertiesProvider.notifier).load();
-      ref.read(_tenantsProvider.notifier).load();
     });
   }
 
@@ -472,16 +473,18 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
   }
 
   Future<void> _pickStartDateTime() async {
+    final now = await ref.read(appNowProvider.future);
+    if (!mounted) return;
     final date = await showDatePicker(
       context: context,
-      initialDate: _startDate ?? DateTime.now(),
+      initialDate: _startDate ?? now.toLocal(),
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
     if (date == null || !mounted) return;
     final time = await showTimePicker(
       context: context,
-      initialTime: _startTime ?? TimeOfDay.now(),
+      initialTime: _startTime ?? TimeOfDay.fromDateTime(now.toLocal()),
     );
     if (time == null || !mounted) return;
     setState(() {
@@ -491,16 +494,19 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
   }
 
   Future<void> _pickEndDateTime() async {
+    final now = await ref.read(appNowProvider.future);
+    if (!mounted) return;
     final date = await showDatePicker(
       context: context,
-      initialDate: _endDate ?? _startDate ?? DateTime.now(),
+      initialDate: _endDate ?? _startDate ?? now.toLocal(),
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
     if (date == null || !mounted) return;
     final time = await showTimePicker(
       context: context,
-      initialTime: _endTime ?? TimeOfDay.now(),
+      initialTime:
+          _endTime ?? _startTime ?? TimeOfDay.fromDateTime(now.toLocal()),
     );
     if (time == null || !mounted) return;
     setState(() {
@@ -530,7 +536,13 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
       setState(() => _error = 'Please select a start date and time.');
       return false;
     }
-    if (_error == 'Please select a start date and time.') {
+    final end = _combineDateAndTime(_endDate, _endTime);
+    if (end != null && !end.isAfter(start)) {
+      setState(() => _error = 'End time must be after start time.');
+      return false;
+    }
+    if (_error == 'Please select a start date and time.' ||
+        _error == 'End time must be after start time.') {
       setState(() => _error = null);
     }
     return true;
@@ -546,13 +558,17 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
     }
 
     final end = _combineDateAndTime(_endDate, _endTime);
+    if (end != null && !end.isAfter(start)) {
+      setState(() => _error = 'End time must be after start time.');
+      return;
+    }
 
     final body = <String, dynamic>{
       'title': _titleCtrl.text.trim(),
       'type': _selectedType,
       'status': _selectedStatus,
-      'scheduledStart': start.toIso8601String(),
-      if (end != null) 'scheduledEnd': end.toIso8601String(),
+      'scheduledStart': localToWireIso(start),
+      if (end != null) 'scheduledEnd': localToWireIso(end),
       if (_selectedPropertyId != null) 'propertyId': _selectedPropertyId,
       if (_selectedTenantId != null) 'tenantId': _selectedTenantId,
       if (_prospectNameCtrl.text.trim().isNotEmpty)
@@ -588,11 +604,19 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
   @override
   Widget build(BuildContext context) {
     final propertiesAsync = ref.watch(propertiesProvider);
-    final tenantsAsync = ref.watch(_tenantsProvider);
+    final tenantsAsync = ref.watch(
+      tenantsPageProvider(
+        TenantListQuery(
+          take: 200,
+          sort: 'name',
+          propertyId: _selectedPropertyId,
+        ),
+      ),
+    );
     final isEdit = widget.existing != null;
     const gap = SizedBox(height: 12);
 
-    return Form(
+    final form = Form(
       key: _formKey,
       child: TabbedFormSheet(
         title: isEdit ? 'Edit Appointment' : 'New Appointment',
@@ -696,34 +720,51 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
                         ),
                       ),
                     ],
-                    onChanged: (v) => setState(() => _selectedPropertyId = v),
+                    onChanged: (v) => setState(() {
+                      if (_selectedPropertyId != v) {
+                        _selectedTenantId = null;
+                      }
+                      _selectedPropertyId = v;
+                    }),
                   ),
                 ),
                 gap,
                 tenantsAsync.when(
                   loading: () => const LinearProgressIndicator(),
                   error: (e, st) => const SizedBox.shrink(),
-                  data: (tenants) => DropdownButtonFormField<int?>(
-                    initialValue: _selectedTenantId,
-                    decoration: const InputDecoration(
-                      labelText: 'Tenant (optional)',
-                    ),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                        value: null,
-                        child: Text('None'),
+                  data: (page) {
+                    final tenants = page.items;
+                    final selectedTenantIsCompatible =
+                        _selectedTenantId == null ||
+                        tenants.any((tenant) => tenant.id == _selectedTenantId);
+                    if (!selectedTenantIsCompatible) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) setState(() => _selectedTenantId = null);
+                      });
+                    }
+
+                    return DropdownButtonFormField<int?>(
+                      initialValue: selectedTenantIsCompatible
+                          ? _selectedTenantId
+                          : null,
+                      decoration: const InputDecoration(
+                        labelText: 'Tenant (optional)',
                       ),
-                      ...tenants.map(
-                        (t) => DropdownMenuItem<int?>(
-                          value: t.id,
-                          child: Text(
-                            t.fullName ?? '${t.firstName} ${t.lastName}',
+                      items: [
+                        const DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text('None'),
+                        ),
+                        ...tenants.map(
+                          (t) => DropdownMenuItem<int?>(
+                            value: t.id,
+                            child: Text(_tenantOptionLabel(t)),
                           ),
                         ),
-                      ),
-                    ],
-                    onChanged: (v) => setState(() => _selectedTenantId = v),
-                  ),
+                      ],
+                      onChanged: (v) => setState(() => _selectedTenantId = v),
+                    );
+                  },
                 ),
               ],
             ),
@@ -779,6 +820,17 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
         ],
       ),
     );
+    return isEdit ? MobileQuickActionHider(child: form) : form;
+  }
+
+  String _tenantOptionLabel(Tenant tenant) {
+    final name = tenant.fullName ?? '${tenant.firstName} ${tenant.lastName}';
+    final context = [
+      tenant.currentPropertyName,
+      if (tenant.currentUnitNumber?.trim().isNotEmpty == true)
+        'Unit ${tenant.currentUnitNumber}',
+    ].whereType<String>().where((part) => part.trim().isNotEmpty).join(' · ');
+    return context.isEmpty ? name : '$name · $context';
   }
 }
 
@@ -821,31 +873,3 @@ class _DateTimePickerField extends StatelessWidget {
     );
   }
 }
-
-// ── Tenants notifier (local, used only by the form) ───────────────────────────
-
-class _TenantsNotifier extends Notifier<AsyncValue<List<Tenant>>> {
-  @override
-  AsyncValue<List<Tenant>> build() => const AsyncValue.loading();
-
-  Future<void> load() async {
-    state = const AsyncValue.loading();
-    try {
-      final dio = ref.read(dioProvider);
-      final response = await dio.get<List<dynamic>>('/tenants');
-      final data = response.data ?? [];
-      final tenants = data
-          .whereType<Map<String, dynamic>>()
-          .map(Tenant.fromJson)
-          .toList();
-      state = AsyncValue.data(tenants);
-    } on Exception catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
-  }
-}
-
-final _tenantsProvider =
-    NotifierProvider<_TenantsNotifier, AsyncValue<List<Tenant>>>(
-      _TenantsNotifier.new,
-    );

@@ -5,17 +5,23 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { overfetchPage } from '$lib/audit/pagination';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { RefreshCw, ShieldAlert } from '@lucide/svelte';
-	import { currentUserIsAdmin } from '$lib/stores/auth.svelte';
+	import { currentUserIsPlatformAdmin } from '$lib/stores/auth.svelte';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import { formatAuditChangeValue, formatStatusLabel } from '$lib/utils/status-labels';
+	import { auditChangeLabel, auditEntryTitle } from '$lib/utils/audit-change-label';
 
-	// Forensic ("Advanced") view — IP + raw before/after — is an Admin-only deep-link from this
-	// page rather than its own nav item (F6). The /admin/audit route still exists and is guarded.
-	const showAdvanced = $derived(currentUserIsAdmin());
+	// The forensic view includes IP addresses and raw before/after JSON. Its API is intentionally
+	// platform-operator-only, so workspace security administrators must not receive a dead link. The
+	// landlord page itself only receives sanitized changes and the portfolio-user-authored reason.
+	const showAdvanced = $derived(currentUserIsPlatformAdmin());
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -27,7 +33,9 @@
 	const ENTITY_TYPES = [
 		'Payment',
 		'Expense',
-		'Lease',
+		'LeaseManagement',
+		'LeaseAgreement',
+		'LeaseAddendum',
 		'Tenant',
 		'Property',
 		'WorkOrder',
@@ -36,30 +44,69 @@
 		'Appointment',
 		'Inspection',
 		'RentalApplication',
+		'RecurringTenantCharge',
+		'RecurringExpense',
+		'CapitalAsset',
+		'ApplicantScreening',
+		'RentalListing',
+		'ListingPublication',
+		'ListingPhoto',
+		'InspectionItem',
+		'VendorDispatch',
+		'ScanDraft',
 	] as const;
 
-	let search = $state('');
-	let operationFilter = $state('');
-	let entityTypeFilter = $state('');
-	let skip = $state(0);
+	// Keep the exact forensic position in the URL so opening a target and using browser Back restores
+	// the same search, filters, date span, and page. The URL uses a human page number while the API
+	// continues to receive its canonical row offset.
+	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
+	let operationFilter = $state(readGridParam(initialParams, 'operation'));
+	let entityTypeFilter = $state(readGridParam(initialParams, 'entity'));
+	let dateFrom = $state(readGridParam(initialParams, 'from'));
+	let dateTo = $state(readGridParam(initialParams, 'to'));
+	let skip = $state((readGridParam(initialParams, 'page', 1) - 1) * PAGE_SIZE);
 
 	const debouncedSearch = debounced(() => search, 300);
 
-	// Reset pagination when filters change
+	// Reset pagination when filters change, but preserve a URL-restored page on the initial mount.
+	let filterResetPrimed = false;
 	$effect(() => {
 		debouncedSearch.value;
 		operationFilter;
 		entityTypeFilter;
+		dateFrom;
+		dateTo;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
 		skip = 0;
 	});
 
+	$effect(() => {
+		syncGridUrl(
+			{
+				q: search,
+				operation: operationFilter,
+				entity: entityTypeFilter,
+				from: dateFrom,
+				to: dateTo,
+				page: Math.floor(skip / PAGE_SIZE) + 1,
+			},
+			{ page: 1 },
+		);
+	});
+
 	const auditQuery = createQuery(() => ({
-		queryKey: ['audit', portfolioId, debouncedSearch.value, operationFilter, entityTypeFilter, skip],
+		queryKey: ['audit', portfolioId, debouncedSearch.value, operationFilter, entityTypeFilter, dateFrom, dateTo, skip],
 		queryFn: () =>
 			audit.list(portfolioId, {
 				search: debouncedSearch.value || undefined,
 				operation: operationFilter || undefined,
 				entityType: entityTypeFilter || undefined,
+				from: dateFrom || undefined,
+				to: dateTo || undefined,
 				skip,
 				take: REQUEST_SIZE,
 				sort: '-timestamp',
@@ -124,9 +171,58 @@
 	}
 
 	/** Human-readable label for entity type + id */
+	const entityTypeLabels: Record<string, string> = {
+		Tenant: 'Tenant',
+		TenantAccount: 'Tenant account',
+		TenantLedgerEntry: 'Tenant account entry',
+		TenantPaymentAttempt: 'Payment attempt',
+		TenantAccountConditionPeriod: 'Tenant account condition',
+		TenantAutopayEnrollment: 'Autopay enrollment',
+		SecurityDepositAccount: 'Security deposit account',
+		SecurityDepositEntry: 'Security-deposit movement',
+		LeaseAgreement: 'Lease agreement',
+		LeaseAgreementSigner: 'Agreement signer',
+		LeaseAddendum: 'Lease addendum',
+		LeaseAddendumSigner: 'Addendum signer',
+		LeaseAddendumFinancialEffect: 'Addendum financial effect',
+		LeaseRenewalAddendumDecision: 'Addendum renewal decision',
+		StoredFile: 'Document',
+		LegalDocumentArtifact: 'Legal document',
+		SignatureRequest: 'Signature request',
+		SignatureSigner: 'Signature signer',
+		NoticeDraft: 'Tenant notice draft',
+		RenderedNotice: 'Rendered tenant notice',
+		NoticeDeliveryEvidence: 'Notice delivery evidence',
+		TenantNoticeWorkItem: 'Tenant notice work item',
+		Conversation: 'Conversation',
+		ConversationMessage: 'Conversation message',
+		Notification: 'Notification',
+		LeaseManagementParty: 'Tenant relationship party',
+		TenantUserAccess: 'Tenant portal access',
+		UnitOperationalPeriod: 'Unit operational period',
+		EvictionCase: 'Eviction case',
+		EvictionCaseEvent: 'Eviction case event',
+		WorkOrderStatusEvent: 'Work-order activity',
+		RecurringTenantCharge: 'Recurring tenant charge',
+		RecurringExpense: 'Recurring expense',
+		CapitalAsset: 'Capital asset',
+		ApplicantScreening: 'Applicant screening',
+		RentalListing: 'Rental listing',
+		ListingPublication: 'Listing publication',
+		ListingPhoto: 'Listing photo',
+		InspectionItem: 'Inspection checklist item',
+		VendorDispatch: 'Vendor dispatch',
+		ScanDraft: 'Scan draft',
+	};
+
 	function entityLabel(entry: AuditEntry): string {
 		if (!entry.entityType) return '';
-		return entry.entityId ? `${entry.entityType} #${entry.entityId}` : entry.entityType;
+		const label = entityTypeLabels[entry.entityType] ?? formatStatusLabel(entry.entityType);
+		return entry.entityId ? `${label} #${entry.entityId}` : label;
+	}
+
+	function entityTypeFilterLabel(value: string): string {
+		return value ? (entityTypeLabels[value] ?? formatStatusLabel(value)) : 'All records';
 	}
 </script>
 
@@ -186,15 +282,23 @@
 			</Select.Root>
 			<Select.Root type="single" bind:value={entityTypeFilter}>
 				<Select.Trigger class="w-40" data-testid="audit-entity-type-filter">
-					{entityTypeFilter || 'All entities'}
+					{entityTypeFilterLabel(entityTypeFilter)}
 				</Select.Trigger>
 				<Select.Content>
-					<Select.Item value="" label="All entities">All entities</Select.Item>
+					<Select.Item value="" label="All records">All records</Select.Item>
 					{#each ENTITY_TYPES as e}
-						<Select.Item value={e} label={e}>{e}</Select.Item>
+						<Select.Item value={e} label={entityTypeLabels[e] ?? formatStatusLabel(e)}>{entityTypeLabels[e] ?? formatStatusLabel(e)}</Select.Item>
 					{/each}
 				</Select.Content>
 			</Select.Root>
+			<RangeDatePicker
+				bind:start={dateFrom}
+				bind:end={dateTo}
+				presets
+				placeholder="All dates"
+				align="end"
+				testid="audit-date-range"
+			/>
 		</div>
 
 		<!-- Entry list -->
@@ -215,6 +319,9 @@
 				<ul class="divide-y divide-border" role="list">
 					{#each entries as entry (entry.id)}
 						{@const Tag = entry.detailHref ? 'a' : 'div'}
+						{@const visibleChanges = (entry.changes ?? [])
+							.map((change) => ({ change, label: auditChangeLabel(change.field) }))
+							.filter((row) => row.label !== null)}
 						<li>
 							<svelte:element
 								this={Tag}
@@ -230,7 +337,7 @@
 
 								<!-- Main content -->
 								<div class="min-w-0 flex-1">
-									<p class="text-sm font-medium leading-snug">{entry.description}</p>
+									<p class="text-sm font-medium leading-snug">{auditEntryTitle(entry.description)}</p>
 									<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
 										<span>{entry.actor}</span>
 										<span aria-hidden="true">·</span>
@@ -251,6 +358,33 @@
 									{formatRelative(entry.timestamp)}
 								</time>
 							</svelte:element>
+							{#if visibleChanges.length || entry.changeReason}
+								<div
+									class="ml-8 border-l border-border px-3 pb-2 text-xs text-muted-foreground"
+									data-testid="audit-changes-{entry.id}"
+								>
+									{#if visibleChanges.length}
+										{#each visibleChanges as { change, label } (change.field)}
+											<p>
+												<span class="font-medium text-foreground">{label}</span>
+												{#if entry.operationName === 'Created'}
+													set to {formatAuditChangeValue(change.field, change.newValue)}
+												{:else if entry.operationName === 'Deleted'}
+													was {formatAuditChangeValue(change.field, change.oldValue)}
+												{:else}
+													changed from {formatAuditChangeValue(change.field, change.oldValue)} to
+													{formatAuditChangeValue(change.field, change.newValue)}
+												{/if}
+											</p>
+										{/each}
+									{/if}
+									{#if entry.changeReason}
+										<p class="mt-2 border-t border-border pt-2">
+											<span class="font-medium text-foreground">Reason:</span> {entry.changeReason}
+										</p>
+									{/if}
+								</div>
+							{/if}
 						</li>
 					{/each}
 				</ul>

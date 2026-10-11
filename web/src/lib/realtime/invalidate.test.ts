@@ -69,4 +69,21 @@ describe('invalidateQueriesForDataUpdate', () => {
 			['header-unread-messages']
 		]);
 	});
+
+	it('refreshes notification lists, unread counts, and the tenant portal notification page', () => {
+		const { client, invalidated, removed } = createQueryClientSpy();
+
+		invalidateQueriesForDataUpdate(client as never, 'EntityUpdated', {
+			entityType: 'Notification',
+			entityId: 17,
+			timestamp: '2026-07-24T19:42:44Z'
+		});
+
+		assert.deepEqual(removed, []);
+		assert.deepEqual(invalidated, [
+			['notifications'],
+			['notifications-unread-count'],
+			['portal-notifications-page']
+		]);
+	});
 });

@@ -87,9 +87,9 @@ const SURFACE_GROUPS = [
     id: 'accounting-reports',
     title: 'Accounting And Reports',
     roles: ['owner/admin', 'manager'],
-    routes: ['/accounting', '/accounting/past-due', '/accounting/year-end', '/accounting/expenses/[id]', '/accounting/payments/[id]', '/reports', '/reports/[report]', '/owners-report', '/banking', '/tax'],
+    routes: ['/accounting', '/accounting/past-due', '/accounting/year-end', '/accounting/expenses/[id]', '/tenant-accounts/[tenantAccountId]/entries/[tenantLedgerEntryId]', '/reports', '/reports/[report]', '/owners-report', '/banking', '/tax'],
     acceptance: [
-      'Filters, tabs, edit/delete, mark paid, matching, CSV/export/print, and packet flows work on scanned data.',
+      'Filters, tabs, append-only receipt/charge posting, correction, matching, CSV/export/print, and packet flows work on scanned data.',
       'Owner, year-end, Schedule E, banking, and report grids use DB-side filtering, sorting, joins, paging, and aggregation.',
       'External provider unavailable states are explicit and non-destructive.',
     ],
@@ -239,7 +239,7 @@ function classifySurfaceGroups(route, item) {
   if (/^\/(scan|lease|payment|expense|workorder|application|document)-file\/\[id\]$/.test(route)) {
     groups.add('file-proxies');
   }
-  if (hasAny(route, ['/accounting', '/accounting/past-due', '/accounting/year-end', '/accounting/expenses/[id]', '/accounting/payments/[id]', '/reports', '/reports/[report]', '/owners-report', '/banking', '/tax'])) {
+  if (hasAny(route, ['/accounting', '/accounting/past-due', '/accounting/year-end', '/accounting/expenses/[id]', '/tenant-accounts/[tenantAccountId]/entries/[tenantLedgerEntryId]', '/reports', '/reports/[report]', '/owners-report', '/banking', '/tax'])) {
     groups.add('accounting-reports');
   }
   if (hasAny(route, ['/settings', '/settings/security', '/settings/accounting', '/onboarding', '/import', '/plaid/auth'])) {

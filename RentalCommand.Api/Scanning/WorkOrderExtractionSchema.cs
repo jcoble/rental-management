@@ -9,8 +9,8 @@ public static class WorkOrderExtractionSchema
     public const string Instructions =
         "You are extracting a maintenance work order from a photo or note for a US residential-rental property manager. " +
         "Identify the likely property, unit, tenant, category, urgency, and a concise title/description. " +
-        "The grounding context lists this portfolio's known vendors, properties, units, tenants, and leases, each with its exact numeric id. " +
-        "For property_id, unit_id, tenant_id, lease_id, and vendor_id, return the matching id COPIED VERBATIM from that grounding list, and only when it strongly matches; otherwise leave the id empty for human review. " +
+        "The grounding context lists this portfolio's known vendors, properties, units, tenants, and leaseManagements, each with its exact numeric id. " +
+        "For property_id, unit_id, tenant_id, lease_management_id, and vendor_id, return the matching id COPIED VERBATIM from that grounding list, and only when it strongly matches; otherwise leave the id empty for human review. " +
         "Never return an id that is not present in the grounding list, and never guess or fabricate an id. " +
         "Priority must be Low, Normal, High, or Emergency. Use Emergency for active flooding, fire, electrical hazard, no heat in winter, lockout, or safety risk. " +
         "Use High for urgent habitability problems or worsening leaks. Use Normal for routine repairs and Low for cosmetic or preventive items. " +
@@ -27,14 +27,36 @@ public static class WorkOrderExtractionSchema
             "Exact id of the matching unit, copied from the grounding list's units[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("tenant_id", "integer",
             "Exact id of the matching tenant, copied from the grounding list's tenants[].id, only when strongly matched. Empty otherwise."),
-        new ExtractionFieldSpec("lease_id", "integer",
-            "Exact id of the matching lease, copied from the grounding list's leases[].id, only when a lease number, tenant, unit, or property strongly matches. Empty otherwise."),
+        new ExtractionFieldSpec("lease_management_id", "integer",
+            "Exact LeaseManagement id copied from leaseManagements[].leaseManagementId only when an agreement number, tenant, unit, or property strongly matches. Empty otherwise."),
         new ExtractionFieldSpec("vendor_id", "integer",
             "Exact id of the suggested vendor, copied from the grounding list's vendors[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("title", "string",
             "Short maintenance title, e.g. 'Kitchen ceiling leak'.", Required: true),
         new ExtractionFieldSpec("description", "string",
             "Clear description of the issue and what can be seen or heard.", Required: true),
+        new ExtractionFieldSpec("requester_name", "string",
+            "Name of the person requesting maintenance, only if present."),
+        new ExtractionFieldSpec("requester_phone", "string",
+            "Requester phone number, only if present."),
+        new ExtractionFieldSpec("requester_email", "string",
+            "Requester email address, only if present."),
+        new ExtractionFieldSpec("resident_must_be_present", "boolean",
+            "True when the note says a resident/requester must be present for entry; false only when explicitly stated."),
+        new ExtractionFieldSpec("call_before_entry", "boolean",
+            "True when the technician should call before entering; false only when explicitly stated."),
+        new ExtractionFieldSpec("call_if_not_home", "boolean",
+            "True when the technician should call if nobody answers or nobody is home; false only when explicitly stated."),
+        new ExtractionFieldSpec("permission_to_enter", "boolean",
+            "True when the resident/owner gives permission to enter without someone present; false only when explicitly denied."),
+        new ExtractionFieldSpec("entry_notes", "string",
+            "Entry instructions such as preferred arrival window, lockbox, gate, parking, or knock/call details."),
+        new ExtractionFieldSpec("pet_warnings", "string",
+            "Pet notes or warnings relevant to entry, only if present."),
+        new ExtractionFieldSpec("access_warnings", "string",
+            "Hazards, access blockers, alarm details, or safety warnings relevant to entry."),
+        new ExtractionFieldSpec("technician_access_instructions", "string",
+            "Concise instructions approved for the technician, combining requester/contact/access/pet/window details when present."),
         new ExtractionFieldSpec("category", "string",
             "Maintenance category such as Plumbing, Electrical, HVAC, Appliance, Roofing, Pest, Safety, or General."),
         new ExtractionFieldSpec("priority", "enum",

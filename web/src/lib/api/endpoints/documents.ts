@@ -14,11 +14,18 @@ export const documents = {
 	 * Upload a file to a given entity.
 	 * POST /api/v1/documents (multipart)
 	 */
-	upload: (entityType: string, entityId: number, file: File, category?: string): Promise<DocumentItem> => {
+	upload: (
+		entityType: string,
+		entityId: number,
+		file: File,
+		category: string | undefined,
+		clientOperationId: string
+	): Promise<DocumentItem> => {
 		const form = new FormData();
 		form.append('file', file);
 		form.append('entityType', entityType);
 		form.append('entityId', String(entityId));
+		form.append('clientOperationId', clientOperationId);
 		if (category) form.append('category', category);
 		return api.upload<DocumentItem>('/documents', form);
 	},
@@ -27,7 +34,8 @@ export const documents = {
 	 * Delete a document.
 	 * DELETE /api/v1/documents/{id}
 	 */
-	delete: (id: number): Promise<void> => api.delete(`/documents/${id}`),
+	delete: (id: number, clientOperationId: string): Promise<void> =>
+		api.delete(`/documents/${id}?clientOperationId=${encodeURIComponent(clientOperationId)}`),
 };
 
 /**

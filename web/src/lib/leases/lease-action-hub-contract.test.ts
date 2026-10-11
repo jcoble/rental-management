@@ -1,0 +1,222 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { describe, it } from 'node:test';
+
+const endpointSource = readFileSync(new URL('../api/endpoints/lease-managements.ts', import.meta.url), 'utf8');
+const draftDialogSource = readFileSync(
+	new URL('../components/leases/AgreementDraftDialog.svelte', import.meta.url),
+	'utf8',
+);
+const successorDialogSource = readFileSync(
+	new URL('../components/leases/AgreementSuccessorDialog.svelte', import.meta.url),
+	'utf8',
+);
+const detailPageSource = readFileSync(
+	new URL('../components/leases/LeaseManagementDetail.svelte', import.meta.url),
+	'utf8',
+);
+const possessionActionsSource = readFileSync(
+	new URL('../components/leases/PossessionActions.svelte', import.meta.url),
+	'utf8',
+);
+const endingDispositionSource = readFileSync(
+	new URL('../components/leases/EndingDispositionDialog.svelte', import.meta.url),
+	'utf8',
+);
+
+describe('canonical lease lifecycle action hub', () => {
+	it('uses typed canonical draft, successor, preparation, and issuance endpoints', () => {
+		assert.match(endpointSource, /getAgreementDraft:/);
+		assert.match(endpointSource, /editAgreementDraft:/);
+		assert.match(endpointSource, /createAgreementSuccessorDraft:/);
+		assert.match(endpointSource, /prepareAgreementIssuance:/);
+		assert.match(endpointSource, /issueAgreement:/);
+		assert.match(endpointSource, /draftRevision: number/);
+		assert.match(endpointSource, /\/successor-drafts`/);
+		assert.match(endpointSource, /\/issuance-preparations`/);
+		assert.match(endpointSource, /headers: \{ "Idempotency-Key": operationKey \}/);
+	});
+
+	it('edits and issues the exact canonical draft revision', () => {
+		assert.match(draftDialogSource, /leaseManagements\.getAgreementDraft/);
+		assert.match(draftDialogSource, /draftRequestsEnabled && leaseManagementId > 0 && leaseAgreementId > 0/);
+		assert.match(draftDialogSource, /enabled: canLoadDraft/);
+		assert.match(draftDialogSource, /draftRevision: draft\.draftRevision/);
+		assert.match(draftDialogSource, /termsSchemaVersion: draft\.termsSchemaVersion/);
+		assert.match(draftDialogSource, /termsPayload: draft\.termsPayload/);
+		assert.match(draftDialogSource, /leaseManagements\.prepareAgreementIssuance/);
+		assert.match(draftDialogSource, /\{ \.\.\.prepared, subject: subject\.trim\(\) \}/);
+		assert.match(draftDialogSource, /draftRequestsEnabled = false;\s*issueConfirmationOpen = false;\s*await onissued\(result\);\s*await queryClient\.invalidateQueries/s);
+		assert.match(draftDialogSource, /Save the current draft changes before issuing/);
+		assert.match(draftDialogSource, /isRequired: true/);
+		assert.match(draftDialogSource, /draft\.signers\.some\(\(signer\) => !signer\.isRequired\)/);
+		assert.doesNotMatch(draftDialogSource, /bind:checked=\{signer\.isRequired\}/);
+	});
+
+	it('uses the mobile-approved prepare-and-issue wording without weakening revision confirmation', () => {
+		assert.match(draftDialogSource, /Send this exact lease revision for signature\?/);
+		// TSK-947 W12: the review's own action says what it does; the confirmation step
+		// keeps the mobile-approved prepare-and-send wording.
+		assert.match(draftDialogSource, /> Send lease to sign</);
+		assert.match(draftDialogSource, /Prepare and send\{\/if\}/);
+		assert.match(draftDialogSource, /Preparing and sending…/);
+		assert.doesNotMatch(draftDialogSource, /Prepare &amp; issue|> Issue for signature/);
+	});
+
+	it('creates each supported successor and opens the returned draft', () => {
+		for (const changeType of ['Correction', 'Restatement', 'Renewal', 'MonthToMonth']) {
+			assert.match(detailPageSource, new RegExp(`changeType: '${changeType}'`));
+		}
+		assert.match(successorDialogSource, /leaseManagements\.createAgreementSuccessorDraft/);
+		assert.match(successorDialogSource, /leaseManagements\.getEffectiveAddendumSeries/);
+		assert.match(successorDialogSource, /sourceAddendumSeriesPublicId: series\.seriesPublicId/);
+		assert.doesNotMatch(successorDialogSource, /addendumDecisionBlocked/);
+		assert.match(detailPageSource, /editAgreementId = result\.leaseAgreementId/);
+		for (const label of [
+			'Fix a typo',
+			'Rewrite the whole lease',
+			'Renew it',
+			'Switch to month-to-month'
+		]) {
+			assert.match(detailPageSource, new RegExp(`>${label}<`));
+		}
+	});
+
+	it('puts every current, upcoming, and ending fact in the first-read summary', () => {
+		for (const label of [
+			'Current status',
+			'Current lease',
+			'Lease status',
+			'Term',
+			'Base rent',
+			'Upcoming lease document',
+			'Ending plan',
+			'Decision recorded',
+			'Planned move-out'
+		]) {
+			assert.match(detailPageSource, new RegExp(`>${label}<`));
+		}
+		assert.match(detailPageSource, /formatAccountingCurrency\(summary\.baseRentAmount\)/);
+		assert.match(detailPageSource, /summary\.upcomingAgreementNumber/);
+		assert.match(detailPageSource, /summary\.endingDispositionDecidedAtUtc/);
+		assert.match(detailPageSource, /summary\.plannedMoveOutAtUtc/);
+	});
+
+	it('links the tenant account card to the existing Unit Money ledger route', () => {
+		assert.match(
+			detailPageSource,
+			/href=\{`\/units\/\$\{summary\.unitId\}\?tab=money&view=tenant-account&tenantAccount=\$\{summary\.tenantAccountId\}`\}/
+		);
+		assert.match(detailPageSource, />View tenant account</);
+		assert.match(detailPageSource, /Continues across renewals and corrections/);
+	});
+
+	it('uses one source-backed draft review action while keeping the scan reachable', () => {
+		assert.match(
+			detailPageSource,
+			/agreement\.hasSourceScan\s*\? downloadSourceScan\(agreement\)\s*:\s*openAgreementDraft\(agreement\)/
+		);
+		assert.match(detailPageSource, /View draft/);
+		assert.match(detailPageSource, /downloadSourceScan\(agreement\)/);
+	});
+
+	it('requires an active lease template only for imported-source successor drafts', () => {
+		assert.match(endpointSource, /documentTemplateId: number \| null/);
+		assert.match(successorDialogSource, /const sourceRequiresTemplate = \$derived\(source\.hasSourceScan\)/);
+		assert.match(successorDialogSource, /documentTemplates\.listPage\(\{/);
+		assert.match(successorDialogSource, /kind: 'Lease'/);
+		assert.match(successorDialogSource, /status: 'Active'/);
+		assert.match(successorDialogSource, /propertyId: templatePropertyId!/);
+		assert.match(successorDialogSource, /const defaultTemplates = templates\.filter\(\(template\) => template\.defaultForPortfolio\)/);
+		assert.match(successorDialogSource, /selectedDocumentTemplateId = Number\(documentTemplateId\)/);
+		assert.match(successorDialogSource, /documentTemplateId: selectedDocumentTemplateId/);
+		assert.match(successorDialogSource, /agreement-successor-document-template/);
+		assert.match(successorDialogSource, /if \(!sourceRequiresTemplate\) \{\s*documentTemplateId = ''/s);
+	});
+
+	it('supports the correction successor UX and abandoned-draft cancellation', () => {
+		assert.match(endpointSource, /correctionReason: string \| null/);
+		assert.match(endpointSource, /cancelAgreementSuccessorDraft:/);
+		assert.match(endpointSource, /\/cancel-draft`/);
+		assert.match(successorDialogSource, /agreement-successor-correction-reason/);
+		assert.match(
+			successorDialogSource,
+			/current signed lease stays in effect until the replacement is fully signed/i,
+		);
+		assert.match(draftDialogSource, /agreement-correction-comparison/);
+		assert.match(draftDialogSource, /agreement-correction-changed-field/);
+		assert.match(draftDialogSource, /agreement-correction-unchanged-fields/);
+		assert.match(draftDialogSource, /leaseManagements\.cancelAgreementSuccessorDraft/);
+		assert.match(draftDialogSource, /agreement-cancel-draft-reason/);
+		assert.match(detailPageSource, /source=\{editAgreementSource\}/);
+	});
+
+	it('pages agreement history on the server and keeps artifacts distinct', () => {
+		assert.match(detailPageSource, /skip: agreementSkip/);
+		assert.match(detailPageSource, /take: AGREEMENT_PAGE_SIZE/);
+		assert.match(detailPageSource, /<Pagination bind:skip=\{agreementSkip\}/);
+		assert.doesNotMatch(detailPageSource, /take:\s*100/);
+		assert.match(detailPageSource, /> Issued PDF</);
+		assert.match(detailPageSource, /> Executed PDF</);
+		assert.match(detailPageSource, /agreement\.hasSourceScan/);
+		assert.match(
+			detailPageSource,
+			/href=\{activeExperience === 'Leasing' \? `\/leasing\/rentals\/\$\{summary\.unitId\}` : `\/units\/\$\{summary\.unitId\}`\}/
+		);
+	});
+
+	it('gives and returns possession through canonical idempotent commands', () => {
+		assert.match(endpointSource, /givePossession:/);
+		assert.match(endpointSource, /returnPossession:/);
+		assert.match(endpointSource, /\/give-possession`/);
+		assert.match(endpointSource, /\/return-possession`/);
+		assert.match(endpointSource, /getReturnPossessionContext:/);
+		assert.match(possessionActionsSource, /leaseManagements\.givePossession/);
+		assert.match(possessionActionsSource, /leaseManagements\.getReturnPossessionContext/);
+		assert.match(possessionActionsSource, /leaseManagements\.returnPossession/);
+		assert.match(possessionActionsSource, /returnOperation\.fingerprint !== fingerprint/);
+		assert.match(possessionActionsSource, /returnContext\.parties/);
+		assert.match(possessionActionsSource, /returnContext\.activeTenantUserAccesses/);
+		assert.doesNotMatch(possessionActionsSource, /summary\.parties/);
+		assert.match(
+			detailPageSource,
+			/<PossessionActions \{summary\} canManage=\{canManageHousehold\} onchanged=\{refreshLease\} \/>/,
+		);
+	});
+
+	it('formats lease-detail planned date-only fields without local timezone drift', () => {
+		assert.match(detailPageSource, /import \{ formatDateOnly \} from '\$lib\/utils\/date';/);
+		assert.match(
+			detailPageSource,
+			/Planned \$\{formatDateOnly\(summary\.plannedPossessionAtUtc\)\}/
+		);
+		assert.match(
+			detailPageSource,
+			/formatDateOnly\(summary\.plannedMoveOutAtUtc\)/
+		);
+		assert.doesNotMatch(
+			detailPageSource,
+			/new Date\(summary\.plannedPossessionAtUtc\)\.toLocaleDateString/
+		);
+		assert.doesNotMatch(
+			detailPageSource,
+			/new Date\(summary\.plannedMoveOutAtUtc\)\.toLocaleDateString/
+		);
+	});
+
+	it('records the approved ending disposition without mutating an agreement', () => {
+		assert.match(endpointSource, /recordEndingDisposition:/);
+		assert.match(endpointSource, /\/ending-disposition`/);
+		for (const disposition of ['Undecided', 'OfferRenewal', 'OfferMonthToMonth', 'NonRenewalMoveOut']) {
+			assert.match(endingDispositionSource, new RegExp(`value: '${disposition}'`));
+		}
+		assert.match(endingDispositionSource, /noticeGivenAtUtc/);
+		assert.match(endingDispositionSource, /plannedMoveOutAtUtc/);
+		assert.match(endingDispositionSource, /decisionReason/);
+		assert.match(endingDispositionSource, /does not change the signed lease/i);
+		assert.match(endingDispositionSource, /Plan move-out/);
+		assert.match(endingDispositionSource, /Renewing instead/);
+		assert.match(endingDispositionSource, /Tenant is leaving/);
+		assert.match(detailPageSource, /<EndingDispositionDialog/);
+	});
+});

@@ -1,22 +1,44 @@
 enum UnitCommandCenterTab {
-  overview,
+  summary,
+  leasing,
+  tenantLease,
+  money,
+  maintenance,
+  documentsHistory,
+}
+
+enum UnitCommandCenterView {
   listing,
-  lease,
   applications,
-  ledger,
-  tenants,
+  agreements,
+  residents,
+  tenantAccount,
+  operatingCosts,
+  workOrders,
+  inspections,
+  recurring,
   turnover,
-  work,
+  documents,
+  history,
+}
+
+class UnitCommandCenterDestination {
+  const UnitCommandCenterDestination({required this.tab, this.view});
+
+  final UnitCommandCenterTab tab;
+  final UnitCommandCenterView? view;
 }
 
 class UnitCommandCenterRouteTarget {
   const UnitCommandCenterRouteTarget({
     required this.unitId,
     required this.initialTab,
+    this.initialView,
   });
 
   final int unitId;
   final UnitCommandCenterTab initialTab;
+  final UnitCommandCenterView? initialView;
 }
 
 UnitCommandCenterRouteTarget? parseUnitCommandCenterRoute(String route) {
@@ -29,50 +51,90 @@ UnitCommandCenterRouteTarget? parseUnitCommandCenterRoute(String route) {
   final unitId = int.tryParse(segments[1]);
   if (unitId == null || unitId <= 0) return null;
 
+  final destination = unitCommandCenterDestinationFromName(
+    uri.queryParameters['tab'],
+    uri.queryParameters['view'],
+  );
   return UnitCommandCenterRouteTarget(
     unitId: unitId,
-    initialTab: unitCommandCenterTabFromName(uri.queryParameters['tab']),
+    initialTab: destination.tab,
+    initialView: destination.view,
   );
 }
 
-UnitCommandCenterTab unitCommandCenterTabFromName(String? raw) {
-  switch (raw?.trim().toLowerCase()) {
-    case 'listing':
-    case 'listings':
-    case 'zillow':
-      return UnitCommandCenterTab.listing;
-    case 'lease':
-    case 'leases':
-      return UnitCommandCenterTab.lease;
-    case 'app':
-    case 'apps':
-    case 'application':
-    case 'applications':
-      return UnitCommandCenterTab.applications;
-    case 'ledger':
-    case 'rent':
-    case 'rents':
-    case 'payment':
-    case 'payments':
-    case 'expense':
-    case 'expenses':
-      return UnitCommandCenterTab.ledger;
-    case 'tenant':
-    case 'tenants':
-      return UnitCommandCenterTab.tenants;
+UnitCommandCenterTab unitCommandCenterTabFromName(String? raw) =>
+    unitCommandCenterDestinationFromName(raw, null).tab;
+
+UnitCommandCenterDestination unitCommandCenterDestinationFromName(
+  String? rawTab,
+  String? rawView,
+) {
+  final tab = rawTab?.trim().toLowerCase();
+  final view = rawView?.trim().toLowerCase();
+
+  UnitCommandCenterDestination canonical(
+    UnitCommandCenterTab area,
+    UnitCommandCenterView? defaultView,
+    Map<String, UnitCommandCenterView> validViews,
+  ) {
+    return UnitCommandCenterDestination(
+      tab: area,
+      view: validViews[view] ?? defaultView,
+    );
+  }
+
+  switch (tab) {
+    case 'leasing':
+      return canonical(
+        UnitCommandCenterTab.leasing,
+        UnitCommandCenterView.listing,
+        {
+          'listing': UnitCommandCenterView.listing,
+          'applications': UnitCommandCenterView.applications,
+        },
+      );
+    case 'tenant-lease':
+      return canonical(
+        UnitCommandCenterTab.tenantLease,
+        UnitCommandCenterView.agreements,
+        {
+          'agreements': UnitCommandCenterView.agreements,
+          'residents': UnitCommandCenterView.residents,
+        },
+      );
+    case 'money':
+      return canonical(
+        UnitCommandCenterTab.money,
+        UnitCommandCenterView.tenantAccount,
+        {
+          'tenant-account': UnitCommandCenterView.tenantAccount,
+          'operating-costs': UnitCommandCenterView.operatingCosts,
+        },
+      );
     case 'maintenance':
-    case 'work':
-    case 'work-orders':
-    case 'workorders':
-      return UnitCommandCenterTab.work;
-    case 'turnover':
-    case 'make-ready':
-    case 'makeready':
-    case 'move-out':
-    case 'moveout':
-      return UnitCommandCenterTab.turnover;
-    case 'overview':
+      return canonical(
+        UnitCommandCenterTab.maintenance,
+        UnitCommandCenterView.workOrders,
+        {
+          'work-orders': UnitCommandCenterView.workOrders,
+          'inspections': UnitCommandCenterView.inspections,
+          'recurring': UnitCommandCenterView.recurring,
+          'turnover': UnitCommandCenterView.turnover,
+        },
+      );
+    case 'documents-history':
+      return canonical(
+        UnitCommandCenterTab.documentsHistory,
+        UnitCommandCenterView.documents,
+        {
+          'documents': UnitCommandCenterView.documents,
+          'history': UnitCommandCenterView.history,
+        },
+      );
+    case 'summary':
     default:
-      return UnitCommandCenterTab.overview;
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.summary,
+      );
   }
 }

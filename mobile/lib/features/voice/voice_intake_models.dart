@@ -58,7 +58,7 @@ class VoiceTurn {
       missingRequired: ((json['missingRequired'] as List?) ?? const [])
           .map((e) => e.toString())
           .toList(),
-      complete: (json['complete'] as bool?) ?? true,
+      complete: (json['complete'] as bool?) ?? false,
       ambiguous: (json['ambiguous'] as bool?) ?? false,
       nextPrompt: json['nextPrompt'] as String?,
     );

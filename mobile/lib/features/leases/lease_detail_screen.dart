@@ -2,785 +2,469 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
 import '../../core/files/document_opener.dart';
-import '../../core/models/models.dart';
-import '../home/mobile_domain_navigation.dart';
-import '../notices/create_tenant_notice.dart';
-import '../payments/payment_detail_screen.dart';
-import '../payments/payments_repository.dart';
-import '../payments/record_payment_sheet.dart';
-import '../properties/property_detail_screen.dart';
-import '../units/unit_command_center_screen.dart';
-import '../units/unit_navigation.dart';
+import '../../core/models/lease.dart';
+import '../inspections/new_inspection_screen.dart';
+import '../tenants/tenant_detail_screen.dart';
+import 'addendum_action_sheets.dart';
+import 'agreement_draft_action_sheets.dart';
+import 'ending_disposition_sheet.dart';
+import 'household_management_sheet.dart';
+import 'issued_agreement_recovery_sheet.dart';
 import 'lease_ledger_view.dart';
-import 'leases_list_screen.dart';
 import 'leases_repository.dart';
+import 'move_in_sheet.dart';
+import 'return_possession_sheet.dart';
+import 'successor_agreement_sheet.dart';
+import '../../core/presentation/formatting.dart';
 
-const _monthNames = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
+class LeaseManagementDetailLoaderScreen extends StatelessWidget {
+  const LeaseManagementDetailLoaderScreen({
+    super.key,
+    required this.leaseManagementId,
+  });
 
-String _fmt(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
+  final int leaseManagementId;
 
-String _formatCurrency(double amount) {
-  final rounded = amount.round();
-  final s = rounded.toString();
-  final buf = StringBuffer(r'$');
-  final start = s.length % 3;
-  if (start > 0) buf.write(s.substring(0, start));
-  for (var i = start; i < s.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(s.substring(i, i + 3));
-  }
-  return buf.toString();
-}
-
-void _openTenantDetail(BuildContext context, Lease lease) {
-  _openTenantIdDetail(context, lease, lease.tenantId);
-}
-
-void _openTenantIdDetail(BuildContext context, Lease lease, int tenantId) {
-  openUnitCommandCenter(
-    context,
-    unitId: lease.unitId,
-    initialTab: UnitCommandCenterTab.tenants,
-    lease: lease,
-    tenantId: tenantId,
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Tenant & lease')),
+    body: LeaseManagementDetailScreen(leaseManagementId: leaseManagementId),
   );
 }
 
-void _openPropertyDetail(BuildContext context, int propertyId) {
-  final shellNavigator = mobileShellNavigatorOf(context);
-  if (shellNavigator != null) {
-    shellNavigator.openTab(
-      MobileShellTabId.rentals,
-      destination: MobileDestinationId.properties,
-      detailBuilder: (_) => PropertyDetailLoaderScreen(propertyId: propertyId),
-    );
-    revealMobileShellIfDetached(context);
-    return;
-  }
+class LeaseManagementDetailScreen extends ConsumerWidget {
+  const LeaseManagementDetailScreen({
+    super.key,
+    required this.leaseManagementId,
+    this.leadingContent,
+    this.trailingContent,
+  });
 
-  final domainNavigator = MobileDomainNavigation.maybeOf(context);
-  if (domainNavigator != null) {
-    domainNavigator.openDestination(
-      MobileDestinationId.properties,
-      detailBuilder: (_) => PropertyDetailLoaderScreen(propertyId: propertyId),
-    );
-    return;
-  }
-
-  Navigator.of(context).push<void>(
-    MaterialPageRoute<void>(
-      builder: (_) => PropertyDetailLoaderScreen(propertyId: propertyId),
-    ),
-  );
-}
-
-/// Loads a lease by id, then lands in the Unit command center's Lease tab. Use
-/// this when the caller only has a lease id (e.g. a payment, which carries
-/// `leaseId` but not the full model).
-class LeaseDetailLoaderScreen extends ConsumerWidget {
-  const LeaseDetailLoaderScreen({super.key, required this.leaseId});
-
-  final int leaseId;
+  final int leaseManagementId;
+  final Widget? leadingContent;
+  final Widget? trailingContent;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(leaseDetailProvider(leaseId));
-    return async.when(
-      loading: () =>
-          const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Scaffold(
-        appBar: AppBar(title: const Text('Lease')),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              e is ApiException ? e.message : e.toString(),
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+    final detail = ref.watch(leaseManagementDetailProvider(leaseManagementId));
+    final agreements = ref.watch(
+      leaseAgreementHistoryProvider(leaseManagementId),
+    );
+    final agreementHistory = agreements.asData?.value;
+    final currentSignedLease = _currentSignedLease(
+      agreementHistory?.items ?? const [],
+    );
+    final auth = ref.watch(authControllerProvider);
+    final canManageHousehold =
+        auth is AuthStateAuthenticated &&
+        (auth.hasCapability('rentals.manage') ||
+            auth.hasCapability('leasing.onboarding.manage'));
+    final canPrepareAgreements =
+        auth is AuthStateAuthenticated &&
+        (auth.hasCapability('rentals.manage') ||
+            auth.hasCapability('leasing.agreements.prepare'));
+    return detail.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, _) => _ErrorState(
+        error: error,
+        onRetry: () =>
+            ref.invalidate(leaseManagementDetailProvider(leaseManagementId)),
+      ),
+      data: (management) => RefreshIndicator(
+        onRefresh: () async {
+          ref.invalidate(leaseAddendumHistoryProvider);
+          await Future.wait([
+            ref.refresh(
+              leaseManagementDetailProvider(leaseManagementId).future,
             ),
-          ),
+            ref.refresh(
+              leaseAgreementHistoryProvider(leaseManagementId).future,
+            ),
+          ]);
+        },
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
+          children: [
+            if (leadingContent != null) ...[
+              leadingContent!,
+              const SizedBox(height: 12),
+            ],
+            _RelationshipHeader(summary: management.summary),
+            const SizedBox(height: 12),
+            _HouseholdCard(
+              management: management,
+              agreements: agreementHistory?.items ?? const [],
+              canManage: canManageHousehold,
+            ),
+            const SizedBox(height: 12),
+            agreements.when(
+              loading: () => const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ),
+              error: (error, _) => _ErrorState(
+                error: error,
+                onRetry: () => ref.invalidate(
+                  leaseAgreementHistoryProvider(leaseManagementId),
+                ),
+              ),
+              data: (history) => _AgreementHistoryCard(
+                leaseManagementId: leaseManagementId,
+                agreements: history.items,
+                propertyName: management.summary.propertyName,
+                unitNumber: management.summary.unitNumber,
+                managementBusinessDate: management.summary.businessDate,
+                canPrepare: canPrepareAgreements,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _AddendumHistoryCard(
+              management: management,
+              canPrepare: canPrepareAgreements,
+            ),
+            const SizedBox(height: 12),
+            _ActionsCard(
+              management: management,
+              onAsk: () => _ask(context, ref),
+              onRenew: canPrepareAgreements && currentSignedLease != null
+                  ? () => _changeLease(
+                      context,
+                      ref,
+                      management,
+                      currentSignedLease,
+                      initialOperation: LeaseSuccessorOperation.renewal,
+                    )
+                  : null,
+              onChangeLease: canPrepareAgreements && currentSignedLease != null
+                  ? () => _changeLease(
+                      context,
+                      ref,
+                      management,
+                      currentSignedLease,
+                    )
+                  : null,
+              onGivePossession:
+                  canManageHousehold &&
+                      management.summary.possessionGivenAt == null &&
+                      management.summary.canceledAt == null &&
+                      management.summary.tenantAccountId != null &&
+                      management.summary.currentResidentCount > 0 &&
+                      (agreementHistory?.items.any(
+                            (agreement) =>
+                                agreement.isGoverning &&
+                                agreement.executedArtifact != null,
+                          ) ??
+                          false)
+                  ? () => _givePossession(context, ref, management)
+                  : null,
+              onReturnPossession:
+                  canManageHousehold &&
+                      management.summary.possessionGivenAt != null &&
+                      management.summary.possessionReturnedAt == null &&
+                      management.summary.canceledAt == null
+                  ? () => _returnPossession(context, ref, management)
+                  : null,
+              onEndingDisposition:
+                  canPrepareAgreements &&
+                      management.summary.possessionGivenAt != null &&
+                      management.summary.possessionReturnedAt == null &&
+                      management.summary.canceledAt == null
+                  ? () => _recordEndingDisposition(context, ref, management)
+                  : null,
+            ),
+            if (trailingContent != null) ...[
+              const SizedBox(height: 12),
+              trailingContent!,
+            ],
+          ],
         ),
       ),
-      data: (lease) => UnitCommandCenterLoaderScreen(
-        unitId: lease.unitId,
-        initialTab: UnitCommandCenterTab.lease,
-        initialLease: lease,
-      ),
     );
   }
-}
 
-/// Detail screen for a single lease.
-///
-/// Shows full lease information with edit support and status action buttons.
-class LeaseDetailScreen extends ConsumerStatefulWidget {
-  const LeaseDetailScreen({
-    super.key,
-    required this.lease,
-    this.leadingContent,
-  });
-
-  final Lease lease;
-  final Widget? leadingContent;
-
-  @override
-  ConsumerState<LeaseDetailScreen> createState() => _LeaseDetailScreenState();
-}
-
-class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
-  late Lease _lease;
-  bool _updatingStatus = false;
-  String? _statusError;
-  final _questionController = TextEditingController();
-  bool _askingLease = false;
-  String? _leaseAnswer;
-  String? _leaseAskError;
-
-  // Lease-agreement PDF actions.
-  bool _generatingDoc = false;
-  bool _openingDoc = false;
-  String? _docError;
-
-  // E-signature workflow.
-  LeaseSignatureStatus? _signature;
-  bool _loadingSignature = false;
-  bool _sendingSignature = false;
-  bool _openingSignedDoc = false;
-  String? _signatureError;
-
-  @override
-  void initState() {
-    super.initState();
-    _lease = widget.lease;
-    _loadSignatureStatus();
-  }
-
-  @override
-  void dispose() {
-    _questionController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _refresh() async {
-    await ref.read(leaseDetailProvider(_lease.id).notifier).refresh();
-    final updated = ref.read(leaseDetailProvider(_lease.id));
-    updated.whenData((l) {
-      if (mounted) setState(() => _lease = l);
-    });
-  }
-
-  void _showEditSheet(BuildContext context) {
-    showModalBottomSheet<void>(
+  Future<void> _ask(BuildContext context, WidgetRef ref) async {
+    final controller = TextEditingController();
+    final question = await showDialog<String>(
       context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Ask this tenant & lease'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 2,
+          maxLines: 5,
+          decoration: const InputDecoration(
+            hintText: 'What does the current lease say about pets?',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Ask'),
+          ),
+        ],
       ),
-      builder: (_) => LeaseFormSheet(existing: _lease, onSaved: _refresh),
     );
-  }
-
-  Future<void> _updateStatus(String newStatus) async {
-    setState(() {
-      _updatingStatus = true;
-      _statusError = null;
-    });
+    controller.dispose();
+    if (question == null || question.trim().isEmpty || !context.mounted) return;
     try {
-      final updated = await ref
-          .read(leasesRepositoryProvider)
-          .updateStatus(_lease.id, newStatus);
-      if (mounted) setState(() => _lease = updated);
-      // Also refresh the list provider so it stays consistent.
-      ref.read(leasesProvider.notifier).refresh();
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _statusError = e.message);
-    } finally {
-      if (mounted) setState(() => _updatingStatus = false);
+      final answer = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .ask(leaseManagementId, question.trim());
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Answer'),
+          content: SingleChildScrollView(child: Text(answer.answer)),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
     }
   }
 
-  Future<void> _createNotice() async {
-    if (_lease.tenantId <= 0) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('This lease has no tenant to notify.')),
+  Future<void> _givePossession(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseManagementDetail management,
+  ) async {
+    final summary = management.summary;
+    final outcome = await showMoveInSheet(context, summary: summary);
+    if (outcome == null || !context.mounted) return;
+
+    final _ = await ref.refresh(
+      leaseManagementDetailProvider(summary.id).future,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Tenant has moved into Unit ${summary.unitNumber}.'),
+      ),
+    );
+
+    if (!outcome.startInspection) return;
+    await Navigator.of(context).push<int>(
+      MaterialPageRoute<int>(builder: (_) => const NewInspectionScreen()),
+    );
+  }
+
+  Future<void> _returnPossession(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseManagementDetail management,
+  ) async {
+    final summary = management.summary;
+    try {
+      final returnContext = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .returnPossessionContext(summary.id);
+      if (!context.mounted) return;
+      if (returnContext.parties.isEmpty) {
+        _showError(
+          context,
+          const ApiException(
+            statusCode: 0,
+            message: 'The app could not find the current household.',
+          ),
         );
+        return;
+      }
+
+      final result = await showReturnPossessionSheet(
+        context,
+        summary: summary,
+        returnContext: returnContext,
+      );
+      if (result == null || !context.mounted) return;
+      await Future.wait([
+        ref.refresh(leaseManagementDetailProvider(summary.id).future),
+        ref.refresh(leaseAgreementHistoryProvider(summary.id).future),
+      ]);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Move-out recorded for Unit ${summary.unitNumber}; getting it ready is open.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _recordEndingDisposition(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseManagementDetail management,
+  ) async {
+    final summary = management.summary;
+    final input = await showEndingDispositionSheet(context, summary: summary);
+    if (input == null || !context.mounted) return;
+    try {
+      final result = await _runWithStableRetry(
+        context,
+        actionLabel: 'record ending decision',
+        action: () => ref
+            .read(leaseManagementsRepositoryProvider)
+            .recordEndingDisposition(
+              leaseManagementId: summary.id,
+              unitId: summary.unitId,
+              disposition: input.disposition,
+              noticeGivenAt: input.noticeGivenAt,
+              plannedMoveOutAt: input.plannedMoveOutAt,
+              decisionReason: input.decisionReason,
+              operationKey: input.operationKey,
+            ),
+      );
+      if (result == null || !context.mounted) return;
+      final _ = await ref.refresh(leaseManagementDetailProvider(summary.id).future);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Lease ending decision recorded.')),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _changeLease(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseManagementDetail management,
+    LeaseAgreementHistory source, {
+    LeaseSuccessorOperation? initialOperation,
+  }) async {
+    final summary = management.summary;
+    LeaseAgreementEffectiveAddendumSeries? effectiveAddendumSeries;
+    try {
+      effectiveAddendumSeries = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .effectiveAddendumSeries(
+            leaseManagementId: summary.id,
+            sourceAgreementId: source.id,
+          );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
       return;
     }
+    if (!context.mounted) return;
 
-    final tenantName = (_lease.tenantName ?? '').trim();
-    await showCreateTenantNoticeFlow(
+    final result = await showSuccessorAgreementSheet(
       context,
-      ref,
-      tenantId: _lease.tenantId,
-      tenantName: tenantName.isEmpty
-          ? 'tenant #${_lease.tenantId}'
-          : tenantName,
+      source: source,
+      initialOperation: initialOperation,
+      propertyName: summary.propertyName,
+      unitNumber: summary.unitNumber,
+      businessDate: summary.businessDate,
+      effectiveAddendumSeries: effectiveAddendumSeries,
     );
-  }
-
-  Future<void> _askLease() async {
-    final question = _questionController.text.trim();
-    if (question.isEmpty) return;
-
-    setState(() {
-      _askingLease = true;
-      _leaseAnswer = null;
-      _leaseAskError = null;
-    });
-
+    if (result == null || !context.mounted) return;
     try {
-      final response = await ref
-          .read(leasesRepositoryProvider)
-          .ask(_lease.id, question);
-      if (mounted) setState(() => _leaseAnswer = response.answer);
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _leaseAskError = e.message);
-    } finally {
-      if (mounted) setState(() => _askingLease = false);
-    }
-  }
-
-  /// Builds (or rebuilds) the standard lease-agreement PDF from the lease's
-  /// captured terms, then opens it for the landlord to review.
-  Future<void> _generateDocument() async {
-    if (_generatingDoc) return;
-    setState(() {
-      _generatingDoc = true;
-      _docError = null;
-    });
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await ref.read(leasesRepositoryProvider).generateDocument(_lease.id);
-      if (!mounted) return;
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Lease agreement generated.')),
-        );
-      await _openDocument();
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _docError = e.message);
-    } finally {
-      if (mounted) setState(() => _generatingDoc = false);
-    }
-  }
-
-  /// Fetches the generated PDF bytes (authed) and hands them to the OS viewer
-  /// via [DocumentOpener] (FileProvider `content://` URI, share-sheet fallback).
-  Future<void> _openDocument() async {
-    if (_openingDoc) return;
-    setState(() {
-      _openingDoc = true;
-      _docError = null;
-    });
-    try {
-      final bytes = await ref
-          .read(leasesRepositoryProvider)
-          .documentBytes(_lease.id);
-      await DocumentOpener.openBytes(
-        bytes: bytes,
-        fileName: 'lease-${_lease.id}-agreement.pdf',
+      final created = await _runWithStableRetry(
+        context,
+        actionLabel: 'save the lease change',
+        action: () => ref
+            .read(leaseManagementsRepositoryProvider)
+            .createSuccessorDraft(
+              leaseManagementId: summary.id,
+              sourceAgreementId: source.id,
+              changeType: result.operation.apiChangeType,
+              termStartOn: result.termStart,
+              termEndOn: result.termEnd,
+              governingFromOn: result.governingFrom,
+              correctionReason: result.correctionReason,
+              addendumDecisions: result.addendumDecisions,
+              operationKey: result.operationKey,
+            ),
       );
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _docError = e.message);
-    } finally {
-      if (mounted) setState(() => _openingDoc = false);
-    }
-  }
-
-  /// Loads the current e-signature status for the lease. Silently ignores a
-  /// 503 (provider not configured) — the card stays in its default state and
-  /// the action handles the gentle messaging when the user actually tries.
-  Future<void> _loadSignatureStatus() async {
-    if (_loadingSignature) return;
-    setState(() {
-      _loadingSignature = true;
-      _signatureError = null;
-    });
-    try {
-      final status = await ref
-          .read(leasesRepositoryProvider)
-          .signatureStatus(_lease.id);
-      if (mounted) setState(() => _signature = status);
-    } on ApiException catch (e) {
-      // 503 = gated/not configured; leave the card in its neutral state.
-      if (e.statusCode != 503 && mounted) {
-        setState(() => _signatureError = e.message);
-      }
-    } finally {
-      if (mounted) setState(() => _loadingSignature = false);
-    }
-  }
-
-  /// Sends the lease to the e-sign provider, then refreshes the status. On a
-  /// 503 (not configured) shows a gentle snackbar instead of an error.
-  Future<void> _sendForSignature() async {
-    if (_sendingSignature) return;
-    setState(() {
-      _sendingSignature = true;
-      _signatureError = null;
-    });
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final status = await ref
-          .read(leasesRepositoryProvider)
-          .sendForSignature(_lease.id);
-      if (!mounted) return;
-      setState(() => _signature = status);
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Lease sent for signature.')),
-        );
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      if (e.statusCode == 503) {
-        messenger
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(content: Text('E-signature isn’t set up yet.')),
+      if (created == null || !context.mounted) return;
+      await _refreshLease(context, ref, summary.id);
+      if (!context.mounted) return;
+      final createdDraft = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .agreementDraft(
+            leaseManagementId: summary.id,
+            leaseAgreementId: created.leaseAgreementId,
           );
-      } else {
-        setState(() => _signatureError = e.message);
+      if (!context.mounted) return;
+      if (createdDraft.documentTemplateId != null) {
+        final edited = await showEditAgreementDraftSheet(
+          context,
+          draft: createdDraft,
+          propertyName: summary.propertyName,
+          unitNumber: summary.unitNumber,
+          source: source,
+        );
+        if (edited != null && context.mounted) {
+          await _refreshLease(context, ref, summary.id);
+        }
+      } else if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'The new version is saved. Open it from the lease history to '
+              'send it for signature.',
+            ),
+          ),
+        );
       }
-    } finally {
-      if (mounted) setState(() => _sendingSignature = false);
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
     }
   }
 
-  /// Fetches the signed lease PDF bytes (authed) and hands them to the OS viewer
-  /// via [DocumentOpener] (FileProvider `content://` URI, share-sheet fallback).
-  Future<void> _openSignedDocument() async {
-    if (_openingSignedDoc) return;
-    setState(() {
-      _openingSignedDoc = true;
-      _signatureError = null;
-    });
+  Future<void> _refreshLease(
+    BuildContext context,
+    WidgetRef ref,
+    int id,
+  ) async {
     try {
-      final bytes = await ref
-          .read(leasesRepositoryProvider)
-          .signedDocumentBytes(_lease.id);
-      await DocumentOpener.openBytes(
-        bytes: bytes,
-        fileName: 'lease-${_lease.id}-signed.pdf',
-      );
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _signatureError = e.message);
-    } finally {
-      if (mounted) setState(() => _openingSignedDoc = false);
+      await Future.wait([
+        ref.refresh(leaseManagementDetailProvider(id).future),
+        ref.refresh(leaseAgreementHistoryProvider(id).future),
+      ]);
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
     }
   }
+}
+
+/// The signed lease that is currently in charge, if there is one. Only that
+/// one can be renewed or changed (LeaseAgreementDraftRules.cs).
+LeaseAgreementHistory? _currentSignedLease(List<LeaseAgreementHistory> items) {
+  for (final item in items) {
+    if (item.isGoverning && item.fullyExecutedAt != null) return item;
+  }
+  return null;
+}
+
+class _RelationshipHeader extends StatelessWidget {
+  const _RelationshipHeader({required this.summary});
+
+  final LeaseManagementSummary summary;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'Lease #${_lease.leaseNumber}',
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined),
-            tooltip: 'Edit lease',
-            onPressed: () => _showEditSheet(context),
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            if (widget.leadingContent != null) ...[
-              widget.leadingContent!,
-              const SizedBox(height: 12),
-            ],
-            // ── Header card ────────────────────────────────────────────────
-            _LeaseHeaderCard(
-              lease: _lease,
-              theme: theme,
-              colorScheme: colorScheme,
-            ),
-            const SizedBox(height: 16),
-
-            // ── Financial details ──────────────────────────────────────────
-            _SectionCard(
-              title: 'Financials',
-              theme: theme,
-              colorScheme: colorScheme,
-              children: [
-                _RowKV(
-                  label: 'Monthly rent',
-                  value: _formatCurrency(_lease.monthlyRent),
-                ),
-                _RowKV(
-                  label: 'Security deposit',
-                  value: _formatCurrency(_lease.securityDeposit),
-                ),
-                _RowKV(
-                  label: 'Late fee',
-                  value: _formatCurrency(_lease.lateFeeAmount),
-                ),
-                _RowKV(
-                  label: 'Rent due day',
-                  value: 'Day ${_lease.rentDueDay}',
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            // ── Account history (transparent ledger) ───────────────────────
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.receipt_long_outlined),
-                title: const Text('Account history'),
-                subtitle: const Text('Every charge and payment, explained'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => Scaffold(
-                      appBar: AppBar(
-                        title: Text('Lease #${_lease.leaseNumber} history'),
-                      ),
-                      body: LeaseLedgerView(leaseId: _lease.id),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // ── Payments ───────────────────────────────────────────────────
-            _LeasePaymentsSection(leaseId: _lease.id),
-            const SizedBox(height: 12),
-
-            // ── Lease agreement (PDF) ──────────────────────────────────────
-            _LeaseDocumentCard(
-              generating: _generatingDoc,
-              opening: _openingDoc,
-              error: _docError,
-              onGenerate: _generateDocument,
-              onView: _openDocument,
-              theme: theme,
-              colorScheme: colorScheme,
-            ),
-            const SizedBox(height: 12),
-
-            // ── E-signature ────────────────────────────────────────────────
-            _LeaseSignatureCard(
-              signature: _signature,
-              loading: _loadingSignature,
-              sending: _sendingSignature,
-              openingSigned: _openingSignedDoc,
-              error: _signatureError,
-              onSend: _sendForSignature,
-              onViewSigned: _openSignedDocument,
-              theme: theme,
-              colorScheme: colorScheme,
-            ),
-            const SizedBox(height: 12),
-
-            // ── Dates ──────────────────────────────────────────────────────
-            _SectionCard(
-              title: 'Dates',
-              theme: theme,
-              colorScheme: colorScheme,
-              children: [
-                _RowKV(label: 'Start date', value: _fmt(_lease.startDate)),
-                _RowKV(label: 'End date', value: _fmt(_lease.endDate)),
-                if (_lease.moveInDate != null)
-                  _RowKV(label: 'Move-in', value: _fmt(_lease.moveInDate!)),
-                if (_lease.moveOutDate != null)
-                  _RowKV(label: 'Move-out', value: _fmt(_lease.moveOutDate!)),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            // ── Status actions ─────────────────────────────────────────────
-            _StatusActions(
-              currentStatus: _lease.status,
-              loading: _updatingStatus,
-              error: _statusError,
-              onSetStatus: _updateStatus,
-              onCreateNotice: _createNotice,
-              theme: theme,
-              colorScheme: colorScheme,
-            ),
-            const SizedBox(height: 16),
-
-            _LeaseAskCard(
-              controller: _questionController,
-              loading: _askingLease,
-              answer: _leaseAnswer,
-              error: _leaseAskError,
-              onAsk: _askLease,
-              theme: theme,
-              colorScheme: colorScheme,
-            ),
-
-            const SizedBox(height: 32),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LeaseAskCard extends StatelessWidget {
-  const _LeaseAskCard({
-    required this.controller,
-    required this.loading,
-    required this.onAsk,
-    required this.theme,
-    required this.colorScheme,
-    this.answer,
-    this.error,
-  });
-
-  final TextEditingController controller;
-  final bool loading;
-  final String? answer;
-  final String? error;
-  final VoidCallback onAsk;
-  final ThemeData theme;
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Ask This Lease',
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: controller,
-              minLines: 1,
-              maxLines: 3,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => onAsk(),
-              decoration: const InputDecoration(
-                labelText: 'Question',
-                hintText: 'When is rent due? Can I have a pet?',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.tonal(
-                onPressed: loading ? null : onAsk,
-                child: loading
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Ask'),
-              ),
-            ),
-            if (answer != null && answer!.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text(
-                answer!,
-                style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
-              ),
-            ],
-            if (error != null) ...[
-              const SizedBox(height: 12),
-              Text(error!, style: TextStyle(color: colorScheme.error)),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── Lease agreement (PDF) card ──────────────────────────────────────────────────
-
-class _LeaseDocumentCard extends StatelessWidget {
-  const _LeaseDocumentCard({
-    required this.generating,
-    required this.opening,
-    required this.onGenerate,
-    required this.onView,
-    required this.theme,
-    required this.colorScheme,
-    this.error,
-  });
-
-  final bool generating;
-  final bool opening;
-  final String? error;
-  final VoidCallback onGenerate;
-  final VoidCallback onView;
-  final ThemeData theme;
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    final busy = generating || opening;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Lease Agreement',
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Create a standard residential lease agreement from this '
-              'lease’s terms, then open it to print or share.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton.icon(
-                  onPressed: busy ? null : onGenerate,
-                  icon: generating
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.description_outlined, size: 18),
-                  label: const Text('Generate lease agreement (PDF)'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: busy ? null : onView,
-                  icon: opening
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.open_in_new, size: 18),
-                  label: const Text('View agreement'),
-                ),
-              ],
-            ),
-            if (error != null) ...[
-              const SizedBox(height: 10),
-              Text(
-                error!,
-                style: TextStyle(color: colorScheme.error, fontSize: 13),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── E-signature card ────────────────────────────────────────────────────────────
-
-class _LeaseSignatureCard extends StatelessWidget {
-  const _LeaseSignatureCard({
-    required this.loading,
-    required this.sending,
-    required this.openingSigned,
-    required this.onSend,
-    required this.onViewSigned,
-    required this.theme,
-    required this.colorScheme,
-    this.signature,
-    this.error,
-  });
-
-  final LeaseSignatureStatus? signature;
-  final bool loading;
-  final bool sending;
-  final bool openingSigned;
-  final String? error;
-  final VoidCallback onSend;
-  final VoidCallback onViewSigned;
-  final ThemeData theme;
-  final ColorScheme colorScheme;
-
-  ({String label, Color bg, Color fg, IconData icon}) _statusChip() {
-    final s = signature;
-    if (s == null || s.esignStatus.toLowerCase() == 'none') {
-      return (
-        label: 'Not sent',
-        bg: colorScheme.surfaceContainerHighest,
-        fg: colorScheme.onSurfaceVariant,
-        icon: Icons.drafts_outlined,
-      );
-    }
-    if (s.isSigned) {
-      return (
-        label: 'Signed',
-        bg: colorScheme.primaryContainer,
-        fg: colorScheme.onPrimaryContainer,
-        icon: Icons.verified_outlined,
-      );
-    }
-    if (s.isDeclined) {
-      return (
-        label: 'Declined',
-        bg: colorScheme.errorContainer,
-        fg: colorScheme.onErrorContainer,
-        icon: Icons.cancel_outlined,
-      );
-    }
-    // Sent — waiting.
-    return (
-      label: 'Sent — waiting',
-      bg: colorScheme.tertiaryContainer,
-      fg: colorScheme.onTertiaryContainer,
-      icon: Icons.schedule_outlined,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final chip = _statusChip();
-    final busy = sending || openingSigned;
-    final hasSignedDoc = signature?.hasSignedDocument ?? false;
-    final isSigned = signature?.isSigned ?? false;
-    // Once signed, "Send for signature" no longer makes sense.
-    final canSend = !isSigned;
-
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -791,342 +475,1108 @@ class _LeaseSignatureCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'E-Signature',
-                    style: theme.textTheme.titleSmall?.copyWith(
+                    summary.primaryTenantName?.trim().isNotEmpty == true
+                        ? summary.primaryTenantName!
+                        : 'Tenancy #${summary.relationshipNumber}',
+                    style: theme.textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-                if (loading)
-                  const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
+                Chip(label: Text(summary.lifecycle)),
+              ],
+            ),
+            Text('${summary.propertyName} · Unit ${summary.unitNumber}'),
+            const SizedBox(height: 16),
+            _Fact(
+              label: 'Current lease',
+              value: summary.agreementNumber ?? 'Not issued',
+            ),
+            _Fact(
+              label: 'Lease status',
+              value: summary.agreementStatus ?? 'No signed lease',
+            ),
+            _Fact(
+              label: 'Term',
+              value: summary.termStartOn == null
+                  ? 'Not set'
+                  : '${_date(summary.termStartOn!)} – '
+                        '${summary.termEndOn == null ? 'Month-to-month' : _date(summary.termEndOn!)}',
+            ),
+            _Fact(
+              label: 'Base rent',
+              value: summary.baseRentAmount == null
+                  ? 'Not set'
+                  : moneyFmt(summary.baseRentAmount!),
+            ),
+            if (summary.upcomingAgreementId != null)
+              _Fact(
+                label: 'Upcoming',
+                value:
+                    '${summary.upcomingAgreementNumber ?? 'Future lease'}'
+                    '${summary.upcomingTermStartOn == null ? '' : ' · starts ${_date(summary.upcomingTermStartOn!)}'}'
+                    '${summary.upcomingAgreementStatus == null ? '' : ' · ${summary.upcomingAgreementStatus}'}',
+              ),
+            _Fact(
+              label: 'Ending plan',
+              value: _endingDispositionLabel(summary.endingDisposition),
+            ),
+            if (summary.endingDispositionDecidedAt != null)
+              _Fact(
+                label: 'Decision recorded',
+                value: _date(summary.endingDispositionDecidedAt!),
+              ),
+            if (summary.plannedMoveOutAt != null)
+              _Fact(
+                label: 'Planned move-out',
+                value: _date(summary.plannedMoveOutAt!),
+              ),
+            if (summary.hasReconciliationException)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(
+                  'Needs review: the status details do not agree.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.error,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HouseholdCard extends ConsumerWidget {
+  const _HouseholdCard({
+    required this.management,
+    required this.agreements,
+    required this.canManage,
+  });
+
+  final LeaseManagementDetail management;
+  final List<LeaseAgreementHistory> agreements;
+  final bool canManage;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final household = ref.watch(
+      leaseHouseholdContextProvider(management.summary.id),
+    );
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Household',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                if (canManage)
+                  FilledButton.tonalIcon(
+                    onPressed: () => _open(
+                      context,
+                      ref,
+                      HouseholdAction.add,
+                      household.asData?.value,
                     ),
-                    decoration: BoxDecoration(
-                      color: chip.bg,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(chip.icon, size: 14, color: chip.fg),
-                        const SizedBox(width: 4),
-                        Text(
-                          chip.label,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: chip.fg,
-                          ),
-                        ),
-                      ],
-                    ),
+                    icon: const Icon(Icons.person_add_outlined),
+                    label: const Text('Add'),
                   ),
               ],
             ),
             const SizedBox(height: 4),
             Text(
-              'Send this lease to the tenant for electronic signature, then '
-              'download the signed copy once it’s returned.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+              'Membership and login access can change. Signed agreement PDFs remain immutable.',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                if (canSend)
-                  FilledButton.icon(
-                    onPressed: busy ? null : onSend,
-                    icon: sending
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.send_outlined, size: 18),
-                    label: const Text('Send for signature'),
-                  ),
-                if (hasSignedDoc)
-                  OutlinedButton.icon(
-                    onPressed: busy ? null : onViewSigned,
-                    icon: openingSigned
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.download_outlined, size: 18),
-                    label: const Text('Download signed lease'),
-                  ),
-              ],
-            ),
-            if (error != null) ...[
-              const SizedBox(height: 10),
-              Text(
-                error!,
-                style: TextStyle(color: colorScheme.error, fontSize: 13),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── Lease header card ─────────────────────────────────────────────────────────
-
-class _LeaseHeaderCard extends StatelessWidget {
-  const _LeaseHeaderCard({
-    required this.lease,
-    required this.theme,
-    required this.colorScheme,
-  });
-
-  final Lease lease;
-  final ThemeData theme;
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Tenant — tappable drill-through to the tenant page.
-                      InkWell(
-                        onTap: () => _openTenantDetail(context, lease),
-                        child: Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                lease.tenantName ??
-                                    'Lease #${lease.leaseNumber}',
-                                style: theme.textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                  color: colorScheme.primary,
-                                ),
-                              ),
-                            ),
-                            Icon(
-                              Icons.chevron_right,
-                              size: 18,
-                              color: colorScheme.onSurfaceVariant,
-                            ),
-                          ],
-                        ),
+            const SizedBox(height: 8),
+            household.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (error, _) => Text(error.toString()),
+              data: (value) => Column(
+                children: [
+                  for (final party in value.parties)
+                    if (_canShowHouseholdAction(party))
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const CircleAvatar(
+                        child: Icon(Icons.person_outline),
                       ),
-                      if (lease.tenants.length > 1) ...[
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            for (final tenant in lease.tenants)
-                              ActionChip(
-                                label: Text(
-                                  tenant.name.isEmpty
-                                      ? 'Tenant #${tenant.id}'
-                                      : tenant.name,
-                                ),
-                                avatar: tenant.isPrimary
-                                    ? const Icon(Icons.star_outline, size: 16)
-                                    : null,
-                                onPressed: () => _openTenantIdDetail(
-                                  context,
-                                  lease,
-                                  tenant.id,
-                                ),
+                      title: Text(party.tenantName),
+                      subtitle: Text(
+                        '${party.role} · login ${_accessFor(value, party.id) == null ? 'not granted' : 'active'}',
+                      ),
+                      trailing: canManage
+                          ? PopupMenuButton<HouseholdAction>(
+                              onSelected: (action) => _open(
+                                context,
+                                ref,
+                                action,
+                                value,
+                                party: party,
+                                access: _accessFor(value, party.id),
                               ),
-                          ],
-                        ),
-                      ],
-                      if (lease.propertyName != null) ...[
-                        const SizedBox(height: 2),
-                        // Property/unit — tappable drill-through to the property.
-                        InkWell(
-                          onTap: () =>
-                              _openPropertyDetail(context, lease.propertyId),
-                          child: Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  '${lease.propertyName}'
-                                  '${lease.unitNumber != null ? ' · Unit ${lease.unitNumber}' : ''}',
-                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                    color: colorScheme.primary,
+                              itemBuilder: (_) => [
+                                const PopupMenuItem(
+                                  value: HouseholdAction.changeRole,
+                                  child: Text('Change role'),
+                                ),
+                                const PopupMenuItem(
+                                  value: HouseholdAction.end,
+                                  child: Text('End membership'),
+                                ),
+                                if (_accessFor(value, party.id) == null &&
+                                    party.email != null &&
+                                    party.canGrantTenantPortalAccess)
+                                  const PopupMenuItem(
+                                    value: HouseholdAction.grantAccess,
+                                    child: Text('Create resident login'),
                                   ),
+                                if (_accessFor(value, party.id) != null)
+                                  const PopupMenuItem(
+                                    value: HouseholdAction.revokeAccess,
+                                    child: Text('Revoke resident login'),
+                                  ),
+                                const PopupMenuItem(
+                                  value: HouseholdAction.add,
+                                  child: Text('View person'),
                                 ),
-                              ),
-                              Icon(
-                                Icons.chevron_right,
-                                size: 16,
-                                color: colorScheme.onSurfaceVariant,
-                              ),
-                            ],
+                              ],
+                            )
+                          : const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => TenantDetailLoaderScreen(
+                            tenantId: party.tenantId,
                           ),
                         ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _StatusBadge(status: lease.status, colorScheme: colorScheme),
-              ],
-            ),
-            const SizedBox(height: 12),
-            const Divider(height: 1),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Lease #${lease.leaseNumber}',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      Text(
-                        _formatCurrency(lease.monthlyRent),
-                        style: theme.textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: colorScheme.primary,
-                        ),
-                      ),
-                      Text(
-                        'per month',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      '${_fmt(lease.startDate)} –',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: colorScheme.onSurfaceVariant,
                       ),
                     ),
-                    Text(
-                      _fmt(lease.endDate),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: colorScheme.onSurfaceVariant,
+                  if (management.parties
+                      .any((party) => !_canShowHouseholdAction(party))) ...[
+                    const Divider(),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'History',
+                        style: Theme.of(context).textTheme.labelLarge,
                       ),
                     ),
+                    for (final party in management.parties)
+                      if (!_canShowHouseholdAction(party))
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.history_outlined),
+                          title: Text(party.tenantName),
+                          subtitle: Text(
+                            '${party.role} · ${_date(party.effectiveFrom)} – ${party.effectiveThrough == null ? 'current' : _date(party.effectiveThrough!)}',
+                          ),
+                        ),
                   ],
-                ),
-              ],
+                ],
+              ),
             ),
           ],
         ),
       ),
     );
   }
-}
 
-class _StatusBadge extends StatelessWidget {
-  const _StatusBadge({required this.status, required this.colorScheme});
-
-  final String status;
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    final isActive = status.toLowerCase() == 'active';
-    final isNotice = status.toLowerCase() == 'noticegiven';
-    Color bgColor;
-    Color fgColor;
-
-    if (isActive) {
-      bgColor = colorScheme.primaryContainer;
-      fgColor = colorScheme.onPrimaryContainer;
-    } else if (isNotice) {
-      bgColor = colorScheme.tertiaryContainer;
-      fgColor = colorScheme.onTertiaryContainer;
-    } else {
-      bgColor = colorScheme.surfaceContainerHighest;
-      fgColor = colorScheme.onSurfaceVariant;
+  ActiveTenantUserAccess? _accessFor(
+    ReturnPossessionContext context,
+    int partyId,
+  ) {
+    for (final access in context.activeTenantUserAccesses) {
+      if (access.leaseManagementPartyId == partyId) return access;
     }
+    return null;
+  }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        status,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: fgColor,
+  bool _canShowHouseholdAction(LeaseManagementParty party) =>
+      party.isCurrent || party.canGrantTenantPortalAccess;
+
+  Future<void> _open(
+    BuildContext context,
+    WidgetRef ref,
+    HouseholdAction action,
+    ReturnPossessionContext? household, {
+    LeaseManagementParty? party,
+    ActiveTenantUserAccess? access,
+  }) async {
+    if (action == HouseholdAction.add && party != null) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => TenantDetailLoaderScreen(tenantId: party.tenantId),
         ),
-      ),
+      );
+      return;
+    }
+    if (household == null) return;
+    final changed = await showHouseholdManagementSheet(
+      context,
+      action: action,
+      management: management,
+      currentParties: household.parties,
+      agreements: agreements,
+      party: party,
+      access: access,
     );
+    if (!changed) return;
+    ref.invalidate(leaseManagementDetailProvider(management.summary.id));
+    ref.invalidate(leaseHouseholdContextProvider(management.summary.id));
   }
 }
 
-// ── Section card ──────────────────────────────────────────────────────────────
-
-class _SectionCard extends StatelessWidget {
-  const _SectionCard({
-    required this.title,
-    required this.children,
-    required this.theme,
-    required this.colorScheme,
+class _AgreementHistoryCard extends ConsumerWidget {
+  const _AgreementHistoryCard({
+    required this.leaseManagementId,
+    required this.agreements,
+    required this.propertyName,
+    required this.unitNumber,
+    required this.managementBusinessDate,
+    required this.canPrepare,
   });
 
-  final String title;
-  final List<Widget> children;
-  final ThemeData theme;
-  final ColorScheme colorScheme;
+  final int leaseManagementId;
+  final List<LeaseAgreementHistory> agreements;
+  final String propertyName;
+  final String unitNumber;
+  final DateTime managementBusinessDate;
+  final bool canPrepare;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Agreement history',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                Text(
+                  '${agreements.length} version${agreements.length == 1 ? '' : 's'}',
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (agreements.isEmpty)
+              const Text('No agreement draft has been created.')
+            else
+              for (final agreement in agreements) ...[
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    agreement.isGoverning
+                        ? Icons.verified_outlined
+                        : Icons.history_outlined,
+                  ),
+                  title: Text(
+                    '${agreement.agreementNumber} · v${agreement.versionNumber}',
+                  ),
+                  subtitle: Text(
+                    '${agreement.changeType} · ${agreement.status}\n'
+                    '${_date(agreement.termStartOn)} – '
+                    '${agreement.termEndOn == null ? 'Month-to-month' : _date(agreement.termEndOn!)}'
+                    '${agreement.correctionReason == null ? '' : '\nReason: ${agreement.correctionReason}'}'
+                    '${agreement.reissueReason == null ? '' : '\nReissue: ${agreement.reissueReason}'}'
+                    '${agreement.draftCancellationReason == null ? '' : '\nCanceled: ${agreement.draftCancellationReason}'}',
+                  ),
+                  isThreeLine: true,
+                ),
+                if (agreement.issuedArtifact != null ||
+                    agreement.executedArtifact != null)
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (agreement.issuedArtifact != null)
+                        OutlinedButton.icon(
+                          onPressed: () => _openArtifact(
+                            context,
+                            ref,
+                            agreement,
+                            agreement.issuedArtifact!,
+                          ),
+                          icon: const Icon(Icons.picture_as_pdf_outlined),
+                          label: const Text('Issued PDF'),
+                        ),
+                      if (agreement.executedArtifact != null)
+                        OutlinedButton.icon(
+                          onPressed: () => _openArtifact(
+                            context,
+                            ref,
+                            agreement,
+                            agreement.executedArtifact!,
+                          ),
+                          icon: const Icon(Icons.verified_outlined),
+                          label: const Text('Executed PDF'),
+                        ),
+                    ],
+                  ),
+                if (canPrepare && agreement.isDraft)
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () => agreement.hasSourceScan
+                            ? _viewDraft(context, ref, agreement)
+                            : _editDraft(context, ref, agreement),
+                        icon: Icon(
+                          agreement.hasSourceScan
+                              ? Icons.visibility_outlined
+                              : Icons.edit_outlined,
+                        ),
+                        label: Text(
+                          agreement.hasSourceScan ? 'View draft' : 'Edit draft',
+                        ),
+                      ),
+                      FilledButton.icon(
+                        onPressed: () => _issueDraft(context, ref, agreement),
+                        icon: const Icon(Icons.send_outlined),
+                        label: const Text('Issue for signature'),
+                      ),
+                      if (agreement.replacesAgreementId != null ||
+                          agreement.renewsAgreementId != null ||
+                          agreement.reissuesAgreementId != null)
+                        OutlinedButton.icon(
+                          onPressed: () =>
+                              _cancelDraft(context, ref, agreement),
+                          icon: const Icon(Icons.delete_outline),
+                          label: const Text('Cancel draft'),
+                        ),
+                    ],
+                  ),
+                if (canPrepare &&
+                    agreement.issuedArtifact != null &&
+                    agreement.fullyExecutedAt == null &&
+                    !agreement.hasLiveReissue)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: FilledButton.tonalIcon(
+                      onPressed: () =>
+                          _recoverIssuedAgreement(context, ref, agreement),
+                      icon: const Icon(Icons.restore_outlined),
+                      label: Text(
+                        agreement.voidedAt == null
+                            ? 'Void and replace'
+                            : 'Create replacement',
+                      ),
+                    ),
+                  ),
+                const Divider(),
+              ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openArtifact(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+    LegalArtifactSummary artifact,
+  ) async {
+    try {
+      final bytes = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .artifactBytes(
+            leaseManagementId: leaseManagementId,
+            leaseAgreementId: agreement.id,
+            artifactId: artifact.id,
+          );
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: artifact.fileName,
+        mimeType: artifact.contentType,
+      );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _recoverIssuedAgreement(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final input = await showIssuedAgreementRecoverySheet(
+      context,
+      source: agreement,
+    );
+    if (input == null || !context.mounted) return;
+    final repository = ref.read(leaseManagementsRepositoryProvider);
+    try {
+      final created = await _runWithStableRetry(
+        context,
+        actionLabel: 'replace issued agreement with a draft',
+        action: () => repository.replaceIssuedAgreementWithDraft(
+          leaseManagementId: leaseManagementId,
+          sourceAgreementId: agreement.id,
+          voidNote: input.voidNote,
+          reissueReason: input.reissueReason,
+          operationKey: input.operationKey,
+        ),
+      );
+      if (created == null || !context.mounted) return;
+      await _refresh(context, ref);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Replacement agreement draft created.')),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<LeaseAgreementDraftDetail?> _loadDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    try {
+      return await ref
+          .read(leaseManagementsRepositoryProvider)
+          .agreementDraft(
+            leaseManagementId: leaseManagementId,
+            leaseAgreementId: agreement.id,
+          );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+      return null;
+    }
+  }
+
+  Future<void> _editDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final draft = await _loadDraft(context, ref, agreement);
+    if (draft == null || !context.mounted) return;
+    if (draft.documentTemplateId == null) {
+      _showError(
+        context,
+        const ApiException(
+          statusCode: 0,
+          message:
+              'This source-scan draft has no template identity and cannot be edited with the template-backed mobile form.',
+        ),
+      );
+      return;
+    }
+    final result = await showEditAgreementDraftSheet(
+      context,
+      draft: draft,
+      propertyName: propertyName,
+      unitNumber: unitNumber,
+      source: _sourceFor(agreement),
+    );
+    if (result == null || !context.mounted) return;
+    await _refresh(context, ref);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Draft revision ${result.draftRevision} saved.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _viewDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final draft = await _loadDraft(context, ref, agreement);
+    if (draft == null || !context.mounted) return;
+    final storedFileId = draft.sourceStoredFileId;
+    if (storedFileId == null) {
+      _showError(
+        context,
+        const ApiException(
+          statusCode: 0,
+          message: 'The original draft document is unavailable.',
+        ),
+      );
+      return;
+    }
+    try {
+      final bytes = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .agreementSourceDocument(storedFileId: storedFileId);
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: draft.sourceFileName ?? 'lease-draft',
+        mimeType: draft.sourceContentType ?? 'application/octet-stream',
+      );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  LeaseAgreementHistory? _sourceFor(LeaseAgreementHistory agreement) {
+    final sourceId =
+        agreement.replacesAgreementId ??
+        agreement.renewsAgreementId ??
+        agreement.reissuesAgreementId;
+    if (sourceId == null) return null;
+    for (final candidate in agreements) {
+      if (candidate.id == sourceId) return candidate;
+    }
+    return null;
+  }
+
+  Future<void> _cancelDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) => const _CancelSuccessorDraftDialog(),
+    );
+    if (reason == null || !context.mounted) return;
+    final operationKey = LeaseManagementsRepository.newOperationKey();
+    try {
+      final canceled = await _runWithStableRetry(
+        context,
+        actionLabel: 'throw the draft away',
+        action: () => ref
+            .read(leaseManagementsRepositoryProvider)
+            .cancelSuccessorDraft(
+              leaseManagementId: leaseManagementId,
+              leaseAgreementId: agreement.id,
+              cancellationReason: reason,
+              operationKey: operationKey,
+            ),
+      );
+      if (canceled == null || !context.mounted) return;
+      await _refresh(context, ref);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Draft thrown away.')),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _issueDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final draft = await _loadDraft(context, ref, agreement);
+    if (draft == null || !context.mounted) return;
+    if (!draft.hasExactOrderedSigners) {
+      _showError(
+        context,
+        const ApiException(
+          statusCode: 0,
+          message:
+              'The draft does not have a complete list of signers in order.',
+        ),
+      );
+      return;
+    }
+    final result = await showIssueAgreementSheet(
+      context,
+      draft: draft,
+      propertyName: propertyName,
+      unitNumber: unitNumber,
+    );
+    if (result == null || !context.mounted) return;
+    await _refresh(context, ref);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Agreement issued for signature.')),
+      );
+    }
+  }
+
+  Future<void> _refresh(BuildContext context, WidgetRef ref) async {
+    try {
+      await Future.wait([
+        ref.refresh(leaseManagementDetailProvider(leaseManagementId).future),
+        ref.refresh(leaseAgreementHistoryProvider(leaseManagementId).future),
+      ]);
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+}
+
+class _CancelSuccessorDraftDialog extends StatefulWidget {
+  const _CancelSuccessorDraftDialog();
+
+  @override
+  State<_CancelSuccessorDraftDialog> createState() =>
+      _CancelSuccessorDraftDialogState();
+}
+
+class _CancelSuccessorDraftDialogState
+    extends State<_CancelSuccessorDraftDialog> {
+  final _reason = TextEditingController();
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Throw this draft away?'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'The lease you have now is unchanged and stays in place. Say why this draft is being thrown away.',
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _reason,
+          decoration: const InputDecoration(labelText: 'Cancellation reason'),
+          minLines: 2,
+          maxLines: 4,
+          maxLength: 1000,
+          onChanged: (_) => setState(() {}),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Keep draft'),
+      ),
+      FilledButton(
+        onPressed: _reason.text.trim().isEmpty
+            ? null
+            : () => Navigator.of(context).pop(_reason.text.trim()),
+        child: const Text('Cancel draft'),
+      ),
+    ],
+  );
+}
+
+class _AddendumHistoryCard extends ConsumerStatefulWidget {
+  const _AddendumHistoryCard({
+    required this.management,
+    required this.canPrepare,
+  });
+
+  final LeaseManagementDetail management;
+  final bool canPrepare;
+
+  @override
+  ConsumerState<_AddendumHistoryCard> createState() =>
+      _AddendumHistoryCardState();
+}
+
+class _AddendumHistoryCardState extends ConsumerState<_AddendumHistoryCard> {
+  static const _pageSize = 10;
+  int _skip = 0;
+
+  LeaseAddendumHistoryQuery get _query => LeaseAddendumHistoryQuery(
+    leaseManagementId: widget.management.summary.id,
+    skip: _skip,
+    take: _pageSize,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final page = ref.watch(leaseAddendumHistoryProvider(_query));
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Addenda',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                if (widget.canPrepare)
+                  FilledButton.tonalIcon(
+                    onPressed: () => _create(context),
+                    icon: const Icon(Icons.add),
+                    label: const Text('New draft'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            page.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (error, _) => _ErrorState(
+                error: error,
+                onRetry: () =>
+                    ref.invalidate(leaseAddendumHistoryProvider(_query)),
+              ),
+              data: (history) => _history(context, history),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _history(
+    BuildContext context,
+    LeaseAddendumHistoryPage page,
+  ) => Column(
+    children: [
+      if (page.items.isEmpty)
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text('No addendum draft has been created.'),
+        )
+      else
+        for (final addendum in page.items) ...[
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.description_outlined),
+            title: Text(
+              '${addendum.addendumNumber} · v${addendum.versionNumber}',
+            ),
+            subtitle: Text(
+              '${addendum.purpose} · ${addendum.status}\n'
+              '${_date(addendum.effectiveFromOn)} – '
+              '${addendum.effectiveThroughOn == null ? 'Open ended' : _date(addendum.effectiveThroughOn!)}\n'
+              '${addendum.financialEffectCount} financial effect${addendum.financialEffectCount == 1 ? '' : 's'} · '
+              '${addendum.signerCount} signer${addendum.signerCount == 1 ? '' : 's'}',
+            ),
+            isThreeLine: true,
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (addendum.issuedArtifact != null)
+                OutlinedButton.icon(
+                  onPressed: () => _openArtifact(
+                    context,
+                    addendum,
+                    addendum.issuedArtifact!,
+                  ),
+                  icon: const Icon(Icons.picture_as_pdf_outlined),
+                  label: const Text('Issued PDF'),
+                ),
+              if (addendum.executedArtifact != null)
+                OutlinedButton.icon(
+                  onPressed: () => _openArtifact(
+                    context,
+                    addendum,
+                    addendum.executedArtifact!,
+                  ),
+                  icon: const Icon(Icons.verified_outlined),
+                  label: const Text('Executed PDF'),
+                ),
+              if (widget.canPrepare && addendum.isDraft)
+                OutlinedButton.icon(
+                  onPressed: () => _edit(context, addendum),
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Edit draft'),
+                ),
+              if (widget.canPrepare && addendum.isDraft)
+                FilledButton.icon(
+                  onPressed: () => _issue(context, addendum),
+                  icon: const Icon(Icons.send_outlined),
+                  label: const Text('Issue'),
+                ),
+              if (widget.canPrepare && addendum.canCorrect)
+                OutlinedButton.icon(
+                  onPressed: () => _correct(context, addendum),
+                  icon: const Icon(Icons.content_copy_outlined),
+                  label: const Text('Correct'),
+                ),
+            ],
+          ),
+          const Divider(),
+        ],
+      if (page.totalCount > 0)
+        Row(
+          children: [
+            IconButton(
+              onPressed: page.hasPrevious
+                  ? () => setState(() {
+                      _skip = _skip > _pageSize ? _skip - _pageSize : 0;
+                    })
+                  : null,
+              icon: const Icon(Icons.chevron_left),
+              tooltip: 'Previous addenda page',
+            ),
+            Expanded(
+              child: Text(
+                '${page.skip + 1}–${page.skip + page.items.length} of ${page.totalCount}',
+                textAlign: TextAlign.center,
               ),
             ),
-            const SizedBox(height: 12),
-            ...children,
+            IconButton(
+              onPressed: page.hasNext
+                  ? () => setState(() => _skip += _pageSize)
+                  : null,
+              icon: const Icon(Icons.chevron_right),
+              tooltip: 'Next addenda page',
+            ),
+          ],
+        ),
+    ],
+  );
+
+  Future<void> _create(BuildContext context) async {
+    final result = await showCreateAddendumDraftSheet(
+      context,
+      management: widget.management.summary,
+    );
+    if (result == null || !mounted) return;
+    setState(() => _skip = 0);
+    await _refresh();
+  }
+
+  Future<LeaseAddendumDraftDetail?> _loadDraft(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+  ) async {
+    try {
+      return await ref
+          .read(leaseManagementsRepositoryProvider)
+          .addendumDraft(
+            leaseManagementId: widget.management.summary.id,
+            leaseAddendumId: addendum.id,
+          );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+      return null;
+    }
+  }
+
+  Future<void> _edit(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+  ) async {
+    final draft = await _loadDraft(context, addendum);
+    if (draft == null || !context.mounted) return;
+    if (draft.documentTemplateId == null) {
+      _showError(
+        context,
+        const ApiException(
+          statusCode: 0,
+          message: 'This draft has no editable template identity.',
+        ),
+      );
+      return;
+    }
+    final result = await showEditAddendumDraftSheet(
+      context,
+      draft: draft,
+      propertyName: widget.management.summary.propertyName,
+      unitNumber: widget.management.summary.unitNumber,
+    );
+    if (result != null && mounted) await _refresh();
+  }
+
+  Future<void> _issue(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+  ) async {
+    final draft = await _loadDraft(context, addendum);
+    if (draft == null || !context.mounted) return;
+    final result = await showIssueAddendumSheet(
+      context,
+      draft: draft,
+      propertyName: widget.management.summary.propertyName,
+      unitNumber: widget.management.summary.unitNumber,
+    );
+    if (result != null && mounted) await _refresh();
+  }
+
+  Future<void> _correct(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+  ) async {
+    final result = await showCorrectAddendumSheet(
+      context,
+      leaseManagementId: widget.management.summary.id,
+      source: addendum,
+      businessDate: widget.management.summary.businessDate,
+    );
+    if (result != null && mounted) {
+      setState(() => _skip = 0);
+      await _refresh();
+    }
+  }
+
+  Future<void> _openArtifact(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+    LegalArtifactSummary artifact,
+  ) async {
+    try {
+      final bytes = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .addendumArtifactBytes(
+            leaseManagementId: widget.management.summary.id,
+            leaseAddendumId: addendum.id,
+            artifactId: artifact.id,
+          );
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: artifact.fileName,
+        mimeType: artifact.contentType,
+      );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _refresh() async {
+    ref.invalidate(leaseAddendumHistoryProvider);
+    await Future.wait([
+      ref.refresh(
+        leaseManagementDetailProvider(widget.management.summary.id).future,
+      ),
+      ref.refresh(leaseAddendumHistoryProvider(_query).future),
+    ]);
+  }
+}
+
+class _ActionsCard extends StatelessWidget {
+  const _ActionsCard({
+    required this.management,
+    required this.onAsk,
+    required this.onRenew,
+    required this.onChangeLease,
+    required this.onGivePossession,
+    required this.onReturnPossession,
+    required this.onEndingDisposition,
+  });
+
+  final LeaseManagementDetail management;
+  final VoidCallback onAsk;
+  final VoidCallback? onRenew;
+  final VoidCallback? onChangeLease;
+  final VoidCallback? onGivePossession;
+  final VoidCallback? onReturnPossession;
+  final VoidCallback? onEndingDisposition;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (onRenew != null)
+            FilledButton.icon(
+              onPressed: onRenew,
+              icon: const Icon(Icons.event_repeat_outlined),
+              label: const Text('Renew'),
+            ),
+          if (onChangeLease != null) ...[
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: onChangeLease,
+              icon: const Icon(Icons.edit_calendar_outlined),
+              label: const Text('Change the lease'),
+            ),
+          ],
+          if (onEndingDisposition != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: onEndingDisposition,
+              icon: const Icon(Icons.event_available_outlined),
+              label: const Text('End the lease'),
+            ),
+          ],
+          if (onGivePossession != null) ...[
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: onGivePossession,
+              icon: const Icon(Icons.key_outlined),
+              label: const Text('Tenant has moved in'),
+            ),
+          ],
+          if (onReturnPossession != null) ...[
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: onReturnPossession,
+              icon: const Icon(Icons.key_off_outlined),
+              label: const Text('Move-out'),
+            ),
+          ],
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => _showMore(context),
+            icon: const Icon(Icons.more_horiz),
+            label: const Text('More'),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  void _showMore(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.auto_awesome_outlined),
+              title: const Text('Ask about this tenant & lease'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                onAsk();
+              },
+            ),
+            if (management.summary.tenantAccountId != null)
+              ListTile(
+                leading: const Icon(Icons.account_balance_wallet_outlined),
+                title: const Text('View tenant account'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => Scaffold(
+                        appBar: AppBar(title: const Text('Tenant account')),
+                        body: LeaseLedgerView(
+                          leaseManagementId: management.summary.id,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
           ],
         ),
       ),
@@ -1134,323 +1584,112 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-class _RowKV extends StatelessWidget {
-  const _RowKV({required this.label, required this.value});
+class _Fact extends StatelessWidget {
+  const _Fact({required this.label, required this.value});
 
   final String label;
   final String value;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 140,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                color: colorScheme.onSurfaceVariant,
-              ),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 130,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
           ),
-          Expanded(
-            child: Text(
-              value,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+        ),
+        Expanded(child: Text(value)),
+      ],
+    ),
+  );
+}
+
+class _ErrorState extends StatelessWidget {
+  const _ErrorState({required this.error, required this.onRetry});
+
+  final Object error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            error is ApiException
+                ? (error as ApiException).message
+                : error.toString(),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 12),
+          FilledButton.tonal(
+            onPressed: onRetry,
+            child: const Text('Try again'),
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
 }
 
-// ── Status actions ────────────────────────────────────────────────────────────
-
-class _StatusActions extends StatelessWidget {
-  const _StatusActions({
-    required this.currentStatus,
-    required this.loading,
-    required this.onSetStatus,
-    required this.onCreateNotice,
-    required this.theme,
-    required this.colorScheme,
-    this.error,
-  });
-
-  final String currentStatus;
-  final bool loading;
-  final String? error;
-  final Future<void> Function(String) onSetStatus;
-  final Future<void> Function() onCreateNotice;
-  final ThemeData theme;
-  final ColorScheme colorScheme;
-
-  static const _transitions = {
-    'Draft': ['Active'],
-    'Active': ['Terminated'],
-    'NoticeGiven': ['Expired', 'Terminated'],
-    'Expired': <String>[],
-    'Terminated': <String>[],
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final available = _transitions[currentStatus] ?? <String>[];
-    final canCreateNotice = currentStatus == 'Active';
-
-    if (available.isEmpty && !canCreateNotice && error == null) {
-      return const SizedBox.shrink();
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Status Actions',
-          style: theme.textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: 8),
-        if (available.isNotEmpty || canCreateNotice)
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (canCreateNotice)
-                OutlinedButton.icon(
-                  onPressed: loading ? null : onCreateNotice,
-                  icon: const Icon(Icons.notifications_active_outlined),
-                  label: const Text('Create / Send notice'),
-                ),
-              ...available.map((status) {
-                return OutlinedButton(
-                  onPressed: loading ? null : () => onSetStatus(status),
-                  child: loading
-                      ? const SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Text(_statusActionLabel(status)),
-                );
-              }),
-            ],
-          ),
-        if (error != null) ...[
-          const SizedBox(height: 8),
-          Text(
-            error!,
-            style: TextStyle(color: colorScheme.error, fontSize: 13),
-          ),
-        ],
-      ],
-    );
-  }
-
-  String _statusActionLabel(String status) {
-    return switch (status) {
-      'Active' => 'Set Active',
-      'Expired' => 'Mark expired',
-      'Terminated' => 'Terminate',
-      _ => 'Mark $status',
-    };
-  }
+void _showError(BuildContext context, Object error) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(error is ApiException ? error.message : error.toString()),
+    ),
+  );
 }
 
-// ── Payments section ──────────────────────────────────────────────────────────
-
-/// Lists this lease's payments (newest first) with drill-through to each payment
-/// and an inline "Record" action on unpaid rows. Backs lease → payments
-/// drill-through (and, via the property unit tile, unit → payments).
-class _LeasePaymentsSection extends ConsumerWidget {
-  const _LeasePaymentsSection({required this.leaseId});
-
-  final int leaseId;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final async = ref.watch(leasePaymentsProvider(leaseId));
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Payments',
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+Future<T?> _runWithStableRetry<T>(
+  BuildContext context, {
+  required String actionLabel,
+  required Future<T> Function() action,
+}) async {
+  while (context.mounted) {
+    try {
+      return await action();
+    } catch (error) {
+      if (!context.mounted) return null;
+      final retry = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Request not confirmed'),
+          content: Text(
+            '${error is ApiException ? error.message : error}\n\n'
+            'Retry $actionLabel with the same request key so an earlier success is not repeated.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
             ),
-            const SizedBox(height: 8),
-            async.when(
-              loading: () => const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-              error: (e, _) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  e is ApiException ? e.message : "Couldn't load payments.",
-                  style: TextStyle(color: cs.error, fontSize: 13),
-                ),
-              ),
-              data: (payments) {
-                if (payments.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Text(
-                      'No payments recorded for this lease yet.',
-                      style: TextStyle(color: cs.onSurfaceVariant),
-                    ),
-                  );
-                }
-                return Column(
-                  children: [
-                    for (final p in payments)
-                      _LeasePaymentTile(payment: p, leaseId: leaseId),
-                  ],
-                );
-              },
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Retry safely'),
             ),
           ],
         ),
-      ),
-    );
+      );
+      if (retry != true) return null;
+    }
   }
+  return null;
 }
 
-class _LeasePaymentTile extends ConsumerWidget {
-  const _LeasePaymentTile({required this.payment, required this.leaseId});
+String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';
 
-  final Payment payment;
-  final int leaseId;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final isPaid = payment.status.toLowerCase() == 'paid';
-
-    Color statusBg() {
-      final lower = payment.status.toLowerCase();
-      if (lower == 'paid') return cs.primaryContainer;
-      if (lower == 'late' || lower == 'overdue') return cs.errorContainer;
-      return cs.surfaceContainerHighest;
-    }
-
-    Color statusFg() {
-      final lower = payment.status.toLowerCase();
-      if (lower == 'paid') return cs.onPrimaryContainer;
-      if (lower == 'late' || lower == 'overdue') return cs.onErrorContainer;
-      return cs.onSurfaceVariant;
-    }
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      elevation: 0,
-      color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
-      child: InkWell(
-        onTap: () {
-          Navigator.of(context).push<void>(
-            MaterialPageRoute<void>(
-              builder: (_) => PaymentDetailScreen(paymentId: payment.id),
-            ),
-          );
-        },
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          _formatCurrency(payment.amount),
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: statusBg(),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            payment.status,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: statusFg(),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${payment.type.isEmpty ? 'Payment' : payment.type}  ·  '
-                      'Due ${_fmt(payment.dueDate)}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: cs.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (!isPaid)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: FilledButton.tonal(
-                    onPressed: () async {
-                      final updated = await showRecordPaymentSheet(
-                        context,
-                        ref,
-                        payment: payment,
-                      );
-                      if (updated != null) {
-                        ref.invalidate(leasePaymentsProvider(leaseId));
-                      }
-                    },
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      textStyle: const TextStyle(fontSize: 12),
-                    ),
-                    child: const Text('Record'),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+String _endingDispositionLabel(String value) => switch (value) {
+  'OfferRenewal' => 'Renew / continue',
+  'OfferMonthToMonth' => 'Continue month-to-month',
+  'NonRenewalMoveOut' => 'Move out / end',
+  _ => 'Not decided',
+};

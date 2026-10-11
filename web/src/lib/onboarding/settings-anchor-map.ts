@@ -15,8 +15,6 @@
  */
 export const LEGACY_ANCHOR_TAB: Record<string, string> = {
 	'settings-portfolio-basics': 'portfolio',
-	'settings-notification-email': 'notifications',
-	'settings-notification-delivery': 'automations',
 };
 
 /**

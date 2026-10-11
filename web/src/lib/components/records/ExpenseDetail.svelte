@@ -1,23 +1,28 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { Pencil, Save, Trash2, X, ReceiptText, Tags, FileText, ChevronDown, Plus } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, ReceiptText, Tags, FileText, ChevronDown, Plus, Landmark } from '@lucide/svelte';
+	import type { DepreciationConvention, DepreciationMethod } from '$lib/api/endpoints/capital-assets';
 	import { expenses } from '$lib/api/endpoints/expenses';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { expenseDetailSchema, parseForm } from '$lib/schemas';
+	import { capitalizeExpenseSchema, expenseDetailSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { formatDateOnly } from '$lib/utils/date';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import {
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
 	} from '$lib/accounting/expense-categories';
-	import { formatExpenseMoney, receiptGrandTotal } from '$lib/accounting/expense-receipt-display';
+	import { receiptGrandTotal } from '$lib/accounting/expense-receipt-display';
 	import {
 		confirmExpenseDelete,
 		expenseDeleteConfirmMessage,
@@ -28,8 +33,10 @@
 	import { buildExpenseReceiptDataForSave } from '$lib/accounting/expense-receipt-data';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	let {
 		expenseId,
@@ -66,6 +73,15 @@
 		receiptData: ''
 	});
 	let formErrors = $state<Record<string, string>>({});
+	let showCapitalize = $state(false);
+	let capitalizeForm = $state({
+		inServiceDate: '',
+		method: 'StraightLine' as DepreciationMethod,
+		recoveryYears: '27.5',
+		convention: 'MidMonth' as DepreciationConvention,
+		description: ''
+	});
+	let capitalizeErrors = $state<Record<string, string>>({});
 
 	// --- Editable line items (mirrors the scan review page pattern) ---
 	// Numeric cells kept as strings; parsed on save. Key is a stable client-side id
@@ -109,8 +125,30 @@
 	);
 
 	const expenseQuery = createQuery(() => ({ queryKey: ['expense', expenseId], queryFn: () => expenses.get(expenseId), enabled: expenseId > 0 }));
-	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
-	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
+
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
+
+	async function loadVendorOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await vendors.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((vendor) => ({
+				id: vendor.id,
+				label: vendor.name,
+				description: vendor.serviceType || vendor.email || vendor.phone || null
+			}))
+		};
+	}
 
 	const expense = $derived(expenseQuery.data);
 
@@ -192,10 +230,9 @@
 		)
 	);
 
-	const currencyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 	const numberFmt = new Intl.NumberFormat('en-US');
 	const usd = (n: number | null | undefined) =>
-		typeof n === 'number' && !Number.isNaN(n) ? currencyFmt.format(n) : '';
+		typeof n === 'number' && !Number.isNaN(n) ? formatAccountingCurrency(n) : '';
 	const qty = (n: number | null | undefined) =>
 		typeof n === 'number' && !Number.isNaN(n) ? numberFmt.format(n) : '';
 	function formatMoney(val: number): string {
@@ -204,8 +241,22 @@
 
 	const statusOptions = $derived(STATUSES.map((value) => ({ value, label: value })));
 	const categoryOptions = $derived(EXPENSE_CATEGORY_OPTIONS);
-	const propertyOptions = $derived([{ value: '', label: 'No property' }, ...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name }))]);
-	const vendorOptions = $derived([{ value: '', label: 'No vendor' }, ...(vendorsQuery.data ?? []).map((v) => ({ value: String(v.id), label: v.name }))]);
+	let selectedPropertyLabel = $state<string | null>(null);
+	let selectedVendorLabel = $state<string | null>(null);
+	const depreciationMethodOptions = [
+		{ value: 'StraightLine', label: 'Straight-line' },
+		{ value: 'Macrs', label: 'MACRS' }
+	];
+	const depreciationConventionOptions = [
+		{ value: 'MidMonth', label: 'Mid-month' },
+		{ value: 'HalfYear', label: 'Half-year' }
+	];
+	const recoveryOptions = [
+		{ value: '27.5', label: '27.5 years' },
+		{ value: '15', label: '15 years' },
+		{ value: '7', label: '7 years' },
+		{ value: '5', label: '5 years' }
+	];
 
 	function startEditing() {
 		if (!expense) return;
@@ -235,12 +286,16 @@
 			unitPrice: li.unitPrice != null ? String(li.unitPrice) : '',
 			amount: li.amount != null ? String(li.amount) : '',
 		}));
+		selectedPropertyLabel = expense.propertyName ?? null;
+		selectedVendorLabel = expense.vendorName ?? null;
 		formErrors = {};
 		editing = true;
 	}
 
 	function cancelEditing() {
 		editing = false;
+		selectedPropertyLabel = null;
+		selectedVendorLabel = null;
 		formErrors = {};
 	}
 
@@ -249,6 +304,8 @@
 		onSuccess: () => {
 			showSuccess('Expense updated.');
 			editing = false;
+			selectedPropertyLabel = null;
+			selectedVendorLabel = null;
 			queryClient.invalidateQueries({ queryKey: ['expense', expenseId] });
 			queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
@@ -296,6 +353,48 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err))
 	}));
+
+	function openCapitalize() {
+		if (!expense) return;
+		capitalizeForm = {
+			inServiceDate: expense.incurredAt?.slice(0, 10) ?? '',
+			method: 'StraightLine',
+			recoveryYears: '27.5',
+			convention: 'MidMonth',
+			description: expense.description
+		};
+		capitalizeErrors = {};
+		showCapitalize = true;
+	}
+
+	function closeCapitalize() {
+		showCapitalize = false;
+		capitalizeErrors = {};
+	}
+
+	const capitalizeMutation = createMutation(() => ({
+		mutationFn: (data: Parameters<typeof expenses.capitalize>[1]) => expenses.capitalize(expenseId, data),
+		onSuccess: () => {
+			showSuccess('Expense capitalized.');
+			closeCapitalize();
+			queryClient.invalidateQueries({ queryKey: ['expense', expenseId] });
+			queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['capital-assets', expense?.propertyId] });
+			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['reports', portfolioId] });
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function submitCapitalize() {
+		const result = parseForm(capitalizeExpenseSchema, capitalizeForm);
+		if (result.errors) {
+			capitalizeErrors = result.errors;
+			return;
+		}
+		capitalizeErrors = {};
+		capitalizeMutation.mutate(result.data);
+	}
 </script>
 
 <svelte:head>
@@ -338,14 +437,24 @@
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
 			<h1 class="truncate text-2xl font-bold">{expense?.description ?? 'Expense'}</h1>
-			<p class="text-sm text-muted-foreground">{expense ? `${formatExpenseCategory(expense.category)} · $${expense.amount} · ${expense.status}` : ''}</p>
+			<p class="text-sm text-muted-foreground">{expense ? `${formatExpenseCategory(expense.category)} · ${formatAccountingCurrency(expense.amount)} · ${formatStatusLabel(expense.status)}` : ''}</p>
 		</div>
 		{#if expense}
-			<div class="flex gap-2">
+			<div class="flex flex-wrap justify-end gap-2">
+				<Button variant="ghost" href="/docs/recording-expenses" data-testid="expense-detail-help-link">How this works</Button>
 				{#if editing}
 					<Button variant="outline" onclick={cancelEditing} disabled={saveMutation.isPending}><X class="h-4 w-4" />Cancel</Button>
 					<Button onclick={saveExpense} disabled={saveMutation.isPending}><Save class="h-4 w-4" />{saveMutation.isPending ? 'Saving...' : 'Save'}</Button>
 				{:else}
+					{#if expense.capitalizedAssetId}
+						<span class="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm font-medium text-muted-foreground" data-testid="expense-detail-capitalized-badge">
+							<Landmark class="h-4 w-4" />Tracked as an improvement
+						</span>
+					{:else if expense.propertyId}
+						<Button variant="outline" onclick={openCapitalize} disabled={capitalizeMutation.isPending} data-testid="expense-detail-capitalize-button">
+							<Landmark class="h-4 w-4" />Track as property improvement
+						</Button>
+					{/if}
 					<Button variant="outline" onclick={startEditing}><Pencil class="h-4 w-4" />Edit</Button>
 					<Button variant="destructive" onclick={() => (deleteTarget = requestExpenseDelete(expense))} disabled={deleteMutation.isPending}><Trash2 class="h-4 w-4" />Delete</Button>
 				{/if}
@@ -372,28 +481,50 @@
 	{/if}
 
 	{#if expenseQuery.isLoading}
-		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Loading expense...</div>
+		<LoadingState label="Loading expense details" testid="expense-detail-loading" />
+	{:else if expenseQuery.isError}
+		<div class="rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="expense-detail-error">
+			<p class="font-medium text-destructive">Could not load this expense.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. No expense changes have been made.</p>
+			<Button class="mt-4" variant="outline" onclick={() => expenseQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if !expense}
 		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Expense not found.</div>
 	{:else}
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Expense" icon={ReceiptText} accent="primary" testid="expense-card-main" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Description" bind:value={form.description} display={expense.description} {editing} error={formErrors.description} testid="expense-detail-description" class="sm:col-span-2" />
-				<InlineField label="Amount" bind:value={form.amount} display={formatExpenseMoney(expense.amount)} {editing} type="number" error={formErrors.amount} testid="expense-detail-amount" />
-				<InlineField label="Status" bind:value={form.status} display={expense.status} {editing} type="select" options={statusOptions} testid="expense-detail-status" />
+				<InlineField label="Amount" bind:value={form.amount} display={formatAccountingCurrency(expense.amount)} {editing} type="number" error={formErrors.amount} testid="expense-detail-amount" />
+				<InlineField label="Status" bind:value={form.status} display={formatStatusLabel(expense.status)} {editing} type="select" options={statusOptions} testid="expense-detail-status" />
 				{@render dateField({ label: 'Incurred date', value: form.incurredAt, setValue: (v) => (form.incurredAt = v), display: formatDateOnly(expense.incurredAt), error: formErrors.incurredAt, testid: 'expense-detail-incurred' })}
 				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: expense.dueDate ? formatDateOnly(expense.dueDate) : '', testid: 'expense-detail-due-date' })}
 				{@render dateField({ label: 'Paid date', value: form.paidAt, setValue: (v) => (form.paidAt = v), display: expense.paidAt ? formatDateOnly(expense.paidAt) : '', testid: 'expense-detail-paid-date' })}
 			</DetailCard>
 
-			<DetailCard title="Categorization & references" icon={Tags} accent="muted" testid="expense-card-references" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+			<DetailCard title="Category and rental" icon={Tags} accent="muted" testid="expense-card-references" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Category" bind:value={form.category} display={formatExpenseCategory(expense.category)} {editing} type="select" options={categoryOptions} testid="expense-detail-category" />
-				<InlineField label="Property" bind:value={form.propertyId} display={expense.propertyName ?? 'General'} {editing} type="select" options={propertyOptions} testid="expense-detail-property" />
+				{#if editing}
+					<RemoteRecordSelect
+						queryKey={['expense-detail-property', portfolioId]}
+						label="Property"
+						bind:value={form.propertyId}
+						selectedLabel={selectedPropertyLabel}
+						placeholder="General"
+						clearLabel="General"
+						searchPlaceholder="Search properties…"
+						emptyLabel="No matching properties"
+						loadPage={loadPropertyOptions}
+						onValueChange={(_value, option) => (selectedPropertyLabel = option?.label ?? null)}
+						testid="expense-detail-property"
+					/>
+				{:else}
+					<InlineField label="Property" bind:value={form.propertyId} display={expense.propertyName ?? 'General'} editing={false} testid="expense-detail-property" />
+				{/if}
 				<div data-testid="expense-detail-unit-field">
 					<p class="mb-1 text-xs font-medium text-muted-foreground">Unit</p>
 					{#if expense.unitId}
 						<a
-							href="/units/{expense.unitId}?tab=ledger&ledger=expenses"
+							href="/units/{expense.unitId}?tab=money&view=operating-costs"
 							class="block min-h-10 rounded-md py-2 text-sm font-medium text-primary underline-offset-4 hover:underline"
 							data-testid="expense-detail-unit-link"
 						>
@@ -405,9 +536,25 @@
 						</p>
 					{/if}
 				</div>
-				<InlineField label="Vendor" bind:value={form.vendorId} display={expense.vendorName ?? 'No vendor'} {editing} type="select" options={vendorOptions} testid="expense-detail-vendor" />
+				{#if editing}
+					<RemoteRecordSelect
+						queryKey={['expense-detail-vendor', portfolioId]}
+						label="Vendor"
+						bind:value={form.vendorId}
+						selectedLabel={selectedVendorLabel}
+						placeholder="No vendor"
+						clearLabel="No vendor"
+						searchPlaceholder="Search vendors…"
+						emptyLabel="No matching vendors"
+						loadPage={loadVendorOptions}
+						onValueChange={(_value, option) => (selectedVendorLabel = option?.label ?? null)}
+						testid="expense-detail-vendor"
+					/>
+				{:else}
+					<InlineField label="Vendor" bind:value={form.vendorId} display={expense.vendorName ?? 'No vendor'} editing={false} testid="expense-detail-vendor" />
+				{/if}
 				<div data-testid="expense-detail-billable-field">
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-detail-billable-input">Billable to owner</label>
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-detail-billable-input">Charge this to the owner</label>
 					{#if editing}
 						<label class="flex h-10 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm">
 							<input id="expense-detail-billable-input" data-testid="expense-detail-billable-input" type="checkbox" bind:checked={form.billableToOwner} />
@@ -463,15 +610,15 @@
 			{/if}
 
 			<DetailCard title="Receipt details" icon={FileText} accent="muted" testid="expense-card-receipt" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-3">
-				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal != null ? formatExpenseMoney(expense.subtotal) : ''} {editing} type="number" error={formErrors.subtotal} testid="expense-detail-subtotal" />
-				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount != null ? formatExpenseMoney(expense.taxAmount) : ''} {editing} type="number" error={formErrors.taxAmount} testid="expense-detail-tax" />
+				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal != null ? formatAccountingCurrency(expense.subtotal) : ''} {editing} type="number" error={formErrors.subtotal} testid="expense-detail-subtotal" />
+				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount != null ? formatAccountingCurrency(expense.taxAmount) : ''} {editing} type="number" error={formErrors.taxAmount} testid="expense-detail-tax" />
 				<div data-testid="expense-detail-receipt-amount-field">
 					<p class="mb-1 block text-xs font-medium text-muted-foreground">Amount</p>
 					<p
 						class="min-h-10 rounded-md bg-primary/10 px-3 py-2 font-mono text-sm font-semibold tabular-nums text-foreground"
 						data-testid="expense-detail-receipt-amount"
 					>
-						{formatExpenseMoney(receiptGrandTotalValue)}
+						{formatAccountingCurrency(receiptGrandTotalValue)}
 					</p>
 				</div>
 				<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} type="textarea" testid="expense-detail-notes" class="sm:col-span-3" />
@@ -614,7 +761,7 @@
 												Grand total
 											</td>
 											<td class="px-3 py-2 text-right font-mono tabular-nums font-bold text-foreground" data-testid="expense-detail-line-items-grand-total">
-												{formatExpenseMoney(receiptGrandTotalValue)}
+												{formatAccountingCurrency(receiptGrandTotalValue)}
 											</td>
 										</tr>
 									</tfoot>
@@ -665,15 +812,23 @@
 						class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-medium text-foreground"
 						data-testid="expense-detail-receipt-data-toggle"
 					>
-						<span>Receipt details (raw)</span>
+						<span>Technical receipt data</span>
 						<ChevronDown class="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
 					</summary>
 					<div class="border-t border-border px-3 py-3">
-						<InlineField label="Receipt details JSON" bind:value={form.receiptData} display={expense.receiptData} {editing} type="textarea" testid="expense-detail-receipt-data" />
+						<InlineField label="Stored receipt data" bind:value={form.receiptData} display={expense.receiptData} {editing} type="textarea" testid="expense-detail-receipt-data" />
 					</div>
 				</details>
 			</DetailCard>
 		</div>
+
+		{#if expense.capitalizedAssetId}
+			<AccountingImpactCard sourceType="CapitalPurchase" sourceId={expense.capitalizedAssetId} />
+		{:else if expense.status === 'Paid' || expense.paidAt}
+			<AccountingImpactCard sourceType="ExpensePayment" sourceId={expense.id} />
+		{:else if expense.status !== 'Draft' && expense.status !== 'Rejected'}
+			<AccountingImpactCard sourceType="BillIncurred" sourceId={expense.id} />
+		{/if}
 
 		<!-- Per-record audit history -->
 		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="expense-history-section">
@@ -683,6 +838,40 @@
 		</div>
 	{/if}
 </div>
+
+<Dialog.Root open={showCapitalize} onOpenChange={(v) => { if (!v) closeCapitalize(); }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Track as a property improvement</Dialog.Title>
+			<Dialog.Description>Use this when the cost improves the property over several years. Ask your accountant if you are unsure.</Dialog.Description>
+		</Dialog.Header>
+		<div class="grid gap-3" data-testid="expense-capitalize-form">
+			<InlineField label="Description" bind:value={capitalizeForm.description} editing type="text" error={capitalizeErrors.description} testid="expense-capitalize-description" />
+			<div data-testid="expense-capitalize-in-service-date-field">
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-capitalize-in-service-date-input">In-service date</label>
+				<DatePicker
+					id="expense-capitalize-in-service-date-input"
+					testid="expense-capitalize-in-service-date-input"
+					bind:value={capitalizeForm.inServiceDate}
+				/>
+				{#if capitalizeErrors.inServiceDate}
+					<p class="mt-1 text-xs text-destructive" data-testid="expense-capitalize-in-service-date-error">{capitalizeErrors.inServiceDate}</p>
+				{/if}
+			</div>
+			<div class="grid grid-cols-3 gap-3">
+				<InlineField label="Method" bind:value={capitalizeForm.method} editing type="select" options={depreciationMethodOptions} error={capitalizeErrors.method} testid="expense-capitalize-method" />
+				<InlineField label="Life" bind:value={capitalizeForm.recoveryYears} editing type="select" options={recoveryOptions} error={capitalizeErrors.recoveryYears} testid="expense-capitalize-recovery-years" />
+				<InlineField label="Convention" bind:value={capitalizeForm.convention} editing type="select" options={depreciationConventionOptions} error={capitalizeErrors.convention} testid="expense-capitalize-convention" />
+			</div>
+		</div>
+		<div class="mt-4 flex justify-end gap-2">
+			<Button variant="outline" onclick={closeCapitalize}>Cancel</Button>
+			<Button onclick={submitCapitalize} disabled={capitalizeMutation.isPending} data-testid="expense-capitalize-save-button">
+				{capitalizeMutation.isPending ? 'Saving...' : 'Save improvement details'}
+			</Button>
+		</div>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={deleteTarget !== null}

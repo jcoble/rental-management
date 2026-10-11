@@ -3,33 +3,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
+import '../home/mobile_shell_actions.dart';
 import '../tenants/tenants_repository.dart';
 import 'message_models.dart';
 import 'message_detail_screen.dart';
 import 'messages_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-const _months = [
-  '',
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
 
 /// Relative-ish timestamp for the thread list: "9:30 AM" today, "Mon" this
 /// week, otherwise "Jun 1".
@@ -53,13 +44,54 @@ String _fmtRelative(DateTime d) {
     const wd = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     return wd[local.weekday];
   }
-  return '${_months[local.month]} ${local.day}';
+  return '${monthAbbrs[local.month]} ${local.day}';
 }
 
 String _tenantDisplayName(Tenant t) {
   final full = t.fullName;
   if (full != null && full.trim().isNotEmpty) return full;
   return '${t.firstName} ${t.lastName}'.trim();
+}
+
+const messageRecipientTenantQuery = TenantListQuery(take: 200, sort: 'name');
+
+@visibleForTesting
+String messageRecipientLabel(Tenant tenant) {
+  final locationParts = [
+    tenant.currentPropertyName?.trim(),
+    tenant.currentUnitNumber?.trim(),
+  ].where((part) => part != null && part.isNotEmpty).cast<String>();
+  final location = locationParts.join(' / ');
+  final name = _tenantDisplayName(tenant);
+  return location.isEmpty ? name : '$name - $location';
+}
+
+@visibleForTesting
+String messagesEmptyInstruction({
+  required bool hasCriteria,
+  required bool canStartConversation,
+  required bool tenantMode,
+}) {
+  if (hasCriteria) return 'Try changing your search or filters.';
+  if (canStartConversation) {
+    return 'Open the action button and choose New conversation.';
+  }
+  if (tenantMode) return 'Messages from your rental team will appear here.';
+  return 'You can read conversations here. Ask a workspace admin for access to start one.';
+}
+
+@visibleForTesting
+String conversationDisplayTitle(Conversation conversation) =>
+    conversation.displayName;
+
+@visibleForTesting
+String conversationAvatarInitials(Conversation conversation) {
+  final name = conversationDisplayTitle(conversation).trim();
+  if (name.isEmpty) return '?';
+  final parts = name.split(RegExp(r'\s+'));
+  if (parts.length == 1) return parts.first.characters.first.toUpperCase();
+  return (parts.first.characters.first + parts.last.characters.first)
+      .toUpperCase();
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -75,99 +107,273 @@ class MessagesListScreen extends ConsumerStatefulWidget {
 }
 
 class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
+  static const _pageSize = 20;
+
+  final _searchCtrl = TextEditingController();
+  String? _search;
+  String _sort = '-lastMessageAt';
+  bool _unreadOnly = false;
+  int _skip = 0;
+
+  ConversationListQuery get _query => ConversationListQuery(
+    skip: _skip,
+    take: _pageSize,
+    search: _search,
+    sort: _sort,
+    unreadOnly: _unreadOnly,
+  );
+
   @override
-  void initState() {
-    super.initState();
-    Future.microtask(() => ref.read(conversationsProvider.notifier).load());
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
-  Future<void> _refresh() => ref.read(conversationsProvider.notifier).refresh();
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchCtrl.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _submitSearch('');
+  }
+
+  void _setSort(String? sort) {
+    if (sort == null || sort == _sort) return;
+    setState(() {
+      _sort = sort;
+      _skip = 0;
+    });
+  }
+
+  void _setUnreadFilter(String? value) {
+    final next = value == 'unread';
+    if (next == _unreadOnly) return;
+    setState(() {
+      _unreadOnly = next;
+      _skip = 0;
+    });
+  }
+
+  Future<void> _refresh() async {
+    ref.invalidate(conversationsPageProvider);
+    await ref.read(conversationsPageProvider(_query).future);
+  }
 
   void _openThread(BuildContext context, Conversation convo) {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => MessageDetailScreen(
-          conversationId: convo.id,
-          title: convo.tenantName,
-          subtitle: convo.subject,
-        ),
-      ),
-    );
+    Widget detailBuilder(BuildContext _) {
+      return MessageDetailScreen(
+        conversationId: convo.id,
+        title: conversationDisplayTitle(convo),
+        subtitle: convo.subject,
+      );
+    }
+
+    final domainNavigator = MobileDomainNavigation.maybeOf(context);
+    if (domainNavigator != null) {
+      domainNavigator.openDestination(
+        MobileDestinationId.messages,
+        detailBuilder: detailBuilder,
+      );
+      return;
+    }
+
+    Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
   }
 
   Future<void> _startNewConversation(BuildContext context) async {
-    final created = await showModalBottomSheet<Conversation>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => const _ComposeConversationSheet(),
-    );
+    final created =
+        await showMobileQuickActionHiddenModalBottomSheet<Conversation>(
+          context: context,
+          isScrollControlled: true,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (_) =>
+              const MobileQuickActionHider(child: _ComposeConversationSheet()),
+        );
     if (created == null || !context.mounted) return;
     // Refresh the inbox and open the freshly created thread.
-    await ref.read(conversationsProvider.notifier).refresh();
+    ref.invalidate(conversationsPageProvider);
+    await ref.read(conversationsPageProvider(_query).future);
     if (!context.mounted) return;
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => MessageDetailScreen(
-          conversationId: created.id,
-          title: created.tenantName,
-          subtitle: created.subject,
-        ),
-      ),
-    );
+    Widget detailBuilder(BuildContext _) {
+      return MessageDetailScreen(
+        conversationId: created.id,
+        title: conversationDisplayTitle(created),
+        subtitle: created.subject,
+      );
+    }
+
+    final domainNavigator = MobileDomainNavigation.maybeOf(context);
+    if (domainNavigator != null) {
+      domainNavigator.openDestination(
+        MobileDestinationId.messages,
+        detailBuilder: detailBuilder,
+      );
+      return;
+    }
+
+    Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
   }
 
   @override
   Widget build(BuildContext context) {
-    final convosAsync = ref.watch(conversationsProvider);
+    final convosAsync = ref.watch(conversationsPageProvider(_query));
     final auth = ref.watch(authControllerProvider);
-    final tenantMode = auth is AuthStateAuthenticated && auth.user.isTenant;
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
+    final tenantMode =
+        auth is AuthStateAuthenticated && auth.isTenantExperience;
+    final canStartConversation =
+        auth is AuthStateAuthenticated &&
+        (canUseMobileCapabilityAction(
+              experience: auth.activeExperience,
+              capabilities: auth.capabilities,
+              capability: 'rentals.manage',
+              experiences: const {WorkspaceExperience.management},
+            ) ||
+            canUseMobileCapabilityAction(
+              experience: auth.activeExperience,
+              capabilities: auth.capabilities,
+              capability: 'leasing.onboarding.manage',
+              experiences: const {WorkspaceExperience.management},
+            ));
+    final routeIsCurrent = ModalRoute.isCurrentOf(context) ?? true;
 
     return Scaffold(
-      appBar: mobileDomainRootAppBar(context, title: const Text('Messages')),
-      floatingActionButton: tenantMode
+      appBar: mobileDomainRootAppBar(
+        context,
+        title: const Text('Messages'),
+        actions: tenantMode
+            ? const [MobileNotificationBell(), MobileAccountMenu()]
+            : null,
+      ),
+      floatingActionButton: tenantMode || !routeIsCurrent
           ? null
           : MobileQuickActionFab(
               heroTag: 'messages-fab',
-              primaryAction: MobileQuickAction(
-                label: 'New conversation',
-                icon: Icons.edit_outlined,
-                onPressed: () => _startNewConversation(context),
-              ),
+              primaryAction: canStartConversation
+                  ? MobileQuickAction(
+                      label: 'New conversation',
+                      icon: Icons.edit_outlined,
+                      onPressed: () => _startNewConversation(context),
+                    )
+                  : null,
               onChat: () => openMobileAssistant(context),
               onRecord: () => openMobileRecord(context),
               onScan: () => openMobileScan(context),
             ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: convosAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: _refresh,
-          ),
-          data: (list) {
-            if (list.isEmpty) {
-              return const _EmptyBody();
-            }
-            return ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 88),
-              itemCount: list.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 4),
-              itemBuilder: (ctx, i) => _ConversationTile(
-                conversation: list[i],
-                colorScheme: colorScheme,
-                theme: theme,
-                onTap: () => _openThread(ctx, list[i]),
+      body: Column(
+        children: [
+          MobileGridControlsBar(
+            keyPrefix: 'conversations',
+            searchController: _searchCtrl,
+            searchLabel: 'Search messages',
+            onSearch: _submitSearch,
+            onClearSearch: _clearSearch,
+            sort: _sort,
+            defaultSort: '-lastMessageAt',
+            sortOptions: const [
+              MobileGridControlOption(
+                value: '-lastMessageAt',
+                label: 'Newest activity',
               ),
-            );
-          },
-        ),
+              MobileGridControlOption(
+                value: 'lastMessageAt',
+                label: 'Oldest activity',
+              ),
+              MobileGridControlOption(value: 'tenantName', label: 'Tenant A-Z'),
+              MobileGridControlOption(value: 'subject', label: 'Subject A-Z'),
+              MobileGridControlOption(
+                value: '-unreadCount',
+                label: 'Most unread',
+              ),
+            ],
+            onSortChanged: _setSort,
+            filters: [
+              MobileGridChoiceFilter(
+                id: 'conversation-read-state',
+                label: 'Messages',
+                value: _unreadOnly ? 'unread' : null,
+                allLabel: 'All conversations',
+                options: const [
+                  MobileGridControlOption(
+                    value: 'unread',
+                    label: 'Unread only',
+                  ),
+                ],
+                onChanged: _setUnreadFilter,
+              ),
+            ],
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: convosAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _ErrorBody(
+                  message: e is ApiException ? e.message : e.toString(),
+                  onRetry: _refresh,
+                ),
+                data: (page) {
+                  if (page.items.isEmpty) {
+                    return _EmptyBody(
+                      hasCriteria: (_search ?? '').isNotEmpty || _unreadOnly,
+                      canStartConversation: canStartConversation,
+                      tenantMode: tenantMode,
+                    );
+                  }
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+                    itemCount: page.items.length + 1,
+                    separatorBuilder: (_, index) {
+                      if (index == page.items.length - 1) {
+                        return const SizedBox(height: 14);
+                      }
+                      return const MobileM3ListDivider();
+                    },
+                    itemBuilder: (ctx, index) {
+                      if (index == page.items.length) {
+                        return MobileGridPagingBar(
+                          totalCount: page.totalCount,
+                          skip: page.skip,
+                          itemCount: page.items.length,
+                          previousTooltip: 'Previous conversations page',
+                          nextTooltip: 'Next conversations page',
+                          onPrevious: page.hasPrevious
+                              ? () => setState(() {
+                                  _skip = (_skip - _pageSize).clamp(0, _skip);
+                                })
+                              : null,
+                          onNext: page.hasNext
+                              ? () => setState(() => _skip += _pageSize)
+                              : null,
+                        );
+                      }
+                      final conversation = page.items[index];
+                      return _ConversationTile(
+                        conversation: conversation,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          index,
+                          page.items.length,
+                        ),
+                        onTap: () => _openThread(context, conversation),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -178,130 +384,87 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
 class _ConversationTile extends StatelessWidget {
   const _ConversationTile({
     required this.conversation,
-    required this.colorScheme,
-    required this.theme,
+    required this.position,
     required this.onTap,
   });
 
   final Conversation conversation;
-  final ColorScheme colorScheme;
-  final ThemeData theme;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
-
-  String _avatarInitials() {
-    final name = conversation.tenantName.trim();
-    if (name.isEmpty) return '?';
-    final parts = name.split(RegExp(r'\s+'));
-    if (parts.length == 1) return parts.first.characters.first.toUpperCase();
-    return (parts.first.characters.first + parts.last.characters.first)
-        .toUpperCase();
-  }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final unread = conversation.hasUnread;
     final preview = conversation.lastMessagePreview ?? '';
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Avatar
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: colorScheme.primaryContainer,
-                child: Text(
-                  _avatarInitials(),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: colorScheme.onPrimaryContainer,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              // Name + subject + preview
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            conversation.tenantName,
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: unread
-                                  ? FontWeight.w700
-                                  : FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _fmtRelative(conversation.lastMessageAt),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: unread
-                                ? colorScheme.primary
-                                : colorScheme.onSurfaceVariant,
-                            fontWeight: unread
-                                ? FontWeight.w700
-                                : FontWeight.w400,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      conversation.subject,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.onSurface,
-                        fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Expanded(
-                          child: Text(
-                            preview.isEmpty ? 'No messages yet' : preview,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: unread
-                                  ? colorScheme.onSurface
-                                  : colorScheme.onSurfaceVariant,
-                              fontWeight: unread
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (unread) ...[
-                          const SizedBox(width: 8),
-                          _UnreadBadge(
-                            count: conversation.unreadCount,
-                            colorScheme: colorScheme,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
+    return MobileM3ListItem(
+      position: position,
+      onTap: onTap,
+      promoted: unread,
+      leading: CircleAvatar(
+        radius: 24,
+        backgroundColor: colorScheme.primaryContainer,
+        child: Text(
+          conversationAvatarInitials(conversation),
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: colorScheme.onPrimaryContainer,
+            fontWeight: FontWeight.w600,
           ),
         ),
+      ),
+      title: Text(
+        conversationDisplayTitle(conversation),
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: unread ? FontWeight.w700 : FontWeight.w600,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      supporting: [
+        Text(
+          conversation.subject,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: colorScheme.onSurface,
+            fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        Text(
+          preview.isEmpty ? 'No messages yet' : preview,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: unread
+                ? colorScheme.onSurface
+                : colorScheme.onSurfaceVariant,
+            fontWeight: unread ? FontWeight.w600 : FontWeight.w400,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+      trailing: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            _fmtRelative(conversation.lastMessageAt),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: unread
+                  ? colorScheme.primary
+                  : colorScheme.onSurfaceVariant,
+              fontWeight: unread ? FontWeight.w700 : FontWeight.w400,
+            ),
+          ),
+          if (unread) ...[
+            const SizedBox(height: 8),
+            _UnreadBadge(
+              count: conversation.unreadCount,
+              colorScheme: colorScheme,
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -340,7 +503,15 @@ class _UnreadBadge extends StatelessWidget {
 // ── Empty / Error ─────────────────────────────────────────────────────────────
 
 class _EmptyBody extends StatelessWidget {
-  const _EmptyBody();
+  const _EmptyBody({
+    required this.hasCriteria,
+    required this.canStartConversation,
+    required this.tenantMode,
+  });
+
+  final bool hasCriteria;
+  final bool canStartConversation;
+  final bool tenantMode;
 
   @override
   Widget build(BuildContext context) {
@@ -361,14 +532,21 @@ class _EmptyBody extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'No conversations yet',
+                  hasCriteria
+                      ? 'No matching conversations'
+                      : 'No conversations yet',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Tap the pencil to message a tenant.',
+                  messagesEmptyInstruction(
+                    hasCriteria: hasCriteria,
+                    canStartConversation: canStartConversation,
+                    tenantMode: tenantMode,
+                  ),
+                  textAlign: TextAlign.center,
                   style: TextStyle(color: colorScheme.onSurfaceVariant),
                 ),
               ],
@@ -413,9 +591,14 @@ class _ErrorBody extends StatelessWidget {
 
 // ── Compose New Conversation Sheet ────────────────────────────────────────────
 
-/// Bottom sheet to start a new conversation: pick a tenant, enter a subject and
-/// first message, choose channels (Portal on by default). On success pops with
-/// the created [Conversation].
+/// The new-conversation sheet, for widget tests that pump it directly.
+@visibleForTesting
+Widget newConversationSheetForTest() => const _ComposeConversationSheet();
+
+/// Bottom sheet to start a new conversation: pick a tenant and write the first
+/// message. It goes out in the tenant app unless the landlord taps "Change".
+/// The subject the server needs comes from the start of the message. On success
+/// pops with the created [Conversation].
 class _ComposeConversationSheet extends ConsumerStatefulWidget {
   const _ComposeConversationSheet();
 
@@ -427,46 +610,29 @@ class _ComposeConversationSheet extends ConsumerStatefulWidget {
 class _ComposeConversationSheetState
     extends ConsumerState<_ComposeConversationSheet> {
   final _formKey = GlobalKey<FormState>();
-  final _subjectCtrl = TextEditingController();
   final _bodyCtrl = TextEditingController();
 
   int? _selectedTenantId;
 
-  // Channel toggles. Portal is the always-on base channel; Email/SMS default
-  // off (portfolio messaging defaults aren't loaded on mobile yet).
+  // Channel toggles, hidden behind "Change". Portal is the default; Email/SMS
+  // default off (portfolio messaging defaults aren't loaded on mobile yet).
   bool _portal = true;
   bool _email = false;
   bool _sms = false;
+  bool _channelsRevealed = false;
 
   bool _saving = false;
   String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    Future.microtask(() => ref.read(tenantsProvider.notifier).load());
-  }
+  String? _operationKey;
 
   @override
   void dispose() {
-    _subjectCtrl.dispose();
     _bodyCtrl.dispose();
     super.dispose();
   }
 
   List<String> _selectedChannels() {
     return [if (_portal) 'Portal', if (_email) 'Email', if (_sms) 'Sms'];
-  }
-
-  bool _validateChannelsStep() {
-    if (_selectedChannels().isEmpty) {
-      setState(() => _error = 'Choose at least one channel.');
-      return false;
-    }
-    if (_error == 'Choose at least one channel.') {
-      setState(() => _error = null);
-    }
-    return true;
   }
 
   Future<void> _submit() async {
@@ -481,20 +647,28 @@ class _ComposeConversationSheetState
       return;
     }
 
+    final body = _bodyCtrl.text.trim();
+    // The server needs a subject; the landlord shouldn't have to write one, so
+    // it comes from the start of the message.
+    final subject = body.length > 60 ? body.substring(0, 60) : body;
+
     setState(() {
       _saving = true;
       _error = null;
     });
+    _operationKey ??= MessagesRepository.createOperationKey();
 
     try {
       final convo = await ref
           .read(messagesRepositoryProvider)
           .startConversation(
             tenantId: _selectedTenantId!,
-            subject: _subjectCtrl.text.trim(),
-            body: _bodyCtrl.text.trim(),
+            subject: subject,
+            body: body,
             channels: channels,
+            operationKey: _operationKey,
           );
+      _operationKey = null;
       if (mounted) Navigator.of(context).pop<Conversation>(convo);
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
@@ -505,7 +679,9 @@ class _ComposeConversationSheetState
 
   @override
   Widget build(BuildContext context) {
-    final tenantsAsync = ref.watch(tenantsProvider);
+    final tenantsAsync = ref.watch(
+      tenantsPageProvider(messageRecipientTenantQuery),
+    );
     final colorScheme = Theme.of(context).colorScheme;
     const gap = SizedBox(height: 12);
 
@@ -534,16 +710,16 @@ class _ComposeConversationSheetState
                     'Could not load tenants: ${e is ApiException ? e.message : e}',
                     style: TextStyle(color: colorScheme.error, fontSize: 13),
                   ),
-                  data: (tenants) => DropdownButtonFormField<int>(
+                  data: (page) => DropdownButtonFormField<int>(
                     initialValue: _selectedTenantId,
                     isExpanded: true,
                     decoration: const InputDecoration(labelText: 'To (tenant)'),
-                    items: tenants
+                    items: page.items
                         .map(
                           (t) => DropdownMenuItem(
                             value: t.id,
                             child: Text(
-                              _tenantDisplayName(t),
+                              messageRecipientLabel(t),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -553,15 +729,6 @@ class _ComposeConversationSheetState
                     validator: (v) =>
                         v == null ? 'Please choose a tenant' : null,
                   ),
-                ),
-                gap,
-                TextFormField(
-                  controller: _subjectCtrl,
-                  textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(labelText: 'Subject'),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Subject is required'
-                      : null,
                 ),
                 gap,
                 TextFormField(
@@ -577,30 +744,23 @@ class _ComposeConversationSheetState
                       ? 'Message is required'
                       : null,
                 ),
-              ],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Channels',
-            validate: _validateChannelsStep,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Send via',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                _ChannelChips(
-                  portal: _portal,
-                  email: _email,
-                  sms: _sms,
-                  onPortal: (v) => setState(() => _portal = v),
-                  onEmail: (v) => setState(() => _email = v),
-                  onSms: (v) => setState(() => _sms = v),
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: _channelsRevealed
+                      ? _ChannelChips(
+                          portal: _portal,
+                          email: _email,
+                          sms: _sms,
+                          onPortal: (v) => setState(() => _portal = v),
+                          onEmail: (v) => setState(() => _email = v),
+                          onSms: (v) => setState(() => _sms = v),
+                        )
+                      : SendingChannelsLine(
+                          channels: _selectedChannels(),
+                          onChange: () =>
+                              setState(() => _channelsRevealed = true),
+                        ),
                 ),
               ],
             ),

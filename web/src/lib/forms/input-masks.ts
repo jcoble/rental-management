@@ -16,6 +16,12 @@ type MaskOptions = {
 	maxDecimals?: number;
 };
 
+/** Apply the same maxlength boundary that the rendered Input exposes to the browser. */
+export function limitInputLength(value: string, maxLength?: number): string {
+	if (typeof maxLength !== 'number' || !Number.isFinite(maxLength)) return value;
+	return value.slice(0, Math.max(0, Math.floor(maxLength)));
+}
+
 export function maskInputValue(value: string, mask: InputMask, options: MaskOptions = {}): string {
 	const decimalOptions = typeof options.maxDecimals === 'number' ? { maxDecimals: options.maxDecimals } : {};
 
@@ -54,7 +60,8 @@ export function maskDecimalInput(value: string, options: DecimalOptions = {}): s
 }
 
 export function maskCurrencyInput(value: string): string {
-	return maskDecimalInput(value, { maxDecimals: 2 });
+	const sign = value.startsWith('-') ? '-' : '';
+	return `${sign}${maskDecimalInput(value, { maxDecimals: 2 })}`;
 }
 
 export function maskPercentageInput(value: string, options: DecimalOptions = {}): string {

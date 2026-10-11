@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
 
 /** How often a recurring maintenance task spawns a fresh work order. */
@@ -94,22 +95,38 @@ export const recurringMaintenance = {
 		);
 	},
 	listPage: (
-		params?: ListParams & { propertyId?: number; activeOnly?: boolean }
+		params?: ListParams & { propertyId?: number; unitId?: number; activeOnly?: boolean }
 	) => {
-		const { propertyId, activeOnly, ...list } = params ?? {};
+		const { propertyId, unitId, activeOnly, ...list } = params ?? {};
 		return api.get<RecurringMaintenanceTaskListResponse>(
 			`/recurring-maintenance/page${buildListQuery(list, {
 				propertyId,
+				unitId,
 				activeOnly: activeOnly == null ? undefined : String(activeOnly),
 			})}`
 		);
 	},
 	get: (id: number) => api.get<RecurringMaintenanceTask>(`/recurring-maintenance/${id}`),
 	create: (data: CreateRecurringMaintenanceTask) =>
-		api.post<RecurringMaintenanceTask>('/recurring-maintenance', data),
+		idempotentMutation(`recurring-maintenance:create:${JSON.stringify(data)}`, (key) =>
+			api.post<RecurringMaintenanceTask>('/recurring-maintenance', data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	update: (id: number, data: UpdateRecurringMaintenanceTask) =>
-		api.patch<RecurringMaintenanceTask>(`/recurring-maintenance/${id}`, data),
+		idempotentMutation(`recurring-maintenance:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<RecurringMaintenanceTask>(`/recurring-maintenance/${id}`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	setActive: (id: number, isActive: boolean) =>
-		api.patch<RecurringMaintenanceTask>(`/recurring-maintenance/${id}/active`, { isActive }),
-	remove: (id: number) => api.delete(`/recurring-maintenance/${id}`),
+		idempotentMutation(`recurring-maintenance:active:${id}:${isActive}`, (key) =>
+			api.patch<RecurringMaintenanceTask>(`/recurring-maintenance/${id}/active`, { isActive }, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	remove: (id: number) =>
+		idempotentMutation(`recurring-maintenance:delete:${id}`, (key) =>
+			api.delete(`/recurring-maintenance/${id}`, { headers: { 'Idempotency-Key': key } })
+		),
 };

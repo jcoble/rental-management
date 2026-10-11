@@ -1,19 +1,15 @@
+import { formatAccountingCurrency } from '../accounting/accounting-display.ts';
+
 const STATUS_LABELS = new Map<string, string>([
 	['InProgress', 'In progress'],
 	['NeedsFollowUp', 'Needs follow-up'],
+	['NoGoverningAgreement', 'No lease in effect'],
 	['NoShow', 'No show'],
 	['NoticeGiven', 'Notice given'],
 	['OnHold', 'On hold'],
 	['PendingSignature', 'Pending signature'],
 	['WaitingParts', 'Waiting on parts'],
 ]);
-
-const currencyFormatter = new Intl.NumberFormat('en-US', {
-	style: 'currency',
-	currency: 'USD',
-	minimumFractionDigits: 2,
-	maximumFractionDigits: 2,
-});
 
 function fallbackLabel(value: string): string {
 	const words = value
@@ -48,7 +44,7 @@ export function formatAuditChangeValue(field: string | undefined | null, value: 
 	) {
 		const amount = Number(value.replace(/,/g, ''));
 		if (Number.isFinite(amount)) {
-			return currencyFormatter.format(amount);
+			return formatAccountingCurrency(amount);
 		}
 	}
 	return value;

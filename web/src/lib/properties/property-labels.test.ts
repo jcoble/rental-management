@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it, test } from 'node:test';
 
-import { formatPropertyStatus, formatPropertyType, propertyTypeOptions } from './property-labels.ts';
+import { formatPropertyStatus, formatPropertyType, formatRentalStructure, propertyTypeOptions } from './property-labels.ts';
 
 describe('property labels', () => {
 	it('formats property type enum values as landlord-facing labels', () => {
@@ -24,4 +24,9 @@ describe('property labels', () => {
 			label: 'Multi-family',
 		});
 	});
+});
+
+test('formats persisted rental structure for people, not schema names', () => {
+	assert.equal(formatRentalStructure('SingleRental'), 'One rental');
+	assert.equal(formatRentalStructure('MultiRental'), 'Multiple rentals');
 });

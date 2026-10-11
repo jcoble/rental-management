@@ -1,9 +1,12 @@
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Services.Sms;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Listings;
+using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Api.Extensions;
 
@@ -30,65 +33,72 @@ public static class ServiceCollectionExtensions
 
         // --- controllers-leasing-money sub-unit ---
         services.AddScoped<ITenantService, TenantService>();
-        services.AddScoped<ILeaseService, LeaseService>();
+        services.AddScoped<ILeaseManagementQueryService, LeaseManagementQueryService>();
+        services.AddScoped<ITenantAccountQueryService, TenantAccountQueryService>();
         services.AddSingleton<IDocumentTemplateFieldCatalog, DocumentTemplateFieldCatalog>();
         services.AddScoped<IDocumentTemplateService, DocumentTemplateService>();
         services.AddScoped<ILeaseQaService, LeaseQaService>();
-        // Lease e-sign workflow (send for signature, status, signed-document, webhook completion).
-        services.AddScoped<ILeaseEsignService, LeaseEsignService>();
-        services.AddScoped<RentalCommand.Api.Services.Security.IEsignWebhookSignatureValidator,
-            RentalCommand.Api.Services.Security.EsignWebhookSignatureValidator>();
         // Residential lease agreement PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<ILeaseAgreementPdfGenerator, LeaseAgreementPdfGenerator>();
+        services.AddSingleton<ILeaseAddendumPdfGenerator, LeaseAddendumPdfGenerator>();
         services.AddScoped<ILeaseAgreementRenderer, LeaseAgreementRenderer>();
+        services.AddScoped<RentalCommand.Core.Leasing.ILegalDocumentIssuanceDraftReader,
+            RentalCommand.Data.Leasing.LegalDocumentIssuanceDraftReader>();
+        services.AddScoped<ILegalDocumentIssuancePreparationService,
+            LegalDocumentIssuancePreparationService>();
         // Native e-sign: executed-PDF/certificate renderer (stateless → singleton) + the public,
         // token-scoped signing flow used by SignController.
         services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdfGenerator,
             RentalCommand.Api.Services.Esign.ExecutedLeasePdfGenerator>();
+        services.AddScoped<RentalCommand.Data.Esign.INativeEsignExecutionClaimStore,
+            RentalCommand.Data.Esign.NativeEsignExecutionClaimStore>();
+        services.AddScoped<RentalCommand.Api.Services.Esign.INativeEsignExecutionService,
+            RentalCommand.Api.Services.Esign.NativeEsignExecutionService>();
         services.AddScoped<RentalCommand.Api.Services.Esign.INativeSigningService,
             RentalCommand.Api.Services.Esign.NativeSigningService>();
-        services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IExpenseService, ExpenseService>();
+        services.AddScoped<ICapitalAssetService, CapitalAssetService>();
+        services.AddScoped<IPropertyDispositionService, PropertyDispositionService>();
         services.AddScoped<ILoanService, LoanService>();
         services.AddScoped<IRecurringExpenseService, RecurringExpenseService>();
         services.AddScoped<IAccountingService, AccountingService>();
         services.AddScoped<IScheduleEService, ScheduleEService>();
         // Year-end accountant packet PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<IYearEndPacketPdfGenerator, YearEndPacketPdfGenerator>();
+        services.AddScoped<IOwnerDistributionService, OwnerDistributionService>();
+        services.AddScoped<IOwnerContributionService, OwnerContributionService>();
         services.AddScoped<IOwnerStatementService, OwnerStatementService>();
+        services.AddScoped<IOwnerPortalService, OwnerPortalService>();
+        services.AddScoped<ILeasingWorkspaceService, LeasingWorkspaceService>();
         services.AddScoped<IOwnerStatementEmailService, OwnerStatementEmailService>();
         // Reports Hub: read-only report queries over existing data (rent roll, ledger, aging, cash flow,
         // occupancy, deposits, 1099, owner distributions, work orders) + the catalog. No schema changes.
         services.AddScoped<IReportsService, ReportsService>();
-        services.AddScoped<ISecurityDepositService, SecurityDepositService>();
+        services.AddScoped<ITenantAccountMoveOutStatementService,
+            TenantAccountMoveOutStatementService>();
         // Security-deposit move-out statement PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<IMoveOutStatementPdfGenerator, MoveOutStatementPdfGenerator>();
         services.AddScoped<IBankingService, BankingService>();
         services.AddHttpClient<IPlaidBankingProvider, PlaidBankingProvider>();
 
         // --- accounting-integration backbone (provider-agnostic; QuickBooks is provider #1) ---
-        // The resolver dispatches the AccountingProvider enum to the registered IAccountingProvider
-        // implementations (none in Phase 1 — provider impls land in Phase 2). Scoped (mirrors
-        // EdiPlatform's ErpProviderResolver registration) so it can consume the providers Phase 2
-        // registers via AddHttpClient without a captive-dependency problem. The app-settings resolver
-        // maps the enum to the right *Options POCO so the backbone never reads QuickBooksOptions
-        // directly (AC-1).
-        services.AddScoped<AccountingProviderResolver>();
+        // The app-settings resolver maps the enum to the provider's *Options POCO so the backbone
+        // never reads QuickBooksOptions directly (AC-1).
         services.AddScoped<AccountingAppSettingsResolver>();
         services.AddScoped<AccountingConnectionService>();
         // Phase 2 — pull-into-domain import engine + the QuickBooks provider (provider #1).
         // AddAccountingProviders is shared with the Engine so the pull worker resolves the same
         // provider/resolver/import-engine the API uses for import-on-connect.
         services.AddScoped<AccountingImportService>();
+        services.AddScoped<RentalCommand.Data.Accounting.IAccountingConnectionClaimStore,
+            RentalCommand.Data.Accounting.AccountingConnectionClaimStore>();
         // Phase 3 — the ONE provider-agnostic token refresh+persist service, shared by the import path's
         // refresh-on-401 and the Engine's AccountingTokenRefreshWorker.
         services.AddScoped<AccountingTokenService>();
         services.AddAccountingProviders();
-        // Per-lease carried-over balance from before the landlord migrated onto Rental Command.
-        services.AddScoped<IOpeningBalanceService, OpeningBalanceService>();
-
         // --- controllers-ops-misc sub-unit ---
         services.AddScoped<IWorkOrderService, WorkOrderService>();
+        services.AddScoped<ITechnicianExperienceService, TechnicianExperienceService>();
         services.AddScoped<IRecurringMaintenanceTaskService, RecurringMaintenanceTaskService>();
         services.AddScoped<IAppointmentService, AppointmentService>();
         services.AddScoped<IInspectionService, InspectionService>();
@@ -97,13 +107,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPortalService, PortalService>();
         services.AddScoped<IConversationService, ConversationService>();
         services.AddScoped<INotificationService, NotificationService>();
-        services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
+        services.AddScoped<IMessagingProviderSettingsResolver, MessagingProviderSettingsResolver>();
+        services.AddScoped<INotificationFoundationService, NotificationFoundationService>();
         // Pluggable SMS providers + resolver (BYO per-portfolio, platform-env fallback). Shared with
         // the Engine outbox path; the API uses it for the synchronous "send test SMS" verify endpoint.
         services.AddSmsProviders();
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
-        services.AddScoped<INoticeTemplateService, NoticeTemplateService>();
-        services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
+        services.AddScoped<IEvictionCaseService, EvictionCaseService>();
         services.AddScoped<ISmsInboundVendorDoneService, SmsInboundVendorDoneService>();
         services.AddScoped<ISmsInboundRouter, SmsInboundRouter>();
         services.AddScoped<IApplicationService, ApplicationService>();
@@ -119,28 +129,29 @@ public static class ServiceCollectionExtensions
 
         // Unit Command Center aggregate (per-unit dashboard + timeline union).
         services.AddScoped<IUnitDashboardService, UnitDashboardService>();
-        services.AddScoped<IUnitListingService, UnitListingService>();
+        services.AddSingleton<IListingChannelAdapter, DisabledZillowListingChannelAdapter>();
+        services.AddScoped<IListingWorkspaceService, ListingWorkspaceService>();
 
         // Portfolio analytics overview (occupancy, rent collection, trend, work orders, lease expiry).
         services.AddScoped<IAnalyticsService, AnalyticsService>();
 
         // --- scan upload pipeline ---
-        services.AddScoped<IScanFileService, ScanFileService>();
+        services.AddScoped<IScanUploadService, ScanUploadService>();
         services.AddScoped<IScanService, ScanService>();
+        services.AddScoped<IWorkspaceLlmCredentialService, WorkspaceLlmCredentialService>();
+        services.AddScoped<IWorkspaceLlmCredentialResolver>(sp =>
+            sp.GetRequiredService<IWorkspaceLlmCredentialService>());
+        services.AddScoped<ILlmUsageEvidenceRecorder>(sp =>
+            sp.GetRequiredService<IWorkspaceLlmCredentialService>());
         services.AddScoped<IAuditTrailService, AuditTrailService>();
         services.AddScoped<IVoiceIntakeService, VoiceIntakeService>();
 
-        // --- unified audit trail (auto-capture + viewer) ---
-        // HTTP-backed actor attribution, per-request de-dupe scope, the humanizer, the query service
-        // behind /api/v1/audit, and the SaveChanges interceptor that auto-records IAuditable CRUD.
+        // --- unified audit trail (canonical atomic viewer) ---
         services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
             RentalCommand.Api.Services.Auditing.HttpCurrentActor>();
-        services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
-            RentalCommand.Data.Auditing.AuditScope>();
         services.AddSingleton<RentalCommand.Api.Services.Auditing.AuditDescriber>();
         services.AddSingleton<RentalCommand.Api.Services.Auditing.AuditDiffBuilder>();
         services.AddScoped<IAuditQueryService, AuditQueryService>();
-        services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
 
         // --- AI (phase 3) ---
         services.AddScoped<IDailyBriefingService, DailyBriefingService>();
@@ -153,6 +164,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IKnowledgeBaseService, KnowledgeBaseService>();
 
         // --- document hub ---
+        services.AddPendingFileUploadStore();
         services.AddScoped<IDocumentService, DocumentService>();
 
         // --- CSV / bulk import (migration on-ramp) ---
@@ -167,12 +179,6 @@ public static class ServiceCollectionExtensions
         // SandboxService owns the one-way go-live wipe.
         services.AddScoped<RentalCommand.Core.Interfaces.ISandboxGuard, RentalCommand.Data.SandboxGuard>();
         services.AddScoped<ISandboxService, SandboxService>();
-
-        // --- self-owner provisioning (the landlord IS the first owner) ---
-        // Used by registration, Google sign-in, and go-live to auto-create the primary owner; the
-        // backfill service is a one-off catch-up for portfolios created before the feature.
-        services.AddScoped<ISelfOwnerProvisioner, SelfOwnerProvisioner>();
-        services.AddScoped<SelfOwnerBackfillService>();
 
         return services;
     }

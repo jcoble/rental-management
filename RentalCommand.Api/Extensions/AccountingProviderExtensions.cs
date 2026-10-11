@@ -13,7 +13,7 @@ namespace RentalCommand.Api.Extensions;
 /// Provider-agnostic by construction: adding a 2nd accounting provider is ONE
 /// <c>AddHttpClient&lt;IAccountingProvider, TProvider&gt;</c> line here + its options binding +
 /// an <see cref="Core.Enums.AccountingProvider"/> value — nothing else in the backbone changes
-/// (AC-1). The resolver collects all registered providers via <c>IEnumerable&lt;IAccountingProvider&gt;</c>.
+/// (AC-1). Services inject the registered <c>IAccountingProvider</c> directly.
 /// </para>
 /// </summary>
 public static class AccountingProviderExtensions

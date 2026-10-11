@@ -7,5 +7,7 @@ public enum PropertyType
     Condo,
     Townhome,
     Commercial,
-    MixedUse
+    MixedUse,
+    Storage,
+    Parking
 }

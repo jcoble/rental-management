@@ -1,29 +1,32 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_domain_navigation.dart';
 import 'message_models.dart';
 import 'messages_repository.dart';
+import '../../core/presentation/formatting.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-const _months = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-];
 
 /// Short timestamp under a bubble: "9:30 AM" or "Jun 1, 9:30 AM" if not today.
 String _fmtBubbleTime(DateTime d) {
   final local = d.toLocal();
   final now = DateTime.now();
-  final h = local.hour > 12 ? local.hour - 12 : (local.hour == 0 ? 12 : local.hour);
+  final h = local.hour > 12
+      ? local.hour - 12
+      : (local.hour == 0 ? 12 : local.hour);
   final min = local.minute.toString().padLeft(2, '0');
   final ampm = local.hour >= 12 ? 'PM' : 'AM';
   final time = '$h:$min $ampm';
   final sameDay =
-      local.year == now.year && local.month == now.month && local.day == now.day;
+      local.year == now.year &&
+      local.month == now.month &&
+      local.day == now.day;
   if (sameDay) return time;
-  return '${_months[local.month]} ${local.day}, $time';
+  return '${shortDateFmt(local)}, $time';
 }
 
 /// Landlord-facing label for a channel string ('Sms' → 'Text').
@@ -33,6 +36,63 @@ String _channelLabel(String channel) {
       return 'Text';
     default:
       return channel;
+  }
+}
+
+/// The quiet line above a compose box: "Sending in the tenant app and by text".
+String sendingChannelsLine(List<String> channels) {
+  final parts = [
+    for (final channel in channels)
+      switch (channel) {
+        'Portal' => 'in the tenant app',
+        'Email' => 'by email',
+        'Sms' => 'by text',
+        _ => channel,
+      },
+  ];
+  if (parts.isEmpty) return 'Choose how to send this';
+  if (parts.length == 1) return 'Sending ${parts.first}';
+  final lead = parts.sublist(0, parts.length - 1).join(', ');
+  return 'Sending $lead and ${parts.last}';
+}
+
+/// The quiet "Sending …" line plus a "Change" button that reveals the chips.
+class SendingChannelsLine extends StatelessWidget {
+  const SendingChannelsLine({
+    super.key,
+    required this.channels,
+    required this.onChange,
+  });
+
+  final List<String> channels;
+  final VoidCallback onChange;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(
+          child: Text(
+            sendingChannelsLine(channels),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        TextButton(
+          onPressed: onChange,
+          style: TextButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            minimumSize: const Size(0, 32),
+          ),
+          child: const Text('Change'),
+        ),
+      ],
+    );
   }
 }
 
@@ -64,18 +124,62 @@ class MessageDetailScreen extends ConsumerStatefulWidget {
 class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   final _scrollCtrl = ScrollController();
   final _composeCtrl = TextEditingController();
+  final _quickActionHiddenOwner = Object();
+  MobileShellNavigator? _shellNavigator;
 
-  // Inline channel toggles for the NEXT send only. Portal on by default;
-  // Email/SMS off (portfolio messaging defaults aren't loaded on mobile yet).
+  // Inline channel toggles for the NEXT send only. They start as the way the
+  // last reply in this thread went out, and are hidden behind "Change" until
+  // the landlord wants something different.
   bool _portal = true;
   bool _email = false;
   bool _sms = false;
+  bool _channelsRevealed = false;
+  bool _channelsSeeded = false;
 
   bool _sending = false;
+  String? _sendOperationKey;
+  String? _sendOperationPayload;
+
+  @override
+  void initState() {
+    super.initState();
+    _composeCtrl.addListener(_invalidateSendOperation);
+    Future.microtask(() {
+      if (mounted) {
+        ref
+            .read(conversationProvider(widget.conversationId).notifier)
+            .refresh();
+      }
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextShellNavigator = mobileShellNavigatorOf(context);
+    if (identical(nextShellNavigator, _shellNavigator)) return;
+    _shellNavigator?.setTabQuickActionsHidden?.call(
+      MobileShellTabId.inbox,
+      _quickActionHiddenOwner,
+      false,
+    );
+    _shellNavigator = nextShellNavigator;
+    _shellNavigator?.setTabQuickActionsHidden?.call(
+      MobileShellTabId.inbox,
+      _quickActionHiddenOwner,
+      true,
+    );
+  }
 
   @override
   void dispose() {
+    _shellNavigator?.setTabQuickActionsHidden?.call(
+      MobileShellTabId.inbox,
+      _quickActionHiddenOwner,
+      false,
+    );
     _scrollCtrl.dispose();
+    _composeCtrl.removeListener(_invalidateSendOperation);
     _composeCtrl.dispose();
     super.dispose();
   }
@@ -98,10 +202,42 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   }
 
   List<String> _selectedChannels() => [
-        if (_portal) 'Portal',
-        if (_email) 'Email',
-        if (_sms) 'Sms',
-      ];
+    if (_portal) 'Portal',
+    if (_email) 'Email',
+    if (_sms) 'Sms',
+  ];
+
+  void _invalidateSendOperation() {
+    _sendOperationKey = null;
+    _sendOperationPayload = null;
+  }
+
+  /// Start the reply on the same channels the last reply in this thread used.
+  void _seedChannelsFromThread(Conversation conversation) {
+    if (_channelsSeeded || conversation.messages.isEmpty) return;
+    _channelsSeeded = true;
+    List<String>? lastSent;
+    for (final message in conversation.messages) {
+      if (message.isFromLandlord && message.channels.isNotEmpty) {
+        lastSent = message.channels;
+      }
+    }
+    if (lastSent == null) return;
+    final channels = lastSent;
+    setState(() {
+      _portal = channels.contains('Portal');
+      _email = channels.contains('Email');
+      _sms = channels.contains('Sms');
+      _invalidateSendOperation();
+    });
+  }
+
+  void _setChannel(void Function() update) {
+    setState(() {
+      update();
+      _invalidateSendOperation();
+    });
+  }
 
   Future<void> _send() async {
     final text = _composeCtrl.text.trim();
@@ -112,12 +248,21 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       return;
     }
 
+    // A retry key represents exactly one immutable send payload. Unchanged retries reuse it;
+    // any text/channel edit invalidates it (listeners above), and this fingerprint is a final
+    // guard against a payload change that did not originate from the visible controls.
+    final payload = jsonEncode([text, channels]);
+    if (_sendOperationKey == null || _sendOperationPayload != payload) {
+      _sendOperationKey = MessagesRepository.createOperationKey();
+      _sendOperationPayload = payload;
+    }
     setState(() => _sending = true);
     try {
       await ref
           .read(conversationProvider(widget.conversationId).notifier)
-          .sendMessage(text, channels);
+          .sendMessage(text, channels, operationKey: _sendOperationKey);
       if (!mounted) return;
+      _invalidateSendOperation();
       _composeCtrl.clear();
       _scrollToBottom(animated: true);
     } on ApiException catch (e) {
@@ -129,9 +274,9 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
 
   void _showError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -145,13 +290,14 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       conversationProvider(widget.conversationId),
       (prev, next) {
         next.whenData((convo) {
+          _seedChannelsFromThread(convo);
           if (convo.messages.isNotEmpty) _scrollToBottom();
         });
       },
     );
 
     final headerTitle = convoAsync.maybeWhen(
-      data: (c) => c.tenantName,
+      data: (c) => c.displayName,
       orElse: () => widget.title ?? 'Conversation',
     );
     final headerSubtitle = convoAsync.maybeWhen(
@@ -167,8 +313,9 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
           children: [
             Text(
               headerTitle,
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -188,8 +335,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
         children: [
           Expanded(
             child: convoAsync.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => _ErrorBody(
                 message: e is ApiException ? e.message : e.toString(),
                 onRetry: () => ref
@@ -207,12 +353,15 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
           _ComposeBar(
             controller: _composeCtrl,
             sending: _sending,
+            channelsRevealed: _channelsRevealed,
+            channels: _selectedChannels(),
+            onRevealChannels: () => setState(() => _channelsRevealed = true),
             portal: _portal,
             email: _email,
             sms: _sms,
-            onPortal: (v) => setState(() => _portal = v),
-            onEmail: (v) => setState(() => _email = v),
-            onSms: (v) => setState(() => _sms = v),
+            onPortal: (v) => _setChannel(() => _portal = v),
+            onEmail: (v) => _setChannel(() => _email = v),
+            onSms: (v) => _setChannel(() => _sms = v),
             onSend: _send,
           ),
         ],
@@ -279,10 +428,10 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final mine = message.isFromLandlord;
     final align = mine ? CrossAxisAlignment.end : CrossAxisAlignment.start;
-    final bubbleColor =
-        mine ? colorScheme.primary : colorScheme.surfaceContainerHighest;
-    final textColor =
-        mine ? colorScheme.onPrimary : colorScheme.onSurface;
+    final bubbleColor = mine
+        ? colorScheme.primary
+        : colorScheme.surfaceContainerHighest;
+    final textColor = mine ? colorScheme.onPrimary : colorScheme.onSurface;
 
     final radius = BorderRadius.only(
       topLeft: const Radius.circular(16),
@@ -306,8 +455,7 @@ class _MessageBubble extends StatelessWidget {
               maxWidth: MediaQuery.sizeOf(context).width * 0.78,
             ),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: bubbleColor,
                 borderRadius: radius,
@@ -365,6 +513,9 @@ class _ComposeBar extends StatelessWidget {
   const _ComposeBar({
     required this.controller,
     required this.sending,
+    required this.channelsRevealed,
+    required this.channels,
+    required this.onRevealChannels,
     required this.portal,
     required this.email,
     required this.sms,
@@ -376,6 +527,9 @@ class _ComposeBar extends StatelessWidget {
 
   final TextEditingController controller;
   final bool sending;
+  final bool channelsRevealed;
+  final List<String> channels;
+  final VoidCallback onRevealChannels;
   final bool portal;
   final bool email;
   final bool sms;
@@ -394,73 +548,79 @@ class _ComposeBar extends StatelessWidget {
       child: Container(
         decoration: BoxDecoration(
           color: colorScheme.surface,
-          border: Border(
-            top: BorderSide(color: colorScheme.outlineVariant),
-          ),
+          border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
         ),
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Channel picker
+            // How this reply goes out. Quiet line by default; the chips only
+            // appear once the landlord taps "Change".
             Align(
               alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 6,
-                children: [
-                  _MiniChannelChip(
-                    icon: Icons.forum_outlined,
-                    label: 'Portal',
-                    selected: portal,
-                    onChanged: onPortal,
-                  ),
-                  _MiniChannelChip(
-                    icon: Icons.email_outlined,
-                    label: 'Email',
-                    selected: email,
-                    onChanged: onEmail,
-                  ),
-                  _MiniChannelChip(
-                    icon: Icons.sms_outlined,
-                    label: 'Text',
-                    selected: sms,
-                    onChanged: onSms,
-                  ),
-                ],
-              ),
+              child: channelsRevealed
+                  ? Wrap(
+                      spacing: 6,
+                      children: [
+                        _MiniChannelChip(
+                          icon: Icons.forum_outlined,
+                          label: 'Portal',
+                          selected: portal,
+                          onChanged: onPortal,
+                        ),
+                        _MiniChannelChip(
+                          icon: Icons.email_outlined,
+                          label: 'Email',
+                          selected: email,
+                          onChanged: onEmail,
+                        ),
+                        _MiniChannelChip(
+                          icon: Icons.sms_outlined,
+                          label: 'Text',
+                          selected: sms,
+                          onChanged: onSms,
+                        ),
+                      ],
+                    )
+                  : SendingChannelsLine(
+                      channels: channels,
+                      onChange: onRevealChannels,
+                    ),
             ),
             const SizedBox(height: 6),
-            // Text field + send
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: controller,
-                    minLines: 1,
-                    maxLines: 5,
-                    textInputAction: TextInputAction.newline,
-                    keyboardType: TextInputType.multiline,
-                    decoration: InputDecoration(
-                      hintText: 'Message…',
-                      filled: true,
-                      fillColor: colorScheme.surfaceContainerHighest,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
+            TextField(
+              controller: controller,
+              minLines: 1,
+              maxLines: 5,
+              textInputAction: TextInputAction.newline,
+              keyboardType: TextInputType.multiline,
+              decoration: InputDecoration(
+                hintText: 'Message…',
+                filled: true,
+                fillColor: colorScheme.surfaceContainerHighest,
+                contentPadding: const EdgeInsetsDirectional.fromSTEB(
+                  16,
+                  10,
+                  8,
+                  10,
+                ),
+                suffixIcon: Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 4),
+                  child: _SendButton(
+                    sending: sending,
+                    onSend: onSend,
+                    colorScheme: colorScheme,
                   ),
                 ),
-                const SizedBox(width: 6),
-                _SendButton(
-                  sending: sending,
-                  onSend: onSend,
-                  colorScheme: colorScheme,
+                suffixIconConstraints: const BoxConstraints(
+                  minWidth: 52,
+                  minHeight: 48,
                 ),
-              ],
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+              ),
             ),
           ],
         ),
@@ -489,6 +649,7 @@ class _SendButton extends StatelessWidget {
         color: colorScheme.primary,
         shape: const CircleBorder(),
         child: InkWell(
+          key: const Key('message-send-button'),
           customBorder: const CircleBorder(),
           onTap: sending ? null : onSend,
           child: Center(
@@ -562,10 +723,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),

@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { notificationStore } from '$lib/stores/notifications.svelte';
-	import { getCurrentUser } from '$lib/stores/auth.svelte';
-	import { isPortalUser, isStaff } from '$lib/types/user';
+	import { getAuthState } from '$lib/stores/auth.svelte';
 	import NotificationListItem from './NotificationListItem.svelte';
 
 	type Props = {
@@ -13,8 +12,8 @@
 
 	let { id = 'notification-dropdown', labelledBy, placement = 'up' }: Props = $props();
 	let dropdownEl: HTMLDivElement | undefined = $state();
-	const currentUser = $derived(getCurrentUser());
-	const portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
+	const authState = getAuthState();
+	const portalUser = $derived(authState.activeExperience === 'Tenant');
 
 	function handleClickOutside(event: MouseEvent) {
 		if (dropdownEl && !dropdownEl.closest('.notification-bell-root')?.contains(event.target as Node)) {

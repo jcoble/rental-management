@@ -1,8 +1,12 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/solo_landlord.dart';
+import '../../core/widgets/mobile_pill_tab_bar.dart';
 import 'mobile_destination.dart';
 import 'mobile_domain_chrome.dart';
 import 'mobile_domain_navigation.dart';
@@ -10,92 +14,161 @@ import 'mobile_quick_action_fab.dart';
 import 'mobile_quick_action_helpers.dart';
 import 'mobile_shell_actions.dart';
 
-class RentalsHubScreen extends StatelessWidget {
+class RentalsHubScreen extends ConsumerWidget {
   const RentalsHubScreen({
     super.key,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
 
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
+  final bool handleSystemBack;
 
   @override
-  Widget build(BuildContext context) => MobileDomainHubScreen(
-    title: 'Rentals',
-    subtitle: 'Properties, people, agreements and applications.',
-    destinations: rentalDestinations,
-    onControllerReady: onControllerReady,
-    onControllerDisposed: onControllerDisposed,
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
+    return MobileDomainHubScreen(
+      title: 'Rentals',
+      subtitle: 'Properties, people, agreements and applications.',
+      destinations: _withoutSoloHidden(
+        rentalHubDestinationsFor(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+        ),
+        solo: isSoloLandlord(ref),
+      ),
+      onControllerReady: onControllerReady,
+      onControllerDisposed: onControllerDisposed,
+      handleSystemBack: handleSystemBack,
+    );
+  }
 }
 
-class MoneyHubScreen extends StatelessWidget {
+class MoneyHubScreen extends ConsumerWidget {
   const MoneyHubScreen({
     super.key,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
 
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
+  final bool handleSystemBack;
 
   @override
-  Widget build(BuildContext context) => MobileDomainHubScreen(
-    title: 'Money',
-    subtitle: 'Snapshot, ledger, deposits, banking and reports.',
-    destinations: moneyHubDestinations,
-    onControllerReady: onControllerReady,
-    onControllerDisposed: onControllerDisposed,
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
+    return MobileDomainHubScreen(
+      title: 'Money',
+      subtitle: 'Snapshot, ledger, deposits, banking and reports.',
+      destinations: _withoutSoloHidden(
+        visibleMobileDestinations(moneyHubDestinations, auth.capabilities),
+        solo: isSoloLandlord(ref),
+      ),
+      onControllerReady: onControllerReady,
+      onControllerDisposed: onControllerDisposed,
+      handleSystemBack: handleSystemBack,
+    );
+  }
 }
 
-class WorkHubScreen extends StatelessWidget {
+class WorkHubScreen extends ConsumerWidget {
   const WorkHubScreen({
     super.key,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
 
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
+  final bool handleSystemBack;
 
   @override
-  Widget build(BuildContext context) => MobileDomainHubScreen(
-    title: 'Work',
-    subtitle: 'Maintenance, inspections, vendors and scheduled work.',
-    destinations: workHubDestinations,
-    onControllerReady: onControllerReady,
-    onControllerDisposed: onControllerDisposed,
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) {
+      return const SizedBox.shrink();
+    }
+    final capabilities = auth.capabilities;
+    final assignedWorkExperience =
+        auth.activeExperience == WorkspaceExperience.maintenance;
+    final destinations = workDestinationsFor(
+      capabilities,
+      assignedWorkExperience: assignedWorkExperience,
+    );
+
+    return MobileDomainHubScreen(
+      title: assignedWorkExperience ? 'My work' : 'Work',
+      subtitle: assignedWorkExperience
+          ? 'Your assigned repairs, updates and conversations.'
+          : 'Maintenance, inspections, vendors and scheduled work.',
+      destinations: destinations,
+      onControllerReady: onControllerReady,
+      onControllerDisposed: onControllerDisposed,
+      handleSystemBack: handleSystemBack,
+    );
+  }
 }
 
-class InboxHubScreen extends StatelessWidget {
+class InboxHubScreen extends ConsumerWidget {
   const InboxHubScreen({
     super.key,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
 
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
+  final bool handleSystemBack;
 
   @override
-  Widget build(BuildContext context) => MobileDomainHubScreen(
-    title: 'Inbox',
-    subtitle: 'Messages and notifications in one place.',
-    destinations: inboxHubDestinations,
-    onControllerReady: onControllerReady,
-    onControllerDisposed: onControllerDisposed,
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
+    return MobileDomainHubScreen(
+      title: 'Inbox',
+      subtitle: 'Messages and notifications in one place.',
+      destinations: visibleMobileDestinations(
+        inboxHubDestinations,
+        auth.capabilities,
+      ),
+      onControllerReady: onControllerReady,
+      onControllerDisposed: onControllerDisposed,
+      handleSystemBack: handleSystemBack,
+    );
+  }
 }
 
-class MobileDomainHubScreen extends StatefulWidget {
+/// A solo landlord has no co-owners to keep a directory or send statements to,
+/// so those two sections stay out of the hubs.
+List<MobileDestination> _withoutSoloHidden(
+  List<MobileDestination> destinations, {
+  required bool solo,
+}) {
+  if (!solo) return destinations;
+  return destinations
+      .where(
+        (destination) =>
+            destination.id != MobileDestinationId.owners &&
+            destination.id != MobileDestinationId.reports,
+      )
+      .toList(growable: false);
+}
+
+class MobileDomainHubScreen extends ConsumerStatefulWidget {
   const MobileDomainHubScreen({
     super.key,
     required this.title,
     required this.subtitle,
     required this.destinations,
+    this.handleSystemBack = true,
     this.onControllerReady,
     this.onControllerDisposed,
   });
@@ -103,14 +176,16 @@ class MobileDomainHubScreen extends StatefulWidget {
   final String title;
   final String subtitle;
   final List<MobileDestination> destinations;
+  final bool handleSystemBack;
   final ValueChanged<MobileDomainNavigator>? onControllerReady;
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
 
   @override
-  State<MobileDomainHubScreen> createState() => _MobileDomainHubScreenState();
+  ConsumerState<MobileDomainHubScreen> createState() =>
+      _MobileDomainHubScreenState();
 }
 
-class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
+class _MobileDomainHubScreenState extends ConsumerState<MobileDomainHubScreen> {
   final _contentNavigatorKey = GlobalKey<NavigatorState>();
   late final MobileDomainHeaderController _headerController;
   late final MobileQuickActionFabRegistry _quickActionFabRegistry;
@@ -127,7 +202,10 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
       ..addListener(_handleHeaderChanged);
     _quickActionFabRegistry = MobileQuickActionFabRegistry()
       ..addListener(_handleQuickActionFabChanged);
-    _domainNavigator = MobileDomainNavigator(_openDestination);
+    _domainNavigator = MobileDomainNavigator(
+      openDestination: _openDestination,
+      popToCurrentRoot: _popToCurrentRoot,
+    );
     widget.onControllerReady?.call(_domainNavigator);
     _scheduleQuickActionFallbackCheck();
   }
@@ -168,10 +246,21 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
     if (oldWidget.onControllerReady != widget.onControllerReady) {
       widget.onControllerReady?.call(_domainNavigator);
     }
-    if (_selectedIndex >= widget.destinations.length) {
-      _selectedIndex = 0;
-      _replaceContentRoot(widget.destinations.first);
+    final previousDestination = _selectedIndex < oldWidget.destinations.length
+        ? oldWidget.destinations[_selectedIndex].id
+        : null;
+    final nextIndex = previousDestination == null
+        ? -1
+        : widget.destinations.indexWhere(
+            (destination) => destination.id == previousDestination,
+          );
+    if (nextIndex >= 0) {
+      _selectedIndex = nextIndex;
+      return;
     }
+
+    _selectedIndex = 0;
+    _replaceContentRoot(widget.destinations.first);
   }
 
   void _selectIndex(int index) {
@@ -182,28 +271,33 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
   void _openDestination(
     MobileDestinationId destination, {
     MobileDetailBuilder? detailBuilder,
+    MobileNavigationGuard? canNavigate,
   }) {
     final index = widget.destinations.indexWhere((d) => d.id == destination);
     if (index < 0) {
       if (detailBuilder != null) {
+        if (canNavigate?.call() == false) return;
         Navigator.of(context).push<void>(_detailRoute(detailBuilder));
       }
       return;
     }
+    if (canNavigate?.call() == false) return;
 
-    setState(() {
-      _selectedIndex = index;
-      _headerCollapsed = false;
-      _quickActionFallbackReady = false;
-      if (detailBuilder == null) {
-        _headerController.clearActiveDetail();
-      }
-    });
-    _scheduleQuickActionFallbackCheck();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (canNavigate?.call() == false) return;
+      setState(() {
+        _selectedIndex = index;
+        _headerCollapsed = false;
+        _quickActionFallbackReady = false;
+        if (detailBuilder == null) {
+          _headerController.clearActiveDetail();
+        }
+      });
+      _scheduleQuickActionFallbackCheck();
       _replaceContentRoot(widget.destinations[index]);
       if (detailBuilder != null) {
+        if (canNavigate?.call() == false) return;
         _contentNavigatorKey.currentState?.push<void>(
           _detailRoute(detailBuilder),
         );
@@ -244,7 +338,10 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
     final rootNavigator = Navigator.of(context);
     if (rootNavigator.canPop()) {
       rootNavigator.pop();
+      return;
     }
+
+    mobileShellNavigatorOf(context)?.openTab(MobileShellTabId.today);
   }
 
   Future<void> _popContentDetail() async {
@@ -258,6 +355,13 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
     if (rootNavigator.canPop()) {
       rootNavigator.pop();
     }
+  }
+
+  void _popToCurrentRoot() {
+    _headerController.clearActiveDetail();
+    _contentNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+    if (!mounted) return;
+    setState(() => _headerCollapsed = false);
   }
 
   Widget _appBarTitle(BuildContext context) {
@@ -316,14 +420,19 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _HubSegmentBar(
-                          destinations: widget.destinations,
-                          selectedIndex: _selectedIndex,
-                          onSelected: _selectIndex,
-                        ),
+                        if (!showingDetailHeader)
+                          MobilePillTabBar(
+                            scrollKey: const Key('hub-segment-scroll'),
+                            tabs: [
+                              for (final destination in widget.destinations)
+                                MobilePillTab(label: destination.label),
+                            ],
+                            selectedIndex: _selectedIndex,
+                            onSelected: _selectIndex,
+                          ),
                         Expanded(
                           child: PopScope<void>(
-                            canPop: false,
+                            canPop: !widget.handleSystemBack,
                             onPopInvokedWithResult: (didPop, _) {
                               unawaited(_handleSystemBack(didPop));
                             },
@@ -358,7 +467,7 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
                   registerWithHost: false,
                   onChat: () => openMobileAssistant(context),
                   onRecord: () => openMobileRecord(context),
-                  onScan: () => openMobileScan(context),
+                  onScan: () => openAuthorizedMobileScan(context, ref),
                 ),
               ),
           ],
@@ -440,250 +549,4 @@ class _DomainScrollCollapseObserverState
 
   @override
   Widget build(BuildContext context) => widget.child;
-}
-
-class _HubSegmentBar extends StatefulWidget {
-  const _HubSegmentBar({
-    required this.destinations,
-    required this.selectedIndex,
-    required this.onSelected,
-  });
-
-  final List<MobileDestination> destinations;
-  final int selectedIndex;
-  final ValueChanged<int> onSelected;
-
-  @override
-  State<_HubSegmentBar> createState() => _HubSegmentBarState();
-}
-
-class _HubSegmentBarState extends State<_HubSegmentBar> {
-  static const _tabMotion = Cubic(0.2, 0, 0, 1);
-  final _scrollController = ScrollController();
-
-  double _lastItemWidth = 0;
-  double _lastViewportWidth = 0;
-
-  @override
-  void didUpdateWidget(covariant _HubSegmentBar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.selectedIndex != widget.selectedIndex) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _centerSelectedTab());
-    }
-  }
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  void _centerSelectedTab() {
-    if (!_scrollController.hasClients || _lastItemWidth <= 0) return;
-
-    final targetCenter =
-        widget.selectedIndex * _lastItemWidth + (_lastItemWidth / 2);
-    final targetOffset = targetCenter - (_lastViewportWidth / 2);
-    final clampedOffset = targetOffset.clamp(
-      _scrollController.position.minScrollExtent,
-      _scrollController.position.maxScrollExtent,
-    );
-
-    _scrollController.animateTo(
-      clampedOffset,
-      duration: const Duration(milliseconds: 260),
-      curve: _tabMotion,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 66,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final count = widget.destinations.length;
-          final viewportWidth = constraints.maxWidth;
-          final availableWidth = math.max(0.0, viewportWidth - 32);
-          final visibleSlots = count <= 3 ? count.toDouble() : 2.82;
-          final itemWidth = math.max(112.0, availableWidth / visibleSlots);
-          final trackWidth = math.max(availableWidth, itemWidth * count);
-          final selectedLeft = itemWidth * widget.selectedIndex;
-
-          _lastItemWidth = itemWidth;
-          _lastViewportWidth = viewportWidth;
-
-          return SingleChildScrollView(
-            controller: _scrollController,
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-            child: _M3StateLayerTrack(
-              width: trackWidth,
-              selectedLeft: selectedLeft,
-              itemWidth: itemWidth,
-              child: Row(
-                children: [
-                  for (var index = 0; index < count; index++)
-                    SizedBox(
-                      width: itemWidth,
-                      child: _M3StateLayerTab(
-                        label: widget.destinations[index].label,
-                        selected: widget.selectedIndex == index,
-                        onTap: () => widget.onSelected(index),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _M3StateLayerTrack extends StatelessWidget {
-  const _M3StateLayerTrack({
-    required this.width,
-    required this.selectedLeft,
-    required this.itemWidth,
-    required this.child,
-  });
-
-  static const _tabMotion = Cubic(0.2, 0, 0, 1);
-
-  final double width;
-  final double selectedLeft;
-  final double itemWidth;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final selectedFill = Color.alphaBlend(
-      colorScheme.primary.withValues(alpha: isDark ? 0.24 : 0.16),
-      isDark
-          ? colorScheme.surfaceContainerHigh
-          : colorScheme.surfaceContainerHighest,
-    );
-
-    return Container(
-      width: width,
-      height: 48,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: isDark
-            ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.28)
-            : colorScheme.surfaceContainerHighest.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: [
-          BoxShadow(
-            color: colorScheme.shadow.withValues(alpha: isDark ? 0.28 : 0.10),
-            blurRadius: 14,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Stack(
-        children: [
-          TweenAnimationBuilder<double>(
-            tween: Tween<double>(end: selectedLeft),
-            duration: const Duration(milliseconds: 280),
-            curve: _tabMotion,
-            builder: (context, left, child) {
-              return Transform.translate(
-                offset: Offset(left, 0),
-                child: SizedBox(
-                  width: itemWidth,
-                  height: double.infinity,
-                  child: child,
-                ),
-              );
-            },
-            child: Padding(
-              padding: const EdgeInsets.all(2),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: selectedFill,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-            ),
-          ),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-class _M3StateLayerTab extends StatelessWidget {
-  const _M3StateLayerTab({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final textColor = selected
-        ? colorScheme.onSurface
-        : colorScheme.onSurfaceVariant;
-
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: label,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(999),
-          overlayColor: WidgetStateProperty.resolveWith((states) {
-            if (states.contains(WidgetState.pressed)) {
-              return textColor.withValues(alpha: 0.12);
-            }
-            if (states.contains(WidgetState.focused)) {
-              return textColor.withValues(alpha: 0.10);
-            }
-            if (states.contains(WidgetState.hovered)) {
-              return textColor.withValues(alpha: 0.08);
-            }
-            return null;
-          }),
-          onTap: onTap,
-          child: Center(
-            child: AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              style:
-                  Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: textColor,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    letterSpacing: 0,
-                  ) ??
-                  TextStyle(
-                    color: textColor,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  ),
-              child: ExcludeSemantics(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

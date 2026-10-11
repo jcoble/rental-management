@@ -5,7 +5,7 @@ import 'getting_started_tasks.dart';
 
 /// Reads one server-shaped [GettingStartedSignals] summary. Counts and booleans
 /// are computed database-side so mobile does not download full property, tenant,
-/// lease, and notification-settings payloads just to render the checklist.
+/// lease, alert, routing, and tenant-notice payloads just to render the checklist.
 ///
 /// `autoDispose` mirrors the home-tab `FutureProvider.autoDispose` style: the
 /// dashboard card and the checklist screen are the only watchers, so the request

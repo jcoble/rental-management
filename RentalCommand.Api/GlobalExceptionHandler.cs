@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Auth;
 
 namespace RentalCommand.Api;
 
@@ -43,6 +45,24 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
         switch (exception)
         {
+            case RefreshTokenRotationOwnershipException:
+                problem = new ProblemDetails
+                {
+                    Status = StatusCodes.Status401Unauthorized,
+                    Title = "Unauthorized",
+                    Detail = "This refresh token is no longer valid. Please sign in again.",
+                };
+                break;
+
+            case AtomicIdempotencyConflictException idempotencyConflict:
+                problem = new ProblemDetails
+                {
+                    Status = StatusCodes.Status409Conflict,
+                    Title = "Conflict",
+                    Detail = idempotencyConflict.Message,
+                };
+                break;
+
             case FairHousingBlockedException fairHousing:
                 // A soft, overridable content gate — the copy was flagged by the Fair Housing review and
                 // not acknowledged. 422 (Unprocessable Content) with the structured concern list so the UI

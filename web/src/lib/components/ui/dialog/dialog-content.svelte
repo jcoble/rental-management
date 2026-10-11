@@ -6,6 +6,8 @@
 	import * as Dialog from "./index.js";
 	import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
 	import type { ComponentProps } from "svelte";
+	import { createDialogOverlayBoundary } from './dialog-overlay-boundary.svelte.js';
+	import { preventDataEntryDismissal } from '../dismiss-policy.js';
 
 	let {
 		ref = $bindable(null),
@@ -13,12 +15,29 @@
 		portalProps,
 		children,
 		showCloseButton = true,
+		onInteractOutside,
+		onEscapeKeydown,
 		...restProps
 	}: WithoutChildrenOrChild<DialogPrimitive.ContentProps> & {
 		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof DialogPortal>>;
 		children: Snippet;
 		showCloseButton?: boolean;
 	} = $props();
+
+	const dialogOverlayBoundary = createDialogOverlayBoundary();
+	$effect(() => {
+		dialogOverlayBoundary.content = ref as Element | null;
+	});
+
+	function handleInteractOutside(event: PointerEvent) {
+		onInteractOutside?.(event);
+		preventDataEntryDismissal(ref as Element | null, event);
+	}
+
+	function handleEscapeKeydown(event: KeyboardEvent) {
+		onEscapeKeydown?.(event);
+		preventDataEntryDismissal(ref as Element | null, event);
+	}
 </script>
 
 <DialogPortal {...portalProps}>
@@ -30,6 +49,8 @@
 			"m3-dialog-content fixed left-1/2 top-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-2xl gap-5 overflow-y-auto border p-6",
 			className
 		)}
+		onInteractOutside={handleInteractOutside}
+		onEscapeKeydown={handleEscapeKeydown}
 		{...restProps}
 	>
 		{@render children?.()}

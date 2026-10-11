@@ -10,11 +10,13 @@ class Tenant {
   final DateTime? dateOfBirth;
   final String? notes;
   final int? activeLeaseCount;
-
-  /// Portal-login state, populated only on the single-tenant GET /tenants/{id}:
-  /// 'none' (no login), 'active' (can sign in), or 'disabled' (login locked off).
-  /// Null on list/create/update responses, which omit it.
-  final String? portalAccess;
+  final int? leaseHistoryCount;
+  final int? currentPropertyId;
+  final String? currentPropertyName;
+  final int? currentUnitId;
+  final String? currentUnitNumber;
+  final bool canDelete;
+  final String? deleteBlockedReason;
 
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -31,7 +33,13 @@ class Tenant {
     this.dateOfBirth,
     this.notes,
     this.activeLeaseCount,
-    this.portalAccess,
+    this.leaseHistoryCount,
+    this.currentPropertyId,
+    this.currentPropertyName,
+    this.currentUnitId,
+    this.currentUnitNumber,
+    this.canDelete = true,
+    this.deleteBlockedReason,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -49,9 +57,17 @@ class Tenant {
       dateOfBirth: DateTime.tryParse(json['dateOfBirth'] as String? ?? ''),
       notes: json['notes'] as String?,
       activeLeaseCount: (json['activeLeaseCount'] as num?)?.toInt(),
-      portalAccess: json['portalAccess'] as String?,
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
-      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
+      leaseHistoryCount: (json['leaseHistoryCount'] as num?)?.toInt(),
+      currentPropertyId: (json['currentPropertyId'] as num?)?.toInt(),
+      currentPropertyName: json['currentPropertyName'] as String?,
+      currentUnitId: (json['currentUnitId'] as num?)?.toInt(),
+      currentUnitNumber: json['currentUnitNumber'] as String?,
+      canDelete: json['canDelete'] as bool? ?? true,
+      deleteBlockedReason: json['deleteBlockedReason'] as String?,
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
     );
   }
 
@@ -63,29 +79,9 @@ class Tenant {
       if (email != null) 'email': email,
       if (phone != null) 'phone': phone,
       if (emergencyContact != null) 'emergencyContact': emergencyContact,
-      if (dateOfBirth != null) 'dateOfBirth': dateOfBirth!.toIso8601String().split('T').first,
+      if (dateOfBirth != null)
+        'dateOfBirth': dateOfBirth!.toIso8601String().split('T').first,
       if (notes != null) 'notes': notes,
     };
-  }
-
-  /// Returns a copy with [portalAccess] replaced. Used after the staff portal
-  /// toggle, which returns just the new state rather than a full tenant.
-  Tenant copyWith({String? portalAccess}) {
-    return Tenant(
-      id: id,
-      portfolioId: portfolioId,
-      firstName: firstName,
-      lastName: lastName,
-      fullName: fullName,
-      email: email,
-      phone: phone,
-      emergencyContact: emergencyContact,
-      dateOfBirth: dateOfBirth,
-      notes: notes,
-      activeLeaseCount: activeLeaseCount,
-      portalAccess: portalAccess ?? this.portalAccess,
-      createdAt: createdAt,
-      updatedAt: updatedAt,
-    );
   }
 }

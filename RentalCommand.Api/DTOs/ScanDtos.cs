@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.DTOs;
@@ -9,13 +10,28 @@ namespace RentalCommand.Api.DTOs;
 /// <summary>One extracted field surfaced to the review UI.</summary>
 public sealed record ScanFieldDto(string Name, string Value, decimal Confidence);
 
+public sealed record ScanCaptureContextDto(
+    string? Experience,
+    int? AccessContextId,
+    long? AccessRevision,
+    int? PropertyId,
+    int? UnitId,
+    int? LeaseManagementId,
+    int? LeaseAgreementId,
+    int? TenantAccountId,
+    long? TenantLedgerEntryId,
+    int? WorkOrderId,
+    int? ApplicationId,
+    int? RentalListingId,
+    string? SourceLabel);
+
 /// <summary>Draft as seen by the review page.</summary>
 public sealed record ScanDraftResponse(
     int Id, int PortfolioId, string TargetEntityType, string Status,
     string FileUrl, IReadOnlyList<ScanFieldDto> Fields,
     string? ModelId, int? TokensUsed, decimal? CostUsd, string? FailureReason,
     DateTime CreatedAt, DateTime? ReviewedAt, DateTime? ConfirmedAt,
-    string? CreatedEntityType = null, int? CreatedEntityId = null, int? CreatedUnitId = null,
+    string? CreatedEntityType = null, long? CreatedEntityId = null, int? CreatedUnitId = null,
     // Conversational-voice ("Tell me") slot state. Populated only via
     // WithVoiceSlots() for the voice endpoints; left at complete/empty defaults
     // for scanned documents (which the scan review screen never reads).
@@ -23,10 +39,13 @@ public sealed record ScanDraftResponse(
     string? NextPrompt = null,
     bool Complete = true,
     bool Ambiguous = false,
-    // Lease-import preview: for a lease draft, what confirm would do with the property/unit
-    // (link-existing vs create-new). Null for non-lease drafts. Populated by the controller via
+    // Lease-import preview: for a lease draft, whether the Property/Unit resolved or still needs
+    // an explicit selection. Null for non-lease drafts. Populated by the controller via
     // WithLeaseProposal() so the review UI can show + let the user correct before committing.
-    LeaseImportProposal? LeaseProposal = null)
+    LeaseImportProposal? LeaseProposal = null,
+    ScanCaptureContextDto? CaptureContext = null,
+    int? SourceStoredFileId = null,
+    string? SourceContentSha256 = null)
 {
     /// <summary>Returns a copy carrying the lease-import property/unit proposal for the review UI.</summary>
     public ScanDraftResponse WithLeaseProposal(LeaseImportProposal? proposal) =>
@@ -41,7 +60,7 @@ public sealed record ScanDraftResponse(
     public static ScanDraftResponse FromEntity(
         ScanDraft d,
         string? createdEntityType = null,
-        int? createdEntityId = null,
+        long? createdEntityId = null,
         int? createdUnitId = null)
     {
         var fields = ParseFields(d.ExtractedFields);
@@ -52,8 +71,18 @@ public sealed record ScanDraftResponse(
             fileUrl, fields,
             d.ModelId, d.TokensUsed, d.CostUsd, d.FailureReason,
             d.CreatedAt, d.ReviewedAt, d.ConfirmedAt,
-            createdEntityType, createdEntityId, createdUnitId);
+            createdEntityType, createdEntityId, createdUnitId,
+            CaptureContext: ToCaptureContext(d),
+            SourceStoredFileId: d.SourceStoredFileId,
+            SourceContentSha256: d.SourceContentSha256);
     }
+
+    internal static ScanCaptureContextDto ToCaptureContext(ScanDraft d) => new(
+        d.CaptureExperience?.ToString(), d.CaptureAccessContextId, d.CaptureAccessRevision,
+        d.CapturePropertyId, d.CaptureUnitId, d.CaptureLeaseManagementId,
+        d.CaptureLeaseAgreementId, d.CaptureTenantAccountId, d.CaptureTenantLedgerEntryId,
+        d.CaptureWorkOrderId, d.CaptureApplicationId, d.CaptureRentalListingId,
+        d.SourceLabel);
 
     /// <summary>
     /// Returns a copy with the conversational-voice slot fields
@@ -80,7 +109,7 @@ public sealed record ScanDraftResponse(
         };
     }
 
-    private static IReadOnlyList<ScanFieldDto> ParseFields(string? json)
+    internal static IReadOnlyList<ScanFieldDto> ParseFields(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
             return [];
@@ -157,12 +186,94 @@ public sealed record ScanBatchDraftResponse(
 /// <summary>Full batch detail: the batch, its rollup counts, and its drafts for the review queue.</summary>
 public sealed record ScanBatchDetailResponse(
     int Id, string? Name, string TargetEntityType, string Status, int FileCount,
-    DateTime CreatedAtUtc, ScanBatchCounts Counts, IReadOnlyList<ScanBatchDraftResponse> Drafts);
+    DateTime CreatedAtUtc, ScanBatchCounts Counts, IReadOnlyList<ScanBatchDraftResponse> Drafts,
+    int DraftTotalCount, int Skip, int Take);
 
-/// <summary>Optional field override JSON applied when confirming a scan draft.</summary>
+/// <summary>Stable operation identity plus optional reviewed field overrides for scan confirmation.</summary>
 public sealed class ConfirmScanRequest
 {
+    [Required]
+    [MaxLength(160)]
+    [RegularExpression(@".*\S.*", ErrorMessage = "A request key cannot be blank.")]
+    public string ClientOperationId { get; set; } = string.Empty;
+
     public string? OverridesJson { get; set; }
+}
+
+/// <summary>Reviewed Guided Setup lease facts admitted through the canonical scan confirmer.</summary>
+public sealed class CreateManualLeaseRequest : IValidatableObject
+{
+    [Range(1, int.MaxValue)]
+    public int? PropertyId { get; set; }
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
+    [Range(1, int.MaxValue)]
+    public int? TenantId { get; set; }
+    public string? TenantName { get; set; }
+    public string? TenantEmail { get; set; }
+    public string? TenantPhone { get; set; }
+    public string? TenantEmergencyContact { get; set; }
+    public string? PropertyName { get; set; }
+    public string? PropertyType { get; set; }
+    public RentalStructure? RentalStructure { get; set; }
+    public string? PropertyAddress { get; set; }
+    public string? PropertyCity { get; set; }
+    public string? PropertyState { get; set; }
+    public string? PropertyPostalCode { get; set; }
+    public string? UnitNumber { get; set; }
+    [Range(typeof(decimal), "0", "99")]
+    public decimal? UnitBedrooms { get; set; }
+    [Range(typeof(decimal), "0", "99")]
+    public decimal? UnitBathrooms { get; set; }
+    [Range(0, 99999)]
+    public int? UnitSquareFeet { get; set; }
+    [Required]
+    [MaxLength(100)]
+    [RegularExpression(@".*\S.*", ErrorMessage = "LeaseNumber cannot be blank.")]
+    public string? LeaseNumber { get; set; }
+    [Required]
+    public DateTime? StartDate { get; set; }
+    [Required]
+    public DateTime? EndDate { get; set; }
+    [Range(typeof(decimal), "0.01", "99999999")]
+    public decimal? MonthlyRent { get; set; }
+    [Range(typeof(decimal), "0", "99999999")]
+    public decimal? SecurityDeposit { get; set; }
+    [Range(typeof(decimal), "0", "99999999")]
+    public decimal? LateFee { get; set; }
+    [Range(1, 31)]
+    public int? RentDueDay { get; set; }
+    [Range(1, int.MaxValue)]
+    public int TermsSchemaVersion { get; set; } = 1;
+    public string? TermsPayload { get; set; }
+    [Range(0, 31)]
+    public short GracePeriodDays { get; set; }
+    public DateTime? PossessionGivenAtUtc { get; set; }
+    public RentTrackingStartMode RentTrackingStartMode { get; set; } = RentTrackingStartMode.ForwardOnly;
+    public DateOnly? RentTrackingStartOn { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (StartDate.HasValue && EndDate.HasValue
+            && EndDate.Value.Date < StartDate.Value.Date)
+        {
+            yield return new ValidationResult(
+                "EndDate cannot be before StartDate.",
+                [nameof(EndDate), nameof(StartDate)]);
+        }
+    }
+}
+
+/// <summary>Stable operation identity plus selected canonical account for payment scan review.</summary>
+public sealed class SetScanDraftPaymentAccountRequest
+{
+    [Range(1, int.MaxValue)]
+    public int TenantAccountId { get; set; }
+
+    [Required]
+    [MaxLength(160)]
+    [RegularExpression(@".*\S.*", ErrorMessage = "A request key cannot be blank.")]
+    public string ClientOperationId { get; set; } = string.Empty;
 }
 
 /// <summary>Optional rejection reason when rejecting a scan draft.</summary>

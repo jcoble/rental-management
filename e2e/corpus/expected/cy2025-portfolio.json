@@ -1,0 +1,393 @@
+{
+  "meta": {
+    "generated": "derive-expected.mjs",
+    "basis": "ledger/events.csv + emit-finance CSVs",
+    "spine": "CY2025 cent-exact",
+    "asOf": "2025-12-31"
+  },
+  "portfolio": {
+    "scheduleE": {
+      "income": 265818.72,
+      "deductibleExpenses": 57562.33,
+      "mortgageInterest": 72830.15,
+      "depreciation": 69709.09,
+      "totalExpenses": 200101.57,
+      "netIncome": 65717.15
+    },
+    "cashflowPnl": {
+      "income": 265818.72,
+      "expense": 57562.33,
+      "net": 208256.39
+    },
+    "trueCashFlow": {
+      "income": 265818.72,
+      "operatingExpenses": 18462.33,
+      "noi": 247356.39,
+      "debtService": 159416.52,
+      "cashFlow": 87939.87
+    },
+    "propertyPnl": {
+      "income": 265853.72,
+      "expense": 57562.33,
+      "net": 208291.39
+    }
+  },
+  "ownerStatements": {
+    "OE-LLC": {
+      "owner": "Okafor Rentals LLC",
+      "feePercent": 0,
+      "properties": [
+        {
+          "property": "P01",
+          "income": 15337.5,
+          "expenses": 2780,
+          "managementFee": 0,
+          "net": 12557.5
+        },
+        {
+          "property": "P02",
+          "income": 23187.75,
+          "expenses": 4990,
+          "managementFee": 0,
+          "net": 18197.75
+        },
+        {
+          "property": "P04",
+          "income": 16220,
+          "expenses": 5170,
+          "managementFee": 0,
+          "net": 11050
+        },
+        {
+          "property": "P06",
+          "income": 16907.4,
+          "expenses": 4360,
+          "managementFee": 0,
+          "net": 12547.4
+        },
+        {
+          "property": "P09",
+          "income": 37123.67,
+          "expenses": 7577.33,
+          "managementFee": 0,
+          "net": 29546.34
+        },
+        {
+          "property": "P10",
+          "income": 18574.5,
+          "expenses": 4370,
+          "managementFee": 0,
+          "net": 14204.5
+        },
+        {
+          "property": "P11",
+          "income": 13266,
+          "expenses": 3890,
+          "managementFee": 0,
+          "net": 9376
+        },
+        {
+          "property": "P12",
+          "income": 19200,
+          "expenses": 4510,
+          "managementFee": 0,
+          "net": 14690
+        },
+        {
+          "property": "P13",
+          "income": 22688.4,
+          "expenses": 5135,
+          "managementFee": 0,
+          "net": 17553.4
+        }
+      ],
+      "income": 182505.22,
+      "expenses": 42782.33,
+      "managementFee": 0,
+      "netToOwner": 139722.89
+    },
+    "OE-BELL": {
+      "owner": "Bell-Okafor Holdings LLC",
+      "feePercent": 8,
+      "properties": [
+        {
+          "property": "P05",
+          "income": 29078.5,
+          "expenses": 5450,
+          "managementFee": 2326.28,
+          "net": 21302.22
+        },
+        {
+          "property": "P07",
+          "income": 27378,
+          "expenses": 4730,
+          "managementFee": 2190.24,
+          "net": 20457.76
+        }
+      ],
+      "income": 56456.5,
+      "expenses": 10180,
+      "managementFee": 4516.52,
+      "netToOwner": 41759.98
+    },
+    "OE-TRUST": {
+      "owner": "Okafor Family Trust",
+      "feePercent": 8,
+      "properties": [
+        {
+          "property": "P03",
+          "income": 14007,
+          "expenses": 2380,
+          "managementFee": 1120.56,
+          "net": 10506.44
+        }
+      ],
+      "income": 14007,
+      "expenses": 2380,
+      "managementFee": 1120.56,
+      "netToOwner": 10506.44
+    },
+    "OE-PERS": {
+      "owner": "Dana R. Okafor",
+      "feePercent": 0,
+      "properties": [
+        {
+          "property": "P08",
+          "income": 12600,
+          "expenses": 2220,
+          "managementFee": 0,
+          "net": 10380
+        }
+      ],
+      "income": 12600,
+      "expenses": 2220,
+      "managementFee": 0,
+      "netToOwner": 10380
+    }
+  },
+  "deposits": {
+    "byLease": {
+      "L01": {
+        "property": "P01",
+        "held": 1250,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1250
+      },
+      "L02": {
+        "property": "P02",
+        "held": 950,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 950
+      },
+      "L03": {
+        "property": "P02",
+        "held": 975,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 975
+      },
+      "L04": {
+        "property": "P03",
+        "held": 1150,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1150
+      },
+      "L05": {
+        "property": "P04",
+        "held": 1450,
+        "deductions": 450,
+        "returned": 1000,
+        "balance": 0
+      },
+      "L06": {
+        "property": "P05",
+        "held": 850,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 850
+      },
+      "L07": {
+        "property": "P05",
+        "held": 850,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 850
+      },
+      "L08": {
+        "property": "P05",
+        "held": 850,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 850
+      },
+      "L09": {
+        "property": "P06",
+        "held": 1395,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1395
+      },
+      "L10": {
+        "property": "P07",
+        "held": 1100,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1100
+      },
+      "L11": {
+        "property": "P07",
+        "held": 1150,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1150
+      },
+      "L12": {
+        "property": "P08",
+        "held": 1050,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1050
+      },
+      "L13": {
+        "property": "P09",
+        "held": 825,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 825
+      },
+      "L14": {
+        "property": "P09",
+        "held": 825,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 825
+      },
+      "L15": {
+        "property": "P09",
+        "held": 825,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 825
+      },
+      "L16": {
+        "property": "P09",
+        "held": 825,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 825
+      },
+      "L17": {
+        "property": "P10",
+        "held": 1525,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1525
+      },
+      "L18": {
+        "property": "P11",
+        "held": 1100,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1100
+      },
+      "L19": {
+        "property": "P12",
+        "held": 1600,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1600
+      },
+      "L20": {
+        "property": "P04",
+        "held": 1495,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 1495
+      },
+      "L21": {
+        "property": "P13",
+        "held": 925,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 925
+      },
+      "L22": {
+        "property": "P13",
+        "held": 940,
+        "deductions": 0,
+        "returned": 0,
+        "balance": 940
+      }
+    },
+    "totals": {
+      "held": 23905,
+      "deductions": 450,
+      "returned": 1000,
+      "balance": 22455
+    }
+  },
+  "delinquencyAtYearEnd": {
+    "asOf": "2025-12-31",
+    "byLease": {
+      "L14": {
+        "property": "P09",
+        "total": 899.75,
+        "current": 899.75,
+        "d31_60": 0,
+        "d61_90": 0,
+        "over90": 0
+      }
+    },
+    "total": 899.75
+  },
+  "vendor1099": [
+    {
+      "vendor": "Clark County Treasurer",
+      "totalPaid": 30360,
+      "needs1099": true
+    },
+    {
+      "vendor": "Buckeye Mutual Insurance",
+      "totalPaid": 13520,
+      "needs1099": true
+    },
+    {
+      "vendor": "Lawn care",
+      "totalPaid": 3360,
+      "needs1099": true
+    },
+    {
+      "vendor": "Trash collection",
+      "totalPaid": 2700,
+      "needs1099": true
+    },
+    {
+      "vendor": "Condo HOA dues",
+      "totalPaid": 2220,
+      "needs1099": true
+    },
+    {
+      "vendor": "Pest control",
+      "totalPaid": 1800,
+      "needs1099": true
+    },
+    {
+      "vendor": "Rooter Brothers Plumbing",
+      "totalPaid": 1167.33,
+      "needs1099": true
+    },
+    {
+      "vendor": "Freshcoat Painters",
+      "totalPaid": 680,
+      "needs1099": true
+    },
+    {
+      "vendor": "Summit Roofing",
+      "totalPaid": 640,
+      "needs1099": true
+    }
+  ]
+}

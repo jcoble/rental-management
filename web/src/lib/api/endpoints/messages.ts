@@ -1,5 +1,6 @@
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
+import { idempotentMutation } from '../idempotency';
 
 /** Channels a message can be delivered on. Portal is the always-on base channel. */
 export type MessageChannel = 'Portal' | 'Email' | 'Sms';
@@ -47,6 +48,7 @@ export interface ConversationUnreadCountResponse {
 }
 
 export interface StartConversationRequest {
+	operationKey: string;
 	tenantId: number;
 	subject: string;
 	body: string;
@@ -60,6 +62,7 @@ export interface StartConversationRequest {
 }
 
 export interface SendMessageRequest {
+	operationKey: string;
 	body: string;
 	channels: string[];
 }
@@ -70,8 +73,16 @@ export const messages = {
 	listPage: (params?: ListParams) =>
 		api.get<ConversationListResponse>(`/conversations/page${buildListQuery(params)}`),
 	unreadCount: () => api.get<ConversationUnreadCountResponse>('/conversations/unread-count'),
-	/** Fetch one conversation's full history. Marks the thread read for the landlord. */
-	get: (id: number) => api.get<Conversation>(`/conversations/${id}`),
+	/** Fetch the thread first so stale links settle as a permanent 404 before any mark-read write. */
+	get: async (id: number) => {
+		const conversation = await api.get<Conversation>(`/conversations/${id}`);
+		await idempotentMutation(`conversations:read:${id}`, (operationKey) =>
+			api.post<void>(`/conversations/${id}/read`, {}, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		);
+		return conversation;
+	},
 	/** Start a new conversation with a tenant. */
 	start: (data: StartConversationRequest) => api.post<Conversation>('/conversations', data),
 	/** Reply to an existing conversation. */

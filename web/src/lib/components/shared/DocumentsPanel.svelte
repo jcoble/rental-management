@@ -7,16 +7,21 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { FileText, Image, Trash2, Upload, AlertCircle, FolderOpen } from '@lucide/svelte';
+	import { ApiError } from '$lib/api/client';
 
 	let {
 		entityType,
 		entityId,
 		title = 'Documents',
+		canUpload = true,
+		canDelete = false,
 		onChanged,
 	}: {
 		entityType: string;
 		entityId: number;
 		title?: string;
+		canUpload?: boolean;
+		canDelete?: boolean;
 		onChanged?: () => void;
 	} = $props();
 
@@ -35,18 +40,32 @@
 	// ── Upload ─────────────────────────────────────────────────────────────────
 	let fileInput: HTMLInputElement | undefined = $state();
 	let uploading = $state(false);
+	let pendingUploadOperation = $state<{ fingerprint: string; id: string } | null>(null);
+
+	function isTerminal(error: unknown): boolean {
+		return error instanceof ApiError
+			&& error.status >= 400 && error.status < 500
+			&& error.status !== 408 && error.status !== 429;
+	}
 
 	async function handleFileChange(e: Event) {
 		const input = e.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
 		if (!file) return;
+		const fingerprint = `${entityType}:${entityId}:${file.name}:${file.type}:${file.size}:${file.lastModified}`;
+		const operation = pendingUploadOperation?.fingerprint === fingerprint
+			? pendingUploadOperation
+			: { fingerprint, id: crypto.randomUUID() };
+		pendingUploadOperation = operation;
 		uploading = true;
 		try {
-			await documents.upload(entityType, entityId, file);
+			await documents.upload(entityType, entityId, file, undefined, operation.id);
+			pendingUploadOperation = null;
 			showSuccess(`"${file.name}" uploaded.`);
 			queryClient.invalidateQueries({ queryKey: queryKey });
 			onChanged?.();
 		} catch (err) {
+			if (isTerminal(err)) pendingUploadOperation = null;
 			showError(apiErrorMessage(err, 'Upload failed.'));
 		} finally {
 			uploading = false;
@@ -70,18 +89,23 @@
 
 	// ── Delete ─────────────────────────────────────────────────────────────────
 	let pendingDelete = $state<DocumentItem | null>(null);
+	let deleteOperationId = $state<string | null>(null);
 
 	const deleteMutation = createMutation(() => ({
-		mutationFn: (id: number) => documents.delete(id),
+		mutationFn: (id: number) => documents.delete(id, (deleteOperationId ??= crypto.randomUUID())),
 		onSuccess: () => {
 			showSuccess('Document deleted.');
 			queryClient.invalidateQueries({ queryKey: queryKey });
 			onChanged?.();
 			pendingDelete = null;
+			deleteOperationId = null;
 		},
 		onError: (err) => {
 			showError(apiErrorMessage(err, 'Delete failed.'));
-			pendingDelete = null;
+			if (isTerminal(err)) {
+				pendingDelete = null;
+				deleteOperationId = null;
+			}
 		},
 	}));
 
@@ -101,25 +125,28 @@
 <Card.Root data-testid="documents-panel">
 	<Card.Header class="flex flex-row items-center justify-between space-y-0 pb-3">
 		<Card.Title class="text-base font-semibold">{title}</Card.Title>
-		<Button
-			size="sm"
-			variant="outline"
-			class="gap-1.5"
-			onclick={triggerUpload}
-			disabled={uploading}
-			data-testid="documents-upload-btn"
-		>
-			<Upload class="h-3.5 w-3.5" />
-			{uploading ? 'Uploading…' : 'Upload'}
-		</Button>
-		<!-- Hidden file input -->
-		<input
-			bind:this={fileInput}
-			type="file"
-			class="hidden"
-			onchange={handleFileChange}
-			data-testid="documents-file-input"
-		/>
+		{#if canUpload}
+			<Button
+				size="sm"
+				variant="outline"
+				class="gap-1.5"
+				onclick={triggerUpload}
+				disabled={uploading}
+				data-testid="documents-upload-btn"
+			>
+				<Upload class="h-3.5 w-3.5" />
+				{uploading ? 'Uploading…' : 'Upload'}
+			</Button>
+		{/if}
+		{#if canUpload}
+			<input
+				bind:this={fileInput}
+				type="file"
+				class="hidden"
+				onchange={handleFileChange}
+				data-testid="documents-file-input"
+			/>
+		{/if}
 	</Card.Header>
 
 	<Card.Content class="pt-0">
@@ -142,7 +169,9 @@
 			<div class="flex flex-col items-center gap-2 py-8 text-center text-muted-foreground" data-testid="documents-empty">
 				<FolderOpen class="h-8 w-8 opacity-40" />
 				<p class="text-sm">No documents yet.</p>
-				<p class="text-xs opacity-70">Upload a file to attach it to this record.</p>
+				{#if canUpload}
+					<p class="text-xs opacity-70">Upload a file to attach it to this record.</p>
+				{/if}
 			</div>
 
 		{:else}
@@ -173,17 +202,18 @@
 							</p>
 						</div>
 
-						<!-- Delete -->
-						<Button
-							size="icon"
-							variant="ghost"
-							class="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-							onclick={() => (pendingDelete = doc)}
-							aria-label={`Delete ${doc.fileName}`}
-							data-testid="document-delete-{doc.id}"
-						>
-							<Trash2 class="h-3.5 w-3.5" />
-						</Button>
+						{#if canDelete}
+							<Button
+								size="icon"
+								variant="ghost"
+								class="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+								onclick={() => (pendingDelete = doc)}
+								aria-label={`Delete ${doc.fileName}`}
+								data-testid="document-delete-{doc.id}"
+							>
+								<Trash2 class="h-3.5 w-3.5" />
+							</Button>
+						{/if}
 					</li>
 				{/each}
 			</ul>
@@ -198,5 +228,8 @@
 	busy={deleteMutation.isPending}
 	testid="documents-delete"
 	onconfirm={() => pendingDelete && deleteMutation.mutate(pendingDelete.id)}
-	oncancel={() => (pendingDelete = null)}
+	oncancel={() => {
+		pendingDelete = null;
+		deleteOperationId = null;
+	}}
 />

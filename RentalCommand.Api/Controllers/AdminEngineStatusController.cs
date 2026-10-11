@@ -12,12 +12,11 @@ namespace RentalCommand.Api.Controllers;
 /// the running Engine instance, and the active LLM provider/model.
 ///
 /// Not portfolio-scoped — engine health is infrastructure, not tenant data — so this inherits
-/// plain <see cref="ControllerBase"/> with an Admin role gate rather than the portfolio base.
+/// plain <see cref="ControllerBase"/> and uses the platform-operator policy.
 /// </summary>
 [ApiController]
 [Route("api/v1/admin/engine-status")]
-// Platform-operator surface — gated by the PlatformAdmin email allowlist (F6 / TSK-212),
-// NOT the landlord Admin role. Ordinary portfolio admins must not see Engine internals.
+// Platform-operator surface — gated by the DB-backed PlatformAdmin email allowlist (F6 / TSK-212).
 [Authorize(Policy = PlatformAdminPolicy.Name)]
 [Produces("application/json")]
 public class AdminEngineStatusController : ControllerBase

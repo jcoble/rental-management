@@ -33,28 +33,14 @@ These live on the header so they're one tap from anywhere; they can still also
 appear in their drawer group. Badges should live-update (SignalR) where we have
 counts (unread messages, upcoming appts).
 
-### 3. Reconcile Activity feed + Audit log (currently two broken halves)
-Investigation findings:
-- `/activity` page reads `ActivityLog` table. **NOTHING writes to it** → always
-  "No activity found." Dead viewer.
-- A real append-only `AuditLog` table DOES exist (`AuditTrailService.LogAsync`)
-  with actor / IP / operation / **old→new values** / timestamp / reason. It's
-  already populated for: Scan, Screening, Lease e-sign (sent/signed/declined),
-  Vendor dispatch, W-9 request, inbound SMS (rent-confirm, vendor-done),
-  Applications. But it has **NO UI / no controller** → invisible.
+### 3. Canonical atomic activity/audit trail
+Resolved by TSK-672: `AtomicAuditLogs` is the sole append-only store and the activity,
+record-history, and forensic readers all project from it. The old `ActivityLog` and
+`AuditLog` stores/writers are removed; there is no fallback or dual-write path.
 
-Plan:
-- **Pick one store.** Promote `AuditLog` as the source of truth; either retire
-  `ActivityLog` or make the `/activity` page read `AuditLog` (with a clean DTO).
-- **Transaction log (every entity):** write an audit/activity row on create /
-  edit / delete / status-change for Payments, Expenses, Leases, Tenants,
-  WorkOrders, Deposits, etc. — at least actor + what changed.
-- **Deep audit (important things):** ensure full old→new diffs on Leases
-  (create / edit / terminate), **signatures**, deposits/refunds, payment
-  reversals — the legally-sensitive trail.
-- **Viewer:** make `/activity` show the unified trail w/ working type + entity
-  filters; add a per-record "History" tab on detail pages (Lease, Payment, etc.)
-  filtered to that entity. Admin-only deep view (IP / raw old→new JSON).
+Remaining mutation conversions are explicitly fail-closed and inventoried in
+`Docs/Reviews/2026-07-14-tsk-672-canonical-audit-cutover.md`. Each must stage its semantic
+event inside the receipt-backed atomic command before the final enforcement gate is enabled.
 
 ### 4. Money pages: separation of concerns (Accounting / Deposits / Banking)
 Findings: three money pages with confusing overlap.
@@ -510,21 +496,19 @@ check SignalWire/Twilio config (separate from email).
 **ROOT CAUSE FOUND (email):** API key is VALID (starts `SG.`, 69 chars, send
 returned 202 — a bad key = 401). The screenshot the user saw is the SendGrid API
 Key **ID** (`WVY2…`), NOT the secret key (secret shown once at creation only).
-Real issue = **domain auth mismatch**: From = `noreply@coblesolutions.com`, but
-the user authenticated `coblesolutions.com` with **Zoho** (DKIM/SPF point to
-Zoho), and the domain is **NOT authenticated in SendGrid**. So SendGrid-sent mail
-fails SPF/DKIM alignment for the domain → with a strict DMARC policy Gmail
-**silently drops it** (explains "not even in spam", despite 202).
+Real issue = **domain auth mismatch**: old From addresses lived on a different
+domain, but the app's public/sending domain is now `rentalcommand.net`. Send
+through the domain-authenticated provider (Google Workspace/Gmail SMTP) or
+authenticate `rentalcommand.net` in SendGrid so SPF/DKIM align with DMARC.
 FIX — pick one:
-- **A) Authenticate domain in SendGrid** (Settings → Sender Authentication →
-  Authenticate Your Domain): add ~3 CNAMEs to DNS + `include:sendgrid.net` to SPF.
-  Coexists with Zoho. Standard/scalable fix.
-- **B) Send via Zoho SMTP** (`smtp.zoho.com`) — reuse the already-authenticated
-  Zoho domain, zero new DNS. Lower send limits but fine at this scale.
-  RECOMMENDED for now (user already did the Zoho DKIM work). Add a config-selected
-  email transport (SendGrid vs SMTP/Zoho) so it's swappable.
-  [Supersedes the earlier project memory note "email=SendGrid"; Zoho is now an
-  option since the user's domain is authenticated there.]
+- **A) Google Workspace/Gmail authenticated SMTP** (`smtp.gmail.com:587`) from
+  `jcoble@rentalcommand.net` with an app password.
+- **B) Google Workspace SMTP relay** (`smtp-relay.gmail.com:587`) from
+  `jcoble@rentalcommand.net`; allow the VPS IP in Workspace Admin.
+- **C) Authenticate domain in SendGrid** (Settings → Sender Authentication →
+  Authenticate Your Domain): add the SendGrid CNAMEs and include SendGrid in SPF.
+  [Supersedes the earlier project memory note "email=SendGrid"; authenticated
+  Workspace/Gmail SMTP is now the preferred low-friction path for early testing.]
 
 ### 28. Google auth (OAuth sign-in) — wire up credentials, it's built
 Code is ALREADY built end-to-end: backend `AuthController POST /auth/google`
@@ -653,8 +637,8 @@ Plan:
 
 ### Wave 8 — Polish batch merged in PR #90 (main `e9b3a0e`)
 - **#22** Inline feature explainers (HelpPopover) across Scan/Notices/Accounting/AI/Lease.
-- **#27** SMTP/Zoho email transport (config-selectable; set Transport=Smtp + smtp.zoho.com creds to fix
-  DMARC delivery). Engine tests 33/33.
+- **#27** SMTP email transport (config-selectable; supports authenticated SMTP and
+  relay mode for DMARC-aligned delivery). Engine tests 33/33.
 
 ### ✅ ALL FIVE DECISION-SPEC FEATURES SHIPPED (PRs #85–#89)
 Reports Hub (#17) · Bank reconciliation (#4/#5) · Docs+KB (#13/#14) · Sandbox (#11) · Native e-sign (#23).
@@ -666,7 +650,7 @@ reconciliation → docs+KB → sandbox(migration) → e-sign(migration).
 
 ### Still open (next waves / need product decisions)
 Polish/feature: #22 (inline feature explainers), #24 (state-specific lease template),
-#27 (email deliverability — use Zoho SMTP), #28 (Google auth — just needs creds),
+#27 (email deliverability — use authenticated SMTP or Workspace relay), #28 (Google auth — just needs creds),
 #18 (onboarding skip + sandbox gating), address-autocomplete API key (sub-item of #19).
 Bigger projects: #3 (audit log unify), #4/#5 (reconciliation — IN PROGRESS),
 #11 (Sandbox), #13/#14 (docs + KB), #23/#26 (native e-sign + module).

@@ -56,6 +56,37 @@ public sealed class PlacesRateLimitTests
         result.Should().BeOfType<OkObjectResult>("a different caller has its own budget");
     }
 
+    [Fact]
+    public async Task Rotating_session_tokens_cannot_bypass_the_ip_cost_ceiling()
+    {
+        var controller = CreateController(ip: "203.0.113.12");
+        IActionResult? result = null;
+
+        for (var i = 0; i <= PlacesRateLimiter.IpLimit; i++)
+        {
+            result = await controller.Autocomplete(
+                q: "123 main",
+                session: $"attacker-session-{i}",
+                CancellationToken.None);
+        }
+
+        result.Should().BeOfType<ObjectResult>()
+            .Which.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests);
+    }
+
+    [Fact]
+    public async Task Oversized_session_token_is_rejected_before_rate_limit_state_is_allocated()
+    {
+        var controller = CreateController(ip: "203.0.113.13");
+
+        var result = await controller.Autocomplete(
+            q: "123 main",
+            session: new string('x', 129),
+            CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
     private static PlacesController CreateController(string ip)
     {
         // No API key configured => Enabled=false, so the proxy never makes a real upstream call; the

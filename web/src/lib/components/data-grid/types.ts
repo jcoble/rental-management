@@ -45,6 +45,10 @@ export interface ColumnDef<T> {
 	maxWidth?: string;
 	/** Extra class(es) appended to both the `<th>` and `<td>`. */
 	class?: string;
+	/** Pin a column to the left or right edge while the desktop table scrolls. */
+	pinned?: 'left' | 'right';
+	/** CSS inset used by a right-pinned column when another pinned column follows it. */
+	pinnedOffset?: string;
 	/** Role in the mobile card layout. First column defaults to `title`, rest to `meta`. */
 	mobileRole?: MobileColumnRole;
 	/** Override the label shown in the mobile card fields grid. Defaults to `title`. */

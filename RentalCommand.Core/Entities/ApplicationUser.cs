@@ -8,16 +8,33 @@ namespace RentalCommand.Core.Entities;
 /// </summary>
 public class ApplicationUser : IdentityUser<int>
 {
-    public int? PortfolioId { get; set; }
-    public int? OwnerEntityId { get; set; }
-    public int? TenantId { get; set; }
+    public const string RegistrationTermsPrivacyVersion = "terms-and-privacy-v1";
+
+    public ApplicationUser()
+    {
+        // Failed-login lockout is a platform invariant. Keep the Identity default enabled even
+        // for callers that construct an account outside the canonical bootstrap command.
+        LockoutEnabled = true;
+    }
+
     public string DisplayName { get; set; } = string.Empty;
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
 
-    public Portfolio? Portfolio { get; set; }
-    public OwnerEntity? OwnerEntity { get; set; }
-    public Tenant? Tenant { get; set; }
-    public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
-    public ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
+    /// <summary>Whether this account accepted the registration Terms of Service and Privacy Policy.</summary>
+    public bool TermsPrivacyAccepted { get; set; }
+
+    /// <summary>UTC time the registration consent was captured.</summary>
+    public DateTime? TermsPrivacyAcceptedAtUtc { get; set; }
+
+    /// <summary>Immutable version label identifying the text accepted at registration.</summary>
+    public string? TermsPrivacyVersion { get; set; }
+
+    public ICollection<WorkspaceAccessContext> WorkspaceAccessContexts { get; set; } =
+        new List<WorkspaceAccessContext>();
+    public ICollection<OwnerUserAccess> OwnerUserAccesses { get; set; } = new List<OwnerUserAccess>();
+    public ICollection<TenantUserAccess> TenantUserAccesses { get; set; } = new List<TenantUserAccess>();
+    public ICollection<AuthSession> AuthSessions { get; set; } = new List<AuthSession>();
+    public ICollection<LoginContextSelectionChallenge> LoginContextSelectionChallenges { get; set; } =
+        new List<LoginContextSelectionChallenge>();
 }

@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -8,14 +9,26 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IOwnerEntityService
 {
-    Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
-    Task<OwnerEntityListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
-    Task<OwnerEntityResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
-    Task<OwnerEntityResponse> CreateAsync(int portfolioId, CreateOwnerEntityRequest request, CancellationToken ct = default);
-    Task<OwnerEntityResponse?> UpdateAsync(int portfolioId, int id, UpdateOwnerEntityRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAsync(
-        int portfolioId,
+    Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<OwnerEntityListResponse> ListPageAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<OwnerEntityResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
+    Task<OwnerEntityResponse?> CreateAsync(WorkspaceReadScope scope, CreateOwnerEntityRequest request, string operationKey, CancellationToken ct = default);
+    Task<OwnerEntityResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateOwnerEntityRequest request, string operationKey, CancellationToken ct = default);
+    Task<ActivateOwnerPortalAccessResponse> ActivateOwnerPortalAccessAsync(
+        WorkspaceReadScope scope,
         int id,
-        DeleteOwnerEntityOptions? options = null,
+        ActivateOwnerPortalAccessRequest request,
+        string operationKey,
+        CancellationToken ct = default);
+    Task<RevokeOwnerPortalAccessResponse> RevokeOwnerPortalAccessAsync(
+        WorkspaceReadScope scope,
+        int id,
+        RevokeOwnerPortalAccessRequest request,
+        string operationKey,
+        CancellationToken ct = default);
+    Task<bool> DeleteAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
         CancellationToken ct = default);
 }

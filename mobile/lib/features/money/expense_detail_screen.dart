@@ -3,12 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../activity/activity_history_screen.dart';
+import '../accounting/accounting_book_models.dart';
+import '../accounting/accounting_impact_card.dart';
+import '../properties/capital_assets_repository.dart';
 import 'expense_models.dart';
-import 'money_format.dart';
+import '../../core/presentation/formatting.dart';
 import 'money_repository.dart';
 import 'receipt_attachment_repository.dart';
 import 'receipt_upload_sheet.dart';
 import 'receipt_viewer_screen.dart';
+import 'transactions_controller.dart';
 
 /// Detail page for one expense — view, inline edit, delete, and receipt viewer.
 ///
@@ -27,23 +32,24 @@ class ExpenseDetailScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Expense'),
         actions: [
-          async.maybeWhen(
-            data: (e) => PopupMenuButton<String>(
-              onSelected: (value) async {
-                if (value == 'delete') {
-                  await _confirmDelete(context, ref, e);
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(
-                  value: 'delete',
-                  child: ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.delete_outline),
-                    title: Text('Delete'),
-                  ),
+          IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: 'View expense activity',
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => ActivityHistoryScreen(
+                  entityType: 'Expense',
+                  entityId: expenseId,
+                  title: 'Expense activity',
                 ),
-              ],
+              ),
+            ),
+          ),
+          async.maybeWhen(
+            data: (expense) => IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Delete expense',
+              onPressed: () => _confirmDelete(context, ref, expense),
             ),
             orElse: () => const SizedBox.shrink(),
           ),
@@ -92,6 +98,8 @@ class ExpenseDetailScreen extends ConsumerWidget {
     try {
       await ref.read(moneyRepositoryProvider).deleteExpense(expense.id);
       ref.invalidate(expensesListProvider);
+      ref.invalidate(expensesPageProvider);
+      ref.invalidate(transactionsProvider);
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(const SnackBar(content: Text('Expense deleted.')));
@@ -121,6 +129,8 @@ class _ExpenseBody extends ConsumerWidget {
     if (saved == true) {
       ref.invalidate(expenseDetailProvider(expense.id));
       ref.invalidate(expensesListProvider);
+      ref.invalidate(expensesPageProvider);
+      ref.invalidate(transactionsProvider);
     }
   }
 
@@ -146,9 +156,38 @@ class _ExpenseBody extends ConsumerWidget {
     ref.invalidate(expenseDetailProvider(expense.id));
     ref.invalidate(expenseReceiptProvider(expense.id));
     ref.invalidate(expensesListProvider);
+    ref.invalidate(expensesPageProvider);
+    ref.invalidate(transactionsProvider);
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(content: Text('Receipt uploaded.')));
+  }
+
+  Future<void> _capitalize(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _CapitalizeExpenseSheet(expense: expense),
+    );
+    if (saved != true) return;
+
+    ref.invalidate(expenseDetailProvider(expense.id));
+    ref.invalidate(expensesListProvider);
+    ref.invalidate(expensesPageProvider);
+    ref.invalidate(transactionsProvider);
+    final propertyId = expense.propertyId;
+    if (propertyId != null) {
+      ref.invalidate(propertyCapitalAssetsProvider(propertyId));
+    }
+    if (!context.mounted) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Expense capitalized.')));
   }
 
   @override
@@ -184,6 +223,8 @@ class _ExpenseBody extends ConsumerWidget {
                 cs.tertiaryContainer,
                 cs.onTertiaryContainer,
               ),
+            if (expense.capitalizedAssetId != null)
+              _chip('Capitalized', cs.primaryContainer, cs.onPrimaryContainer),
           ],
         ),
         const SizedBox(height: 20),
@@ -238,6 +279,14 @@ class _ExpenseBody extends ConsumerWidget {
             ),
         ],
 
+        AccountingImpactCard(
+          sourceId: expense.id,
+          sourceTypes: const [
+            JournalSourceType.billIncurred,
+            JournalSourceType.expensePayment,
+          ],
+        ),
+
         const SizedBox(height: 24),
         if (expense.hasReceipt)
           OutlinedButton.icon(
@@ -256,6 +305,21 @@ class _ExpenseBody extends ConsumerWidget {
           label: const Text('Upload receipt'),
         ),
         const SizedBox(height: 12),
+        if (expense.capitalizedAssetId != null) ...[
+          OutlinedButton.icon(
+            onPressed: null,
+            icon: const Icon(Icons.account_balance_wallet_outlined),
+            label: const Text('Capitalized'),
+          ),
+          const SizedBox(height: 12),
+        ] else if (expense.propertyId != null) ...[
+          OutlinedButton.icon(
+            onPressed: () => _capitalize(context, ref),
+            icon: const Icon(Icons.account_balance_wallet_outlined),
+            label: const Text('Capitalize expense'),
+          ),
+          const SizedBox(height: 12),
+        ],
         FilledButton.icon(
           onPressed: () => _edit(context, ref),
           icon: const Icon(Icons.edit_outlined),
@@ -367,6 +431,194 @@ class _ErrorView extends StatelessWidget {
   }
 }
 
+class _CapitalizeExpenseSheet extends ConsumerStatefulWidget {
+  const _CapitalizeExpenseSheet({required this.expense});
+
+  final Expense expense;
+
+  @override
+  ConsumerState<_CapitalizeExpenseSheet> createState() =>
+      _CapitalizeExpenseSheetState();
+}
+
+class _CapitalizeExpenseSheetState
+    extends ConsumerState<_CapitalizeExpenseSheet> {
+  final _descriptionCtrl = TextEditingController();
+  final _recoveryYearsCtrl = TextEditingController(text: '27.5');
+  late DateTime _inServiceDate;
+  DepreciationMethod _method = DepreciationMethod.straightLine;
+  DepreciationConvention _convention = DepreciationConvention.midMonth;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final expense = widget.expense;
+    _descriptionCtrl.text = expense.description;
+    _inServiceDate = expense.incurredAt.year > 1
+        ? expense.incurredAt
+        : DateTime.now();
+  }
+
+  @override
+  void dispose() {
+    _descriptionCtrl.dispose();
+    _recoveryYearsCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _inServiceDate,
+      firstDate: DateTime(now.year - 40),
+      lastDate: DateTime(now.year + 1),
+    );
+    if (picked != null) setState(() => _inServiceDate = picked);
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+
+    final description = _descriptionCtrl.text.trim();
+    try {
+      await ref.read(moneyRepositoryProvider).capitalizeExpense(
+        widget.expense.id,
+        {
+          'inServiceDate': _inServiceDate.toIso8601String(),
+          'method': _method.wire,
+          'recoveryYears': double.tryParse(_recoveryYearsCtrl.text.trim()) ?? 0,
+          'convention': _convention.wire,
+          if (description.isNotEmpty) 'description': description,
+        },
+      );
+      if (mounted) Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const gap = SizedBox(height: 12);
+    return TabbedFormSheet(
+      title: 'Capitalize Expense',
+      saveLabel: 'Capitalize',
+      saving: _saving,
+      error: _error,
+      onSave: _submit,
+      tabs: [
+        TabbedFormStepSpec(
+          label: 'Asset',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Cost basis: ${moneyFmt(widget.expense.amount)}',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              gap,
+              TextFormField(
+                key: const Key('expense-capitalize-description-field'),
+                controller: _descriptionCtrl,
+                textInputAction: TextInputAction.next,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(labelText: 'Description'),
+                validator: (value) =>
+                    (value != null && value.trim().length > 500)
+                    ? 'Description must be 500 characters or fewer'
+                    : null,
+              ),
+              gap,
+              InkWell(
+                onTap: _pickDate,
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'In-service date',
+                    suffixIcon: Icon(Icons.calendar_today_outlined, size: 18),
+                  ),
+                  child: Text(dateFmt(_inServiceDate)),
+                ),
+              ),
+            ],
+          ),
+        ),
+        TabbedFormStepSpec(
+          label: 'Depreciation',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              DropdownButtonFormField<DepreciationMethod>(
+                key: const Key('expense-capitalize-method-field'),
+                initialValue: _method,
+                decoration: const InputDecoration(labelText: 'Method'),
+                items: DepreciationMethod.values
+                    .map(
+                      (method) => DropdownMenuItem(
+                        value: method,
+                        child: Text(method.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) setState(() => _method = value);
+                },
+              ),
+              gap,
+              TextFormField(
+                key: const Key('expense-capitalize-recovery-years-field'),
+                controller: _recoveryYearsCtrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  labelText: 'Recovery life',
+                  suffixText: 'years',
+                ),
+                validator: (value) => _numberInRange(
+                  value,
+                  min: 1,
+                  max: 40,
+                  label: 'Recovery life',
+                ),
+              ),
+              gap,
+              DropdownButtonFormField<DepreciationConvention>(
+                key: const Key('expense-capitalize-convention-field'),
+                initialValue: _convention,
+                decoration: const InputDecoration(labelText: 'Convention'),
+                items:
+                    const [
+                          DepreciationConvention.midMonth,
+                          DepreciationConvention.halfYear,
+                        ]
+                        .map(
+                          (convention) => DropdownMenuItem(
+                            value: convention,
+                            child: Text(convention.label),
+                          ),
+                        )
+                        .toList(),
+                onChanged: (value) {
+                  if (value != null) setState(() => _convention = value);
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// Inline edit sheet for an expense (amount / category / status / dates / notes).
 class _EditExpenseSheet extends ConsumerStatefulWidget {
   const _EditExpenseSheet({required this.expense});
@@ -439,7 +691,7 @@ class _EditExpenseSheetState extends ConsumerState<_EditExpenseSheet> {
       });
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      if (mounted) setState(() => _error = e.message);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -555,3 +807,20 @@ class _EditExpenseSheetState extends ConsumerState<_EditExpenseSheet> {
     );
   }
 }
+
+String? _numberInRange(
+  String? value, {
+  required double min,
+  required double max,
+  required String label,
+}) {
+  final parsed = double.tryParse(value?.trim() ?? '');
+  if (parsed == null) return 'Enter a number';
+  if (parsed < min || parsed > max) {
+    return '$label must be between ${_rangeLabel(min)} and ${_rangeLabel(max)}';
+  }
+  return null;
+}
+
+String _rangeLabel(double value) =>
+    value == value.roundToDouble() ? value.toStringAsFixed(0) : '$value';

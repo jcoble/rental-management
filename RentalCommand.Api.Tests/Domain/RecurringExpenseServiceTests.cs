@@ -1,136 +1,85 @@
 using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Portfolio-scoped CRUD for recurring-expense templates: create validates property/unit
-/// in-portfolio (the IDOR guard), defaults NextRunDate to StartDate, update/soft-delete behave, and
-/// the soft-delete query filter hides removed templates.
+/// Portfolio-scoped recurring-expense reads, SQL-side paging, and the contract that all business
+/// mutations flow through scoped receipt-backed commands.
 /// </summary>
-public class RecurringExpenseServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public class RecurringExpenseServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
-    private readonly RecurringExpenseService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RecurringExpenseService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public RecurringExpenseServiceTests()
+    public RecurringExpenseServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _sut = new RecurringExpenseService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        _fixture = fixture;
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(RecurringExpenseServiceTests));
+        _sut = new RecurringExpenseService(
+            _ctx.Db, TimeProvider.System, Mock.Of<IWriteExecutor>());
+    }
+
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
-    public async Task CreateAsync_PersistsTemplate_DefaultsNextRunToStart()
+    public void MutationsExposeOnlyScopedReceiptBackedOverloads()
+    {
+        var mutationMethods = typeof(IRecurringExpenseService).GetMethods()
+            .Where(method => method.Name is "CreateAsync" or "UpdateAsync" or "DeleteAsync")
+            .ToArray();
+
+        mutationMethods.Should().HaveCount(3);
+        mutationMethods.Should().OnlyContain(method =>
+            method.GetParameters().First().ParameterType == typeof(RentalCommand.Core.Authorization.WorkspaceReadScope) &&
+            method.GetParameters().Any(parameter => parameter.Name == "idempotencyKey"));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_FiltersByNextRunDate_AndReturnsPagedMetadata()
     {
         var property = SeedProperty();
+        SeedTemplate(property.Id, description: "January insurance", nextRunDate: new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc));
+        SeedTemplate(property.Id, description: "February insurance", nextRunDate: new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc));
+        SeedTemplate(property.Id, description: "March insurance", nextRunDate: new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc));
 
-        var result = await _sut.CreateAsync(PortfolioId, new CreateRecurringExpenseRequest
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var page = await _sut.ListPageAsync(_scope, property.Id, new ListQuery
         {
-            PropertyId = property.Id,
-            Category = ScheduleECategory.Insurance,
-            Description = "Annual policy",
-            Amount = 1_200m,
-            Frequency = RecurringExpenseFrequency.Annual,
-            StartDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            From = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            To = new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc),
+            Sort = "-nextRunDate",
+            Skip = 0,
+            Take = 1,
         });
 
-        result.Should().NotBeNull();
-        result!.Description.Should().Be("Annual policy");
-        result.Frequency.Should().Be(RecurringExpenseFrequency.Annual);
-        result.NextRunDate.Should().Be(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-        result.PropertyName.Should().Be(property.Name);
-        result.Active.Should().BeTrue();
-        _ctx.Db.RecurringExpenses.Should().HaveCount(1);
-    }
-
-    [Fact]
-    public async Task CreateAsync_RejectsPropertyOutsidePortfolio()
-    {
-        SeedPortfolio(999);
-        var foreign = SeedProperty(portfolioId: 999);
-
-        var result = await _sut.CreateAsync(PortfolioId, new CreateRecurringExpenseRequest
-        {
-            PropertyId = foreign.Id,
-            Description = "Should not link",
-            Amount = 100m,
-            StartDate = DateTime.UtcNow,
-        });
-
-        result.Should().BeNull();
-        _ctx.Db.RecurringExpenses.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task UpdateAsync_ChangesFields()
-    {
-        var property = SeedProperty();
-        var template = SeedTemplate(property.Id);
-
-        var result = await _sut.UpdateAsync(PortfolioId, template.Id, new UpdateRecurringExpenseRequest
-        {
-            Amount = 999m,
-            Frequency = RecurringExpenseFrequency.Quarterly,
-            Active = false,
-        });
-
-        result.Should().NotBeNull();
-        result!.Amount.Should().Be(999m);
-        result.Frequency.Should().Be(RecurringExpenseFrequency.Quarterly);
-        result.Active.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task CrossPortfolio_CannotReadOrMutate()
-    {
-        var property = SeedProperty();
-        var template = SeedTemplate(property.Id);
-
-        (await _sut.GetAsync(portfolioId: 2, template.Id)).Should().BeNull();
-        (await _sut.UpdateAsync(portfolioId: 2, template.Id, new UpdateRecurringExpenseRequest { Amount = 1m })).Should().BeNull();
-        (await _sut.DeleteAsync(portfolioId: 2, template.Id)).Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task DeleteAsync_SoftDeletes_AndHidesFromReads()
-    {
-        var property = SeedProperty();
-        var template = SeedTemplate(property.Id);
-
-        (await _sut.DeleteAsync(PortfolioId, template.Id)).Should().BeTrue();
-
-        (await _sut.GetAsync(PortfolioId, template.Id)).Should().BeNull();
-        (await _sut.ListAsync(PortfolioId, propertyId: null, new ListQuery())).Should().BeEmpty();
-        _ctx.Db.RecurringExpenses.IgnoreQueryFilters().Should().HaveCount(1);
+        page.TotalCount.Should().Be(2);
+        page.Skip.Should().Be(0);
+        page.Take.Should().Be(1);
+        page.Items.Should().ContainSingle();
+        page.Items[0].Description.Should().Be("March insurance");
+        page.Items[0].PropertyName.Should().Be(property.Name);
     }
 
     // -----------------------------------------------------------------------
     // Helpers
-
-    private void SeedPortfolio(int id)
-    {
-        var now = DateTime.UtcNow;
-        _ctx.Db.Portfolios.Add(new Portfolio
-        {
-            Id = id,
-            Name = $"Portfolio {id}",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _ctx.Db.SaveChanges();
-    }
 
     private Property SeedProperty(int portfolioId = PortfolioId)
     {
@@ -151,19 +100,23 @@ public class RecurringExpenseServiceTests : IDisposable
         return property;
     }
 
-    private RecurringExpense SeedTemplate(int propertyId)
+    private RecurringExpense SeedTemplate(
+        int propertyId,
+        string description = "Monthly insurance",
+        DateTime? nextRunDate = null)
     {
         var now = DateTime.UtcNow;
+        var nextRun = nextRunDate ?? now.Date;
         var template = new RecurringExpense
         {
             PortfolioId = PortfolioId,
             PropertyId = propertyId,
             Category = ScheduleECategory.Insurance,
-            Description = "Monthly insurance",
+            Description = description,
             Amount = 250m,
             Frequency = RecurringExpenseFrequency.Monthly,
-            StartDate = now.Date,
-            NextRunDate = now.Date,
+            StartDate = nextRun,
+            NextRunDate = nextRun,
             Active = true,
             CreatedAt = now,
             UpdatedAt = now,

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../home/mobile_domain_chrome.dart';
+import 'notice_content_safety.dart';
 import 'notices_models.dart';
 import 'notices_repository.dart';
 
@@ -15,8 +16,15 @@ class NoticesScreen extends ConsumerWidget {
 
     Future<void> refresh() async => ref.invalidate(noticeDraftsProvider);
     Future<void> generateDrafts() async {
-      await ref.read(noticesRepositoryProvider).generate();
-      ref.invalidate(noticeDraftsProvider);
+      try {
+        await ref.read(noticesRepositoryProvider).generate();
+        ref.invalidate(noticeDraftsProvider);
+      } on ApiException catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
     }
 
     final generateButton = IconButton(
@@ -90,6 +98,9 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final channels = _selectedChannels;
+    final contentIssue = draft.status == 'Draft'
+        ? noticeContentSafetyIssue(subject: draft.subject, body: draft.body)
+        : null;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -169,12 +180,22 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
                 ],
               ),
             ],
+            if (contentIssue != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                contentIssue,
+                style: theme.textTheme.bodySmall?.copyWith(color: cs.error),
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
                   child: FilledButton.tonalIcon(
-                    onPressed: (_busy || channels.isEmpty) ? null : _approve,
+                    onPressed:
+                        (_busy || channels.isEmpty || contentIssue != null)
+                        ? null
+                        : _approve,
                     icon: const Icon(Icons.send_outlined),
                     label: const Text('Approve'),
                   ),
@@ -200,6 +221,12 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
     try {
       await ref.read(noticesRepositoryProvider).approve(draft.id, channels);
       ref.invalidate(noticeDraftsProvider);
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -210,6 +237,12 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
     try {
       await ref.read(noticesRepositoryProvider).dismiss(draft.id);
       ref.invalidate(noticeDraftsProvider);
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -217,11 +250,11 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
 
   String _label(String type) {
     switch (type) {
-      case 'RenewalOffer':
+      case 'lease-renewal-offer':
         return 'Renewal';
-      case 'LateRentNotice':
+      case 'late-rent-late-fee':
         return 'Late rent';
-      case 'MoveOutReminder':
+      case 'lease-non-renewal':
         return 'Move-out';
       default:
         return type;
@@ -280,7 +313,7 @@ class _EmptyBody extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.all(24),
         child: Text(
-          'No draft notices. Tap refresh to generate lease lifecycle drafts.',
+          'No draft notices. Tap refresh to generate lease notice drafts.',
         ),
       ),
     );

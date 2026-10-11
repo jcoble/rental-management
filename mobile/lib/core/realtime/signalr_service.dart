@@ -24,7 +24,7 @@ class RealtimeEvent {
 
   final RealtimeEventType type;
 
-  /// e.g. "Payment", "WorkOrder", "Lease", "Property", "Tenant",
+  /// e.g. "Payment", "WorkOrder", "LeaseManagement", "Property", "Tenant",
   ///      "Appointment", "ScanDraft"
   final String entityType;
 
@@ -61,8 +61,7 @@ class SignalrService {
   /// Broadcast stream of realtime events from the updates hub.
   Stream<RealtimeEvent> get events => _controller.stream;
 
-  bool get isConnected =>
-      _hub?.state == HubConnectionState.Connected;
+  bool get isConnected => _hub?.state == HubConnectionState.Connected;
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -82,7 +81,9 @@ class SignalrService {
     _hub = _buildConnection(hubUrl);
     try {
       await _hub!.start();
-      debugPrint('[SignalR] CONNECTED state=${_hub!.state}');
+      final hub = _hub;
+      if (hub == null) return;
+      debugPrint('[SignalR] CONNECTED state=${hub.state}');
     } catch (e, st) {
       debugPrint('[SignalR] connect() failed: $e\n$st');
       // withAutomaticReconnect() will keep retrying after the initial failure
@@ -121,20 +122,19 @@ class SignalrService {
 
     final hub = HubConnectionBuilder()
         .withUrl(hubUrl, options: options)
-        .withAutomaticReconnect(retryDelays: [
-          0,
-          2000,
-          5000,
-          10000,
-          30000,
-          60000,
-        ])
+        .withAutomaticReconnect(
+          retryDelays: [0, 2000, 5000, 10000, 30000, 60000],
+        )
         .build();
 
-    hub.on('EntityUpdated', (args) =>
-        _handleEvent(RealtimeEventType.entityUpdated, args));
-    hub.on('EntityDeleted', (args) =>
-        _handleEvent(RealtimeEventType.entityDeleted, args));
+    hub.on(
+      'EntityUpdated',
+      (args) => _handleEvent(RealtimeEventType.entityUpdated, args),
+    );
+    hub.on(
+      'EntityDeleted',
+      (args) => _handleEvent(RealtimeEventType.entityDeleted, args),
+    );
 
     hub.onreconnecting(({error}) {
       debugPrint('[SignalR] reconnecting… error: $error');
@@ -152,6 +152,7 @@ class SignalrService {
   }
 
   void _handleEvent(RealtimeEventType type, List<Object?>? args) {
+    if (_controller.isClosed) return;
     if (args == null || args.isEmpty) return;
 
     final raw = args[0];
@@ -161,16 +162,17 @@ class SignalrService {
     final entityId = (raw['entityId'] as num?)?.toInt() ?? 0;
     if (entityType.isEmpty) return;
 
-    _controller.add(RealtimeEvent(
-      type: type,
-      entityType: entityType,
-      entityId: entityId,
-    ));
+    _controller.add(
+      RealtimeEvent(type: type, entityType: entityType, entityId: entityId),
+    );
   }
 
+  @visibleForTesting
+  void handleEventForTesting(RealtimeEventType type, List<Object?>? args) =>
+      _handleEvent(type, args);
+
   void dispose() {
-    _controller.close();
-    disconnect();
+    disconnect().whenComplete(_controller.close);
   }
 }
 

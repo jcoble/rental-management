@@ -4,7 +4,7 @@
 person." Written so you can use the app confidently — and demo it to Dad on Father's Day and help
 him get his whole portfolio set up.*
 
-**Where it lives:** the website is at **https://rc.coblesolutions.com** (open it in any browser).
+**Where it lives:** the website is at **https://rentalcommand.net** (open it in any browser).
 There's also an **Android app** that does the same things, made for snapping photos and replying to
 tenants on the go. They're the same system — change something in one place and it shows up in the
 other.
@@ -18,7 +18,7 @@ other.
 
 ## ⏱️ 5-Minute First Run (do this once)
 
-1. **Sign in.** Go to https://rc.coblesolutions.com, enter your email + password ("Welcome back"
+1. **Sign in.** Go to https://rentalcommand.net, enter your email + password ("Welcome back"
    screen). Forgot it? There's a **"Forgot password?"** link that emails you a reset.
 2. **Choose Live or Sandbox.** The very first time, the app asks. **Sandbox** = a safe demo with
    fake example data to poke around in. **Live** = your real properties. *For setting up Dad's real

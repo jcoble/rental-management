@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
-import 'guided_rental_flow.dart';
 import 'scan_capture.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
@@ -104,6 +103,7 @@ class ScanListScreen extends ConsumerWidget {
         builder: (_) => ScanReviewScreen(draftId: draftId),
       ),
     );
+    if (!context.mounted) return;
 
     // Refresh list after returning from the review screen.
     final status = _serverStatusFor(ref.read(_scanFilterProvider));
@@ -182,21 +182,18 @@ class ScanListScreen extends ConsumerWidget {
                             return _DraftTile(
                               draft: draft,
                               onTap: () async {
-                                // Lease drafts open the guided New-rental flow;
-                                // everything else uses the standard review screen.
-                                if (draft.isLease) {
-                                  await GuidedRentalFlow.open(
-                                    context,
-                                    draft.id,
-                                  );
-                                } else {
-                                  await Navigator.of(context).push(
-                                    MaterialPageRoute<void>(
-                                      builder: (_) =>
-                                          ScanReviewScreen(draftId: draft.id),
-                                    ),
-                                  );
-                                }
+                                // Reopen every draft through the canonical
+                                // review. Lease review supports both create and
+                                // link-existing targets plus the complete
+                                // tenant, unit, possession, and agreement
+                                // contract.
+                                await Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        ScanReviewScreen(draftId: draft.id),
+                                  ),
+                                );
+                                if (!context.mounted) return;
                                 ref.invalidate(_scanListProvider(status));
                               },
                             );
@@ -239,6 +236,7 @@ class _DraftTile extends StatelessWidget {
     final colorScheme = theme.colorScheme;
 
     return ListTile(
+      titleAlignment: ListTileTitleAlignment.center,
       onTap: onTap,
       leading: CircleAvatar(
         backgroundColor: _statusColor(
@@ -263,6 +261,7 @@ class _DraftTile extends StatelessWidget {
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           _StatusChip(status: draft.status),
           const SizedBox(width: 4),

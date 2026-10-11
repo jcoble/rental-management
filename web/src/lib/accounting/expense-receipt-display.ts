@@ -1,9 +1,3 @@
-const usdFormatter = new Intl.NumberFormat('en-US', {
-	style: 'currency',
-	currency: 'USD',
-	minimumFractionDigits: 2
-});
-
 export type ExpenseReceiptTotalSource = {
 	amount?: number | null;
 	subtotal?: number | null;
@@ -20,9 +14,4 @@ export function receiptGrandTotal(source: ExpenseReceiptTotalSource): number {
 	const tax =
 		typeof source.taxAmount === 'number' && Number.isFinite(source.taxAmount) ? source.taxAmount : 0;
 	return subtotal + tax;
-}
-
-export function formatExpenseMoney(value: number | string | null | undefined): string {
-	const amount = Number(value);
-	return usdFormatter.format(Number.isFinite(amount) ? amount : 0);
 }

@@ -9,7 +9,8 @@ public class Inspection : IAuditable, IPortfolioScoped
     public int PortfolioId { get; set; }
     public int PropertyId { get; set; }
     public int? UnitId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+    public int? LeaseAgreementId { get; set; }
     public InspectionType Type { get; set; } = InspectionType.Routine;
     public InspectionStatus Status { get; set; } = InspectionStatus.Scheduled;
     public DateTime ScheduledFor { get; set; }
@@ -32,7 +33,8 @@ public class Inspection : IAuditable, IPortfolioScoped
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
-    public Lease? Lease { get; set; }
+    public LeaseManagement? LeaseManagement { get; set; }
+    public LeaseAgreement? LeaseAgreement { get; set; }
 
     /// <summary>Checklist items, ordered by <see cref="InspectionItem.SortOrder"/>.</summary>
     public List<InspectionItem> Items { get; set; } = [];

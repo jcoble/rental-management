@@ -11,20 +11,48 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 
-	let { propertyId }: { propertyId: number } = $props();
+	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
 	const queryClient = useQueryClient();
+	const PAGE_SIZE = 10;
+
+	let recurringPage = $state(1);
+	let recurringSort = $state('nextRunDate');
+	let recurringFrom = $state('');
+	let recurringTo = $state('');
+
+	let recurringFilterResetPrimed = false;
+	$effect(() => {
+		propertyId;
+		recurringFrom;
+		recurringTo;
+		if (!recurringFilterResetPrimed) {
+			recurringFilterResetPrimed = true;
+			return;
+		}
+		recurringPage = 1;
+	});
 
 	const query = createQuery(() => ({
-		queryKey: ['recurring-expenses', propertyId],
-		queryFn: () => recurringExpenses.list({ propertyId }),
+		queryKey: ['recurring-expenses', propertyId, 'page', recurringPage, recurringSort, recurringFrom, recurringTo, PAGE_SIZE],
+		queryFn: () => recurringExpenses.listPage({
+			propertyId,
+			skip: (recurringPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: recurringSort || undefined,
+			from: recurringFrom || undefined,
+			to: recurringTo || undefined
+		}),
 		enabled: !isNaN(propertyId) && propertyId > 0
 	}));
-	const list = $derived(query.data ?? []);
+	const list = $derived(query.data?.items ?? []);
+	const totalCount = $derived(query.data?.totalCount ?? 0);
 
 	const categoryOptions = EXPENSE_CATEGORY_OPTIONS;
 	const frequencyOptions = [
@@ -48,6 +76,7 @@
 	let formErrors = $state<Record<string, string>>({});
 
 	function openAdd() {
+		if (!canManage) return;
 		editingId = null;
 		form = { ...emptyForm };
 		formErrors = {};
@@ -55,6 +84,7 @@
 	}
 
 	function openEdit(t: RecurringExpense) {
+		if (!canManage) return;
 		editingId = t.id;
 		form = {
 			category: t.category,
@@ -136,6 +166,7 @@
 </script>
 
 {#snippet actionsCell(t: RecurringExpense)}
+	{#if canManage}
 	<div class="flex items-center justify-end gap-1">
 		<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(t); }} aria-label="Edit recurring expense">
 			<Pencil class="h-4 w-4" />
@@ -144,6 +175,7 @@
 			<Trash2 class="h-4 w-4" />
 		</Button>
 	</div>
+	{/if}
 {/snippet}
 
 <div class="mb-6" data-testid="property-detail-recurring-expenses">
@@ -152,24 +184,40 @@
 	<DataGrid
 		data={list}
 		{columns}
-		loading={query.isLoading}
+		loading={query.isLoading || query.isFetching}
 		emptyMessage="No recurring expenses yet."
 		getRowKey={(t) => t.id}
-		onRowClick={(t) => openEdit(t)}
-		pageSize={10}
+		onRowClick={canManage ? (t) => openEdit(t) : undefined}
+		pageSize={PAGE_SIZE}
+		page={recurringPage}
+		totalCount={totalCount}
+		serverSide
+		sort={recurringSort}
+		onPageChange={(page) => (recurringPage = page)}
+		onSortChange={(sort) => { recurringSort = sort ?? ''; recurringPage = 1; }}
 		data-testid="property-recurring-expenses-grid"
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1"></div>
+			<RangeDatePicker
+				bind:start={recurringFrom}
+				bind:end={recurringTo}
+				presets
+				placeholder="Next run dates"
+				align="end"
+				testid="property-recurring-expenses-date-range"
+			/>
+			{#if canManage}
 			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="recurring-expense-add-button">
 				<Plus class="h-4 w-4" />
 				Add Recurring Expense
 			</Button>
+			{/if}
 		{/snippet}
 	</DataGrid>
 </div>
 
-<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+<Dialog.Root open={canManage && showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
 	<Dialog.Content class="max-w-sm">
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'Add Recurring Expense' : 'Edit Recurring Expense'}</Dialog.Title>
@@ -181,7 +229,11 @@
 				<InlineField label="Amount" bind:value={form.amount} editing type="number" error={formErrors.amount} testid="recurring-expense-amount" />
 				<InlineField label="Frequency" bind:value={form.frequency} editing type="select" options={frequencyOptions} error={formErrors.frequency} testid="recurring-expense-frequency" />
 			</div>
-			<InlineField label="Start date" bind:value={form.startDate} editing type="date" error={formErrors.startDate} testid="recurring-expense-start" />
+			<div data-testid="recurring-expense-start-field">
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="recurring-expense-start-input">Start date</label>
+				<DatePicker id="recurring-expense-start-input" testid="recurring-expense-start-input" bind:value={form.startDate} />
+				{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="recurring-expense-start-error">{formErrors.startDate}</p>{/if}
+			</div>
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button variant="outline" onclick={closeForm}>Cancel</Button>
@@ -193,7 +245,7 @@
 </Dialog.Root>
 
 <ConfirmDialog
-	open={deleteTarget !== null}
+	open={canManage && deleteTarget !== null}
 	title="Remove recurring expense"
 	message={deleteTarget ? `Remove "${deleteTarget.description}"? Already-generated expenses are kept.` : ''}
 	busy={deleteMut.isPending}

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rental Application — {{firstName}} {{lastName}}</title>
+<style>
+  @page { size: Letter; margin: 0.8in; }
+  * { box-sizing: border-box; }
+  body { font-family: "Helvetica Neue", Arial, sans-serif; color: #141414; font-size: 11pt; }
+  h1 { font-size: 18pt; margin: 0 0 2pt; }
+  .co { color: #555; margin: 0 0 16pt; font-size: 10pt; }
+  h2 { font-size: 12pt; background: #f0f2f5; border-left: 4px solid #16457a; padding: 4pt 8pt; margin: 14pt 0 6pt; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 4pt 6pt; vertical-align: top; }
+  td.k { color: #444; width: 32%; }
+  td.v { font-weight: bold; border-bottom: 1px dotted #bbb; }
+  .two td.k { width: 22%; }
+  .consent { margin-top: 16pt; font-size: 9.5pt; color: #333; border: 1px solid #ccc; padding: 8pt; background: #fafafa; }
+  .sig { margin-top: 20pt; border-top: 1px solid #222; width: 300px; padding-top: 3pt; font-size: 10pt; }
+</style>
+</head>
+<body>
+  <h1>Residential Rental Application</h1>
+  <p class="co">{{managementCompany}} &middot; Springfield, OH</p>
+
+  <h2>Applicant</h2>
+  <table class="two">
+    <tr><td class="k">First name</td><td class="v">{{firstName}}</td><td class="k">Last name</td><td class="v">{{lastName}}</td></tr>
+    <tr><td class="k">Email</td><td class="v">{{email}}</td><td class="k">Phone</td><td class="v">{{phone}}</td></tr>
+    <tr><td class="k">Date of birth</td><td class="v">{{dob}}</td><td class="k">ID (last 4)</td><td class="v">{{idLast4}}</td></tr>
+  </table>
+
+  <h2>Current Residence</h2>
+  <table>
+    <tr><td class="k">Current address</td><td class="v">{{currentAddress}}</td></tr>
+  </table>
+
+  <h2>Employment &amp; Income</h2>
+  <table class="two">
+    <tr><td class="k">Employer</td><td class="v">{{employer}}</td><td class="k">Monthly income</td><td class="v">${{monthlyIncome}}</td></tr>
+    <tr><td class="k">Co-signer</td><td class="v">{{coSigner}}</td><td class="k"></td><td class="v"></td></tr>
+  </table>
+
+  <h2>Unit Applied For</h2>
+  <table class="two">
+    <tr><td class="k">Property</td><td class="v">{{propertyName}}</td><td class="k">Unit</td><td class="v">{{unitNumber}}</td></tr>
+    <tr><td class="k">Applying for</td><td class="v">{{applyingFor}}</td><td class="k">Desired move-in</td><td class="v">{{desiredMoveIn}}</td></tr>
+  </table>
+
+  <div class="consent">
+    <b>Screening consent (FCRA):</b> I authorize {{managementCompany}} to obtain a consumer credit
+    report, criminal background, and eviction history in connection with this rental application. I
+    certify the information above is true and complete.
+  </div>
+  <div class="sig">Applicant signature &mdash; {{firstName}} {{lastName}} &middot; {{signDate}}</div>
+</body>
+</html>

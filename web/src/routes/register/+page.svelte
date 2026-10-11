@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Building, Loader2, MailCheck, CheckCircle2 } from '@lucide/svelte';
+	import { Loader2, MailCheck, CheckCircle2 } from '@lucide/svelte';
 	import type { ActionData, PageData } from './$types';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -13,6 +14,7 @@
 	let email = $state('');
 	let password = $state('');
 	let confirmPassword = $state('');
+	let termsPrivacyAccepted = $state(false);
 
 	// Repopulate fields after a failed submit.
 	$effect(() => {
@@ -42,11 +44,7 @@
 		<div class="w-full max-w-sm">
 			<!-- Compact brand for narrow screens -->
 			<div class="mb-8 flex items-center gap-2 lg:hidden">
-				<span
-					class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
-				>
-					<Building class="h-5 w-5" />
-				</span>
+				<BrandMark class="h-9 w-9 shadow-sm" />
 				<span class="text-lg font-semibold tracking-tight text-foreground">Rental Command</span>
 			</div>
 
@@ -97,7 +95,7 @@
 				>
 					<div>
 						<label for="register-displayname" class="mb-1.5 block text-sm font-medium text-foreground">
-							Display name
+							Your name
 						</label>
 						<Input
 							id="register-displayname"
@@ -111,6 +109,22 @@
 							class="h-11"
 						/>
 					</div>
+
+					<label for="register-terms-privacy" class="flex items-start gap-2 text-sm text-muted-foreground">
+						<input
+							id="register-terms-privacy"
+							name="termsPrivacyAccepted"
+							type="checkbox"
+							data-testid="register-terms-privacy-checkbox"
+							bind:checked={termsPrivacyAccepted}
+							required
+							class="mt-0.5 h-4 w-4 rounded border-border text-primary accent-primary"
+						/>
+						<span>
+							I agree to the <a href="/terms" class="text-primary underline underline-offset-4 hover:text-primary/80">Terms of Service</a>
+							and <a href="/privacy" class="text-primary underline underline-offset-4 hover:text-primary/80">Privacy Policy</a>.
+						</span>
+					</label>
 
 					<div>
 						<label for="register-email" class="mb-1.5 block text-sm font-medium text-foreground">

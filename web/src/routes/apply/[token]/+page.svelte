@@ -359,6 +359,40 @@
 			</div>
 
 			<form onsubmit={onSubmit} class="space-y-5" data-testid="apply-form" novalidate>
+				<!-- The five things we actually need -->
+				<div class="rounded-2xl border border-border bg-card p-5" data-testid="apply-essentials">
+					<h2 class="mb-4 text-base font-semibold text-foreground">Your details</h2>
+					<div class="grid gap-4 sm:grid-cols-2">
+						{@render field('First name', 'firstName', firstName, (v) => (firstName = v), { required: true })}
+						{@render field('Last name', 'lastName', lastName, (v) => (lastName = v), { required: true })}
+						{@render field('Email', 'email', email, (v) => (email = v), { required: true, type: 'email' })}
+						{@render field('Phone', 'phone', phone, (v) => (phone = v), { required: true, type: 'tel' })}
+					</div>
+				</div>
+
+				<!-- Consent -->
+				<div class="rounded-2xl border border-border bg-card p-5" data-testid="apply-consent">
+					<label class="flex cursor-pointer items-start gap-3">
+						<input
+							type="checkbox"
+							bind:checked={consentGiven}
+							onchange={() => clearFieldError('consent')}
+							class="mt-1 h-5 w-5 shrink-0 rounded border-input text-primary focus:ring-2 focus:ring-ring/40"
+							data-testid="apply-consent-checkbox"
+						/>
+						<span class="text-sm leading-relaxed text-foreground">
+							I certify that the information I've provided is true and complete. I authorize
+							{#if context}<span class="font-medium">{context.managementCompanyName}</span>{:else}the property
+								manager{/if} to verify this information and to obtain consumer reports, including a credit
+							and background check, in connection with my rental application, as permitted under the Fair
+							Credit Reporting Act (FCRA). I understand a report may be requested now and during my tenancy.
+						</span>
+					</label>
+					{#if formErrors.consent}
+						<p class="mt-2 pl-8 text-sm text-destructive" data-testid="apply-consent-error">{formErrors.consent}</p>
+					{/if}
+				</div>
+
 				<!-- Property / unit picker -->
 				{#if properties.length > 0}
 					<div class="rounded-2xl border border-border bg-card p-5">
@@ -423,14 +457,10 @@
 					</div>
 				{/if}
 
-				<!-- Your details -->
-				<div class="rounded-2xl border border-border bg-card p-5">
-					<h2 class="mb-4 text-base font-semibold text-foreground">Your details</h2>
+				<!-- Everything else -->
+				<div class="rounded-2xl border border-border bg-card p-5" data-testid="apply-more-about-you">
+					<h2 class="mb-4 text-base font-semibold text-foreground">A bit more about you</h2>
 					<div class="grid gap-4 sm:grid-cols-2">
-						{@render field('First name', 'firstName', firstName, (v) => (firstName = v), { required: true })}
-						{@render field('Last name', 'lastName', lastName, (v) => (lastName = v), { required: true })}
-						{@render field('Email', 'email', email, (v) => (email = v), { required: true, type: 'email' })}
-						{@render field('Phone', 'phone', phone, (v) => (phone = v), { required: true, type: 'tel' })}
 						{@render field('Date of birth', 'dateOfBirth', dateOfBirth, (v) => (dateOfBirth = v), { type: 'date' })}
 						{@render field('Desired move-in date', 'desiredMoveInDate', desiredMoveInDate, (v) => (desiredMoveInDate = v), { type: 'date' })}
 					</div>
@@ -487,29 +517,6 @@
 							data-testid="apply-notes-input"
 						></textarea>
 					</label>
-				</div>
-
-				<!-- Consent -->
-				<div class="rounded-2xl border border-border bg-card p-5" data-testid="apply-consent">
-					<label class="flex cursor-pointer items-start gap-3">
-						<input
-							type="checkbox"
-							bind:checked={consentGiven}
-							onchange={() => clearFieldError('consent')}
-							class="mt-1 h-5 w-5 shrink-0 rounded border-input text-primary focus:ring-2 focus:ring-ring/40"
-							data-testid="apply-consent-checkbox"
-						/>
-						<span class="text-sm leading-relaxed text-foreground">
-							I certify that the information I've provided is true and complete. I authorize
-							{#if context}<span class="font-medium">{context.managementCompanyName}</span>{:else}the property
-								manager{/if} to verify this information and to obtain consumer reports, including a credit
-							and background check, in connection with my rental application, as permitted under the Fair
-							Credit Reporting Act (FCRA). I understand a report may be requested now and during my tenancy.
-						</span>
-					</label>
-					{#if formErrors.consent}
-						<p class="mt-2 pl-8 text-sm text-destructive" data-testid="apply-consent-error">{formErrors.consent}</p>
-					{/if}
 				</div>
 
 				{#if submitErrorMessage}

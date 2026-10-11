@@ -1,4 +1,5 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Atomic;
 
 namespace RentalCommand.Core.Models.Accounting;
 
@@ -120,7 +121,7 @@ public sealed record ExtCustomerDto(
     string? Email,
     string? Phone,
     /// <summary>Free-form provider payload (addresses, custom fields) for later enrichment.</summary>
-    string? MetadataJson);
+    string? MetadataJson) : IAtomicCommandData;
 
 /// <summary>An external accounting vendor (maps → RC Vendor).</summary>
 public sealed record ExtVendorDto(
@@ -131,7 +132,7 @@ public sealed record ExtVendorDto(
     string? Email,
     string? Phone,
     string? TaxId,
-    string? MetadataJson);
+    string? MetadataJson) : IAtomicCommandData;
 
 /// <summary>
 /// An external account or class (maps → RC Property via Class, and Schedule-E
@@ -145,7 +146,7 @@ public sealed record ExtAccountDto(
     DateTime? UpdatedAtUtc,
     /// <summary>Provider account classification (e.g. QBO <c>AccountType</c>); null for classes.</summary>
     string? AccountType,
-    string? MetadataJson);
+    string? MetadataJson) : IAtomicCommandData;
 
 /// <summary>Whether an <see cref="ExtAccountDto"/> came from the provider's Account list or its Class list.</summary>
 public enum AccountingListKind
@@ -171,7 +172,7 @@ public sealed record ExtPaymentDto(
     /// <summary>External invoice ids this payment applies to (QBO linked txns).</summary>
     IReadOnlyList<string>? InvoiceExternalIds,
     string? DepositAccountExternalId,
-    string? MetadataJson);
+    string? MetadataJson) : IAtomicCommandData;
 
 /// <summary>An external money-out transaction (maps → RC <c>Expense</c>).</summary>
 /// <param name="SourceKind">
@@ -190,7 +191,7 @@ public sealed record ExtExpenseDto(
     string? ReferenceNumber,
     DateTime? UpdatedAtUtc,
     string SourceKind,
-    string? MetadataJson);
+    string? MetadataJson) : IAtomicCommandData;
 
 // --- Push docs (Rental Command → accounting) ------------------------------------
 

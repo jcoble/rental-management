@@ -7,19 +7,14 @@
  * handleFetch simply forwards the request.
  */
 
-import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { serverGet } from '$lib/api/server-fetch';
 import type { DocsIndex } from '$lib/api/endpoints/docs';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ fetch }) => {
-	try {
-		const res = await fetch(`${SERVER_API_BASE_URL}/docs`);
-		if (res.ok) {
-			const index = (await res.json()) as DocsIndex;
-			return { index, unavailable: false };
-		}
-	} catch {
-		/* fall through to the graceful empty state below */
+export const load: PageServerLoad = async () => {
+	const result = await serverGet<DocsIndex>('/docs');
+	if (result.data) {
+		return { index: result.data, unavailable: false };
 	}
 	// Fail-soft: when the docs service is unreachable (or returns non-OK), render a
 	// friendly "being set up / temporarily unavailable" state instead of a hard 5xx

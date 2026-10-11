@@ -55,7 +55,29 @@ public class AccountingConnection : IPortfolioScoped, IAuditable
     public DateTime? ConnectedAt { get; set; }
     public DateTime? DisconnectedAt { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>DB-side due time used for fair scheduled-pull ordering.</summary>
+    public DateTime NextPullAtUtc { get; set; } = DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
+
+    public string? PullClaimOwner { get; set; }
+    public Guid? PullClaimToken { get; set; }
+    public DateTime? PullClaimExpiresAtUtc { get; set; }
+    public int PullAttemptCount { get; set; }
+    public DateTime? PullLastAttemptAtUtc { get; set; }
+
+    /// <summary>
+    /// Durable serialization lane for every refresh-token rotation, whether scheduled or caused by
+    /// an inline provider 401. An expired in-flight rotation is never retried with the same rotating
+    /// provider token; reconciliation moves the connection to <see cref="AccountingConnectionStatus.NeedsReconnect"/>.
+    /// </summary>
+    public AccountingTokenRotationState TokenRotationState { get; set; }
+    public long TokenGeneration { get; set; }
+    public string? TokenRotationClaimOwner { get; set; }
+    public Guid? TokenRotationClaimToken { get; set; }
+    public DateTime? TokenRotationClaimExpiresAtUtc { get; set; }
+    public int TokenRotationAttemptCount { get; set; }
+    public DateTime? TokenRotationLastAttemptAtUtc { get; set; }
+
+    public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }

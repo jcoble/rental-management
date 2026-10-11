@@ -55,6 +55,7 @@ void main() {
     expect(find.text('Name is required'), findsOneWidget);
     expect(find.text('Basics body'), findsOneWidget);
     expect(find.byKey(const Key('tabbed-form-current-0')), findsOneWidget);
+    expect(find.byKey(const Key('tabbed-form-error-0')), findsOneWidget);
   });
 
   testWidgets('next also runs custom step validation', (tester) async {

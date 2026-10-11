@@ -5,12 +5,10 @@ using RentalCommand.Engine.Services;
 namespace RentalCommand.Engine.Workers;
 
 /// <summary>
-/// Lease Lifecycle Autopilot worker. Polls twice a day to proactively generate notice drafts
-/// (renewal offers, escalating late-rent notices, move-out reminders) across all portfolios via
-/// <see cref="INoticeDraftGenerationService"/>, so drafts wait for one-tap approval WITHOUT the
-/// landlord tapping "Generate". Idempotent (the underlying generation skips notice types that
-/// already have an open draft) and gated behind <c>Notifications:EnableNoticeAutopilot</c>.
-/// Drafts are only created here — never sent — so auto-generation is safe.
+/// Claims DB-selected tenant-notice work and applies each automation's independent mode. Draft mode
+/// leaves editable copy for review; Auto freezes the selected template version and queues only the
+/// policy's tenant channels after recipient and legal gates pass. Off policies are never claimable.
+/// Claims are fenced and idempotent, and failure behavior decides retry, retained draft, or block.
 /// </summary>
 public sealed class NoticeDraftWorker : EngineWorkerBase
 {

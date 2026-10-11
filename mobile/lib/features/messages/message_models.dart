@@ -58,6 +58,7 @@ class Conversation {
   final int id;
   final int tenantId;
   final String tenantName;
+  final String counterpartyName;
   final String subject;
   final String? propertyName;
   final String? lastMessagePreview;
@@ -72,6 +73,7 @@ class Conversation {
     required this.id,
     required this.tenantId,
     required this.tenantName,
+    String? counterpartyName,
     required this.subject,
     this.propertyName,
     this.lastMessagePreview,
@@ -79,9 +81,15 @@ class Conversation {
     required this.unreadCount,
     required this.messageCount,
     this.messages = const [],
-  });
+  }) : counterpartyName = counterpartyName ?? tenantName;
 
   bool get hasUnread => unreadCount > 0;
+  String get displayName {
+    final counterparty = counterpartyName.trim();
+    if (counterparty.isNotEmpty) return counterparty;
+    final tenant = tenantName.trim();
+    return tenant.isEmpty ? 'Conversation' : tenant;
+  }
 
   factory Conversation.fromJson(Map<String, dynamic> json) {
     final rawMessages = json['messages'];
@@ -89,6 +97,7 @@ class Conversation {
       id: (json['id'] as num).toInt(),
       tenantId: (json['tenantId'] as num).toInt(),
       tenantName: json['tenantName'] as String? ?? 'Tenant',
+      counterpartyName: json['counterpartyName'] as String?,
       subject: json['subject'] as String? ?? '',
       propertyName: json['propertyName'] as String?,
       lastMessagePreview: json['lastMessagePreview'] as String?,
@@ -97,10 +106,69 @@ class Conversation {
       messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
       messages: rawMessages is List
           ? rawMessages
-              .whereType<Map<String, dynamic>>()
-              .map(ConversationMessage.fromJson)
-              .toList()
+                .whereType<Map<String, dynamic>>()
+                .map(ConversationMessage.fromJson)
+                .toList()
           : const [],
+    );
+  }
+}
+
+class ConversationListQuery {
+  const ConversationListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.search,
+    this.sort = '-lastMessageAt',
+    this.unreadOnly = false,
+  });
+
+  final int skip;
+  final int take;
+  final String? search;
+  final String sort;
+  final bool unreadOnly;
+
+  @override
+  bool operator ==(Object other) {
+    return other is ConversationListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.search == search &&
+        other.sort == sort &&
+        other.unreadOnly == unreadOnly;
+  }
+
+  @override
+  int get hashCode => Object.hash(skip, take, search, sort, unreadOnly);
+}
+
+class ConversationListPage {
+  const ConversationListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Conversation> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory ConversationListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    return ConversationListPage(
+      items: (rawItems is List ? rawItems : const [])
+          .whereType<Map<String, dynamic>>()
+          .map(Conversation.fromJson)
+          .toList(growable: false),
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? 20,
     );
   }
 }

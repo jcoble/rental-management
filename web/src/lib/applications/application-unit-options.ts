@@ -1,11 +1,11 @@
-import type { UnitStatus } from '$lib/types';
+import type { DerivedUnitStatus } from '$lib/types';
 
 export type ApplicationUnitOption = {
 	unitNumber: string;
-	status?: UnitStatus | string | null;
+	status?: DerivedUnitStatus | string | null;
 };
 
-export function applicationUnitAvailabilityLabel(status?: UnitStatus | string | null): string {
+export function applicationUnitAvailabilityLabel(status?: DerivedUnitStatus | string | null): string {
 	switch (status) {
 		case 'Vacant':
 			return 'Available';

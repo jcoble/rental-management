@@ -4,10 +4,11 @@ import { describe, it } from 'node:test';
 import { createEmptyPropertyDraft, getPropertiesEmptyStateCopy } from './property-list-state.ts';
 
 describe('property list state', () => {
-	it('creates an active multi-family property draft when no filters are active', () => {
+	it('creates an active property draft that still requires an explicit rental structure', () => {
 		assert.deepEqual(createEmptyPropertyDraft(), {
 			name: '',
 			type: 'MultiFamily',
+			rentalStructure: '',
 			status: 'Active',
 			addressLine1: '',
 			addressLine2: '',
@@ -15,6 +16,13 @@ describe('property list state', () => {
 			state: '',
 			postalCode: '',
 			ownerEntityId: '',
+			yearBuilt: '',
+			managementFeePercent: '',
+			notes: '',
+			purchasePrice: '',
+			landValue: '',
+			inServiceDate: '',
+			manualAnnualDepreciation: '',
 		});
 	});
 

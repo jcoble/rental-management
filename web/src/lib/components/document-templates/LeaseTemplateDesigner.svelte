@@ -12,21 +12,27 @@
 		type DocumentTemplateSignerRole,
 		type UpdateDocumentTemplateFieldRequest
 	} from '$lib/api/endpoints/document-templates';
-	import { leases } from '$lib/api/endpoints/leases';
+	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import { documentFileHref, fileBlob } from '$lib/api/endpoints/documents';
+	import { idempotentMutation } from '$lib/api/idempotency';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import type { Lease } from '$lib/types';
+	import type { LeaseManagementSummary } from '$lib/types';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Card from '$lib/components/ui/card';
 	import * as Tabs from '$lib/components/ui/tabs';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import PdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 	import {
 		adjustFieldRectSize,
 		clampDesignerZoom,
 		clampFieldRect,
+		MAX_FIELD_DIMENSION_PERCENT,
+		MIN_FIELD_DIMENSION_PERCENT,
 		moveFieldRect,
+		parseFieldDimensionPercent,
 		resizeFieldRect,
 		type FieldRect,
 		type FieldResizeHandle
@@ -113,6 +119,11 @@
 	let renderedZoomPct = $state(100);
 	let lastSavedAt = $state<Date | null>(null);
 	let saveErrorMessage = $state<string | null>(null);
+	let fieldDimensionError = $state<{
+		fieldId: number;
+		dimension: 'widthPct' | 'heightPct';
+		message: string;
+	} | null>(null);
 	let renderToken = 0;
 	let cleanupActiveDrag: (() => void) | null = null;
 	let lastTemplateId = $state<number | null>(null);
@@ -139,9 +150,9 @@
 		queryKey: ['document-template-preview-leases', portfolioId, template?.propertyId ?? null],
 		enabled: viewMode === 'preview' && portfolioId > 0 && !!template,
 		queryFn: () =>
-			leases.listPage(portfolioId, {
+			leaseManagements.listPage({
 				take: 50,
-				sort: '-updatedAt',
+				sort: '-updatedAtUtc',
 				propertyId: template?.propertyId ?? undefined
 			})
 	}));
@@ -149,9 +160,11 @@
 		catalog.find((item) => item.fieldKey === selectedCatalogKey) ?? null
 	);
 	const fields = $derived(template?.fields ?? []);
-	const previewLeases = $derived<Lease[]>(previewLeasesQuery.data?.items ?? []);
+	const previewLeases = $derived<LeaseManagementSummary[]>(
+		(previewLeasesQuery.data?.items ?? []).filter((relationship) => relationship.leaseAgreementId != null)
+	);
 	const selectedPreviewLease = $derived(
-		previewLeases.find((lease) => lease.id === previewLeaseId) ?? null
+		previewLeases.find((relationship) => relationship.leaseAgreementId === previewLeaseId) ?? null
 	);
 	const pageFields = $derived(
 		fields
@@ -215,8 +228,8 @@
 			previewLeaseId = null;
 			return;
 		}
-		if (!previewLeaseId || !leases.some((lease) => lease.id === previewLeaseId)) {
-			previewLeaseId = leases[0].id;
+		if (!previewLeaseId || !leases.some((relationship) => relationship.leaseAgreementId === previewLeaseId)) {
+			previewLeaseId = leases[0].leaseAgreementId ?? null;
 		}
 	});
 
@@ -265,7 +278,10 @@
 
 	const addFieldMutation = createMutation(() => ({
 		mutationFn: (request: CreateDocumentTemplateFieldRequest) =>
-			documentTemplates.addField(templateId, request),
+			idempotentMutation(
+				`document-template:${templateId}:field-add:${JSON.stringify(request)}`,
+				(operationKey) => documentTemplates.addField(templateId, request, operationKey)
+			),
 		onMutate: () => {
 			saveErrorMessage = null;
 		},
@@ -285,7 +301,12 @@
 		}: {
 			field: DocumentTemplateField;
 			request: UpdateDocumentTemplateFieldRequest;
-		}) => documentTemplates.updateField(templateId, field.id, request),
+		}) =>
+			idempotentMutation(
+				`document-template:${templateId}:field-update:${field.id}:${JSON.stringify(request)}`,
+				(operationKey) =>
+					documentTemplates.updateField(templateId, field.id, request, operationKey)
+			),
 		onMutate: () => {
 			saveErrorMessage = null;
 		},
@@ -302,7 +323,10 @@
 	}));
 
 	const deleteFieldMutation = createMutation(() => ({
-		mutationFn: (field: DocumentTemplateField) => documentTemplates.deleteField(templateId, field.id),
+		mutationFn: (field: DocumentTemplateField) =>
+			idempotentMutation(`document-template:${templateId}:field-delete:${field.id}`, (operationKey) =>
+				documentTemplates.deleteField(templateId, field.id, operationKey)
+			),
 		onMutate: () => {
 			saveErrorMessage = null;
 		},
@@ -382,7 +406,7 @@
 
 	async function loadPreviewPdf(leaseId: number, key: string) {
 		try {
-			const blob = await documentTemplates.previewLeasePdf(templateId, leaseId);
+			const blob = await documentTemplates.previewLeaseAgreementPdf(templateId, leaseId);
 			if (loadedPdfKey !== key) {
 				return;
 			}
@@ -716,11 +740,19 @@
 	) {
 		if (field.locked || moveFieldMutation.isPending) return;
 		const target = event.currentTarget as HTMLInputElement;
-		const pct = Number(target.value) / 100;
-		if (!Number.isFinite(pct)) return;
+		const parsed = parseFieldDimensionPercent(target.value);
+		if (parsed.error) {
+			fieldDimensionError = {
+				fieldId: field.id,
+				dimension,
+				message: parsed.error
+			};
+			return;
+		}
+		fieldDimensionError = null;
 		const rect = clampFieldRect({
 			...getFieldRect(field),
-			[dimension]: pct
+			[dimension]: parsed.valuePct
 		});
 		draftRects = {
 			...draftRects,
@@ -884,12 +916,12 @@
 		}
 	}
 
-	function leasePreviewLabel(lease: Lease) {
-		const place = [lease.propertyName, lease.unitNumber ? `Unit ${lease.unitNumber}` : '']
+	function leasePreviewLabel(relationship: LeaseManagementSummary) {
+		const place = [relationship.propertyName, relationship.unitNumber ? `Unit ${relationship.unitNumber}` : '']
 			.filter(Boolean)
 			.join(' · ');
-		const tenant = lease.tenantName ? ` · ${lease.tenantName}` : '';
-		return `${place || `Lease ${lease.leaseNumber}`}${tenant}`;
+		const tenant = relationship.primaryTenantName ? ` · ${relationship.primaryTenantName}` : '';
+		return `${place || relationship.relationshipNumber}${tenant}`;
 	}
 
 	function canvasCursorClass() {
@@ -995,7 +1027,7 @@
 							<div class="flex items-center justify-between gap-2 px-1">
 								<div class="flex items-center gap-2">
 									<PanelLeft class="h-4 w-4 text-primary" />
-									<h3 class="text-sm font-semibold">Dynamic Fields</h3>
+									<h3 class="text-sm font-semibold">Information we fill in</h3>
 								</div>
 								<Badge variant="secondary">{catalog.length}</Badge>
 							</div>
@@ -1063,7 +1095,7 @@
 									<div class="flex flex-wrap items-center gap-2">
 										<Badge variant="outline">{formatSigner(selectedCatalogItem.signerRole)}</Badge>
 										<Badge variant={selectedCatalogItem.requiredForSignature ? 'default' : 'secondary'}>
-											{selectedCatalogItem.requiredForSignature ? 'Required' : selectedCatalogItem.kind}
+											{selectedCatalogItem.requiredForSignature ? 'Required' : formatStatusLabel(selectedCatalogItem.kind)}
 										</Badge>
 									</div>
 									<p class="mt-2 truncate text-xs font-medium">{selectedCatalogItem.label}</p>
@@ -1078,18 +1110,17 @@
 							</div>
 							<label class="mt-4 block space-y-1 text-xs font-medium">
 								<span class="text-muted-foreground">Fill fields from</span>
-								<select
-									bind:value={previewLeaseId}
-									class="h-10 w-full rounded-md border border-input bg-background px-2 text-sm"
+								<SimpleSelect
+									value={String(previewLeaseId)}
+									onchange={(value) => (previewLeaseId = Number(value))}
+									options={previewLeases.map((relationship) => ({
+										value: String(relationship.leaseAgreementId),
+										label: `${leasePreviewLabel(relationship)} · ${relationship.agreementNumber}`
+									}))}
+									placeholder="Choose a lease"
 									disabled={previewLeasesQuery.isLoading || previewLeases.length === 0}
-									data-testid="lease-template-preview-lease-select"
-								>
-									{#each previewLeases as lease (lease.id)}
-										<option value={lease.id}>
-											{leasePreviewLabel(lease)} · {lease.leaseNumber}
-										</option>
-									{/each}
-								</select>
+									testid="lease-template-preview-lease-select"
+								/>
 							</label>
 
 							{#if previewLeasesQuery.isLoading}
@@ -1104,7 +1135,7 @@
 							{:else if selectedPreviewLease}
 								<div class="mt-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
 									<p class="font-semibold">{selectedPreviewLease.propertyName ?? 'Property'}{selectedPreviewLease.unitNumber ? ` · Unit ${selectedPreviewLease.unitNumber}` : ''}</p>
-									<p class="mt-1 text-muted-foreground">{selectedPreviewLease.tenantName ?? 'Tenant'} · {selectedPreviewLease.leaseNumber}</p>
+									<p class="mt-1 text-muted-foreground">{selectedPreviewLease.primaryTenantName ?? 'Tenant'} · {selectedPreviewLease.agreementNumber ?? 'Agreement draft'}</p>
 								</div>
 							{/if}
 
@@ -1292,15 +1323,13 @@
 							>
 								<ArrowLeft class="h-4 w-4" />
 							</Button>
-							<select
-								bind:value={selectedPage}
-								class="h-9 flex-1 rounded-md border border-input bg-background px-2 text-sm"
-								data-testid="lease-template-page-select"
-							>
-								{#each pageNumbers() as page}
-									<option value={page}>Page {page}</option>
-								{/each}
-							</select>
+							<SimpleSelect
+								value={String(selectedPage)}
+								onchange={(value) => (selectedPage = Number(value))}
+								options={pageNumbers().map((page) => ({ value: String(page), label: `Page ${page}` }))}
+								triggerClass="h-9 flex-1"
+								testid="lease-template-page-select"
+							/>
 							<Button
 								variant="outline"
 								size="icon"
@@ -1389,36 +1418,44 @@
 									</div>
 								</div>
 								<div class="space-y-3 rounded-md border border-border bg-muted/15 p-3">
-									<div class="grid grid-cols-2 gap-2">
-										<label class="space-y-1 text-xs font-medium">
-											<span class="text-muted-foreground">Width %</span>
-											<input
-												type="number"
-												min="3"
-												max="100"
-												step="1"
-												value={Math.round(getFieldRect(selectedField).widthPct * 100)}
-												class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-												disabled={selectedField.locked || moveFieldMutation.isPending}
-												onchange={(event) => setSelectedFieldDimension(selectedField, 'widthPct', event)}
-												data-testid="lease-template-field-width"
-											/>
-										</label>
-										<label class="space-y-1 text-xs font-medium">
-											<span class="text-muted-foreground">Height %</span>
-											<input
-												type="number"
-												min="3"
-												max="100"
-												step="1"
-												value={Math.round(getFieldRect(selectedField).heightPct * 100)}
-												class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-												disabled={selectedField.locked || moveFieldMutation.isPending}
-												onchange={(event) => setSelectedFieldDimension(selectedField, 'heightPct', event)}
-												data-testid="lease-template-field-height"
-											/>
-										</label>
-									</div>
+										<div class="grid grid-cols-2 gap-2">
+											<label class="space-y-1 text-xs font-medium">
+												<span class="text-muted-foreground">Width %</span>
+												<input
+													type="number"
+													min={MIN_FIELD_DIMENSION_PERCENT}
+													max={MAX_FIELD_DIMENSION_PERCENT}
+													step="1"
+													value={Math.round(getFieldRect(selectedField).widthPct * 100)}
+													class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+													disabled={selectedField.locked || moveFieldMutation.isPending}
+													aria-invalid={fieldDimensionError?.fieldId === selectedField.id && fieldDimensionError.dimension === 'widthPct'}
+													onchange={(event) => setSelectedFieldDimension(selectedField, 'widthPct', event)}
+													data-testid="lease-template-field-width"
+												/>
+												{#if fieldDimensionError?.fieldId === selectedField.id && fieldDimensionError.dimension === 'widthPct'}
+													<p class="text-xs font-normal text-destructive" data-testid="lease-template-field-width-error">{fieldDimensionError.message}</p>
+												{/if}
+											</label>
+											<label class="space-y-1 text-xs font-medium">
+												<span class="text-muted-foreground">Height %</span>
+												<input
+													type="number"
+													min={MIN_FIELD_DIMENSION_PERCENT}
+													max={MAX_FIELD_DIMENSION_PERCENT}
+													step="1"
+													value={Math.round(getFieldRect(selectedField).heightPct * 100)}
+													class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+													disabled={selectedField.locked || moveFieldMutation.isPending}
+													aria-invalid={fieldDimensionError?.fieldId === selectedField.id && fieldDimensionError.dimension === 'heightPct'}
+													onchange={(event) => setSelectedFieldDimension(selectedField, 'heightPct', event)}
+													data-testid="lease-template-field-height"
+												/>
+												{#if fieldDimensionError?.fieldId === selectedField.id && fieldDimensionError.dimension === 'heightPct'}
+													<p class="text-xs font-normal text-destructive" data-testid="lease-template-field-height-error">{fieldDimensionError.message}</p>
+												{/if}
+											</label>
+										</div>
 									<div class="grid grid-cols-2 gap-2">
 										<Button
 											variant="outline"

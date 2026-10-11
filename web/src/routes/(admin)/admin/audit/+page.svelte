@@ -6,16 +6,17 @@
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { overfetchPage } from '$lib/audit/pagination';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { RefreshCw, ShieldAlert, Download } from '@lucide/svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
+	import { formatAuditChangeValue, formatStatusLabel } from '$lib/utils/status-labels';
 
 	// The (admin) route group already gates this page behind the Admin role server-side. This is the
-	// forensic view: every landlord-facing audit row, plus the IP address + raw old→new JSON withheld
-	// from /audit.
+	// forensic view: every audit row, plus actor identity and the captured IP address/raw old→new JSON.
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 50;
@@ -24,8 +25,11 @@
 	const OPERATIONS = ['Created', 'Updated', 'Deleted', 'Approved', 'Rejected'] as const;
 	const ENTITY_TYPES = [
 		'Payment',
+		'TenantAccount',
 		'Expense',
-		'Lease',
+		'LeaseManagement',
+		'LeaseAgreement',
+		'LeaseAddendum',
 		'SecurityDeposit',
 		'Tenant',
 		'Property',
@@ -35,6 +39,16 @@
 		'Appointment',
 		'Inspection',
 		'RentalApplication',
+		'RecurringTenantCharge',
+		'RecurringExpense',
+		'CapitalAsset',
+		'ApplicantScreening',
+		'RentalListing',
+		'ListingPublication',
+		'ListingPhoto',
+		'InspectionItem',
+		'VendorDispatch',
+		'ScanDraft',
 	] as const;
 
 	let search = $state('');
@@ -111,7 +125,8 @@
 
 	function entityLabel(entry: AdminAuditEntry): string {
 		if (!entry.entityType) return '';
-		return entry.entityId ? `${entry.entityType} #${entry.entityId}` : entry.entityType;
+		const label = formatStatusLabel(entry.entityType);
+		return entry.entityId ? `${label} #${entry.entityId}` : label;
 	}
 
 	/** Pretty-print a JSON string column; falls back to the raw text if it isn't valid JSON. */
@@ -126,7 +141,7 @@
 </script>
 
 <svelte:head>
-	<title>Audit (forensic) - Rental Command</title>
+	<title>Detailed activity log - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="admin-audit-page">
@@ -134,11 +149,11 @@
 		<div>
 			<h1 class="flex items-center gap-2 text-2xl font-bold">
 				<ShieldAlert class="h-5 w-5 text-[var(--warning)]" />
-				Audit — forensic
+				Detailed activity log
 			</h1>
 			<p class="text-sm text-muted-foreground">
-				Admin-only deep view: every change with the actor's IP address and the raw before → after
-				values.
+				Review every recorded change, including who made it, where it came from, and the values
+				before and after the change.
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
@@ -185,12 +200,12 @@
 			</Select.Root>
 			<Select.Root type="single" bind:value={entityTypeFilter}>
 				<Select.Trigger class="w-44" data-testid="admin-audit-entity-type-filter">
-					{entityTypeFilter || 'All entities'}
+					{entityTypeFilter ? formatStatusLabel(entityTypeFilter) : 'All records'}
 				</Select.Trigger>
 				<Select.Content>
-					<Select.Item value="" label="All entities">All entities</Select.Item>
+					<Select.Item value="" label="All records">All records</Select.Item>
 					{#each ENTITY_TYPES as e}
-						<Select.Item value={e} label={e}>{e}</Select.Item>
+						<Select.Item value={e} label={formatStatusLabel(e)}>{formatStatusLabel(e)}</Select.Item>
 					{/each}
 				</Select.Content>
 			</Select.Root>
@@ -198,9 +213,7 @@
 
 		<Card.Content class="p-0" data-testid="admin-audit-list">
 			{#if auditQuery.isLoading}
-				<p class="py-10 text-center text-sm text-muted-foreground" data-testid="admin-audit-loading">
-					Loading…
-				</p>
+				<LoadingState label="Loading activity history" variant="page" testid="admin-audit-loading" />
 			{:else if auditQuery.isError}
 				<p class="py-10 text-center text-sm text-destructive" data-testid="admin-audit-error">
 					Failed to load audit trail. Try refreshing.
@@ -240,9 +253,9 @@
 												{/if}
 												<span aria-hidden="true">·</span>
 											{/if}
-											<span class="font-medium text-foreground/60">{entry.operationName}</span>
-											<span aria-hidden="true">·</span>
-											<span class="font-mono">IP {entry.ipAddress || '—'}</span>
+												<span class="font-medium text-foreground/60">{entry.operationName}</span>
+												<span aria-hidden="true">·</span>
+												<span class="font-mono">IP address: {entry.ipAddress || 'Not recorded'}</span>
 										</div>
 									</div>
 									<time
@@ -253,23 +266,61 @@
 									</time>
 								</summary>
 
-								<!-- Forensic detail: change reason + raw before/after JSON -->
+								<!-- Forensic detail: simple changes plus reason, source, and raw before/after JSON -->
 								<div class="space-y-3 border-t border-border bg-muted/20 px-4 py-3 text-xs">
-									{#if entry.changeReason}
-										<div>
-											<span class="font-semibold text-muted-foreground">Reason:</span>
-											{entry.changeReason}
+									{#if entry.isProviderPaymentDeadLetter}
+										<div class="rounded border border-destructive/40 bg-destructive/5 p-2" data-testid="admin-audit-provider-dead-letter-{entry.id}">
+											<p class="font-semibold text-destructive">Provider payment dead letter</p>
+											<div class="mt-1 grid gap-x-3 gap-y-1 md:grid-cols-2">
+												<span>Event id: <strong>{entry.providerEventId || 'Not recorded'}</strong></span>
+												<span>PaymentIntent: <strong>{entry.paymentIntentId || 'Not recorded'}</strong></span>
+												<span>Amount: <strong>{entry.paymentAmount ?? 'Not recorded'} {entry.paymentCurrency || ''}</strong></span>
+													<span>Target charge: <strong>{entry.targetChargeLedgerEntryId ?? 'Not recorded'}</strong></span>
+													<span>Payment attempt: <strong>{entry.paymentAttemptId ?? 'Not recorded'}</strong></span>
+													<span>Provider received: <strong>{entry.providerReceivedAtUtc ? formatAbsolute(entry.providerReceivedAtUtc) : 'Not recorded'}</strong></span>
+													<span>Dead-lettered: <strong>{entry.providerDeadLetteredAtUtc ? formatAbsolute(entry.providerDeadLetteredAtUtc) : 'Not recorded'}</strong></span>
+													<span>Recovery: <strong>{entry.recoveryStatus || 'DeadLettered'}</strong></span>
+												</div>
+													<p class="mt-1 text-muted-foreground">Recovery action: {entry.recoveryAction || 'Reconcile the provider object before retrying.'}</p>
+										</div>
+									{/if}
+									<div class="grid gap-1 md:grid-cols-2">
+										<div data-testid="admin-audit-reason-{entry.id}">
+											<span class="font-semibold text-muted-foreground">Change reason:</span>
+											{entry.changeReason || 'Not recorded'}
+										</div>
+										<div data-testid="admin-audit-ip-{entry.id}">
+											<span class="font-semibold text-muted-foreground">IP address:</span>
+											{entry.ipAddress || 'Not recorded'}
+										</div>
+									</div>
+									{#if entry.changes?.length}
+										<div class="space-y-1" data-testid="admin-audit-changes-{entry.id}">
+											<p class="font-semibold text-muted-foreground">What changed</p>
+											{#each entry.changes as change (change.field)}
+												<p>
+													<span class="font-medium text-foreground">{change.field}</span>
+													{#if entry.operationName === 'Created'}
+														set to {formatAuditChangeValue(change.field, change.newValue)}
+													{:else if entry.operationName === 'Deleted'}
+														was {formatAuditChangeValue(change.field, change.oldValue)}
+													{:else}
+														changed from {formatAuditChangeValue(change.field, change.oldValue)} to
+														{formatAuditChangeValue(change.field, change.newValue)}
+													{/if}
+												</p>
+											{/each}
 										</div>
 									{/if}
 									<div class="grid gap-3 md:grid-cols-2">
 										<div>
-											<p class="mb-1 font-semibold text-muted-foreground">Old values</p>
+											<p class="mb-1 font-semibold text-muted-foreground">Before values</p>
 											<pre
 												class="overflow-x-auto rounded bg-background p-2 font-mono text-[11px] leading-snug"
 												data-testid="admin-audit-old-{entry.id}">{pretty(entry.oldValues)}</pre>
 										</div>
 										<div>
-											<p class="mb-1 font-semibold text-muted-foreground">New values</p>
+											<p class="mb-1 font-semibold text-muted-foreground">After values</p>
 											<pre
 												class="overflow-x-auto rounded bg-background p-2 font-mono text-[11px] leading-snug"
 												data-testid="admin-audit-new-{entry.id}">{pretty(entry.newValues)}</pre>

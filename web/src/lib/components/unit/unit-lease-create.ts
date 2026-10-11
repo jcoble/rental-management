@@ -1,4 +1,4 @@
-import { defaultLeaseNumber } from '$lib/leases/lease-number';
+import { defaultLeaseNumber } from '../../leases/lease-number.ts';
 
 export type UnitLeaseCreateContext = {
 	unit: {
@@ -22,11 +22,6 @@ export type UnitLeaseCreateForm = {
 	securityDeposit: string;
 	lateFeeAmount: string;
 	rentDueDay: string;
-	rentTrackingStartMode: string;
-	rentTrackingStartDate: string;
-	openingBalanceAmount: string;
-	openingBalanceAsOfDate: string;
-	openingBalanceNote: string;
 	status: string;
 	notes: string;
 };
@@ -51,14 +46,13 @@ export function createUnitLeaseForm(context: UnitLeaseCreateContext): UnitLeaseC
 		securityDeposit: '',
 		lateFeeAmount: '75',
 		rentDueDay: '1',
-		rentTrackingStartMode: 'ForwardOnly',
-		rentTrackingStartDate: '',
-		openingBalanceAmount: '',
-		openingBalanceAsOfDate: '',
-		openingBalanceNote: '',
-		status: 'Draft',
+		status: 'Active',
 		notes: '',
 	};
+}
+
+export function hasOccupyingLease(lease: { status: string } | null | undefined): boolean {
+	return lease?.status === 'Active' || lease?.status === 'NoticeGiven';
 }
 
 export function createSimpleTenantForm(): SimpleTenantForm {

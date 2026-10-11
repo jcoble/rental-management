@@ -16,4 +16,33 @@ describe('portal maintenance page', () => {
 		assert.match(source, /data-testid="portal-request-description-error"/);
 		assert.doesNotMatch(source, /if \(!form\.title\.trim\(\) \|\| !form\.description\.trim\(\)\) return;/);
 	});
+
+	it('uses stable request loaders and retry actions', () => {
+		const source = readFileSync(
+			new URL('../../routes/(portal)/portal/maintenance/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(source, /LoadingState/);
+		assert.match(source, /portal-work-orders-loading/);
+		assert.match(source, /portal-work-order-detail-loading/);
+		assert.match(source, /workOrdersQuery\.refetch\(\)/);
+		assert.match(source, /detailQuery\.refetch\(\)/);
+	});
+
+	it('shows tenant-safe maintenance detail context without staff-only cost controls', () => {
+		const source = readFileSync(
+			new URL('../../routes/(portal)/portal/maintenance/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(source, /portal-work-order-job-context/);
+		assert.match(source, /portal-work-order-photo-summary/);
+		assert.match(source, /portal-work-order-activity/);
+		assert.match(source, /accessRows\(detail\)/);
+		assert.doesNotMatch(source, /estimatedCost/);
+		assert.doesNotMatch(source, /actualCost/);
+		assert.doesNotMatch(source, /technicianAccessInstructions/);
+		assert.doesNotMatch(source, /RecordHistory/);
+	});
 });

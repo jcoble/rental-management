@@ -3,11 +3,12 @@ using MailKit.Net.Smtp;
 using MailKit.Security;
 using MimeKit;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Engine.Services;
 
 /// <summary>
-/// Sends an email over SMTP (e.g. Zoho — <c>smtp.zoho.com:465</c>). Pulled out of
+/// Sends an email over SMTP (authenticated mailbox SMTP or IP-authorized relay). Pulled out of
 /// <see cref="RoutingNotificationChannel"/> so the MailKit dependency and the connect/auth/send
 /// dance live in one focused, testable place. The channel decides WHICH transport to use; this
 /// class only knows HOW to talk SMTP. Throws on failure so the outbox worker can retry — mirroring
@@ -15,17 +16,30 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public interface ISmtpEmailSender
 {
-    Task SendAsync(SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default);
+    Task<string?> SendAsync(
+        SmtpOptions smtp,
+        string toEmail,
+        string subject,
+        string body,
+        NotificationDeliveryContext delivery,
+        string? htmlBody = null,
+        CancellationToken ct = default);
 }
 
 /// <inheritdoc />
 public sealed class SmtpEmailSender : ISmtpEmailSender
 {
-    public async Task SendAsync(
-        SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
+    public async Task<string?> SendAsync(
+        SmtpOptions smtp,
+        string toEmail,
+        string subject,
+        string body,
+        NotificationDeliveryContext delivery,
+        string? htmlBody = null,
+        CancellationToken ct = default)
     {
-        // Caller (RoutingNotificationChannel) only reaches here when smtp.Enabled, so Host/Username/
-        // Password are present. From falls back to the authenticated mailbox when FromEmail is unset.
+        // Caller (RoutingNotificationChannel) only reaches here when smtp.Enabled, so Host is present
+        // and either credentials exist or FromEmail is available for no-auth relay.
         var fromEmail = string.IsNullOrWhiteSpace(smtp.FromEmail) ? smtp.Username! : smtp.FromEmail!;
         var fromName = string.IsNullOrWhiteSpace(smtp.FromName) ? "Rental Command" : smtp.FromName!;
 
@@ -33,6 +47,9 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
         message.From.Add(new MailboxAddress(fromName, fromEmail));
         message.To.Add(MailboxAddress.Parse(toEmail));
         message.Subject = subject;
+        // A retry must retain the same RFC Message-Id. This does not make SMTP itself
+        // idempotent, but it gives relays and operators a stable reconciliation key.
+        message.MessageId = $"<rc-outbox-{delivery.OutboxMessageId}@rentalcommand.net>";
 
         // The outbox carries a plaintext body (the source of truth / fallback) plus an optional
         // pre-composed htmlBody. Use the supplied HTML verbatim when present (e.g. auth emails with a
@@ -45,7 +62,7 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
         };
         message.Body = bodyBuilder.ToMessageBody();
 
-        // Port 465 = SSL on connect (Zoho default); 587 = STARTTLS. UseSsl drives the choice but the
+        // Port 465 = SSL on connect; 587 = STARTTLS. UseSsl drives the choice but the
         // port stays authoritative so an explicit 587 still upgrades via STARTTLS even if UseSsl is true.
         var socketOptions = smtp.Port == 587
             ? SecureSocketOptions.StartTls
@@ -62,7 +79,10 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
         try
         {
             await client.ConnectAsync(smtp.Host, smtp.Port, socketOptions, ct);
-            await client.AuthenticateAsync(smtp.Username, smtp.Password, ct);
+            if (smtp.HasCredentials)
+            {
+                await client.AuthenticateAsync(smtp.Username, smtp.Password, ct);
+            }
             await client.SendAsync(message, ct);
         }
         finally
@@ -73,6 +93,8 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
                 try { await client.DisconnectAsync(true, ct); } catch { /* ignore */ }
             }
         }
+
+        return message.MessageId;
     }
 
     // Minimal, safe HTML alternative: escape the plaintext and turn newlines into <br>. The outbox

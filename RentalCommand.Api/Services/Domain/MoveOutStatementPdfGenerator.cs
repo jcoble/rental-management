@@ -1,9 +1,11 @@
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
-using RentalCommand.Api.DTOs;
 
 namespace RentalCommand.Api.Services.Domain;
+
+/// <summary>A single itemised deduction from a security deposit.</summary>
+public sealed record DepositDeduction(string Reason, decimal Amount, string? Notes);
 
 /// <summary>Data needed to render a security-deposit move-out statement PDF (provider-agnostic).</summary>
 public sealed class MoveOutStatementData

@@ -2,7 +2,9 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { portal } from '$lib/api/endpoints/portal';
 	import type { Appointment } from '$lib/types';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { Button } from '$lib/components/ui/button';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { CalendarClock, Clock, MapPin } from '@lucide/svelte';
 
@@ -69,12 +71,11 @@
 
 	<div class="space-y-3">
 		{#if appointmentsQuery.isLoading}
-			<div class="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground" data-testid="portal-appointments-loading">
-				Loading appointments...
-			</div>
+			<LoadingState label="Loading appointments" variant="page" testid="portal-appointments-loading" />
 		{:else if appointmentsQuery.isError}
-			<div class="rounded-lg border border-destructive/40 bg-card p-4 text-sm text-destructive" data-testid="portal-appointments-error">
-				Couldn't load appointments.
+			<div class="rounded-lg border border-destructive/40 bg-card p-6 text-center" data-testid="portal-appointments-error">
+				<p class="text-sm font-medium text-destructive">Couldn't load appointments.</p>
+				<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => appointmentsQuery.refetch()}>Try again</Button>
 			</div>
 		{:else}
 			{#each appointmentsQuery.data ?? [] as appointment (appointment.id)}

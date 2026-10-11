@@ -1,196 +1,176 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Domain;
-using RentalCommand.Core.Configuration;
-using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Automation;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Automation;
 
 namespace RentalCommand.Engine.Services;
 
 /// <summary>
-/// Turns standing recurring-maintenance chores into work orders. For each active, non-deleted task
-/// whose NextDueDate has arrived (the landlord's LOCAL "today"), it creates one New
-/// <see cref="WorkOrder"/> + its initial <see cref="WorkOrderStatusEvent"/>, stamps
-/// <see cref="RecurringMaintenanceTask.LastGeneratedAtUtc"/>, then advances NextDueDate by the
-/// recurrence interval. Runs inside a fresh DI scope (scoped <see cref="RentalCommandDbContext"/>),
-/// under the Engine's single-instance advisory lock.
+/// Claims due recurring-maintenance schedules, then applies each schedule in its own atomic scope.
+/// A failed schedule is recorded and released without blocking the rest of the claimed batch.
 /// </summary>
 public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
 {
-    private const string DefaultTimeZoneId = "America/New_York";
-
-    private readonly RentalCommandDbContext _db;
-    private readonly INotificationSettingsService _settings;
-    private readonly IDataUpdateService _dataUpdate;
-    private readonly TimeZoneInfo _businessTimeZone;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly TimeProvider _timeProvider;
+    private readonly IAppTimeZoneProvider _tz;
+    private readonly IScheduledAutomationClaimStore _claims;
     private readonly ILogger<RecurringMaintenanceService> _logger;
 
     public RecurringMaintenanceService(
-        RentalCommandDbContext db,
-        INotificationSettingsService settings,
-        IDataUpdateService dataUpdate,
-        IConfiguration configuration,
+        IServiceScopeFactory scopeFactory,
+        TimeProvider timeProvider,
+        IAppTimeZoneProvider tz,
+        IScheduledAutomationClaimStore claims,
         ILogger<RecurringMaintenanceService> logger)
     {
-        _db = db;
-        _settings = settings;
-        _dataUpdate = dataUpdate;
+        _scopeFactory = scopeFactory;
+        _timeProvider = timeProvider;
+        _tz = tz;
+        _claims = claims;
         _logger = logger;
-
-        // Chores roll over on the landlord's local calendar day, not in UTC. Near midnight an evening
-        // (ET) UtcNow is already "tomorrow" in UTC, which would generate a due task a day early — so the
-        // due-date comparison is done in this zone. Every value WRITTEN to the DB stays UTC.
-        var tzId = configuration["App:TimeZone"];
-        if (string.IsNullOrWhiteSpace(tzId))
-            tzId = DefaultTimeZoneId;
-        _businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(tzId);
     }
 
-    /// <inheritdoc/>
     public async Task<int> GenerateAsync(CancellationToken ct = default)
     {
-        // Business "today" in the landlord's local zone (drives the due comparison + interval math only).
-        // NextDueDate is a timestamptz column, so the comparison value must be UTC-Kind or Npgsql rejects
-        // the parameter ("Cannot write DateTime with Kind=Unspecified to timestamp with time zone").
-        // NextDueDate is stored as UTC-midnight of the local calendar date, so we mark this the same way.
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var businessTimeZone = _tz.BusinessTimeZone;
         var today = DateTime.SpecifyKind(
-            TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date,
+            TimeZoneInfo.ConvertTimeFromUtc(now, businessTimeZone).Date,
             DateTimeKind.Utc);
+        var claims = await _claims.ClaimRecurringMaintenanceAsync(
+            $"{Environment.MachineName}:{Environment.ProcessId}:recurring-maintenance",
+            today,
+            TimeSpan.FromMinutes(6),
+            25,
+            ct);
+        if (claims.Count == 0) return 0;
 
-        // Active, non-deleted tasks that are due. The query filter already excludes soft-deleted rows.
-        var tasks = await _db.RecurringMaintenanceTasks
-            .Where(t => t.IsActive && t.NextDueDate <= today)
-            .ToListAsync(ct);
-
-        var configCache = new Dictionary<int, NotificationsConfig>();
-        var created = 0;
-
-        foreach (var task in tasks)
+        var generated = 0;
+        foreach (var claim in claims)
         {
             ct.ThrowIfCancellationRequested();
-
-            // Settings are per-portfolio. The master EnableRecurringMaintenance flag is the outer gate;
-            // the per-task IsActive (filtered above) is the real switch.
-            if (!configCache.TryGetValue(task.PortfolioId, out var cfg))
-            {
-                cfg = await _settings.GetRuntimeAsync(task.PortfolioId, ct);
-                configCache[task.PortfolioId] = cfg;
-            }
-
-            if (!cfg.EnableRecurringMaintenance)
-                continue;
-
-            var now = DateTime.UtcNow;
-
-            // Roll NextDueDate forward off the value that was due. If several periods were missed (e.g. the
-            // Engine was down), we still create exactly ONE work order this run and advance the schedule
-            // past "today" so the field queue isn't flooded with a backlog — the next due date is then
-            // back on cadence.
-            var nextDue = task.NextDueDate;
-            do
-            {
-                nextDue = Advance(nextDue, task.RecurrenceInterval);
-            }
-            while (nextDue <= today);
-
-            var workOrder = new WorkOrder
-            {
-                PortfolioId = task.PortfolioId,
-                PropertyId = task.PropertyId,
-                UnitId = task.UnitId,
-                VendorId = task.VendorId,
-                RecurringMaintenanceTaskId = task.Id,
-                Title = task.Title,
-                Description = string.IsNullOrWhiteSpace(task.Description) ? task.Title : task.Description,
-                Category = string.IsNullOrWhiteSpace(task.Category) ? "General" : task.Category,
-                Priority = task.Priority,
-                Status = WorkOrderStatus.New,
-                RequestedAt = now,
-                ScheduledFor = ToScheduledUtc(task.NextDueDate, task.ScheduledTime, _businessTimeZone),
-                EstimatedCost = task.EstimatedCost,
-                CreatedBy = "Recurring maintenance",
-                UpdatedAt = now,
-            };
-
-            // Initial timeline entry: null → New, in the same save as the work order so the stream can
-            // never diverge from the current status. ChangedByLabel = "System" (a worker generated it).
-            workOrder.StatusEvents.Add(new WorkOrderStatusEvent
-            {
-                PortfolioId = task.PortfolioId,
-                FromStatus = null,
-                ToStatus = WorkOrderStatus.New,
-                Note = "Auto-created from recurring maintenance schedule",
-                ChangedByUserId = null,
-                ChangedByLabel = "System",
-                CreatedAtUtc = now,
-            });
-
-            _db.WorkOrders.Add(workOrder);
-
-            // The work-order insert and the schedule advance must commit atomically: a crash between two
-            // separate saves could create a work order without rolling NextDueDate forward, double-billing
-            // the chore on the next cycle. Wrap both in one transaction; the (active, due) re-scan retries
-            // the whole unit if it rolls back.
-            await using var tx = await _db.Database.BeginTransactionAsync(ct);
-            try
-            {
-                task.LastGeneratedAtUtc = now;
-                task.NextDueDate = nextDue;
-                task.UpdatedAt = now;
-
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                created++;
-
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    task.PortfolioId, "WorkOrder", workOrder.Id, WorkOrderResponse.FromEntity(workOrder), ct);
-            }
-            catch (Exception ex)
-            {
-                await tx.RollbackAsync(ct);
-                _logger.LogWarning(
-                    ex,
-                    "Failed to generate work order for recurring maintenance task {TaskId} (portfolio {PortfolioId}); rolled back, will retry",
-                    task.Id, task.PortfolioId);
-
-                // Detach so the context stays usable for the next iteration.
-                _db.Entry(workOrder).State = EntityState.Detached;
-                continue;
-            }
+            generated += await ApplyClaimAsync(claim, today, now, businessTimeZone.Id, ct);
         }
 
-        if (created > 0)
-        {
+        if (generated > 0)
             _logger.LogInformation(
                 "RecurringMaintenanceService created {Count} work order(s) from recurring maintenance schedules.",
-                created);
+                generated);
+        return generated;
+    }
+
+    private async Task<int> ApplyClaimAsync(
+        ScheduledAutomationClaim claim,
+        DateTime today,
+        DateTime appliedAtUtc,
+        string businessTimeZoneId,
+        CancellationToken ct)
+    {
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var command = new ApplyClaimedRecurringMaintenanceBatchCommand(
+                    [claim.Id],
+                    claim.ClaimToken,
+                    today,
+                    appliedAtUtc,
+                    businessTimeZoneId);
+            var handler = new ApplyClaimedRecurringMaintenanceBatchRule(
+                scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+            var outcome = await scope.ServiceProvider.GetRequiredService<IWriteExecutor>().ExecuteAsync(
+                $"{claim.ClaimToken:N}:{claim.Id}",
+                ScheduledFinanceWriteSupport.Write(
+                    command, handler.ExecuteAsync, handler.AuthorizeAsync),
+                ct);
+            return outcome.Value.GeneratedRowCount;
         }
-
-        return created;
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var correlationId = BuildFailureCorrelationId();
+            _logger.LogError(
+                ex,
+                "Recurring-maintenance task {RecurringMaintenanceTaskId} failed; isolating it from the remaining claimed schedules. CorrelationId: {FailureCorrelationId}.",
+                claim.Id,
+                correlationId);
+            await TryRecordFailureAsync(claim, appliedAtUtc, ex, correlationId, ct);
+            return 0;
+        }
     }
 
-    /// <summary>Advance a due date by one recurrence period (Weekly = +7d, else calendar months/years).</summary>
-    private static DateTime Advance(DateTime date, RecurrenceInterval interval) => interval switch
+    private async Task TryRecordFailureAsync(
+        ScheduledAutomationClaim claim,
+        DateTime failedAtUtc,
+        Exception exception,
+        string correlationId,
+        CancellationToken ct)
     {
-        RecurrenceInterval.Weekly => date.AddDays(7),
-        RecurrenceInterval.Monthly => date.AddMonths(1),
-        RecurrenceInterval.Quarterly => date.AddMonths(3),
-        RecurrenceInterval.SemiAnnually => date.AddMonths(6),
-        RecurrenceInterval.Annually => date.AddYears(1),
-        _ => date.AddMonths(1),
-    };
-
-    private static DateTime? ToScheduledUtc(DateTime dueDate, TimeOnly? scheduledTime, TimeZoneInfo businessTimeZone)
-    {
-        if (scheduledTime == null)
-            return null;
-
-        var localDateTime = dueDate.Date.Add(scheduledTime.Value.ToTimeSpan());
-        localDateTime = DateTime.SpecifyKind(localDateTime, DateTimeKind.Unspecified);
-        return TimeZoneInfo.ConvertTimeToUtc(localDateTime, businessTimeZone);
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var claims = scope.ServiceProvider.GetRequiredService<IScheduledAutomationClaimStore>();
+            var recorded = await claims.RecordRecurringMaintenanceFailureAsync(
+                claim,
+                failedAtUtc,
+                BuildFailureReason(exception, correlationId),
+                ScheduledAutomationPolicy.RecurringMaintenanceQuarantineAfterAttempts,
+                ct);
+            if (!recorded)
+                _logger.LogWarning(
+                    "Recurring-maintenance task {RecurringMaintenanceTaskId} failure could not be recorded because its claim was lost.",
+                    claim.Id);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception recordException)
+        {
+            // Failure recording is deliberately contained: it must not turn one bad row into a
+            // batch-wide failure. The claim lease expiry remains the recovery path if this write fails.
+            _logger.LogError(
+                recordException,
+                "Recurring-maintenance failure record could not be persisted for task {RecurringMaintenanceTaskId}; the claim will be recovered after lease expiry.",
+                claim.Id);
+        }
     }
+
+    internal static string BuildFailureReason(Exception exception, string correlationId)
+    {
+        var root = exception;
+        while (root.InnerException is not null)
+            root = root.InnerException;
+
+        var reason = root switch
+        {
+            InvalidOperationException invalidOperation
+                when invalidOperation.Message.StartsWith(
+                    "Unsupported recurring-maintenance interval",
+                    StringComparison.Ordinal) =>
+                "This recurring maintenance schedule uses an unsupported repeat interval. " +
+                "Edit it and choose a supported interval.",
+            ArgumentException argument
+                when argument.Message.Contains("invalid time", StringComparison.OrdinalIgnoreCase) =>
+                "The scheduled time falls during a daylight-saving time change. Pick a different time.",
+            ScheduledFinanceClaimLostException =>
+                "This recurring maintenance schedule changed while it was running. It will be retried automatically.",
+            _ => BuildUnknownFailureReason(correlationId),
+        };
+        return reason.Length <= ScheduledAutomationPolicy.RecurringMaintenanceFailureReasonMaxLength
+            ? reason
+            : reason[..ScheduledAutomationPolicy.RecurringMaintenanceFailureReasonMaxLength];
+    }
+
+    private static string BuildUnknownFailureReason(string correlationId) =>
+        $"Recurring maintenance could not be generated. Check the schedule and try again. " +
+        $"Reference: {correlationId}";
+
+    private static string BuildFailureCorrelationId() => $"RM-{Guid.NewGuid():N}";
 }

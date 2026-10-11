@@ -4,6 +4,24 @@ namespace RentalCommand.Api.DTOs;
 public record ScheduleECategoryAmount(string Category, decimal Amount);
 
 /// <summary>
+/// Tax activity that cannot yet be placed on an IRS Schedule E property line. This is populated only
+/// for a workspace-wide Administrator; property-scoped callers receive the zero/default shape so the
+/// existence of out-of-scope portfolio activity is never disclosed.
+/// </summary>
+public class ScheduleEUnallocatedActivity
+{
+    public bool CanView { get; set; }
+    public bool RequiresAllocation { get; set; }
+    public int IncomeEntryCount { get; set; }
+    public decimal RentalIncome { get; set; }
+    public int ExpenseCount { get; set; }
+    public IReadOnlyList<ScheduleECategoryAmount> ExpensesByCategory { get; set; } = [];
+    public decimal TotalExpenses { get; set; }
+    public decimal NetIncome { get; set; }
+    public string Warning { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Year-end income/expense summary for a single property, structured for IRS Schedule E reporting.
 /// <para><see cref="ExpensesByCategory"/> is the full deductible breakdown and already INCLUDES the
 /// modeled <c>MortgageInterest</c> (from the loan split — principal excluded) and <c>Depreciation</c>
@@ -30,7 +48,20 @@ public class ScheduleEReport
 {
     public int Year { get; set; }
     public IReadOnlyList<ScheduleEPropertyReport> Properties { get; set; } = [];
+
+    /// <summary>Allocated portfolio expense totals by IRS category, already aggregated in SQL.</summary>
+    public IReadOnlyList<ScheduleECategoryAmount> ExpensesByCategory { get; set; } = [];
+
+    /// <summary>Totals of property-allocated Schedule E rows. These remain the IRS per-property totals.</summary>
     public decimal TotalRentalIncome { get; set; }
     public decimal TotalExpenses { get; set; }
     public decimal NetIncome { get; set; }
+
+    /// <summary>Explicit reconciliation for workspace activity that still needs property allocation.</summary>
+    public ScheduleEUnallocatedActivity UnallocatedActivity { get; set; } = new();
+
+    /// <summary>Allocated plus visible unallocated activity; never assigns shared activity to a property.</summary>
+    public decimal ReconciledTotalRentalIncome { get; set; }
+    public decimal ReconciledTotalExpenses { get; set; }
+    public decimal ReconciledNetIncome { get; set; }
 }

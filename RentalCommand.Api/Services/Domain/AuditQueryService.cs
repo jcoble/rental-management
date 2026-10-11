@@ -1,8 +1,9 @@
-using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -13,32 +14,42 @@ public class AuditQueryService : IAuditQueryService
     private readonly RentalCommandDbContext _db;
     private readonly AuditDescriber _describer;
     private readonly AuditDiffBuilder _diff;
+    private readonly IAppTimeZoneProvider _tz;
+    private readonly TimeProvider _timeProvider;
 
-    public AuditQueryService(RentalCommandDbContext db, AuditDescriber describer, AuditDiffBuilder diff)
+    public AuditQueryService(
+        RentalCommandDbContext db,
+        AuditDescriber describer,
+        AuditDiffBuilder diff,
+        IAppTimeZoneProvider tz,
+        TimeProvider timeProvider)
     {
         _db = db;
         _describer = describer;
         _diff = diff;
+        _tz = tz;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<AuditEntryResponse>> ListAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         AuditLogOperation? operation,
         string? entityType,
         int? entityId,
         ListQuery query,
         CancellationToken ct = default)
     {
-        var rows = await FilteredPage(portfolioId, operation, entityType, entityId, query).ToListAsync(ct);
-        var userNames = await ResolveActorNamesAsync(portfolioId, rows, ct);
-        var unitIds = await ResolveUnitIdsAsync(portfolioId, rows, ct);
+        var rows = await BuildPageProjectionQuery(
+                scope, operation, entityType, entityId, query)
+            .ToListAsync(ct);
+
         return rows
             .Select(r => AuditEntryResponse.FromEntity(
-                r,
+                r.Audit,
                 _describer,
                 _diff,
-                userNames,
-                unitIds.GetValueOrDefault((r.EntityType, r.EntityId))))
+                r.ResolvedActorName,
+                r.UnitId))
             .ToList();
     }
 
@@ -50,125 +61,18 @@ public class AuditQueryService : IAuditQueryService
         ListQuery query,
         CancellationToken ct = default)
     {
-        var rows = await FilteredPage(portfolioId, operation, entityType, entityId, query).ToListAsync(ct);
-        var userNames = await ResolveActorNamesAsync(portfolioId, rows, ct);
-        return rows.Select(r => AdminAuditEntryResponse.FromEntity(r, _describer, userNames)).ToList();
-    }
-
-    /// <summary>
-    /// Batch-resolves a human label (display name, falling back to email) for every user-actor row
-    /// that didn't carry an <c>ActorLabel</c> of its own, in ONE query. The audit trail stores only
-    /// the user id for HTTP requests whose token lacked a name claim (and the trail must not break
-    /// when a user later renames), so the friendly label is resolved at read time — that's what keeps
-    /// the History card from showing "User #1". Rows that already carry an <c>ActorLabel</c>, or that
-    /// have no user id (system/AI actors), are skipped. Empty when there is nothing to resolve.
-    /// The resolution is scoped to <paramref name="portfolioId"/> as a defensive guard so an actor
-    /// email from another portfolio can never surface through the History card.
-    /// </summary>
-    private async Task<IReadOnlyDictionary<int, string>> ResolveActorNamesAsync(
-        int portfolioId, IReadOnlyList<Core.Entities.AuditLog> rows, CancellationToken ct)
-    {
-        var ids = rows
-            .Where(r => string.IsNullOrWhiteSpace(r.ActorLabel) && r.UserId.HasValue)
-            .Select(r => r.UserId!.Value)
-            .Distinct()
-            .ToList();
-
-        if (ids.Count == 0)
-        {
-            return EmptyUserNames;
-        }
-
-        var resolved = await _db.Users
-            .AsNoTracking()
-            .Where(u => ids.Contains(u.Id) && u.PortfolioId == portfolioId)
-            .Select(u => new { u.Id, u.DisplayName, u.Email })
+        var rows = await BuildForensicPageProjectionQuery(
+                portfolioId, operation, entityType, entityId, query)
             .ToListAsync(ct);
 
-        return resolved.ToDictionary(
-            u => u.Id,
-            u => !string.IsNullOrWhiteSpace(u.DisplayName) ? u.DisplayName : (u.Email ?? string.Empty));
-    }
-
-    private static readonly IReadOnlyDictionary<int, string> EmptyUserNames =
-        new Dictionary<int, string>();
-
-    private async Task<IReadOnlyDictionary<(string EntityType, int EntityId), int?>> ResolveUnitIdsAsync(
-        int portfolioId, IReadOnlyList<Core.Entities.AuditLog> rows, CancellationToken ct)
-    {
-        var unitIds = new Dictionary<(string, int), int?>();
-        if (rows.Count == 0)
-        {
-            return unitIds;
-        }
-
-        List<int> Ids(string type)
-        {
-            var ids = new List<int>();
-            foreach (var row in rows)
-            {
-                if (row.EntityType == type && !ids.Contains(row.EntityId))
-                {
-                    ids.Add(row.EntityId);
-                }
-            }
-
-            return ids;
-        }
-
-        async Task AddAsync(string type, IQueryable<UnitRefRow> projected)
-        {
-            foreach (var row in await projected.ToListAsync(ct))
-            {
-                unitIds[(type, row.Id)] = row.UnitId;
-            }
-        }
-
-        var leaseIds = Ids("Lease");
-        if (leaseIds.Count > 0)
-        {
-            await AddAsync("Lease", _db.Leases.AsNoTracking()
-                .Where(l => leaseIds.Contains(l.Id) && l.PortfolioId == portfolioId)
-                .Select(l => new UnitRefRow { Id = l.Id, UnitId = l.UnitId }));
-        }
-
-        var paymentIds = Ids("Payment");
-        if (paymentIds.Count > 0)
-        {
-            await AddAsync("Payment", _db.Payments.AsNoTracking()
-                .Where(p => paymentIds.Contains(p.Id) && p.PortfolioId == portfolioId)
-                .Select(p => new UnitRefRow { Id = p.Id, UnitId = p.Lease != null ? p.Lease.UnitId : null }));
-        }
-
-        var workOrderIds = Ids("WorkOrder");
-        if (workOrderIds.Count > 0)
-        {
-            await AddAsync("WorkOrder", _db.WorkOrders.AsNoTracking()
-                .Where(w => workOrderIds.Contains(w.Id) && w.PortfolioId == portfolioId)
-                .Select(w => new UnitRefRow { Id = w.Id, UnitId = w.UnitId }));
-        }
-
-        var expenseIds = Ids("Expense");
-        if (expenseIds.Count > 0)
-        {
-            await AddAsync("Expense", _db.Expenses.AsNoTracking()
-                .Where(e => expenseIds.Contains(e.Id) && e.PortfolioId == portfolioId)
-                .Select(e => new UnitRefRow
-                {
-                    Id = e.Id,
-                    UnitId = e.UnitId ?? (e.WorkOrder != null ? e.WorkOrder.UnitId : null),
-                }));
-        }
-
-        var applicationIds = Ids("RentalApplication");
-        if (applicationIds.Count > 0)
-        {
-            await AddAsync("RentalApplication", _db.RentalApplications.AsNoTracking()
-                .Where(a => applicationIds.Contains(a.Id) && a.PortfolioId == portfolioId)
-                .Select(a => new UnitRefRow { Id = a.Id, UnitId = a.UnitId }));
-        }
-
-        return unitIds;
+        return rows
+            .Select(r => AdminAuditEntryResponse.FromEntity(
+                r.Audit,
+                _describer,
+                r.ResolvedActorName,
+                r.UnitId,
+                diff: _diff))
+            .ToList();
     }
 
     public async IAsyncEnumerable<AdminAuditEntryResponse> StreamForensicAsync(
@@ -183,48 +87,144 @@ public class AuditQueryService : IAuditQueryService
         // ignores paging (skip/take) so the *whole* filtered result set is exported. The query is
         // streamed row-by-row from Postgres (AsAsyncEnumerable) so an unbounded set is never
         // materialized in API memory; the caller (CSV writer) flushes each row as it arrives.
-        var q = ApplyFilters(portfolioId, operation, entityType, entityId, query);
+        var q = ApplyFilters(
+                _db.AtomicAuditLogs.AsNoTracking().Where(audit => audit.PortfolioId == portfolioId),
+                operation,
+                entityType,
+                entityId,
+                query)
+            .OrderByDescending(a => a.Timestamp)
+            .ThenByDescending(a => a.Id);
 
-        // Friendly-actor resolution for the stream: a single up-front id→label pass over the same
-        // filtered set (projecting only the user ids, never the rows) so each streamed row can show
-        // a real name instead of "User #1" without buffering the full result set. The user table is
-        // tiny relative to the audit trail, so the map fits comfortably in memory.
-        var actorUserIds = await q
-            .Where(a => (a.ActorLabel == null || a.ActorLabel == "") && a.UserId != null)
-            .Select(a => a.UserId!.Value)
-            .Distinct()
-            .ToListAsync(ct);
-
-        IReadOnlyDictionary<int, string> userNames = EmptyUserNames;
-        if (actorUserIds.Count > 0)
+        // Actor resolution and supported entity-to-Unit route context stay in the same translated
+        // SQL statement as the streamed audit row. No actor-id pre-pass, dictionary join, or
+        // per-entity follow-up query is permitted here.
+        await foreach (var row in ProjectRows(q, portfolioId).AsAsyncEnumerable().WithCancellation(ct))
         {
-            var resolved = await _db.Users
-                .AsNoTracking()
-                .Where(u => actorUserIds.Contains(u.Id) && u.PortfolioId == portfolioId)
-                .Select(u => new { u.Id, u.DisplayName, u.Email })
-                .ToListAsync(ct);
-            userNames = resolved.ToDictionary(
-                u => u.Id,
-                u => !string.IsNullOrWhiteSpace(u.DisplayName) ? u.DisplayName : (u.Email ?? string.Empty));
-        }
-
-        q = q.OrderByDescending(a => a.Timestamp).ThenByDescending(a => a.Id);
-
-        await foreach (var row in q.AsAsyncEnumerable().WithCancellation(ct))
-        {
-            yield return AdminAuditEntryResponse.FromEntity(row, _describer, userNames);
+            yield return AdminAuditEntryResponse.FromEntity(
+                row.Audit,
+                _describer,
+                row.ResolvedActorName,
+                row.UnitId,
+                diff: _diff);
         }
     }
 
     /// <summary>
-    /// Portfolio-scoped, filtered, sorted, paged query shared by the landlord-facing and admin-forensic
-    /// projections. The cross-tenant IDOR guard (<c>PortfolioId == portfolioId</c>) is applied here, so
-    /// neither caller can ever read another tenant's trail.
+    /// Builds the complete portfolio-scoped audit page as one translated SQL statement. PostgreSQL
+    /// applies filters, stable sorting, paging, actor resolution, and every supported entity-to-Unit
+    /// route lookup before rows cross the application boundary.
     /// </summary>
-    private IQueryable<Core.Entities.AuditLog> FilteredPage(
-        int portfolioId, AuditLogOperation? operation, string? entityType, int? entityId, ListQuery query)
+    internal IQueryable<AuditReadRow> BuildPageProjectionQuery(
+        WorkspaceReadScope scope,
+        AuditLogOperation? operation,
+        string? entityType,
+        int? entityId,
+        ListQuery query)
     {
-        var q = ApplyFilters(portfolioId, operation, entityType, entityId, query);
+        var authorized = _db.AtomicAuditLogs
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                _timeProvider.GetUtcNow().UtcDateTime);
+
+        return ProjectRows(
+            FilteredPage(authorized, operation, entityType, entityId, query),
+            scope.PortfolioId);
+    }
+
+    /// <summary>
+    /// Platform-forensic projection. This deliberately does not share the user-facing authorization
+    /// query: the platform policy admits the operation, while the explicit portfolio predicate remains
+    /// the cross-workspace boundary. Unsupported and workspace-global rows remain visible here for
+    /// diagnostics and export.
+    /// </summary>
+    internal IQueryable<AuditReadRow> BuildForensicPageProjectionQuery(
+        int portfolioId,
+        AuditLogOperation? operation,
+        string? entityType,
+        int? entityId,
+        ListQuery query)
+    {
+        var portfolioRows = _db.AtomicAuditLogs
+            .AsNoTracking()
+            .Where(audit => audit.PortfolioId == portfolioId);
+        return ProjectRows(
+            FilteredPage(portfolioRows, operation, entityType, entityId, query),
+            portfolioId);
+    }
+
+    private IQueryable<AuditReadRow> ProjectRows(
+        IQueryable<Core.Entities.AtomicAuditLog> query,
+        int portfolioId) =>
+        query.Select(audit => new AuditReadRow
+        {
+            Audit = audit,
+            ResolvedActorName = audit.ActorLabel != null && audit.ActorLabel != ""
+                ? audit.ActorLabel
+                : audit.UserId != null
+                    ? _db.Users
+                        .Where(user => user.Id == audit.UserId.Value
+                            && user.WorkspaceAccessContexts.Any(
+                                context => context.PortfolioId == portfolioId))
+                        .Select(user => user.DisplayName != null && user.DisplayName != ""
+                            ? user.DisplayName
+                            : user.Email)
+                        .FirstOrDefault()
+                    : null,
+            UnitId = audit.EntityType == nameof(Core.Entities.LeaseManagement)
+                ? _db.LeaseManagements
+                    .Where(relationship => relationship.Id == audit.EntityId
+                        && relationship.PortfolioId == portfolioId)
+                    .Select(relationship => (int?)relationship.UnitId)
+                    .FirstOrDefault()
+                : audit.EntityType == nameof(Core.Entities.LeaseAgreement)
+                    ? _db.LeaseAgreements
+                        .Where(agreement => agreement.Id == audit.EntityId
+                            && agreement.PortfolioId == portfolioId)
+                        .Select(agreement => (int?)agreement.LeaseManagement!.UnitId)
+                        .FirstOrDefault()
+                    : audit.EntityType == nameof(Core.Entities.TenantAccount)
+                        ? _db.TenantAccounts
+                            .Where(account => account.Id == audit.EntityId
+                                && account.PortfolioId == portfolioId)
+                            .Select(account => (int?)account.LeaseManagement!.UnitId)
+                            .FirstOrDefault()
+                        : audit.EntityType == nameof(Core.Entities.WorkOrder)
+                            ? _db.WorkOrders
+                                .Where(workOrder => workOrder.Id == audit.EntityId
+                                    && workOrder.PortfolioId == portfolioId)
+                                .Select(workOrder => workOrder.UnitId)
+                                .FirstOrDefault()
+                            : audit.EntityType == nameof(Core.Entities.Expense)
+                                ? _db.Expenses
+                                    .Where(expense => expense.Id == audit.EntityId
+                                        && expense.PortfolioId == portfolioId)
+                                    .Select(expense => expense.UnitId
+                                        ?? (expense.WorkOrder != null ? expense.WorkOrder.UnitId : null))
+                                    .FirstOrDefault()
+                                : audit.EntityType == nameof(Core.Entities.RentalApplication)
+                                    ? _db.RentalApplications
+                                        .Where(application => application.Id == audit.EntityId
+                                            && application.PortfolioId == portfolioId)
+                                        .Select(application => (int?)application.UnitId)
+                                        .FirstOrDefault()
+                                    : null,
+        });
+
+    /// <summary>
+    /// Filters, stably sorts, and pages an already-scoped source. The user-facing caller supplies its
+    /// canonical authorization query; the forensic caller supplies its explicit portfolio predicate.
+    /// </summary>
+    private IQueryable<Core.Entities.AtomicAuditLog> FilteredPage(
+        IQueryable<Core.Entities.AtomicAuditLog> source,
+        AuditLogOperation? operation,
+        string? entityType,
+        int? entityId,
+        ListQuery query)
+    {
+        var q = ApplyFilters(source, operation, entityType, entityId, query);
 
         // Default newest-first; ascending only when the client explicitly asks for `timestamp`.
         q = query.SortField switch
@@ -241,16 +241,18 @@ public class AuditQueryService : IAuditQueryService
     }
 
     /// <summary>
-    /// Applies the portfolio scope and every column/free-text filter, but no ordering or paging.
+    /// Applies every column/free-text filter to an already-scoped source, but no ordering or paging.
     /// Shared by the paged viewer (<see cref="FilteredPage"/>) and the streamed export so the export's
     /// filtered set matches the page exactly.
     /// </summary>
-    private IQueryable<Core.Entities.AuditLog> ApplyFilters(
-        int portfolioId, AuditLogOperation? operation, string? entityType, int? entityId, ListQuery query)
+    private IQueryable<Core.Entities.AtomicAuditLog> ApplyFilters(
+        IQueryable<Core.Entities.AtomicAuditLog> source,
+        AuditLogOperation? operation,
+        string? entityType,
+        int? entityId,
+        ListQuery query)
     {
-        var q = _db.AuditLogs
-            .AsNoTracking()
-            .Where(a => a.PortfolioId == portfolioId);
+        var q = source;
 
         if (operation.HasValue)
         {
@@ -273,33 +275,42 @@ public class AuditQueryService : IAuditQueryService
             q = ApplySearch(q, query.Search.Trim());
         }
 
+        // Grid date-range filter on Timestamp — a true INSTANT (real time-of-day), so the picked
+        // [from, to] day span is interpreted in the landlord's business timezone and converted to UTC
+        // instants (half-open). "This month" is the landlord's local month: an 11pm-ET-Dec-31 event
+        // stays in December, not the next UTC year. DB-side, one predicate.
+        var (fromUtc, toUtcExclusive) = ListDateRange.BusinessTzDay(query.From, query.To, _tz.BusinessTimeZone);
+        if (fromUtc is { } f)
+            q = q.Where(a => a.Timestamp >= f);
+        if (toUtcExclusive is { } t)
+            q = q.Where(a => a.Timestamp < t);
+
         return q;
     }
 
     /// <summary>
-    /// Free-text search across <em>every field the audit page renders</em>: the action title / entity
-    /// noun (derived from <see cref="Core.Entities.AuditLog.EntityType"/>), the actor (label or
+    /// Free-text search across the fields the audit page renders, plus the title of a linked WorkOrder
+    /// target: the action title / entity
+    /// noun (derived from <see cref="Core.Entities.AtomicAuditLog.EntityType"/>), the actor (label or
     /// <c>User #id</c>), the entity id (so a bare <c>76</c> matches), the compound entity label
     /// (<c>Expense #76</c> / <c>expense 76</c>), the action verb (<c>Created</c>/<c>Updated</c>…), and
     /// the IP address. Runs entirely Postgres-side as one translated query.
     /// <para>
-    /// The text predicates only touch the columns that carry pg_trgm GIN indexes
-    /// (<c>EntityType</c>/<c>ActorLabel</c>/<c>IpAddress</c>, see migration <c>AuditSearchTrgmIndexes</c>),
-    /// so Postgres can BitmapOr the index-backed branches. The entity-id / actor-id / compound-label
-    /// matching is done as <em>integer equality</em> on a parsed id (<c>EntityId == n</c> /
-    /// <c>UserId == n</c>) rather than <c>LIKE</c> over <c>EntityId::text</c>: the old computed-column
-    /// LIKEs were unindexable and, OR'd into the predicate, forced the whole search to a sequential scan
-    /// (defeating the trgm indexes). A purely-numeric term ("76") matches the id; a "noun + number"
-    /// term ("expense 76", "Expense #76") matches the entity noun on the trgm column AND the id.
+    /// The audit-column text predicates only touch columns that carry pg_trgm GIN indexes
+    /// (<c>EntityType</c>/<c>ActorLabel</c>/<c>IpAddress</c>, see migration <c>AuditSearchTrgmIndexes</c>).
+    /// WorkOrder title lookup is correlated by its indexed primary key and portfolio before applying
+    /// <c>ILIKE</c> to that single target row. Entity-id / actor-id / compound-label matching is integer
+    /// equality rather than <c>LIKE</c> over computed text. A purely-numeric term ("76") matches the id;
+    /// a "noun + number" term ("expense 76", "Expense #76") matches the entity noun and id.
     /// </para>
     /// </summary>
-    private static IQueryable<Core.Entities.AuditLog> ApplySearch(IQueryable<Core.Entities.AuditLog> q, string term)
+    private IQueryable<Core.Entities.AtomicAuditLog> ApplySearch(
+        IQueryable<Core.Entities.AtomicAuditLog> q,
+        string term)
     {
-        // Case-insensitive contains via Postgres ILIKE %term%, served by the
-        // `gin (lower(col) gin_trgm_ops)` trigram indexes (AuditSearchTrgmIndexes) — index-driven,
-        // never a sequential scan. Only the three trgm-indexed columns appear here; the unindexable
-        // computed-column LIKEs that used to be OR'd in (and forced a seq scan of the whole predicate)
-        // are gone, replaced by id equality below. The audit trail is Postgres-only.
+        // Case-insensitive contains via Postgres ILIKE %term%. Audit text columns use their trigram
+        // indexes; linked WorkOrder title resolution uses the WorkOrder primary key. Unindexable
+        // computed audit-column LIKEs remain replaced by id equality below. PostgreSQL only.
         var like = $"%{term}%";
 
         // Verb search: "Created", "create", "recorded", "scheduled", etc. should narrow by operation.
@@ -317,11 +328,24 @@ public class AuditQueryService : IAuditQueryService
             EF.Functions.ILike(a.EntityType, like)
             || (a.ActorLabel != null && EF.Functions.ILike(a.ActorLabel, like))
             || (a.IpAddress != null && EF.Functions.ILike(a.IpAddress, like))
+            // Provider dead-letter event ids, PaymentIntent ids, and recovery reasons are captured
+            // in the audit JSON. Keep the predicate in this same translated PostgreSQL query so an
+            // operator can paste either identifier and find the linked TenantAccount row directly.
+            || (a.ChangeReason != null && EF.Functions.ILike(a.ChangeReason, like))
+            || (a.NewValues != null && EF.Functions.ILike(Convert.ToString(a.NewValues)!, like))
             // Entity / actor id as integer equality (sargable) instead of LIKE on its text form.
             || (parsedId != null && a.EntityId == parsedId.Value)
             || (parsedId != null && a.UserId != null && a.UserId == parsedId.Value)
             // Action verb → operation.
-            || matchedOps.Contains(a.Operation));
+            || matchedOps.Contains(a.Operation)
+            // The Activity History row links to the audited WorkOrder target. Search its user-facing
+            // title as part of the same translated statement so a landlord can find the audit event
+            // using the record name they are investigating (for example, "Yard cleanup").
+            || (a.EntityType == nameof(Core.Entities.WorkOrder)
+                && _db.WorkOrders.Any(workOrder =>
+                    workOrder.PortfolioId == a.PortfolioId
+                    && workOrder.Id == a.EntityId
+                    && EF.Functions.ILike(workOrder.Title, like))));
     }
 
     /// <summary>
@@ -374,9 +398,10 @@ public class AuditQueryService : IAuditQueryService
         return matched;
     }
 
-    private sealed class UnitRefRow
+    internal sealed class AuditReadRow
     {
-        public int Id { get; set; }
+        public Core.Entities.AtomicAuditLog Audit { get; set; } = null!;
+        public string? ResolvedActorName { get; set; }
         public int? UnitId { get; set; }
     }
 }

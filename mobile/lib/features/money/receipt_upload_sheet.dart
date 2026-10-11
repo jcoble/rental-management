@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import 'receipt_attachment_repository.dart';
@@ -37,6 +38,7 @@ class _ReceiptUploadSheet extends ConsumerStatefulWidget {
 }
 
 class _ReceiptUploadSheetState extends ConsumerState<_ReceiptUploadSheet> {
+  String? _uploadOperationId;
   bool _busy = false;
   String? _error;
 
@@ -89,9 +91,17 @@ class _ReceiptUploadSheetState extends ConsumerState<_ReceiptUploadSheet> {
             bytes: bytes,
             fileName: fileName,
             contentType: contentType,
+            clientOperationId: _uploadOperationId ??= const Uuid().v4(),
           );
+      _uploadOperationId = null;
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
+      if (e.statusCode >= 400 &&
+          e.statusCode < 500 &&
+          e.statusCode != 408 &&
+          e.statusCode != 429) {
+        _uploadOperationId = null;
+      }
       if (mounted) {
         setState(() {
           _busy = false;

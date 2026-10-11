@@ -1,3 +1,5 @@
+using RentalCommand.Core.Enums;
+
 namespace RentalCommand.Core.Services;
 
 /// <summary>
@@ -30,7 +32,49 @@ public readonly record struct DepreciationResult(decimal Amount, bool IsFirstYea
 public static class DepreciationCalculator
 {
     /// <summary>Residential rental property recovery period, in years (IRS straight-line).</summary>
-    public const decimal ResidentialRecoveryYears = 27.5m;
+    public const decimal ResidentialRecoveryYears = RecoveryClass.ResidentialBuilding;
+
+    private static readonly decimal[] MacrsFiveYearHalfYear =
+    [
+        0.20m,
+        0.32m,
+        0.192m,
+        0.1152m,
+        0.1152m,
+        0.0576m,
+    ];
+
+    private static readonly decimal[] MacrsSevenYearHalfYear =
+    [
+        0.1429m,
+        0.2449m,
+        0.1749m,
+        0.1249m,
+        0.0893m,
+        0.0892m,
+        0.0893m,
+        0.0446m,
+    ];
+
+    private static readonly decimal[] MacrsFifteenYearHalfYear =
+    [
+        0.05m,
+        0.095m,
+        0.0855m,
+        0.077m,
+        0.0693m,
+        0.0623m,
+        0.059m,
+        0.059m,
+        0.0591m,
+        0.059m,
+        0.0591m,
+        0.059m,
+        0.0591m,
+        0.059m,
+        0.0591m,
+        0.0295m,
+    ];
 
     /// <summary>
     /// Annual depreciation for <paramref name="basis"/> in tax <paramref name="year"/> (spec §6/§18):
@@ -65,14 +109,78 @@ public static class DepreciationCalculator
         if (year < inService.Year || remaining is <= 0m)
             return new DepreciationResult(0m, false);
 
-        var fullYear = building / ResidentialRecoveryYears;
+        return AnnualForYear(
+            building,
+            inService,
+            DepreciationMethod.StraightLine,
+            ResidentialRecoveryYears,
+            DepreciationConvention.MidMonth,
+            basis.AccumulatedDepreciation,
+            year);
+    }
 
+    public static DepreciationResult AnnualForYear(
+        decimal costBasis,
+        DateTime inServiceDate,
+        DepreciationMethod method,
+        decimal recoveryYears,
+        DepreciationConvention convention,
+        decimal accumulatedDepreciation,
+        int year)
+    {
+        var basis = Round(costBasis);
+        if (basis <= 0m || recoveryYears <= 0m || year < inServiceDate.Year)
+            return new DepreciationResult(0m, false);
+
+        var remaining = Math.Max(0m, basis - accumulatedDepreciation);
+        if (remaining <= 0m)
+            return new DepreciationResult(0m, false);
+
+        var result = method switch
+        {
+            DepreciationMethod.StraightLine => StraightLineAnnual(basis, inServiceDate, recoveryYears, convention, year),
+            DepreciationMethod.Macrs => MacrsAnnual(basis, inServiceDate, recoveryYears, convention, year),
+            _ => throw new ArgumentOutOfRangeException(nameof(method), method, "Unsupported depreciation method."),
+        };
+
+        var computed = Math.Min(result.Amount, remaining);
+        return new DepreciationResult(Math.Max(0m, computed), result.IsFirstYearEstimate);
+    }
+
+    public static decimal UnrecapturedSec1250Gain(decimal totalGain, decimal accumulatedDepreciation)
+    {
+        if (totalGain <= 0m || accumulatedDepreciation <= 0m)
+            return 0m;
+
+        return Round(Math.Min(totalGain, accumulatedDepreciation));
+    }
+
+    private static DepreciationResult StraightLineAnnual(
+        decimal costBasis,
+        DateTime inServiceDate,
+        decimal recoveryYears,
+        DepreciationConvention convention,
+        int year)
+    {
+        var fullYear = costBasis / recoveryYears;
+        var yearIndex = year - inServiceDate.Year;
+
+        return convention switch
+        {
+            DepreciationConvention.MidMonth => StraightLineMidMonth(fullYear, inServiceDate, year),
+            DepreciationConvention.HalfYear => StraightLineHalfYear(fullYear, recoveryYears, yearIndex),
+            _ => throw new ArgumentOutOfRangeException(nameof(convention), convention, "Unsupported straight-line depreciation convention."),
+        };
+    }
+
+    private static DepreciationResult StraightLineMidMonth(decimal fullYear, DateTime inServiceDate, int year)
+    {
         decimal monthsInService;
         bool firstYearEstimate;
-        if (year == inService.Year)
+        if (year == inServiceDate.Year)
         {
             // IRS mid-month approximation: whole months strictly AFTER the in-service month, + 0.5.
-            var monthsAfter = 12 - inService.Month; // e.g. July(7) -> 5 (Aug..Dec)
+            var monthsAfter = 12 - inServiceDate.Month; // e.g. July(7) -> 5 (Aug..Dec)
             monthsInService = monthsAfter + 0.5m;
             firstYearEstimate = true;
         }
@@ -82,14 +190,43 @@ public static class DepreciationCalculator
             firstYearEstimate = false;
         }
 
-        var computed = Round(fullYear * monthsInService / 12m);
-
-        // Cap at the remaining basis so cumulative depreciation never exceeds the building basis.
-        if (remaining is { } cap && computed > cap)
-            computed = cap;
-
-        return new DepreciationResult(Math.Max(0m, computed), firstYearEstimate);
+        return new DepreciationResult(Round(fullYear * monthsInService / 12m), firstYearEstimate);
     }
+
+    private static DepreciationResult StraightLineHalfYear(decimal fullYear, decimal recoveryYears, int yearIndex)
+    {
+        if (yearIndex < 0 || yearIndex > recoveryYears)
+            return new DepreciationResult(0m, false);
+
+        var multiplier = yearIndex == 0 || yearIndex == recoveryYears ? 0.5m : 1m;
+        return new DepreciationResult(Round(fullYear * multiplier), yearIndex == 0);
+    }
+
+    private static DepreciationResult MacrsAnnual(
+        decimal costBasis,
+        DateTime inServiceDate,
+        decimal recoveryYears,
+        DepreciationConvention convention,
+        int year)
+    {
+        if (convention != DepreciationConvention.HalfYear)
+            throw new ArgumentOutOfRangeException(nameof(convention), convention, "Only half-year MACRS is supported.");
+
+        var yearIndex = year - inServiceDate.Year;
+        var table = MacrsHalfYearTable(recoveryYears);
+        if (yearIndex < 0 || yearIndex >= table.Length)
+            return new DepreciationResult(0m, false);
+
+        return new DepreciationResult(Round(costBasis * table[yearIndex]), yearIndex == 0);
+    }
+
+    private static decimal[] MacrsHalfYearTable(decimal recoveryYears) => recoveryYears switch
+    {
+        RecoveryClass.Appliance => MacrsFiveYearHalfYear,
+        RecoveryClass.Furniture => MacrsSevenYearHalfYear,
+        RecoveryClass.LandImprovement => MacrsFifteenYearHalfYear,
+        _ => throw new ArgumentOutOfRangeException(nameof(recoveryYears), recoveryYears, "Unsupported MACRS recovery class."),
+    };
 
     private static decimal Round(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
 }

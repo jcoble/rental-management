@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Api.Services.Sms;
 
@@ -19,7 +20,12 @@ public sealed class TelnyxSmsProvider : ISmsProvider
 
     public SmsProviderKey Key => SmsProviderKey.Telnyx;
 
-    public async Task SendAsync(SmsCredentials credentials, string toPhoneNumber, string message, CancellationToken ct = default)
+    public async Task<SmsProviderReceipt> SendAsync(
+        SmsCredentials credentials,
+        string toPhoneNumber,
+        string message,
+        NotificationDeliveryContext delivery,
+        CancellationToken ct = default)
     {
         var payload = JsonSerializer.Serialize(new
         {
@@ -36,5 +42,7 @@ public sealed class TelnyxSmsProvider : ISmsProvider
 
         var response = await _http.SendAsync(request, ct);
         await SmsProviderHttp.EnsureSuccessAsync(response, "Telnyx", ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        return new SmsProviderReceipt(SmsProviderHttp.TryReadString(body, "data", "id"));
     }
 }

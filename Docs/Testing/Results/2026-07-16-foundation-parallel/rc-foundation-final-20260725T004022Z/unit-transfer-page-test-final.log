@@ -1,0 +1,19 @@
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj : warning NU1903: Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.11 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Data/RentalCommand.Data.csproj : warning NU1903: Package 'System.Security.Cryptography.Xml' 9.0.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-23rf-6693-g89p
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Data/RentalCommand.Data.csproj : warning NU1903: Package 'System.Security.Cryptography.Xml' 9.0.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-8q5v-6pqq-x66h
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Data/RentalCommand.Data.csproj : warning NU1903: Package 'System.Security.Cryptography.Xml' 9.0.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-cvvh-rhrc-wg4q
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Data/RentalCommand.Data.csproj : warning NU1903: Package 'System.Security.Cryptography.Xml' 9.0.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-g8r8-53c2-pm3f
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Data/RentalCommand.Data.csproj : warning NU1903: Package 'System.Security.Cryptography.Xml' 9.0.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-mmjf-rqrv-855v
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.TestCommon/RentalCommand.TestCommon.csproj : warning NU1903: Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.11 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q
+  RentalCommand.Core -> /srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Core/bin/Debug/net10.0/RentalCommand.Core.dll
+  RentalCommand.Data -> /srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Data/bin/Debug/net10.0/RentalCommand.Data.dll
+  RentalCommand.Api -> /srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Api/bin/Debug/net10.0/RentalCommand.Api.dll
+  RentalCommand.TestCommon -> /srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.TestCommon/bin/Debug/net10.0/RentalCommand.TestCommon.dll
+  RentalCommand.Api.Tests -> /srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Api.Tests/bin/Debug/net10.0/RentalCommand.Api.Tests.dll
+Test run for /srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/RentalCommand.Api.Tests/bin/Debug/net10.0/RentalCommand.Api.Tests.dll (.NETCoreApp,Version=v10.0)
+VSTest version 18.0.2 (x64)
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+
+Passed!  - Failed:     0, Passed:     1, Skipped:     0, Total:     1, Duration: 1 s - RentalCommand.Api.Tests.dll (net10.0)

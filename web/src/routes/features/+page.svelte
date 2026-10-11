@@ -239,7 +239,7 @@
 					<span class="win-glow" aria-hidden="true"></span>
 					<div class="chrome" aria-hidden="true">
 						<span class="dots"><i></i><i></i><i></i></span>
-						<span class="url">rentalcommand.app<span class="path"> / units / Unit&nbsp;1</span></span>
+						<span class="url">rentalcommand.net<span class="path"> / units / Unit&nbsp;1</span></span>
 					</div>
 					<img src="/landing/app/commandcenter.webp" alt="The Rental Command web app" width="1600" height="888" loading="eager" decoding="async" />
 				</div>
@@ -271,7 +271,7 @@
 						<span class="win-glow" aria-hidden="true"></span>
 						<div class="chrome" aria-hidden="true">
 							<span class="dots"><i></i><i></i><i></i></span>
-							<span class="url">rentalcommand.app</span>
+							<span class="url">rentalcommand.net</span>
 						</div>
 						<img src={act.shot} alt={`${act.eyebrow} in Rental Command`} width="1600" height="888" loading="lazy" decoding="async" />
 					</div>

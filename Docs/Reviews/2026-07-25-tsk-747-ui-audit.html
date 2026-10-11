@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>TSK-747 Web UI Rescue Audit</title>
+	<style>
+		:root { color-scheme: dark; --bg:#101015; --card:#1b1b23; --line:#343442; --text:#f4f2f7; --muted:#b9b5c4; --accent:#b9afff; --good:#86d7b3; --warn:#f0c36b; }
+		* { box-sizing: border-box; }
+		body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,sans-serif; }
+		main { width:min(1180px,calc(100% - 32px)); margin:40px auto 72px; }
+		h1 { margin:0 0 8px; font-size:32px; letter-spacing:-.03em; }
+		h2 { margin:0 0 14px; font-size:20px; }
+		p { color:var(--muted); }
+		.grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin:24px 0; }
+		.card { border:1px solid var(--line); border-radius:16px; background:var(--card); padding:18px; }
+		.metric { color:var(--accent); font-size:28px; font-weight:750; }
+		table { width:100%; border-collapse:collapse; }
+		th,td { border-bottom:1px solid var(--line); padding:12px 10px; text-align:left; vertical-align:top; }
+		th { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+		.done { color:var(--good); font-weight:700; }
+		.blocked { color:var(--warn); }
+		ul { margin:0; padding-left:20px; }
+		li + li { margin-top:8px; }
+		a { color:var(--accent); }
+		@media (max-width:760px) { .grid { grid-template-columns:1fr; } table { font-size:13px; } }
+	</style>
+</head>
+<body>
+<main>
+	<p>Rental Command · TSK-747 · July 25, 2026</p>
+	<h1>Web UI rescue audit</h1>
+	<p>Three implementation lanes reviewed the complete route inventory for visual hierarchy, plain-English wording, navigation, component consistency, progressive disclosure, contextual help, and loading/empty/error states.</p>
+
+	<section class="grid" aria-label="Audit summary">
+		<div class="card"><div class="metric">3</div><strong>UI lanes</strong><p>Rental spine, work and notifications, and money/intake.</p></div>
+		<div class="card"><div class="metric">1710×1107</div><strong>Primary viewport</strong><p>Measured content viewport matching the user's display.</p></div>
+		<div class="card"><div class="metric">606/606</div><strong>Web unit tests</strong><p>Complete suite passing after implementation.</p></div>
+		<div class="card"><div class="metric">10/10</div><strong>Sample-data tests</strong><p>Focused API seeding suite passing.</p></div>
+		<div class="card"><div class="metric">2/2</div><strong>PostgreSQL report tests</strong><p>Production General and Rent Ledger query paths exercised against PostgreSQL.</p></div>
+	</section>
+
+	<section class="card">
+		<h2>Lane outcomes</h2>
+		<table>
+			<thead><tr><th>Lane</th><th>Primary surfaces</th><th>Outcome</th></tr></thead>
+			<tbody>
+				<tr><td>1 · Rental spine</td><td>Dashboard, properties, Units, tenants, leases, owners</td><td class="done">Command Center restored; Unit tabs and record links re-centered on the Unit.</td></tr>
+				<tr><td>2 · Work and communication</td><td>Maintenance, appointments, messages, notifications</td><td class="done">Notifications converted into a three-step journey with single-open disclosure panels.</td></tr>
+				<tr><td>3 · Money and intake</td><td>Accounting, banking, deposits, reports, scan, settings, help</td><td class="done">Money wording simplified; payment and expense details made consistently reachable.</td></tr>
+			</tbody>
+		</table>
+	</section>
+
+	<section class="grid">
+		<div class="card">
+			<h2>Critical flows proved</h2>
+			<ul>
+				<li>Searchable Command Center rental picker.</li>
+				<li>The Default Portfolio card stays first; Daily Briefing follows it with its own loading state, visible timeout, and manual retry.</li>
+				<li>Unit main and secondary tabs switch without a page-level reload.</li>
+				<li>Route changes show an in-content skeleton instead of a frozen page and top-bar loader.</li>
+				<li>Payment receipts open inside the Unit Money workspace.</li>
+				<li>Rent rows say “paid” and “still owed,” not “allocated” and “open.”</li>
+				<li>Calendar month and year controls open the app menu, not a disguised operating-system dropdown.</li>
+			</ul>
+		</div>
+		<div class="card">
+			<h2>Consistency checks</h2>
+			<ul>
+				<li>Shared tab spacing and hit areas corrected.</li>
+				<li>First-party selects and dates use the established app controls.</li>
+				<li>File uploads use purposeful drop zones or app-styled actions instead of browser-default controls.</li>
+				<li>Server-paged grids show result ranges even when only one page exists.</li>
+				<li>Help actions point to written Help pages.</li>
+				<li>Notification accordions expose one policy at a time.</li>
+			</ul>
+		</div>
+		<div class="card">
+			<h2>Known boundary</h2>
+			<p class="blocked">Role-specific routes without a seeded Leasing, Maintenance, Owner, Tenant, or Platform Admin session were source-reviewed and explicitly marked blocked—not claimed as browser proof.</p>
+			<p>The separate 17-query Dashboard/RLS performance defect is tracked in TSK-748.</p>
+		</div>
+	</section>
+
+	<section class="card">
+		<h2>Independently found defects and proof boundaries</h2>
+		<table>
+			<thead><tr><th>Surface</th><th>Evidence</th><th>Status</th></tr></thead>
+			<tbody>
+				<tr><td>General Ledger</td><td>The running-balance projection repeated the complete authorized ledger union for every row.</td><td class="done">One DB-side PostgreSQL statement; real integration test passed</td></tr>
+				<tr><td>Rent Ledger</td><td>The report rebuilt session, membership, assignment, role, and capability authorization inside the report SQL.</td><td class="done">Canonical effective-scope function; real integration test passed</td></tr>
+				<tr><td>Azure report proof</td><td>Rent Roll later completed in 2.5 seconds. The local UI still points at the older Azure backend, so the new General/Rent Ledger runtime is not yet deployed.</td><td class="blocked">Source fixed; deployment not performed</td></tr>
+				<tr><td>Owner totals</td><td>Ownership began after the seeded financial history, making otherwise valid sample activity fall outside every owner's period.</td><td class="done">Ownership now predates seeded activity; focused test passed</td></tr>
+				<tr><td>Expense 1</td><td>Description named Unit A while the seed omitted its UnitId.</td><td class="done">Named-unit expenses now seed the matching UnitId</td></tr>
+				<tr><td>Admin activity</td><td>Ordinary workspace admins were shown a forensic-audit link whose API correctly requires Platform Admin.</td><td class="done">Navigation and route now enforce the same Platform Admin boundary</td></tr>
+				<tr><td>Lease templates</td><td>The upload exposed a browser-default file control and the full signer-field catalog as a wall.</td><td class="done">Numbered upload flow plus collapsed per-signer field groups</td></tr>
+				<tr><td>Record and role states</td><td>Lease template, application, message thread, scan draft/batch, Tenant, Leasing, Maintenance, Owner, and Platform Admin valid states were unavailable in the supplied session.</td><td class="blocked">Not claimed as browser proof</td></tr>
+				<tr><td>Fresh owner seed</td><td>The canonical primary owner is now reused as Maple Ridge Properties LLC, preventing a third “Rental Command Admin” owner on newly seeded workspaces.</td><td class="done">Fixed in source; no destructive Azure reseed</td></tr>
+			</tbody>
+		</table>
+	</section>
+
+	<section class="card">
+		<h2>Verification</h2>
+		<ul>
+			<li><span class="done">Passed:</span> TypeScript native compiler check.</li>
+			<li><span class="done">Passed:</span> Svelte check with 0 errors; 23 non-blocking initialization warnings remain.</li>
+			<li><span class="done">Passed:</span> 606 tests across 160 suites.</li>
+			<li><span class="done">Passed:</span> 10 focused API sample-seeding tests.</li>
+			<li><span class="done">Passed:</span> 2 real PostgreSQL report integration tests.</li>
+			<li><span class="done">Passed:</span> whitespace validation and a source sweep for native select/date controls.</li>
+			<li><span class="done">Passed:</span> full browser walkthrough at measured 1710×1107 plus 1280×720 and 414px-wide compatibility passes; Daily Briefing was re-proved after a clean reload in 2.34 seconds, its narrow layout has zero overflowing cards, and the custom calendar month menu was exercised end to end.</li>
+		</ul>
+		<p>See the adjacent Markdown checklist for every individual route and its evidence state.</p>
+	</section>
+</main>
+</body>
+</html>

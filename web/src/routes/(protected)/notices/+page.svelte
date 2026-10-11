@@ -12,9 +12,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import FairHousingReviewDialog from '$lib/components/shared/FairHousingReviewDialog.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
-	import { AlertTriangle, CheckCircle2, FileText, Mail, MessageSquare, MonitorSmartphone, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
+	import { AlertTriangle, CheckCircle2, ChevronDown, FileText, Mail, MessageSquare, MonitorSmartphone, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
@@ -31,6 +32,7 @@
 		statusFilterOptions.find((o) => o.value === statusFilter)?.label ?? 'All'
 	);
 	let editingId = $state<number | null>(null);
+	let expandedDraftId = $state<number | null>(null);
 	let editSubject = $state('');
 	let editBody = $state('');
 	let approveChannels = $state<Record<string, { portal: boolean; email: boolean; sms: boolean }>>({});
@@ -71,6 +73,7 @@
 	}
 
 	function startEdit(draft: NoticeDraft) {
+		expandedDraftId = draft.id;
 		editingId = draft.id;
 		editSubject = draft.subject;
 		editBody = draft.body;
@@ -80,6 +83,11 @@
 	function cancelEdit() {
 		editingId = null;
 		resetFairHousing();
+	}
+
+	function toggleDraft(id: number) {
+		if (editingId === id) return;
+		expandedDraftId = expandedDraftId === id ? null : id;
 	}
 
 	async function checkFairHousing() {
@@ -184,9 +192,11 @@
 
 	function noticeLabel(type: string) {
 		switch (type) {
-			case 'RenewalOffer': return 'Renewal offer';
-			case 'LateRentNotice': return 'Late rent';
-			case 'MoveOutReminder': return 'Move-out';
+			case 'rent-reminder': return 'Rent reminder';
+			case 'lease-renewal-offer': return 'Lease renewal offer';
+			case 'month-to-month-offer': return 'Month-to-month offer';
+			case 'lease-non-renewal': return 'Lease expiration / non-renewal';
+			case 'late-rent-late-fee': return 'Past-due rent / late fee';
 			default: return type;
 		}
 	}
@@ -195,9 +205,11 @@
 	// positive (blue), late rent reads urgent (red), move-out reads warning (amber).
 	function noticeAccent(type: string) {
 		switch (type) {
-			case 'RenewalOffer': return { bar: 'bg-primary', icon: 'text-primary' };
-			case 'LateRentNotice': return { bar: 'bg-destructive', icon: 'text-destructive' };
-			case 'MoveOutReminder': return { bar: 'bg-warning', icon: 'text-warning' };
+			case 'rent-reminder': return { bar: 'bg-primary', icon: 'text-primary' };
+			case 'lease-renewal-offer': return { bar: 'bg-primary', icon: 'text-primary' };
+			case 'month-to-month-offer': return { bar: 'bg-primary', icon: 'text-primary' };
+			case 'lease-non-renewal': return { bar: 'bg-warning', icon: 'text-warning' };
+			case 'late-rent-late-fee': return { bar: 'bg-destructive', icon: 'text-destructive' };
 			default: return { bar: 'bg-muted-foreground/40', icon: 'text-muted-foreground' };
 		}
 	}
@@ -241,13 +253,13 @@
 		tone="rose"
 		eyebrow="Inbox"
 		title="Tenant notices"
-		description="Lease lifecycle drafts for renewals, late rent, and move-out reminders. Review, edit, then approve to send."
+		description="Lease reminder drafts for renewals, late rent, and move-out reminders. Review, edit, then approve to send."
 		actions={headerActions}
 		data-testid="notices-header"
 	/>
 
 	{#if draftsQuery.isLoading}
-		<p class="py-12 text-center text-sm text-muted-foreground">Loading notice drafts...</p>
+		<LoadingState label="Loading tenant notices" variant="page" testid="notice-list-loading" />
 	{:else if draftsQuery.isError}
 		<p class="py-12 text-center text-sm text-destructive">Could not load notice drafts.</p>
 	{:else if drafts.length === 0}
@@ -257,6 +269,9 @@
 			</Card.Content>
 		</Card.Root>
 	{:else}
+		<p class="mb-3 text-sm text-muted-foreground" data-testid="notice-list-range">
+			Showing 1–{drafts.length} of {drafts.length} notice{drafts.length === 1 ? '' : 's'}
+		</p>
 		<div class="grid gap-4" data-testid="notice-draft-list">
 			{#each drafts as draft (draft.id)}
 				{@const accent = noticeAccent(draft.noticeType)}
@@ -275,10 +290,23 @@
 									{draft.propertyName ?? 'Property'}{draft.unitNumber ? ` · Unit ${draft.unitNumber}` : ''} · {draft.reason}
 								</p>
 							</div>
-							<StatusBadge status={draft.status} />
+							<div class="flex items-center gap-2">
+								<StatusBadge status={draft.status} />
+								<Button
+									size="sm"
+									variant="outline"
+									onclick={() => toggleDraft(draft.id)}
+									aria-expanded={expandedDraftId === draft.id}
+									aria-controls={`notice-draft-content-${draft.id}`}
+								>
+									{expandedDraftId === draft.id ? 'Hide draft' : 'Review draft'}
+									<ChevronDown class="h-4 w-4 transition-transform {expandedDraftId === draft.id ? 'rotate-180' : ''}" />
+								</Button>
+							</div>
 						</div>
 					</Card.Header>
-					<Card.Content class="space-y-4 p-5">
+					{#if expandedDraftId === draft.id || editingId === draft.id}
+					<Card.Content id={`notice-draft-content-${draft.id}`} class="space-y-4 p-5">
 						{#if editingId === draft.id}
 							<div class="space-y-3">
 								<input class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" bind:value={editSubject} data-testid="notice-edit-subject" />
@@ -382,12 +410,13 @@
 							</div>
 						{:else if draft.conversationId}
 							<div class="border-t border-border pt-3">
-								<Button size="sm" variant="outline" href={`/messages?conversation=${draft.conversationId}`}>
+								<Button size="sm" variant="outline" href={`/messages/${draft.conversationId}`} data-testid="notice-conversation-link">
 									Open conversation
 								</Button>
 							</div>
 						{/if}
 					</Card.Content>
+					{/if}
 				</Card.Root>
 			{/each}
 		</div>

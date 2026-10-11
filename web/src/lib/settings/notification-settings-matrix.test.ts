@@ -2,27 +2,77 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const source = readFileSync('src/routes/(protected)/settings/+page.svelte', 'utf8');
+const settingsSource = readFileSync('src/routes/(protected)/settings/+page.svelte', 'utf8');
+const alertsSource = readFileSync(
+	'src/lib/components/notifications/MyAlertsSection.svelte',
+	'utf8',
+);
+const routingSource = readFileSync(
+	'src/lib/components/notifications/TeamRoutingSection.svelte',
+	'utf8',
+);
+const tenantSource = readFileSync(
+	'src/lib/components/notifications/TenantNoticesSection.svelte',
+	'utf8',
+);
+const endpointSource = readFileSync('src/lib/api/endpoints/notifications.ts', 'utf8');
 
-test('notification settings exposes the full staff channel matrix including mobile push', () => {
-	assert.match(source, /const channelColumns/);
-	assert.match(source, /enablePush/);
-	assert.match(source, /Mobile push/);
-	assert.match(source, /testSuffix: 'push'/);
-	assert.match(source, /settings-channel-\$\{row\.type\}-\$\{column\.testSuffix\}/);
-	assert.doesNotMatch(source, /enablePush is round-tripped \(not yet shown in this UI\)/);
+test('notification settings is a three-area route-backed landing with no legacy mixed matrix', () => {
+	assert.match(settingsSource, /\/settings\/notifications\/my-alerts/);
+	assert.match(settingsSource, /\/settings\/notifications\/team-routing/);
+	assert.match(settingsSource, /\/settings\/notifications\/tenant-notices/);
+	assert.match(settingsSource, /settings-late-fee-automations/);
+	assert.match(settingsSource, /settings-enable-late-fees/);
+	assert.match(settingsSource, /settings-late-fee-grace-days/);
+	assert.match(settingsSource, /Rent charges always on/);
+	assert.doesNotMatch(settingsSource, /settings-notification-audience-matrix/);
+	assert.doesNotMatch(settingsSource, /Send tenant notices/);
+	assert.doesNotMatch(settingsSource, /notifications\.getSettings/);
+	assert.doesNotMatch(settingsSource, /notifications\.setSettings/);
 });
 
-test('notification settings makes tenant delivery explicit for tenant-facing automations', () => {
-	assert.match(source, /tenantFacingNotificationTypes/);
-	assert.match(source, /'RentCharge'/);
-	assert.match(source, /'LateFee'/);
-	assert.match(source, /settings-tenant-delivery-toggle/);
-	assert.match(source, /settings-audience-row-\$\{row\.type\}-staff/);
-	assert.match(source, /settings-audience-row-\$\{row\.type\}-tenant/);
+test('My alerts is personal and exposes every canonical channel', () => {
+	assert.match(alertsSource, /Alert destinations for/);
+	for (const channel of ['In Rental Command', 'Phone app', 'Email', 'Text message'])
+		assert.match(alertsSource, new RegExp(channel));
+	assert.match(alertsSource, /notifications\.myAlerts\.update/);
+	assert.match(alertsSource, /data-testid="notifications-my-alerts"/);
 });
 
-test('notification settings copy distinguishes mobile app push from unsupported browser web push', () => {
-	assert.match(source, /registered mobile app devices/);
-	assert.match(source, /Browser web push is not available yet/);
+test('Team routing and Tenant notices use separate canonical persistence', () => {
+	assert.match(routingSource, /notifications\.teamRouting\.replace/);
+	assert.match(routingSource, /Let administrators handle unassigned alerts/);
+	assert.match(routingSource, /namedRecipientSummary/);
+	assert.doesNotMatch(routingSource, /\.filter\(/);
+	assert.match(routingSource, /Daily summary/);
+	assert.match(routingSource, /NotificationPolicyAccordion/);
+	assert.match(routingSource, /editingTopic === item\.topic/);
+	assert.match(routingSource, /notifications\.morningBriefing\.update/);
+	assert.match(routingSource, /topic: 'MorningBriefing'/);
+	assert.match(tenantSource, /\{ value: 'Off'/);
+	assert.match(tenantSource, /\{ value: 'Draft'/);
+	assert.match(tenantSource, /\{ value: 'Auto'/);
+	assert.match(tenantSource, /notifications\.tenantNotices\.updatePolicy/);
+	assert.match(tenantSource, /Save and use this message/);
+	assert.match(tenantSource, /templateProvenance/);
+	assert.match(tenantSource, /Use the current Rental Command starting message/);
+	assert.match(tenantSource, /let expandedAutomation = \$state<string \| null>\(null\)/);
+	assert.match(tenantSource, /open=\{expandedAutomation === policy\.automationKey\}/);
+	assert.match(tenantSource, /Advanced delivery settings/);
+	assert.doesNotMatch(tenantSource, /Lead days/);
+	assert.doesNotMatch(tenantSource, /Local send hour/);
+	assert.doesNotMatch(tenantSource, />SMS</);
+	assert.doesNotMatch(tenantSource, /seedTemplates/);
+	for (const status of ['Queued', 'Accepted', 'Retrying', 'Sent', 'PermanentlyFailed'])
+		assert.match(tenantSource, new RegExp(status));
+	assert.doesNotMatch(tenantSource, /'Delivered'/);
+	assert.doesNotMatch(tenantSource, /'Failed'/);
+});
+
+test('notification API clients do not preserve the broad legacy settings path', () => {
+	assert.match(endpointSource, /"\/my-alerts"/);
+	assert.match(endpointSource, /"\/automation-settings\/late-fees"/);
+	assert.match(endpointSource, /"\/team-routing"/);
+	assert.match(endpointSource, /"\/tenant-notices"/);
+	assert.doesNotMatch(endpointSource, /\/notification-settings\//);
 });

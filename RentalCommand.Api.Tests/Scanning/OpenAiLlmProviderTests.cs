@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
+using SkiaSharp;
 
 namespace RentalCommand.Api.Tests.Scanning;
 
@@ -34,6 +35,60 @@ public class OpenAiLlmProviderTests
     }
 
     // ----- No-op fallback -----
+
+    [Fact]
+    public async Task TestCredentialAsync_UsesSuppliedWorkspaceKeyWithoutReturningIt()
+    {
+        var handler = new FixedResponseHandler(HttpStatusCode.OK, """{"choices":[]}""");
+        var provider = BuildProvider(null, handler);
+
+        var result = await provider.TestCredentialAsync(
+            "sk-workspace-secret",
+            "gpt-4o");
+
+        result.Succeeded.Should().BeTrue();
+        result.Provider.Should().Be("openai");
+        result.ModelId.Should().Be("gpt-4o");
+        result.ToString().Should().NotContain("sk-workspace-secret");
+    }
+
+    [Fact]
+    public async Task ExtractWorkspaceAsync_UsesOnlySuppliedWorkspaceKeyAndModel()
+    {
+        var response = """
+            {
+              "model": "workspace-response-model",
+              "choices": [{
+                "message": {
+                  "tool_calls": [{
+                    "function": {
+                      "arguments": "{\"vendor_name\":\"ACME\",\"vendor_name_confidence\":0.9,\"amount\":\"10\",\"amount_confidence\":0.8}"
+                    }
+                  }]
+                },
+                "finish_reason": "tool_calls"
+              }],
+              "usage": { "prompt_tokens": 12, "completion_tokens": 4 }
+            }
+            """;
+        var handler = new CaptureRequestHandler(HttpStatusCode.OK, response);
+        var provider = BuildProvider(
+            null,
+            handler,
+            new AssistantConfig { ApiKey = null, ModelId = "shared-model-must-not-run" });
+
+        await provider.ExtractWorkspaceAsync(
+            new WorkspaceLlmRuntimeCredential(
+                42, "openai", "workspace-request-model", "sk-workspace-only"),
+            new byte[] { 0xFF, 0xD8, 0xFF },
+            "image/jpeg",
+            "Extract fields",
+            TwoFields());
+
+        handler.Authorization.Should().Be("Bearer sk-workspace-only");
+        handler.RequestBody.Should().Contain("\"model\":\"workspace-request-model\"");
+        handler.RequestBody.Should().NotContain("shared-model-must-not-run");
+    }
 
     [Fact]
     public async Task ExtractAsync_WhenApiKeyEmpty_ReturnsAllFieldsWithZeroConfidenceAndNoHttpCall()
@@ -191,6 +246,59 @@ public class OpenAiLlmProviderTests
         body.GetRawText().Should().Contain("\"detail\":\"high\"");
     }
 
+    [Fact]
+    public async Task ExtractAsync_TallMultiPageImage_SendsReadableHighDetailTiles()
+    {
+        var argsJson = """{"vendor_name":"ACME Supply Co","vendor_name_confidence":0.92,"amount":"78.00","amount_confidence":0.85}""";
+        var openAiJson = $$"""
+            {
+              "model": "gpt-4o-2024-11-20",
+              "choices": [{
+                "message": {
+                  "tool_calls": [{
+                    "function": {
+                      "arguments": {{JsonEscape(argsJson)}}
+                    }
+                  }]
+                },
+                "finish_reason": "tool_calls"
+              }],
+              "usage": { "prompt_tokens": 20, "completion_tokens": 10 }
+            }
+            """;
+        var handler = new CaptureRequestHandler(HttpStatusCode.OK, openAiJson);
+        var provider = BuildProvider(
+            "sk-test-key",
+            handler,
+            new AssistantConfig
+            {
+                ApiKey = "sk-test-key",
+                ModelId = "gpt-4o",
+                ImageDetail = "low",
+            });
+
+        using var bitmap = new SKBitmap(400, 4000);
+        bitmap.Erase(SKColors.White);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var encoded = image.Encode(SKEncodedImageFormat.Jpeg, 90);
+
+        await provider.ExtractAsync(
+            encoded.ToArray(),
+            "image/jpeg",
+            "Extract fields",
+            TwoFields());
+
+        using var doc = JsonDocument.Parse(handler.RequestBody!);
+        var content = doc.RootElement.GetProperty("messages")[1].GetProperty("content");
+        var imageParts = content.EnumerateArray()
+            .Where(part => part.GetProperty("type").GetString() == "image_url")
+            .ToArray();
+
+        imageParts.Should().HaveCountGreaterThan(1);
+        imageParts.Should().OnlyContain(part =>
+            part.GetProperty("image_url").GetProperty("detail").GetString() == "high");
+    }
+
     // ----- helpers -----
 
     /// <summary>
@@ -230,10 +338,12 @@ public class OpenAiLlmProviderTests
     private sealed class CaptureRequestHandler(HttpStatusCode status, string body) : HttpMessageHandler
     {
         public string? RequestBody { get; private set; }
+        public string? Authorization { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            Authorization = request.Headers.Authorization?.ToString();
             RequestBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);

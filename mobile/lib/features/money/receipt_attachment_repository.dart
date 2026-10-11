@@ -8,7 +8,7 @@ import '../../core/api/dio_client.dart';
 import '../../core/models/document.dart';
 
 enum ReceiptEntityType {
-  payment('Payment'),
+  tenantLedgerEntry('TenantLedgerEntry'),
   expense('Expense');
 
   const ReceiptEntityType(this.wireName);
@@ -17,7 +17,7 @@ enum ReceiptEntityType {
 }
 
 /// Uploads receipt files directly onto finance entities through the shared
-/// documents hub. The backend already authorizes Payment and Expense entity
+/// documents hub. The backend authorizes TenantLedgerEntry and Expense entity
 /// attachments and the existing scan/receipt endpoints display the latest file.
 class ReceiptAttachmentRepository {
   const ReceiptAttachmentRepository(this._dio);
@@ -30,6 +30,7 @@ class ReceiptAttachmentRepository {
     required Uint8List bytes,
     required String fileName,
     required String contentType,
+    required String clientOperationId,
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
@@ -43,6 +44,7 @@ class ReceiptAttachmentRepository {
           'entityType': entityType.wireName,
           'entityId': entityId,
           'category': 'Receipt',
+          'clientOperationId': clientOperationId,
         }),
       );
       final data = response.data;

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../scan/scan_repository.dart';
 import 'voice_error_message.dart';
 import 'voice_intake_models.dart';
@@ -47,14 +48,35 @@ class VoiceConversationController extends Notifier<VoiceState> {
 
   /// First utterance → create the draft.
   Future<void> start({Uint8List? audio, String? transcript}) async {
-    await _run(() => _repo.start(audio: audio, transcript: transcript));
+    final scope = 'voice:start:${_inputFingerprint(audio, transcript)}';
+    await _run(
+      () => IdempotentMutation.run(
+        scope,
+        (operationKey) => _repo.start(
+          operationKey: operationKey,
+          audio: audio,
+          transcript: transcript,
+        ),
+      ),
+    );
   }
 
   /// Subsequent answer → fill the next slot on the existing draft.
   Future<void> answer({Uint8List? audio, String? transcript}) async {
     final id = state.turn?.draftId;
     if (id == null) return;
-    await _run(() => _repo.answer(id, audio: audio, transcript: transcript));
+    final scope = 'voice:answer:$id:${_inputFingerprint(audio, transcript)}';
+    await _run(
+      () => IdempotentMutation.run(
+        scope,
+        (operationKey) => _repo.answer(
+          id,
+          operationKey: operationKey,
+          audio: audio,
+          transcript: transcript,
+        ),
+      ),
+    );
   }
 
   /// Confirms the completed draft via the shared scan confirm path (empty
@@ -85,6 +107,15 @@ class VoiceConversationController extends Notifier<VoiceState> {
         error: voiceDraftErrorMessage(e),
       );
     }
+  }
+
+  static int _inputFingerprint(Uint8List? audio, String? transcript) {
+    var hash = transcript?.hashCode ?? 0;
+    if (audio == null) return hash;
+    for (final byte in audio) {
+      hash = 0x1fffffff & (hash * 31 + byte);
+    }
+    return Object.hash(audio.length, hash);
   }
 }
 

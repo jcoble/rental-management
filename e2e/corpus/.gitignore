@@ -1,0 +1,10 @@
+# Rendered corpus artifacts are regenerable from templates/ + tools/ (node tools/generate.mjs).
+# They are binaries (~13 MB at full scale) — keep them out of git; the user is disk-constrained.
+generated/
+
+# build artifacts from the standalone finance emitter (dev tool, not in the .sln)
+tools/emit-finance/bin/
+tools/emit-finance/obj/
+
+# macOS cruft
+.DS_Store

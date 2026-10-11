@@ -3,6 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { appointments } from '$lib/api/endpoints/appointments';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
+	import type { Appointment } from '$lib/types';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -11,7 +13,10 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Pencil, Save, Trash2, X, CalendarCheck, CheckCircle, XCircle, UserX, CalendarClock, Users } from '@lucide/svelte';
@@ -25,6 +30,17 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const APPT_TYPES = ['Showing', 'MoveIn', 'MoveOut', 'Inspection', 'MaintenanceVisit', 'OwnerMeeting'];
 
+	type AppointmentWorkOrderOption = {
+		id: number;
+		label: string;
+		description?: string | null;
+		propertyId?: number | null;
+		unitId?: number | null;
+		tenantId?: number | null;
+		propertyName?: string | null;
+		tenantName?: string | null;
+	};
+
 	const id = $derived(Number(page.params.id));
 
 	const appointmentQuery = createQuery(() => ({
@@ -32,31 +48,55 @@
 		queryFn: () => appointments.get(id),
 		enabled: !isNaN(id) && id > 0,
 	}));
-	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId],
-		queryFn: () => properties.list(portfolioId, { take: 200 }),
-	}));
-	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId],
-		queryFn: () => tenants.list(portfolioId, { take: 200 }),
-	}));
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
+	async function loadTenantOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await tenants.listPage(portfolioId, { ...params, sort: 'lastName' });
+		return {
+			...result,
+			items: result.items.map((tenant) => ({
+				id: tenant.id,
+				label: tenant.fullName || `${tenant.firstName} ${tenant.lastName}`,
+				description: tenant.email || tenant.phone || null
+			}))
+		};
+	}
+	async function loadWorkOrderOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await workOrders.listPage(portfolioId, { ...params, sort: '-requestedAt' });
+		return {
+			...result,
+			items: result.items.map((workOrder) => ({
+				id: workOrder.id,
+				label: `#${workOrder.id} ${workOrder.title}`,
+				description: [
+					workOrder.propertyName,
+					workOrder.unitNumber ? `Unit ${workOrder.unitNumber}` : null,
+					workOrder.tenantName,
+					workOrder.status
+				].filter(Boolean).join(' · '),
+				propertyId: workOrder.propertyId,
+				unitId: workOrder.unitId,
+				tenantId: workOrder.tenantId,
+				propertyName: workOrder.propertyName,
+				tenantName: workOrder.tenantName
+			}))
+		};
+	}
 
 	const appt = $derived(appointmentQuery.data);
 
 	const typeOptions = $derived(APPT_TYPES.map((value) => ({ value, label: labelForType(value) })));
 	const statusOptions = appointmentStatusOptions();
 	const statusActions = $derived(appt ? appointmentDetailStatusActions(appt.status) : null);
-	const propertyOptions = $derived([
-		{ value: '', label: 'No property' },
-		...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
-	]);
-	const tenantOptions = $derived([
-		{ value: '', label: 'No tenant' },
-		...(tenantsQuery.data ?? []).map((t) => ({
-			value: String(t.id),
-			label: t.fullName || `${t.firstName} ${t.lastName}`,
-		})),
-	]);
 
 	function invalidate() {
 		invalidateAppointmentQueries(queryClient, portfolioId, id);
@@ -66,19 +106,34 @@
 	let editing = $state(false);
 	let form = $state({
 		title: '', type: 'Showing', scheduledStart: '', scheduledEnd: '',
-		propertyId: '', tenantId: '', prospectName: '', prospectEmail: '', assignedTo: '', status: 'Scheduled',
+		propertyId: '', unitId: '', tenantId: '', workOrderId: '', prospectName: '', prospectEmail: '', assignedTo: '', status: 'Scheduled',
 	});
 	let formErrors = $state<Record<string, string>>({});
+	let selectedPropertyLabel = $state<string | null>(null);
+	let selectedTenantLabel = $state<string | null>(null);
+	let selectedWorkOrderLabel = $state<string | null>(null);
 
 	function startEditing() {
 		if (!appt) return;
 		form = createAppointmentDetailEditForm(appt);
+		selectedPropertyLabel = appt.propertyName ?? null;
+		selectedTenantLabel = appt.tenantName ?? null;
+		selectedWorkOrderLabel = appt.workOrderId != null ? `#${appt.workOrderId}` : null;
 		formErrors = {};
 		editing = true;
 	}
 	function cancelEditing() {
 		editing = false;
 		formErrors = {};
+	}
+	function applyWorkOrderSelection(option: AppointmentWorkOrderOption | null) {
+		selectedWorkOrderLabel = option?.label ?? null;
+		if (!option) return;
+		form.propertyId = option.propertyId != null ? String(option.propertyId) : '';
+		form.unitId = option.unitId != null ? String(option.unitId) : '';
+		form.tenantId = option.tenantId != null ? String(option.tenantId) : '';
+		selectedPropertyLabel = option.propertyName ?? null;
+		selectedTenantLabel = option.tenantName ?? null;
 	}
 	function save() {
 		const result = parseForm(appointmentSchema, form);
@@ -113,7 +168,7 @@
 	// ── Delete ────────────────────────────────────────────────────────────────
 	let showDelete = $state(false);
 	const deleteMutation = createMutation(() => ({
-		mutationFn: (apptId: number) => appointments.delete(apptId),
+		mutationFn: (appointment: Appointment) => appointments.delete(appointment.id, appointment.propertyId),
 		onSuccess: () => {
 			showSuccess('Appointment deleted.');
 			goto('/appointments');
@@ -134,6 +189,33 @@
 	}
 </script>
 
+{#snippet dateTimeField(opts: {
+	label: string;
+	value: string;
+	setValue: (value: string) => void;
+	display: string;
+	testid: string;
+	error?: string;
+})}
+	<div data-testid={`${opts.testid}-field`}>
+		{#if editing}
+			<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
+			<DateTimePicker
+				id={`${opts.testid}-input`}
+				testid={`${opts.testid}-input`}
+				value={opts.value}
+				onchange={opts.setValue}
+			/>
+			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
+		{:else}
+			<div class="m3-readonly-field flex flex-col justify-center" data-testid={`${opts.testid}-value`}>
+				<span class="m3-readonly-field__label">{opts.label}</span>
+				<span class="m3-readonly-field__value mt-1">{opts.display === '' ? '-' : opts.display}</span>
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
 <svelte:head>
 	<title>{appt ? appt.title : 'Appointment'} - Rental Command</title>
 </svelte:head>
@@ -149,9 +231,7 @@
 	</div>
 
 	{#if appointmentQuery.isLoading}
-		<div class="flex items-center justify-center py-16 text-muted-foreground" data-testid="appointment-detail-loading">
-			Loading…
-		</div>
+		<LoadingState label="Loading appointment details" variant="page" testid="appointment-detail-loading" />
 	{:else if appointmentQuery.isError}
 		<div class="flex flex-col items-center gap-3 py-16" data-testid="appointment-detail-error">
 			<p class="text-muted-foreground">Failed to load appointment.</p>
@@ -254,13 +334,56 @@
 				<InlineField label="Title" bind:value={form.title} display={appt.title} {editing} error={formErrors.title} testid="appointment-detail-title-field" class="sm:col-span-2" />
 				<InlineField label="Type" bind:value={form.type} display={labelForType(appt.type)} {editing} type="select" options={typeOptions} testid="appointment-detail-type-field" />
 				<InlineField label="Status" bind:value={form.status} display={appointmentDetailStatusLabel(appt.status)} {editing} type="select" options={statusOptions} testid="appointment-detail-status-field" />
-				<InlineField label="Start" bind:value={form.scheduledStart} display={fmtDateTime(appt.scheduledStart)} {editing} type="datetime-local" error={formErrors.scheduledStart} testid="appointment-detail-start" />
-				<InlineField label="End" bind:value={form.scheduledEnd} display={appt.scheduledEnd ? fmtDateTime(appt.scheduledEnd) : ''} {editing} type="datetime-local" error={formErrors.scheduledEnd} testid="appointment-detail-end" />
+				{@render dateTimeField({ label: 'Start', value: form.scheduledStart, setValue: (value) => (form.scheduledStart = value), display: fmtDateTime(appt.scheduledStart), error: formErrors.scheduledStart, testid: 'appointment-detail-start' })}
+				{@render dateTimeField({ label: 'End', value: form.scheduledEnd, setValue: (value) => (form.scheduledEnd = value), display: appt.scheduledEnd ? fmtDateTime(appt.scheduledEnd) : '', error: formErrors.scheduledEnd, testid: 'appointment-detail-end' })}
 			</DetailCard>
 
 			<DetailCard title="Who" icon={Users} accent="muted" testid="appointment-detail-who" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-				<InlineField label="Property" bind:value={form.propertyId} display={appt.propertyName ? `${appt.propertyName}${appt.unitNumber ? ' · Unit ' + appt.unitNumber : ''}` : ''} {editing} type="select" options={propertyOptions} testid="appointment-detail-property" />
-				<InlineField label="Tenant" bind:value={form.tenantId} display={appt.tenantName ?? ''} {editing} type="select" options={tenantOptions} testid="appointment-detail-tenant" />
+				{#if editing}
+					<RemoteRecordSelect
+						queryKey={['appointment-detail-property', portfolioId]}
+						label="Property"
+						bind:value={form.propertyId}
+						selectedLabel={selectedPropertyLabel}
+						placeholder="No property"
+						clearLabel="No property"
+						searchPlaceholder="Search properties…"
+						emptyLabel="No matching properties"
+						loadPage={loadPropertyOptions}
+						onValueChange={(_value, option) => (selectedPropertyLabel = option?.label ?? null)}
+						testid="appointment-detail-property"
+					/>
+					<RemoteRecordSelect
+						queryKey={['appointment-detail-tenant', portfolioId]}
+						label="Tenant"
+						bind:value={form.tenantId}
+						selectedLabel={selectedTenantLabel}
+						placeholder="No tenant"
+						clearLabel="No tenant"
+						searchPlaceholder="Search tenants…"
+						emptyLabel="No matching tenants"
+						loadPage={loadTenantOptions}
+						onValueChange={(_value, option) => (selectedTenantLabel = option?.label ?? null)}
+						testid="appointment-detail-tenant"
+					/>
+					<RemoteRecordSelect
+						queryKey={['appointment-detail-work-order', portfolioId]}
+						label="Work order"
+						bind:value={form.workOrderId}
+						selectedLabel={selectedWorkOrderLabel}
+						placeholder="No work order"
+						clearLabel="No work order"
+						searchPlaceholder="Search work orders…"
+						emptyLabel="No matching work orders"
+						loadPage={loadWorkOrderOptions}
+						onValueChange={(_value, option) => applyWorkOrderSelection(option as AppointmentWorkOrderOption | null)}
+						testid="appointment-detail-work-order"
+					/>
+				{:else}
+					<InlineField label="Property" bind:value={form.propertyId} display={appt.propertyName ? `${appt.propertyName}${appt.unitNumber ? ' · Unit ' + appt.unitNumber : ''}` : ''} editing={false} testid="appointment-detail-property" />
+					<InlineField label="Tenant" bind:value={form.tenantId} display={appt.tenantName ?? ''} editing={false} testid="appointment-detail-tenant" />
+					<InlineField label="Work order" bind:value={form.workOrderId} display={appt.workOrderId != null ? `#${appt.workOrderId}` : ''} editing={false} testid="appointment-detail-work-order" />
+				{/if}
 				<InlineField label="Prospect" bind:value={form.prospectName} display={appt.prospectName} {editing} testid="appointment-detail-prospect-name" />
 				<InlineField label="Prospect email" bind:value={form.prospectEmail} display={appt.prospectEmail} {editing} type="email" error={formErrors.prospectEmail} testid="appointment-detail-prospect-email" />
 				<InlineField label="Assigned to" bind:value={form.assignedTo} display={appt.assignedTo} {editing} testid="appointment-detail-assigned" />
@@ -297,6 +420,6 @@
 	message={appt ? `Delete "${appt.title}"?` : ''}
 	busy={deleteMutation.isPending}
 	testid="appointment-delete"
-	onconfirm={() => appt && deleteMutation.mutate(appt.id)}
+	onconfirm={() => appt && deleteMutation.mutate(appt)}
 	oncancel={() => (showDelete = false)}
 />

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -17,7 +18,6 @@ public class OwnerEntityResponse
     public string? City { get; set; }
     public string? State { get; set; }
     public string? PostalCode { get; set; }
-    public string? Address { get; set; }
     public string? Phone { get; set; }
     public string? Email { get; set; }
 
@@ -26,6 +26,12 @@ public class OwnerEntityResponse
 
     /// <summary>True for the self-owner auto-created from the landlord's own account at onboarding.</summary>
     public bool IsPrimary { get; set; }
+
+    /// <summary>True when this owner already has at least one active owner-portal relationship.</summary>
+    public bool HasActiveOwnerPortalAccess { get; set; }
+
+    /// <summary>True when owner portal access exists but the invited passwordless account is still pending activation.</summary>
+    public bool HasPendingOwnerPortalInvitation { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -45,15 +51,66 @@ public class OwnerEntityResponse
         City = e.City,
         State = e.State,
         PostalCode = e.PostalCode,
-        Address = e.Address,
         Phone = e.Phone,
         Email = e.Email,
         AssignedPropertyCount = assignedPropertyCount,
         IsPrimary = e.IsPrimary,
+        HasActiveOwnerPortalAccess = e.UserAccesses.Any(access => access.RevokedAtUtc == null),
+        HasPendingOwnerPortalInvitation = false,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };
 }
+
+public sealed record ActivateOwnerPortalAccessRequest(
+    string? Reason = null,
+    DateTime? EffectiveToUtc = null);
+
+public enum ActivateOwnerPortalAccessOutcome
+{
+    Activated,
+    InvitationPending,
+    AlreadyActive,
+    MissingOwnerEmail,
+    MissingUserAccount,
+    MissingWorkspaceAccess,
+    InactiveWorkspaceAccess,
+    PrimaryOwnerNotSupported,
+    NotFound,
+    Invalid,
+}
+
+public sealed record ActivateOwnerPortalAccessResponse(
+    ActivateOwnerPortalAccessOutcome Outcome,
+    int OwnerEntityId,
+    string? OwnerEmail,
+    int? TargetAccessContextId,
+    int? OwnerUserAccessId,
+    long? AccessRevision,
+    bool Replayed,
+    bool RequiresAccountActivation,
+    DateTime? InvitationExpiresAtUtc,
+    string Message);
+
+public sealed record RevokeOwnerPortalAccessRequest(string? Reason = null);
+
+public enum RevokeOwnerPortalAccessOutcome
+{
+    Revoked,
+    AlreadyRevoked,
+    NotFound,
+}
+
+public sealed record RevokeOwnerPortalAccessResponse(
+    RevokeOwnerPortalAccessOutcome Outcome,
+    int OwnerEntityId,
+    string? OwnerEmail,
+    int RevokedRelationshipCount,
+    int? TargetAccessContextId,
+    int? OwnerUserAccessId,
+    long? AccessRevision,
+    bool Replayed,
+    string Message);
 
 public class OwnerEntityListResponse
 {
@@ -63,13 +120,10 @@ public class OwnerEntityListResponse
     public int Take { get; set; }
 }
 
-public class DeleteOwnerEntityOptions
+public class OwnerEntityListQuery : ListQuery
 {
-    /// <summary>
-    /// When true, clears this owner from assigned properties before soft-deleting the owner. This is
-    /// intended for Guided Setup cleanup where a property may be temporarily ownerless.
-    /// </summary>
-    public bool ClearPropertyAssignments { get; set; }
+    [FromQuery(Name = "ownerEntityType")]
+    public OwnerEntityType? OwnerEntityType { get; set; }
 }
 
 public class CreateOwnerEntityRequest
@@ -97,9 +151,6 @@ public class CreateOwnerEntityRequest
 
     [MaxLength(20)]
     public string? PostalCode { get; set; }
-
-    [MaxLength(500)]
-    public string? Address { get; set; }
 
     [MaxLength(50)]
     public string? Phone { get; set; }
@@ -133,9 +184,6 @@ public class UpdateOwnerEntityRequest
 
     [MaxLength(20)]
     public string? PostalCode { get; set; }
-
-    [MaxLength(500)]
-    public string? Address { get; set; }
 
     [MaxLength(50)]
     public string? Phone { get; set; }

@@ -2,31 +2,36 @@ using System.Globalization;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Admin-only forensic view of the caller's portfolio audit trail. Same filters as
+/// Platform-operator forensic view of the caller's selected portfolio audit trail. Same filters as
 /// <see cref="AuditController"/> (<c>?operation&amp;entityType&amp;entityId&amp;skip&amp;take&amp;search&amp;sort</c>),
-/// but the rows include the actor IP address and raw old→new JSON that the landlord-facing
-/// <c>/api/v1/audit</c> intentionally withholds. Portfolio-scoped (the cross-tenant IDOR guard from the
-/// base) <b>and</b> gated behind the Admin role; the data already lives on the row, so there is no
-/// migration. Read-only — the trail is append-only.
+/// but the rows include actor identity and the raw old→new JSON needed by the operator view.
+/// Portfolio-scoped (the cross-tenant IDOR guard from the base) <b>and</b> gated by the database-backed
+/// platform-operator allowlist. Workspace administrators do not receive this operator surface merely
+/// because they manage their Team. The data already lives on the row, so there is no migration. Read-only
+/// — the trail is append-only.
 /// </summary>
 [ApiController]
 [Route("api/v1/admin/audit")]
-[Authorize(Roles = "Admin")]
+[Authorize(Policy = PlatformAdminPolicy.Name)]
 [Produces("application/json")]
-public class AdminAuditController : ManagementControllerBase
+public class AdminAuditController : AuthenticatedPortfolioControllerBase
 {
     private readonly IAuditQueryService _service;
+    private readonly TimeProvider _timeProvider;
 
-    public AdminAuditController(IAuditQueryService service)
+    public AdminAuditController(IAuditQueryService service, TimeProvider timeProvider)
     {
         _service = service;
+        _timeProvider = timeProvider;
     }
 
     [HttpGet]
@@ -59,7 +64,7 @@ public class AdminAuditController : ManagementControllerBase
         CancellationToken ct)
     {
         var portfolioId = GetPortfolioId();
-        var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        var stamp = _timeProvider.UtcNow().ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
 
         Response.ContentType = "text/csv; charset=utf-8";
         Response.Headers["Content-Disposition"] = $"attachment; filename=\"audit-{stamp}.csv\"";

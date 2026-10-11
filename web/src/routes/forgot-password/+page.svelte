@@ -1,15 +1,21 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Building } from '@lucide/svelte';
 	import type { ActionData, PageData } from './$types';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Card from '$lib/components/ui/card';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
 	let email = $state('');
+
+	$effect(() => {
+		const returnedEmail =
+			form && 'email' in form && typeof form.email === 'string' ? form.email : null;
+		email = returnedEmail ?? data.email ?? '';
+	});
 </script>
 
 <svelte:head>
@@ -20,7 +26,7 @@
 	<Card.Root class="w-full max-w-md shadow-xl">
 		<Card.Content class="p-6">
 			<div class="mb-5 flex items-center gap-2">
-				<Building class="h-6 w-6 text-primary" />
+				<BrandMark class="h-8 w-8 shadow-sm" />
 				<h1 class="text-xl font-bold text-foreground">Rental Command</h1>
 			</div>
 

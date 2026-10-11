@@ -22,17 +22,26 @@ class VoiceIntakeRepository {
   /// Starts a conversation from a spoken note. Pass [audio] (preferred) or a
   /// [transcript] (handy for tests / non-audio entry).
   Future<VoiceTurn> start({
+    required String operationKey,
     Uint8List? audio,
     String filename = 'voice.m4a',
     String contentType = 'audio/mp4',
     String? transcript,
   }) {
-    return _post('/voice/drafts', audio, filename, contentType, transcript);
+    return _post(
+      '/voice/drafts',
+      operationKey,
+      audio,
+      filename,
+      contentType,
+      transcript,
+    );
   }
 
   /// Answers the current question for [draftId].
   Future<VoiceTurn> answer(
     int draftId, {
+    required String operationKey,
     Uint8List? audio,
     String filename = 'voice.m4a',
     String contentType = 'audio/mp4',
@@ -40,6 +49,7 @@ class VoiceIntakeRepository {
   }) {
     return _post(
       '/voice/drafts/$draftId/answer',
+      operationKey,
       audio,
       filename,
       contentType,
@@ -49,6 +59,7 @@ class VoiceIntakeRepository {
 
   Future<VoiceTurn> _post(
     String path,
+    String operationKey,
     Uint8List? audio,
     String filename,
     String contentType,
@@ -69,6 +80,7 @@ class VoiceIntakeRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         path,
         data: formData,
+        options: Options(headers: {'Idempotency-Key': operationKey}),
       );
       final data = response.data;
       if (data == null) {

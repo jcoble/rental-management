@@ -1,77 +1,136 @@
-using System.Security.Claims;
+using System.Data.Common;
+using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
 using Moq;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Scanning;
 
-public class ScanControllerTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name1)]
+public class ScanControllerTests : IAsyncLifetime
 {
-    private readonly SqliteConnection _conn;
-    private readonly RentalCommandDbContext _db;
+    private static readonly Guid SessionId =
+        Guid.Parse("11111111-1111-1111-1111-111111111111");
 
-    public ScanControllerTests()
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private readonly List<string> _executedSql = [];
+    private readonly List<RecordedCommand> _executedCommands = [];
+    private CanonicalScanTestAuthorization _authorization = null!;
+
+    public ScanControllerTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
-
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .Options;
-
-        _db = new ScanControllerTestDbContext(options);
-        _db.Database.EnsureCreated();
+        _fixture = fixture;
     }
 
-    public void Dispose()
+    public async Task InitializeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        _ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(_executedSql, _executedCommands)]);
+        _db = _ctx.Db;
+        _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
+            _db, portfolioId: 42, userId: 7, sessionId: SessionId);
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
     public async Task Upload_WithWorkOrderTarget_CreatesDraft()
     {
         var scan = new Mock<IScanService>(MockBehavior.Strict);
-        scan.Setup(s => s.CreateDraftAsync(
-                42,
-                It.Is<byte[]>(b => b.SequenceEqual(new byte[] { 1, 2, 3 })),
-                "image/jpeg",
+        var uploads = new Mock<IScanUploadService>(MockBehavior.Strict);
+        uploads.Setup(s => s.UploadAsync(
+                It.Is<WorkspaceReadScope>(scope => scope.PortfolioId == 42
+                    && scope.UserId == 7
+                    && scope.AccessContextId == 1
+                    && scope.AccessRevision == 1),
+                "scan-op",
                 "WorkOrder",
+                false,
+                null,
+                It.Is<ScanCaptureContextData>(context =>
+                    context.AccessContextId == 1
+                    && context.AccessRevision == 1
+                    && context.PropertyId == null
+                    && context.UnitId == null
+                    && context.LeaseManagementId == null
+                    && context.TenantAccountId == null),
+                It.Is<IReadOnlyList<ScanUploadFilePayload>>(payloads =>
+                    payloads.Count == 1
+                    && payloads[0].Bytes.SequenceEqual(new byte[] { 1, 2, 3 })
+                    && payloads[0].ContentType == "image/jpeg"
+                    && payloads[0].FileName == "work-order.jpg"),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ScanDraft
-            {
-                Id = 17,
-                PortfolioId = 42,
-                TargetEntityType = "WorkOrder",
-                Status = "Pending",
-                FilePath = "uploads/work-order.jpg",
-                CreatedAt = DateTime.UtcNow,
-            });
+            .ReturnsAsync(new FinalizeScanUploadResult(
+                null, null, "WorkOrder", [new FinalizedScanDraft(17, "Pending", "uploads/work-order.jpg")]));
 
-        var controller = CreateController(scan.Object);
+        var controller = CreateController(scan.Object, uploads: uploads.Object);
         var file = new FormFile(new MemoryStream([1, 2, 3]), 0, 3, "file", "work-order.jpg")
         {
             Headers = new HeaderDictionary(),
             ContentType = "image/jpeg",
         };
 
-        var result = await controller.Upload(file, "WorkOrder", CancellationToken.None);
+        var result = await controller.Upload(file, "WorkOrder", "scan-op", CancellationToken.None);
 
         var created = result.Result.Should().BeOfType<CreatedAtActionResult>().Subject;
         var body = created.Value.Should().BeOfType<ScanCreatedResponse>().Subject;
         body.DraftId.Should().Be(17);
         body.Status.Should().Be("Pending");
-        scan.VerifyAll();
+        uploads.VerifyAll();
+    }
+
+    [Fact]
+    public async Task Upload_WithoutTarget_CreatesAutoClassificationDraft()
+    {
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        var uploads = new Mock<IScanUploadService>(MockBehavior.Strict);
+        uploads.Setup(service => service.UploadAsync(
+                It.Is<WorkspaceReadScope>(scope => scope.PortfolioId == 42 && scope.UserId == 7),
+                "scan-auto",
+                string.Empty,
+                false,
+                null,
+                It.IsAny<ScanCaptureContextData>(),
+                It.Is<IReadOnlyList<ScanUploadFilePayload>>(payloads =>
+                    payloads.Count == 1 && payloads[0].FileName == "document.pdf"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FinalizeScanUploadResult(
+                null, null, string.Empty, [new FinalizedScanDraft(18, "Pending", "uploads/document.pdf")]));
+
+        var controller = CreateController(scan.Object, uploads: uploads.Object);
+        var file = new FormFile(new MemoryStream([1, 2, 3]), 0, 3, "file", "document.pdf")
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = "application/pdf",
+        };
+
+        var result = await controller.Upload(file, null, "scan-auto", CancellationToken.None);
+
+        var created = result.Result.Should().BeOfType<CreatedAtActionResult>().Subject;
+        created.Value.Should().BeOfType<ScanCreatedResponse>().Which.DraftId.Should().Be(18);
+        uploads.VerifyAll();
     }
 
     [Theory]
@@ -84,15 +143,6 @@ public class ScanControllerTests : IDisposable
     [InlineData("", true)]        // empty      → thumbnail
     public async Task DownloadFile_FullFlag_SelectsOriginalOrThumbnail(string? full, bool expectThumbnail)
     {
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = 42,
-            Name = "Portfolio 42",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
         _db.ScanDrafts.Add(new ScanDraft
         {
             Id = 51,
@@ -144,15 +194,6 @@ public class ScanControllerTests : IDisposable
     public async Task ListPage_IncludesCreatedUnitId_ForUnitTiedConfirmedRecords()
     {
         var now = DateTime.UtcNow;
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = 42,
-            Name = "Portfolio 42",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
         _db.Properties.Add(new Property
         {
             Id = 10,
@@ -168,6 +209,7 @@ public class ScanControllerTests : IDisposable
         _db.Units.Add(new Unit
         {
             Id = 11,
+            PortfolioId = 42,
             PropertyId = 10,
             UnitNumber = "A",
             CreatedAt = now,
@@ -182,30 +224,92 @@ public class ScanControllerTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         });
-        _db.Leases.Add(new Lease
+        await _db.SaveChangesAsync();
+
+        _db.LeaseManagements.Add(new LeaseManagement
         {
             Id = 13,
+            PublicId = Guid.NewGuid(),
             PortfolioId = 42,
             PropertyId = 10,
             UnitId = 11,
-            TenantId = 12,
-            LeaseNumber = "L-13",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date,
-            EndDate = now.Date.AddYears(1),
-            MonthlyRent = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            RelationshipNumber = "LM-13",
+            PossessionGivenAtUtc = now,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 7,
+            RowVersion = Guid.NewGuid(),
         });
-        _db.Payments.Add(new Payment
+        await _db.SaveChangesAsync();
+
+        _db.TenantAccounts.Add(new TenantAccount
         {
             Id = 14,
+            PublicId = Guid.NewGuid(),
             PortfolioId = 42,
-            LeaseId = 13,
+            LeaseManagementId = 13,
+            AccountNumber = "TA-14",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = 7,
+        });
+        _db.LeaseManagementParties.Add(new LeaseManagementParty
+        {
+            Id = 16,
+            PortfolioId = 42,
+            LeaseManagementId = 13,
+            TenantId = 12,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now),
+            ChangeReason = "Canonical scan-list fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = 7,
+        });
+        _db.LeaseAgreements.Add(new LeaseAgreement
+        {
+            Id = 18,
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 42,
+            LeaseManagementId = 13,
+            VersionNumber = 1,
+            AgreementNumber = "AGR-18",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now),
+            BaseRentAmount = 1200m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 0m,
+            LateFeeAmount = 0m,
+            GracePeriodDays = 0,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                42, 7, now),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 7,
+        });
+        await _db.SaveChangesAsync();
+
+        _db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            Id = 17,
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 42,
+            TenantAccountId = 14,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
             Amount = 1200m,
-            DueDate = now.Date,
-            CreatedAt = now,
-            UpdatedAt = now,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Scanned rent receipt",
+            BusinessKey = "scan-receipt:21",
+            CreatedByUserId = 7,
         });
         _db.RentalApplications.Add(new RentalApplication
         {
@@ -219,6 +323,15 @@ public class ScanControllerTests : IDisposable
             UpdatedAt = now,
             SubmittedAtUtc = now,
         });
+        _db.StoredFiles.Add(new StoredFile
+        {
+            Id = 16,
+            PortfolioId = 42,
+            FileName = "security-deposit-receipt.jpg",
+            FilePath = "uploads/security-deposit-receipt.jpg",
+            ContentType = "image/jpeg",
+            FileSize = 256,
+        });
         _db.ScanDrafts.AddRange(
             new ScanDraft
             {
@@ -226,6 +339,8 @@ public class ScanControllerTests : IDisposable
                 PortfolioId = 42,
                 TargetEntityType = "Payment",
                 Status = "Confirmed",
+                ConfirmedEntityId = 14,
+                SourceStoredFileId = 16,
                 FilePath = "uploads/payment.jpg",
                 CreatedAt = now,
             },
@@ -235,34 +350,15 @@ public class ScanControllerTests : IDisposable
                 PortfolioId = 42,
                 TargetEntityType = "Application",
                 Status = "Confirmed",
+                ConfirmedEntityId = 15,
                 FilePath = "uploads/application.jpg",
                 CreatedAt = now.AddSeconds(1),
-            });
-        _db.StoredFiles.AddRange(
-            new StoredFile
-            {
-                PortfolioId = 42,
-                FileName = "payment.jpg",
-                FilePath = "uploads/payment.jpg",
-                ContentType = "image/jpeg",
-                FileSize = 1,
-                EntityType = "Payment",
-                EntityId = 14,
-            },
-            new StoredFile
-            {
-                PortfolioId = 42,
-                FileName = "application.jpg",
-                FilePath = "uploads/application.jpg",
-                ContentType = "image/jpeg",
-                FileSize = 1,
-                EntityType = "Application",
-                EntityId = 15,
             });
         await _db.SaveChangesAsync();
 
         var controller = CreateController(Mock.Of<IScanService>());
 
+        _executedSql.Clear();
         var result = await controller.ListPage(new ListQuery { Skip = 0, Take = 20 }, "Confirmed", CancellationToken.None);
 
         var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
@@ -270,35 +366,530 @@ public class ScanControllerTests : IDisposable
         body.Items.Should().HaveCount(2);
         body.Items.Should().Contain(i =>
             i.CreatedEntityType == "Payment" &&
-            i.CreatedEntityId == 14 &&
-            i.CreatedUnitId == 11);
+            i.CreatedEntityId == 17 &&
+            i.CreatedUnitId == 11 &&
+            i.SourceStoredFileId == 16);
         body.Items.Should().Contain(i =>
             i.CreatedEntityType == "Application" &&
             i.CreatedEntityId == 15 &&
             i.CreatedUnitId == 11);
+        _executedSql.Should().HaveCount(2, "the page uses one count and one DB-shaped item query");
+        _executedSql[1].Should().ContainEquivalentOf("ORDER BY");
+        _executedSql[1].Should().ContainEquivalentOf("LIMIT");
+        _executedSql[1].Should().NotContain("StoredFiles");
     }
 
-    private ScanController CreateController(IScanService scan, IFileStorage? files = null)
+    [Fact]
+    public async Task List_DoesNotExecuteDiscardedTotalCountQuery()
     {
-        var controller = new ScanController(scan, _db, files ?? Mock.Of<IFileStorage>())
+        SeedAuthorizedDraft(23);
+        await _ctx.ActivateApiScopeAsync(_authorization.Scope);
+        var controller = CreateController(Mock.Of<IScanService>());
+
+        _executedSql.Clear();
+        _executedCommands.Clear();
+        var result = await controller.List(null, skip: 0, take: 20, CancellationToken.None);
+
+        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var body = ok.Value.Should().BeAssignableTo<IReadOnlyList<ScanDraftResponse>>().Subject;
+        body.Should().ContainSingle(item => item.Id == 23);
+        _executedSql.Should().ContainSingle(
+            "the array endpoint must execute only its authorized, sorted, DB-paged item query");
+        _executedSql[0].Should().ContainEquivalentOf("ORDER BY");
+        _executedSql[0].Should().ContainEquivalentOf("LIMIT");
+        _executedSql[0].Should().NotContainEquivalentOf("COUNT(*)");
+        _executedSql[0].Length.Should().BeLessThan(
+            150_000,
+            "scan authorization must not re-expand its permission graph for every captured relationship");
+        Regex.Matches(
+            _executedSql[0],
+            @"FROM public\.rc_api_effective_capability_scopes\(",
+            RegexOptions.IgnoreCase).Count.Should().BeLessThanOrEqualTo(
+            12,
+            "each scan target should evaluate one cohesive property scope, with assigned-work scope only where supported");
+
+        var itemCommand = _executedCommands.Should().ContainSingle().Subject;
+        await using var explain = _db.Database.GetDbConnection().CreateCommand();
+        explain.CommandText = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + itemCommand.CommandText;
+        explain.Transaction = _db.Database.CurrentTransaction?.GetDbTransaction();
+        foreach (var parameter in itemCommand.Parameters)
+            explain.Parameters.Add(CloneParameter(parameter));
+
+        var planJson = (string)(await explain.ExecuteScalarAsync())!;
+        using var plan = JsonDocument.Parse(planJson);
+        var planningMs = plan.RootElement[0].GetProperty("Planning Time").GetDouble();
+        var executionMs = plan.RootElement[0].GetProperty("Execution Time").GetDouble();
+        (planningMs + executionMs).Should().BeLessThan(
+            5_000,
+            "the canonical PostgreSQL plan must remain comfortably inside the mobile request timeout");
+    }
+
+    [Fact]
+    public async Task Confirm_WithoutStableOperationId_IsRejectedBeforePreparationOrAtomicAdmission()
+    {
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        var writes = new RecordingRequestWriteExecutor();
+        var controller = CreateController(scan.Object, writes: writes);
+
+        var result = await controller.Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "   " },
+            CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        writes.Calls.Should().Be(0);
+        scan.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("lease-number-blank")]
+    [InlineData("lease-number-too-long")]
+    [InlineData("start-date-missing")]
+    [InlineData("end-date-missing")]
+    [InlineData("end-before-start")]
+    [InlineData("monthly-rent-not-positive")]
+    [InlineData("rent-due-day-out-of-range")]
+    [InlineData("property-id-not-positive")]
+    [InlineData("unit-id-not-positive")]
+    [InlineData("tenant-id-not-positive")]
+    [InlineData("security-deposit-negative")]
+    [InlineData("late-fee-negative")]
+    [InlineData("bedrooms-negative")]
+    [InlineData("bathrooms-negative")]
+    [InlineData("square-feet-negative")]
+    public void CreateManualLeaseRequest_RejectsEveryGuidedSetupInvalidClass(string invalidClass)
+    {
+        var request = new CreateManualLeaseRequest
+        {
+            PropertyId = 12,
+            UnitId = 34,
+            TenantId = 56,
+            LeaseNumber = "MANUAL-834",
+            StartDate = new DateTime(2026, 9, 1),
+            EndDate = new DateTime(2027, 8, 31),
+            MonthlyRent = 1_450m,
+            SecurityDeposit = 1_450m,
+            LateFee = 75m,
+            RentDueDay = 1,
+            UnitBedrooms = 2m,
+            UnitBathrooms = 1m,
+            UnitSquareFeet = 900,
+        };
+        switch (invalidClass)
+        {
+            case "lease-number-blank": request.LeaseNumber = "   "; break;
+            case "lease-number-too-long": request.LeaseNumber = new string('L', 101); break;
+            case "start-date-missing": request.StartDate = null; break;
+            case "end-date-missing": request.EndDate = null; break;
+            case "end-before-start": request.EndDate = new DateTime(2026, 8, 31); break;
+            case "monthly-rent-not-positive": request.MonthlyRent = 0m; break;
+            case "rent-due-day-out-of-range": request.RentDueDay = 0; break;
+            case "property-id-not-positive": request.PropertyId = 0; break;
+            case "unit-id-not-positive": request.UnitId = -1; break;
+            case "tenant-id-not-positive": request.TenantId = -1; break;
+            case "security-deposit-negative": request.SecurityDeposit = -1m; break;
+            case "late-fee-negative": request.LateFee = -1m; break;
+            case "bedrooms-negative": request.UnitBedrooms = -1m; break;
+            case "bathrooms-negative": request.UnitBathrooms = -1m; break;
+            case "square-feet-negative": request.UnitSquareFeet = -1; break;
+            default: throw new ArgumentOutOfRangeException(nameof(invalidClass), invalidClass, null);
+        }
+
+        var errors = new List<ValidationResult>();
+        Validator.TryValidateObject(request, new ValidationContext(request), errors, validateAllProperties: true)
+            .Should().BeFalse();
+        errors.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateManualLease_NormalizesDateTimesBeforeAtomicAdmission()
+    {
+        var writes = new RecordingRequestWriteExecutor
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.Confirmed,
+                    17,
+                    nameof(LeaseAgreement),
+                    91,
+                    LeaseManagementId: 90),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()),
+        };
+        var controller = CreateController(Mock.Of<IScanService>(), writes: writes);
+        var body = new CreateManualLeaseRequest
+        {
+            PropertyId = 12,
+            UnitId = 34,
+            TenantId = 56,
+            TenantName = "Manual Tenant",
+            PropertyName = "Manual House",
+            PropertyAddress = "12 Main Street",
+            PropertyCity = "Columbus",
+            PropertyState = "OH",
+            PropertyPostalCode = "43215",
+            LeaseNumber = "MANUAL-17",
+            StartDate = new DateTime(2026, 9, 1),
+            EndDate = new DateTime(2027, 8, 31),
+            MonthlyRent = 1_450m,
+            SecurityDeposit = 1_450m,
+            LateFee = 75m,
+            RentDueDay = 1,
+            TermsPayload = "{}",
+            PossessionGivenAtUtc = new DateTime(2026, 9, 2),
+        };
+
+        var result = await controller.CreateManualLease(
+            body,
+            "manual-lease-date-kind",
+            CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var command = writes.Command.Should().BeOfType<CreateManualLeaseCommand>().Subject;
+        command.Target.StartDate.Should().Be(new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc));
+        command.Target.StartDate!.Value.Kind.Should().Be(DateTimeKind.Utc);
+        command.Target.EndDate.Should().Be(new DateTime(2027, 8, 31, 0, 0, 0, DateTimeKind.Utc));
+        command.Target.EndDate!.Value.Kind.Should().Be(DateTimeKind.Utc);
+        command.Target.PossessionGivenAtUtc.Should()
+            .Be(new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Utc));
+        command.Target.PossessionGivenAtUtc!.Value.Kind.Should().Be(DateTimeKind.Utc);
+    }
+
+    [Theory]
+    [InlineData(AtomicCommandDisposition.Executed, false)]
+    [InlineData(AtomicCommandDisposition.Replayed, true)]
+    public async Task Confirm_UsesTypedAtomicCommandAndReportsExecutionDisposition(
+        AtomicCommandDisposition disposition,
+        bool replayed)
+    {
+        SeedAuthorizedDraft(17);
+        var command = ExpenseCommand(17);
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        scan.Setup(service => service.PrepareConfirmationAsync(
+                42, 17, 7, "{}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanConfirmationPreparation(
+                ScanConfirmationPreparationOutcome.Ready, command));
+        var writes = new RecordingRequestWriteExecutor
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.Confirmed, 17, "Expense", 91, 12),
+                disposition,
+                Guid.NewGuid()),
+        };
+        var controller = CreateController(scan.Object, writes: writes);
+
+        var result = await controller.Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "mobile-confirm-17" },
+            CancellationToken.None);
+
+        var body = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
+        Property(body, "entityType").Should().Be("Expense");
+        Property(body, "entityId").Should().Be(91);
+        Property(body, "unitId").Should().Be(12);
+        Property(body, "replayed").Should().Be(replayed);
+        Property(body, "atomicDisposition").Should().Be(disposition.ToString());
+        writes.Calls.Should().Be(1);
+        var admitted = writes.Command.Should().BeOfType<ConfirmScanDraftCommand>().Subject;
+        admitted.PortfolioId.Should().Be(command.PortfolioId);
+        admitted.DraftId.Should().Be(command.DraftId);
+        admitted.ConfirmedByUserId.Should().Be(command.ConfirmedByUserId);
+        admitted.ConfirmedAtUtc.Should().Be(command.ConfirmedAtUtc);
+        admitted.ExpectedDraftFingerprint.Should().Be(command.ExpectedDraftFingerprint);
+        admitted.Target.Should().BeEquivalentTo(command.Target);
+        admitted.AuthSessionId.Should().Be(Guid.Parse("11111111-1111-1111-1111-111111111111"));
+        admitted.AccessContextId.Should().Be(1);
+        admitted.ExpectedAccessRevision.Should().Be(1);
+        admitted.DeliveryIdempotencyKey.Should().StartWith("scan-confirm:42:17:");
+        writes.Identity!.CommandType.Should().Be("scan.confirm");
+        writes.Identity.IdempotencyKey.Should().StartWith("42:17:");
+        scan.VerifyAll();
+    }
+
+    [Fact]
+    public async Task Confirm_AlreadyConfirmed_ReturnsCanonicalEntityWithoutLegacyWrite()
+    {
+        SeedAuthorizedDraft(17);
+        var scan = ReadyScan(ExpenseCommand(17));
+        var writes = new RecordingRequestWriteExecutor
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.AlreadyConfirmed, 17, "Payment", 88, 4,
+                    LedgerEntryId: 8_800_000_000),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()),
+        };
+        var controller = CreateController(scan.Object, writes: writes);
+
+        var result = await controller.Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "second-operation" },
+            CancellationToken.None);
+
+        var body = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
+        Property(body, "status").Should().Be("alreadyConfirmed");
+        Property(body, "receiptId").Should().Be(8_800_000_000L);
+        Property(body, "tenantAccountId").Should().Be(88);
+        Property(body, "entityId").Should().Be(88);
+        Property(body, "entityType").Should().Be("Payment");
+        scan.VerifyAll();
+    }
+
+    [Fact]
+    public async Task Confirm_LoanMatchResponseIncludesLoanAndPaymentIds()
+    {
+        SeedAuthorizedDraft(17, "Loan");
+        var scan = ReadyScan(LoanCommand(17));
+        var writes = new RecordingRequestWriteExecutor
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.Confirmed, 17, "Loan", 91,
+                    LoanPaymentId: 901),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()),
+        };
+        var controller = CreateController(scan.Object, writes: writes);
+
+        var result = await controller.Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "loan-match" },
+            CancellationToken.None);
+
+        var body = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
+        Property(body, "loanId").Should().Be(91);
+        Property(body, "loanPaymentId").Should().Be(901);
+        Property(body, "entityId").Should().Be(91);
+        Property(body, "entityType").Should().Be("Loan");
+        scan.VerifyAll();
+    }
+
+
+    [Fact]
+    public async Task Confirm_MapsNotFoundRejectedAndValidationResponses()
+    {
+        var notFoundScan = new Mock<IScanService>(MockBehavior.Strict);
+        notFoundScan.Setup(service => service.PrepareConfirmationAsync(
+                42, 17, 7, "{}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanConfirmationPreparation(
+                ScanConfirmationPreparationOutcome.DraftNotFound,
+                Error: "Scan draft not found."));
+        var unusedWrites = new RecordingRequestWriteExecutor();
+        var notFound = await CreateController(notFoundScan.Object, writes: unusedWrites).Confirm(
+            17, new ConfirmScanRequest { ClientOperationId = "missing" }, CancellationToken.None);
+        notFound.Should().BeOfType<NotFoundObjectResult>();
+        unusedWrites.Calls.Should().Be(0);
+
+        SeedAuthorizedDraft(17);
+        var rejectedScan = ReadyScan(ExpenseCommand(17));
+        var rejectedWrites = new RecordingRequestWriteExecutor
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.DraftRejected, 17, "Expense", null, Error: "Draft is rejected."),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()),
+        };
+        var rejected = await CreateController(rejectedScan.Object, writes: rejectedWrites).Confirm(
+            17, new ConfirmScanRequest { ClientOperationId = "rejected" }, CancellationToken.None);
+        rejected.Should().BeOfType<ConflictObjectResult>();
+
+        var validationScan = ReadyScan(ExpenseCommand(17));
+        var validationWrites = new RecordingRequestWriteExecutor
+        {
+            Exception = new ScanConfirmationValidationException("Draft is not ready to confirm."),
+        };
+        var validation = await CreateController(validationScan.Object, writes: validationWrites).Confirm(
+            17, new ConfirmScanRequest { ClientOperationId = "not-ready" }, CancellationToken.None);
+        validation.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task Confirm_LeasePreparation_ReturnsTemporaryUnavailableWithoutAtomicOrLegacyWriter()
+    {
+        SeedAuthorizedDraft(17, nameof(LeaseAgreement));
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        scan.Setup(service => service.PrepareConfirmationAsync(
+                42, 17, 7, "{}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanConfirmationPreparation(
+                ScanConfirmationPreparationOutcome.TemporarilyUnavailable,
+                Error: "Lease scan confirmation is temporarily unavailable."));
+        var writes = new RecordingRequestWriteExecutor();
+
+        var result = await CreateController(scan.Object, writes: writes).Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "lease-confirm" },
+            CancellationToken.None);
+
+        var unavailable = result.Should().BeOfType<ObjectResult>().Subject;
+        unavailable.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        writes.Calls.Should().Be(0);
+        scan.VerifyAll();
+    }
+
+    private ScanController CreateController(
+        IScanService scan,
+        IFileStorage? files = null,
+        IWriteExecutor? writes = null,
+        IScanUploadService? uploads = null)
+    {
+        var httpContext = new DefaultHttpContext();
+        httpContext.Items[CanonicalAccessContextHttpItem.Key] = _authorization.HttpAccessContext;
+
+        var controller = new ScanController(
+            scan,
+            uploads ?? Mock.Of<IScanUploadService>(),
+            writes ?? Mock.Of<IWriteExecutor>(),
+            Mock.Of<IScanConfirmationTargetWriter>(),
+            _db,
+            files ?? Mock.Of<IFileStorage>(),
+            TimeProvider.System)
         {
             ControllerContext = new ControllerContext
             {
-                HttpContext = new DefaultHttpContext
-                {
-                    User = new ClaimsPrincipal(new ClaimsIdentity([
-                        new Claim("portfolioId", "42"),
-                        new Claim(ClaimTypes.NameIdentifier, "7"),
-                    ], "test")),
-                },
+                HttpContext = httpContext,
             },
         };
 
         return controller;
     }
-}
 
-internal sealed class ScanControllerTestDbContext : RentalCommandDbContext
-{
-    public ScanControllerTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
+    private static Mock<IScanService> ReadyScan(ConfirmScanDraftCommand command)
+    {
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        scan.Setup(service => service.PrepareConfirmationAsync(
+                42, 17, 7, "{}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanConfirmationPreparation(
+                ScanConfirmationPreparationOutcome.Ready, command));
+        return scan;
+    }
+
+    private void SeedAuthorizedDraft(int id, string targetEntityType = "Expense")
+    {
+        _db.ScanDrafts.Add(new ScanDraft
+        {
+            Id = id,
+            PortfolioId = 42,
+            TargetEntityType = targetEntityType,
+            Status = "Reviewing",
+            FilePath = $"uploads/scan-{id}.jpg",
+            CaptureAccessContextId = _authorization.Scope.AccessContextId,
+            CaptureAccessRevision = _authorization.Scope.AccessRevision,
+            CreatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+    }
+
+    private static ConfirmScanDraftCommand ExpenseCommand(int draftId) => new(
+        42,
+        draftId,
+        7,
+        DateTime.UtcNow,
+        ScanConfirmationDraftFingerprint.Create("Expense", null, null),
+        new ScanConfirmationTargetData(
+            ScanConfirmationTargetKind.Expense,
+            Expense: new ScanExpenseTargetData(
+                new ScanReceiptData(
+                    null, null, null, null, null, null, null, null, null, null,
+                    null, null, null, 25m, null, null, null, null, null, null, [],
+                    null, null, null, []),
+                true,
+                null,
+                null,
+                null)));
+
+    private static ConfirmScanDraftCommand LoanCommand(int draftId) => new(
+        42,
+        draftId,
+        7,
+        DateTime.UtcNow,
+        ScanConfirmationDraftFingerprint.Create("Loan", null, null),
+        new ScanConfirmationTargetData(
+            ScanConfirmationTargetKind.Loan,
+            Loan: new ScanLoanTargetData(
+                10,
+                "Existing Match Bank",
+                200_000m,
+                199_500m,
+                6.125m,
+                360,
+                DateTime.UtcNow.AddYears(-1),
+                1,
+                1_250m,
+                300m,
+                true,
+                true,
+                "Scanned statement",
+                ExistingLoanId: 91,
+                ExistingLoanPaymentId: 901)));
+
+    private static object? Property(object value, string name) =>
+        value.GetType().GetProperty(name)!.GetValue(value);
+
+    private sealed class RecordingRequestWriteExecutor : IWriteExecutor
+    {
+        public object? Outcome { get; init; }
+        public Exception? Exception { get; init; }
+        public int Calls { get; private set; }
+        public AtomicCommandIdentity? Identity { get; private set; }
+        public object? Command { get; private set; }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            string idempotencyKey,
+            TransactionalWrite<TCommand, TResult> write,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            Calls++;
+            Identity = new AtomicCommandIdentity(write.OperationName, idempotencyKey);
+            Command = write.Request;
+            if (Exception is not null)
+                return Task.FromException<AtomicCommandOutcome<TResult>>(Exception);
+            return Task.FromResult((AtomicCommandOutcome<TResult>)Outcome!);
+        }
+    }
+
+    private sealed record RecordedCommand(
+        string CommandText,
+        IReadOnlyList<DbParameter> Parameters);
+
+    private static DbParameter CloneParameter(DbParameter parameter) =>
+        parameter is ICloneable cloneable
+            ? (DbParameter)cloneable.Clone()
+            : throw new InvalidOperationException(
+                $"Database parameter type {parameter.GetType().Name} cannot be cloned for EXPLAIN.");
+
+    private sealed class RecordingCommandInterceptor(
+        List<string> commands,
+        List<RecordedCommand> recordedCommands) : DbCommandInterceptor
+    {
+        private static RecordedCommand Snapshot(DbCommand command) =>
+            new(
+                command.CommandText,
+                command.Parameters.Cast<DbParameter>().Select(CloneParameter).ToArray());
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            recordedCommands.Add(Snapshot(command));
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            recordedCommands.Add(Snapshot(command));
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
 }

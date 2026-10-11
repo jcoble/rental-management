@@ -3,6 +3,7 @@
 	import type { AuditEntry } from '$lib/types';
 	import { units as unitsApi } from '$lib/api/endpoints/units';
 	import ActivityFeed from '$lib/components/shared/ActivityFeed.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 
 	let { unitId }: { unitId: number } = $props();
@@ -10,7 +11,7 @@
 	const PAGE = 30;
 	let take = $state(PAGE);
 
-	// Deep, paged history: a bounded AuditLog union over the unit + its children (newest first).
+	// Deep, paged history: a bounded AtomicAuditLog union over the unit + its children (newest first).
 	const timelineQuery = createQuery(() => ({
 		queryKey: ['unit-timeline', unitId, take],
 		enabled: unitId > 0,
@@ -26,7 +27,12 @@
 
 <div class="space-y-4 rounded-xl border bg-card p-4" data-testid="unit-timeline-tab">
 	{#if timelineQuery.isLoading}
-		<p class="py-8 text-center text-sm text-muted-foreground">Loading history…</p>
+		<LoadingState label="Loading Unit history" testid="unit-history-loading" />
+	{:else if timelineQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-history-error">
+			<p class="text-sm font-medium text-destructive">Unit history could not be loaded.</p>
+			<Button class="mt-3" variant="outline" size="sm" onclick={() => timelineQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if activities.length === 0}
 		<p class="py-8 text-center text-sm text-muted-foreground">No history yet for this unit.</p>
 	{:else}

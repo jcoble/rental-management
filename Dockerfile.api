@@ -1,13 +1,13 @@
 # RentalCommand.Api — runtime-only image (PostgreSQL-backed REST API).
 #
-# The app is compiled and published ON THE SELF-HOSTED BUILD BOX (see the build-push job in
-# .github/workflows/deploy.yml); this image only lays the published output onto the runtime
+# The app is compiled and published by the GitHub Actions deploy workflow; this image only
+# lays the published output onto the runtime
 # base. There is NO SDK stage and NO in-image restore/build — that removed the redundant
 # recompile of Core/Data/Engine that used to run inside BOTH this image and Dockerfile.engine.
 #
 # Build context is the published output directory (publish/api), NOT the repo root.
 # .NET base images are mirrored into our own GHCR (ghcr.io/jcoble/rentalcommand-dotnet-*) so the
-# build box never hits Microsoft MCR's anonymous-pull rate limit (429). Refresh with:
+# deploy build does not depend on Microsoft MCR's anonymous-pull rate limit. Refresh with:
 #   crane copy --platform linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0 ghcr.io/jcoble/rentalcommand-dotnet-aspnet:10.0
 FROM ghcr.io/jcoble/rentalcommand-dotnet-aspnet:10.0
 WORKDIR /app

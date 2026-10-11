@@ -2,7 +2,7 @@
 
 Locked decisions for the remaining big TODO items so they can be implemented
 autonomously. Source: TODO.md at repo root. Smaller no-decision items (Google auth
-wiring #28, Zoho SMTP email #27, address-API key, inline explainers #22) are handled
+wiring #28, SMTP email #27, address-API key, inline explainers #22) are handled
 separately and gated on keys the user provides.
 
 Wave discipline (per project): branch off fresh `origin/main` per wave; ONE
@@ -112,4 +112,4 @@ pattern, e-sign status UI on the lease page, `AuditLog`, QuestPDF lease PDF, and
 (4 and 5 are the migration waves — one migration each, run separately.)
 
 Plus, gated on user-provided secrets (build now, light up later): Google auth (#28),
-Zoho SMTP email (#27), address autocomplete key (#19 sub-item), inline explainers (#22).
+SMTP email (#27), address autocomplete key (#19 sub-item), inline explainers (#22).

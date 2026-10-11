@@ -12,7 +12,8 @@
  */
 
 import { API_BASE_URL } from '$lib/config';
-import type { UnitStatus } from '$lib/types';
+import type { DerivedUnitStatus } from '$lib/types';
+import { idempotentMutation } from './idempotency.ts';
 import { readPublicError } from './public-error.ts';
 
 const PUBLIC_FETCH_TIMEOUT_MS = 30_000;
@@ -31,7 +32,7 @@ export class PublicApiError extends Error {
 export interface PublicApplicationUnit {
 	id: number;
 	unitNumber: string;
-	status: UnitStatus;
+	status: DerivedUnitStatus;
 }
 
 export interface PublicApplicationProperty {
@@ -146,13 +147,23 @@ export async function submitApplication(
 	token: string,
 	body: SubmitApplicationBody
 ): Promise<SubmitApplicationResult> {
-	const response = await publicFetch(`/public/applications/${encodeURIComponent(token)}`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-		body: JSON.stringify(body),
-	});
-	if (!response.ok) {
-		throw new PublicApiError(response.status, await readPublicError(response));
-	}
-	return response.json() as Promise<SubmitApplicationResult>;
+	const payload = JSON.stringify(body);
+	return idempotentMutation(
+		`public-application:submit:${token}:${payload}`,
+		async (operationKey) => {
+			const response = await publicFetch(`/public/applications/${encodeURIComponent(token)}`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					Accept: 'application/json',
+					'Idempotency-Key': operationKey
+				},
+				body: payload,
+			});
+			if (!response.ok) {
+				throw new PublicApiError(response.status, await readPublicError(response));
+			}
+			return response.json() as Promise<SubmitApplicationResult>;
+		}
+	);
 }

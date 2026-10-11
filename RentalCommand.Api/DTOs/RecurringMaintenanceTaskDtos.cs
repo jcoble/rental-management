@@ -28,6 +28,10 @@ public class RecurringMaintenanceTaskResponse
     public DateTime? LastGeneratedAtUtc { get; set; }
     public bool IsActive { get; set; }
     public WorkOrderPriority Priority { get; set; }
+    public int AutomationFailureAttemptCount { get; set; }
+    public string? AutomationFailureReason { get; set; }
+    public DateTime? AutomationFailureAtUtc { get; set; }
+    public DateTime? AutomationQuarantinedAtUtc { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -61,6 +65,10 @@ public class RecurringMaintenanceTaskResponse
         LastGeneratedAtUtc = e.LastGeneratedAtUtc,
         IsActive = e.IsActive,
         Priority = e.Priority,
+        AutomationFailureAttemptCount = e.WorkerClaimAttemptCount,
+        AutomationFailureReason = e.WorkerClaimLastFailureReason,
+        AutomationFailureAtUtc = e.WorkerClaimLastFailureAtUtc,
+        AutomationQuarantinedAtUtc = e.WorkerClaimQuarantinedAtUtc,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };
@@ -88,6 +96,13 @@ public class RecurringMaintenanceTaskListResponse
     public int TotalCount { get; set; }
     public int Skip { get; set; }
     public int Take { get; set; }
+}
+
+/// <summary>Server-paged recurring-maintenance query with an optional Unit-local scope.</summary>
+public sealed class RecurringMaintenanceTaskListQuery : ListQuery
+{
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
 }
 
 public class CreateRecurringMaintenanceTaskRequest

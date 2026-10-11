@@ -10,7 +10,7 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     public int PropertyId { get; set; }
     public int? UnitId { get; set; }
     public int? TenantId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
     public int? VendorId { get; set; }
     public int? RecurringMaintenanceTaskId { get; set; }
     public string Title { get; set; } = string.Empty;
@@ -32,6 +32,7 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     public decimal? ActualCost { get; set; }
     public string? CreatedBy { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public DateTime? ChronologyRepairOriginalUpdatedAtUtc { get; set; }
     public DateTime? DeletedAt { get; set; }   // soft-delete (preserves maintenance history)
 
     /// <summary>
@@ -40,15 +41,34 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     /// </summary>
     public string? ExtractedData { get; set; }
 
+    /// <summary>
+    /// Instructions approved for the assigned technician (lockbox, entry notice, pets, or hazards).
+    /// Kept separate from general Property/Unit notes so the field experience never leaks office notes.
+    /// </summary>
+    public string? TechnicianAccessInstructions { get; set; }
+    public string? SubmittedByLabel { get; set; }
+    public string? RequesterName { get; set; }
+    public string? RequesterPhone { get; set; }
+    public string? RequesterEmail { get; set; }
+    public bool? ResidentMustBePresent { get; set; }
+    public bool? CallBeforeEntry { get; set; }
+    public bool? CallIfNotHome { get; set; }
+    public bool? PermissionToEnter { get; set; }
+    public string? EntryNotes { get; set; }
+    public string? PetWarnings { get; set; }
+    public string? AccessWarnings { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
     public Tenant? Tenant { get; set; }
-    public Lease? Lease { get; set; }
+    public LeaseManagement? LeaseManagement { get; set; }
     public Vendor? Vendor { get; set; }
     public RecurringMaintenanceTask? RecurringMaintenanceTask { get; set; }
     public List<Expense> Expenses { get; set; } = [];
 
     /// <summary>Append-only status timeline (Received → Assigned → In Progress → Done), oldest first.</summary>
     public List<WorkOrderStatusEvent> StatusEvents { get; set; } = [];
+    public List<WorkOrderResponsibility> Responsibilities { get; set; } = [];
+    public List<TechnicianWorkEntry> TechnicianEntries { get; set; } = [];
 }

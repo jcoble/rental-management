@@ -1,13 +1,12 @@
 namespace RentalCommand.Engine.Services;
 
 /// <summary>
-/// Engine-side driver for Lease Lifecycle Autopilot. Iterates portfolios and proactively generates
-/// notice drafts (renewal offers, escalating late-rent notices, move-out reminders) via the Api's
-/// <c>INoticeDraftService</c>, so drafts appear for one-tap approval WITHOUT the landlord tapping
-/// "Generate". Drafts are never auto-sent — approval (and channel selection) stays manual.
+/// Engine-side driver for the durable tenant-notice work queue. One set-based PostgreSQL command
+/// produces the claimed batch's exact drafts. Draft policies stop after editable copy; Auto policies
+/// atomically render, queue enabled destinations, and complete the fenced work claim.
 /// </summary>
 public interface INoticeDraftGenerationService
 {
-    /// <summary>Generate notice drafts across all portfolios. Returns the total number of drafts created.</summary>
+    /// <summary>Process one claimed batch. Returns the number of newly inserted drafts.</summary>
     Task<int> GenerateAllAsync(CancellationToken ct = default);
 }

@@ -28,6 +28,7 @@ export const POST: RequestHandler = async ({ cookies }) => {
 
 	return json({
 		accessToken: result.accessToken,
-		accessTokenExpiration: result.accessTokenExpiration
+		accessTokenExpiration: result.accessTokenExpiration,
+		access: result.access
 	});
 };

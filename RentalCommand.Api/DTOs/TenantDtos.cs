@@ -1,6 +1,5 @@
 using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -17,15 +16,29 @@ public class TenantResponse
     public DateTime? DateOfBirth { get; set; }
     public string? Notes { get; set; }
 
-    /// <summary>Number of this tenant's leases currently in <see cref="LeaseStatus.Active"/>. Computed DB-side.</summary>
+    /// <summary>
+    /// Number of Units this tenant currently possesses as a resident party through a canonical
+    /// LeaseManagement relationship. Guarantor-only relationships are excluded. Computed DB-side.
+    /// </summary>
     public int ActiveLeaseCount { get; set; }
 
     /// <summary>
-    /// Portal-login state for this tenant: <c>"none"</c> (no Identity login), <c>"active"</c> (login,
-    /// can sign in), or <c>"disabled"</c> (login locked off). Only populated on the single-tenant GET
-    /// (it requires an Identity join); null on list/create/update responses.
+    /// Number of distinct live or historical LeaseManagement relationships linked to this tenant.
+    /// Agreement corrections and renewals do not inflate this count. Computed DB-side.
     /// </summary>
-    public string? PortalAccess { get; set; }
+    public int LeaseHistoryCount { get; set; }
+
+    /// <summary>Current resident property context for selectors that must disambiguate duplicate names.</summary>
+    public int? CurrentPropertyId { get; set; }
+    public string? CurrentPropertyName { get; set; }
+    public int? CurrentUnitId { get; set; }
+    public string? CurrentUnitNumber { get; set; }
+
+    /// <summary>True only when this tenant has no lease history and can be safely deleted.</summary>
+    public bool CanDelete { get; set; } = true;
+
+    /// <summary>User-facing reason delete is disabled, when <see cref="CanDelete"/> is false.</summary>
+    public string? DeleteBlockedReason { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -60,6 +73,13 @@ public class TenantListResponse
 public class TenantListQuery : ListQuery
 {
     public bool? AvailableForLease { get; set; }
+    public int? PropertyId { get; set; }
+    public int? UnitId { get; set; }
+    /// <summary>
+    /// Keeps parties already attached to this canonical relationship selectable while editing it.
+    /// This is a LeaseManagement id, not a legal-agreement version id.
+    /// </summary>
+    public int? IncludeLeaseManagementId { get; set; }
 }
 
 public class CreateTenantRequest
@@ -88,31 +108,16 @@ public class CreateTenantRequest
     public string? Notes { get; set; }
 }
 
-/// <summary>Request body for the staff portal-access toggle: turn the tenant's login on or off.</summary>
-public class SetPortalAccessRequest
+/// <summary>
+/// One reviewed Guided Setup action. The complete collection is committed or rolled back as one
+/// receipt-backed command; it is deliberately separate from ordinary one-tenant CRUD.
+/// </summary>
+public sealed class GuidedTenantSetupRequest
 {
-    /// <summary>True to enable the tenant's portal login (provisioning one if needed), false to turn it off.</summary>
-    public bool Enabled { get; set; }
-}
-
-/// <summary>Result of the staff portal-access toggle for a tenant.</summary>
-public class PortalAccessResponse
-{
-    /// <summary>The resulting portal-login state: <c>"none"</c>, <c>"active"</c>, or <c>"disabled"</c>.</summary>
-    public string PortalAccess { get; set; } = "none";
-
-    /// <summary>The email the tenant signs in with, when known.</summary>
-    public string? Email { get; set; }
-}
-
-/// <summary>Result of the staff "send / resend portal invite" action for a tenant.</summary>
-public class PortalInviteResponse
-{
-    /// <summary>The email the invite was sent to (the tenant's sign-in email).</summary>
-    public string? Email { get; set; }
-
-    /// <summary>True when the tenant already had a portal login (this was a resend).</summary>
-    public bool AlreadyExisted { get; set; }
+    [Required]
+    [MinLength(1)]
+    [MaxLength(25)]
+    public List<CreateTenantRequest> Tenants { get; set; } = [];
 }
 
 public class UpdateTenantRequest
@@ -127,11 +132,17 @@ public class UpdateTenantRequest
     [EmailAddress]
     public string? Email { get; set; }
 
+    public bool ClearEmail { get; set; }
+
     [MaxLength(50)]
     public string? Phone { get; set; }
 
+    public bool ClearPhone { get; set; }
+
     [MaxLength(200)]
     public string? EmergencyContact { get; set; }
+
+    public bool ClearEmergencyContact { get; set; }
 
     public DateTime? DateOfBirth { get; set; }
 

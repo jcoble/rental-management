@@ -3,6 +3,7 @@
 	import { adminEngine } from '$lib/api/endpoints/adminEngine';
 	import type { WorkerStatus, EngineStatusResponse } from '$lib/api/endpoints/adminEngine';
 	import { getAuthState } from '$lib/stores/auth.svelte';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import {
@@ -241,7 +242,7 @@
 									worker.status
 								] ?? 'bg-gray-100 text-gray-800'}"
 							>
-								{worker.status}
+								{formatStatusLabel(worker.status)}
 							</span>
 							<span
 								class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {healthStateStyles[

@@ -13,7 +13,22 @@ export const USER_ASSIGNABLE_WORK_ORDER_STATUSES = [
 	'Cancelled'
 ] as const;
 
-export type UserAssignableWorkOrderStatus = (typeof USER_ASSIGNABLE_WORK_ORDER_STATUSES)[number];
+export type UserAssignableWorkOrderStatus =
+	| (typeof USER_ASSIGNABLE_WORK_ORDER_STATUSES)[number]
+	| 'OnHold';
+
+const ASSIGNED_TECHNICIAN_STATUS_TARGETS: Record<
+	UserAssignableWorkOrderStatus,
+	readonly UserAssignableWorkOrderStatus[]
+> = {
+	New: ['Scheduled', 'InProgress', 'OnHold', 'Cancelled', 'Completed'],
+	Scheduled: ['InProgress', 'WaitingParts', 'OnHold', 'Cancelled', 'Completed'],
+	InProgress: ['WaitingParts', 'OnHold', 'Completed'],
+	WaitingParts: ['InProgress', 'OnHold', 'Completed'],
+	OnHold: ['Scheduled', 'InProgress', 'WaitingParts', 'Cancelled', 'Completed'],
+	Completed: [],
+	Cancelled: []
+};
 
 export function canDispatchToVendor(vendor: DispatchVendorContact | null | undefined): boolean {
 	return Boolean(vendor?.phone?.trim());
@@ -33,8 +48,13 @@ export function formatStatusTransitionCopy(
 }
 
 export function workOrderStatusActionTargets(
-	currentStatus: string | null | undefined
+	currentStatus: string | null | undefined,
+	restrictToAssignedTechnicianTransitions = false
 ): UserAssignableWorkOrderStatus[] {
+	if (restrictToAssignedTechnicianTransitions) {
+		if (!currentStatus || !(currentStatus in ASSIGNED_TECHNICIAN_STATUS_TARGETS)) return [];
+		return [...ASSIGNED_TECHNICIAN_STATUS_TARGETS[currentStatus as UserAssignableWorkOrderStatus]];
+	}
 	return USER_ASSIGNABLE_WORK_ORDER_STATUSES.filter((status) => status !== currentStatus);
 }
 

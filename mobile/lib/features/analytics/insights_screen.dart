@@ -2,25 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/presentation/formatting.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'analytics_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-String _fmtCurrency(double amount) {
-  final isNegative = amount < 0;
-  final abs = amount.abs();
-  final parts = abs.toStringAsFixed(2).split('.');
-  final intPart = parts[0];
-  final decPart = parts[1];
-  final buf = StringBuffer();
-  final len = intPart.length;
-  for (var i = 0; i < len; i++) {
-    if (i > 0 && (len - i) % 3 == 0) buf.write(',');
-    buf.write(intPart[i]);
-  }
-  return '\$${isNegative ? '-' : ''}$buf.$decPart';
-}
 
 String _fmtPct(double pct) => '${pct.toStringAsFixed(1)}%';
 
@@ -95,7 +81,7 @@ class _OverviewContent extends StatelessWidget {
               const SizedBox(height: 8),
               _LeaseExpiryPipeline(overview: overview),
               const SizedBox(height: 20),
-              _SectionHeader(title: 'Open Work Orders'),
+              _SectionHeader(title: 'Open Repairs'),
               const SizedBox(height: 8),
               _WorkOrderPriorityList(workOrders: overview.openWorkOrders),
               const SizedBox(height: 24),
@@ -137,7 +123,7 @@ class _KpiGrid extends StatelessWidget {
                 label: 'Collection Rate',
                 value: _fmtPct(overview.collectionRate),
                 subtitle:
-                    '${_fmtCurrency(overview.monthRentCollected)} of ${_fmtCurrency(overview.monthRentScheduled)}',
+                    '${moneyFmt(overview.monthRentCollected)} of ${moneyFmt(overview.monthRentScheduled)}',
                 color: cs.secondaryContainer,
                 textColor: cs.onSecondaryContainer,
               ),
@@ -150,7 +136,7 @@ class _KpiGrid extends StatelessWidget {
             Expanded(
               child: _KpiCard(
                 label: 'Overdue',
-                value: _fmtCurrency(overview.overdueAmount),
+                value: moneyFmt(overview.overdueAmount),
                 subtitle:
                     '${overview.overdueCount} payment${overview.overdueCount == 1 ? '' : 's'}',
                 color: cs.errorContainer,
@@ -160,9 +146,9 @@ class _KpiGrid extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: _KpiCard(
-                label: 'Monthly Rent',
-                value: _fmtCurrency(overview.monthlyRecurringRent),
-                subtitle: 'recurring',
+                label: 'Signed lease rent',
+                value: moneyFmt(overview.monthlyRecurringRent),
+                subtitle: 'currently governing',
                 color: cs.tertiaryContainer,
                 textColor: cs.onTertiaryContainer,
               ),
@@ -394,10 +380,7 @@ class _BarChartPainter extends CustomPainter {
       );
       canvas.drawRRect(expRect, expensePaint);
 
-      // Month label (last 3 chars, e.g. "Jan")
-      final label = point.month.length > 3
-          ? point.month.substring(point.month.length - 3)
-          : point.month;
+      final label = shortMonthLabel(point.month);
       final tp = TextPainter(
         text: TextSpan(text: label, style: labelStyle),
         textDirection: TextDirection.ltr,
@@ -531,7 +514,7 @@ class _WorkOrderPriorityList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (workOrders.isEmpty) {
-      return _EmptyCard(message: 'No open work orders.');
+      return _EmptyCard(message: 'No open repairs.');
     }
     final cs = Theme.of(context).colorScheme;
     final theme = Theme.of(context);

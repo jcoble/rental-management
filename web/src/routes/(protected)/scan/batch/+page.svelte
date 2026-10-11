@@ -84,7 +84,7 @@
 	}
 
 	const uploadMutation = createMutation(() => ({
-		mutationFn: (files: File[]) => scan.uploadBatch(files, { targetEntityType: 'Lease' }),
+		mutationFn: (files: File[]) => scan.uploadBatch(files, { targetEntityType: 'LeaseAgreement' }),
 		onSuccess: (res) => {
 			queryClient.invalidateQueries({ queryKey: ['scan-batches'] });
 			queryClient.invalidateQueries({ queryKey: ['scans'] });

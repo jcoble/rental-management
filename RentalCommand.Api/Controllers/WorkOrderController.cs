@@ -1,16 +1,18 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// CRUD for maintenance work orders within the caller's portfolio. Scope comes from the JWT
-/// <c>portfolioId</c> claim; list supports <c>?propertyId&amp;vendorId&amp;skip&amp;take&amp;search&amp;sort</c>.
-/// Create validates the referenced property/unit/tenant/lease/vendor are in the portfolio. Work orders
-/// have no soft-delete column, so removal is a hard delete.
+/// CRUD for maintenance work orders within the caller's canonical workspace and property scope.
+/// The list supports <c>?propertyId&amp;vendorId&amp;skip&amp;take&amp;search&amp;sort</c>
+/// plus requested/scheduled/completed date windows.
+/// Create validates the referenced property/unit/tenant/lease relationship/vendor are in the portfolio. Work orders
+/// are soft-deleted so their maintenance history remains available for audit and reporting.
 /// </summary>
 [ApiController]
 [Route("api/v1/work-orders")]
@@ -33,9 +35,10 @@ public class WorkOrderController : ManagementControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<WorkOrderResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<WorkOrderResponse>>> List(
-        [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] int? unitId, [FromQuery] int? vendorId, CancellationToken ct)
+        [FromQuery] WorkOrderListQuery query, [FromQuery] int? propertyId, [FromQuery] int? unitId, [FromQuery] int? vendorId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, unitId, vendorId, query, ct);
+        var items = await _service.ListAuthorizedAsync(
+            GetWorkspaceReadScope(), propertyId, unitId, vendorId, query, ct);
         return Ok(items);
     }
 
@@ -44,7 +47,7 @@ public class WorkOrderController : ManagementControllerBase
     public async Task<ActionResult<WorkOrderListResponse>> ListPage(
         [FromQuery] WorkOrderListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
     }
 
@@ -53,7 +56,7 @@ public class WorkOrderController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<WorkOrderDetailResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
     }
 
@@ -61,23 +64,43 @@ public class WorkOrderController : ManagementControllerBase
     [HttpGet("{id:int}/scan")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public Task<IActionResult> GetScan(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
-        => ServeEntityScanAsync(_db, _files, "WorkOrder", id, thumb, ct);
+    public async Task<IActionResult> GetScan(
+        int id,
+        [FromQuery] bool thumb = false,
+        CancellationToken ct = default)
+    {
+        var portfolioId = GetPortfolioId();
+        if (!await HasAnyCapabilityAsync(
+                [CapabilityKeys.WorkRead, CapabilityKeys.AssignedWorkRead],
+                new WorkOrderCapabilityAuthorizationTarget(portfolioId, id),
+                ct))
+        {
+            return NotFound(new { error = "Work order not found" });
+        }
+
+        return await ServeEntityScanAsync(_db, _files, "WorkOrder", id, thumb, ct);
+    }
 
     [HttpPost]
     [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<WorkOrderResponse>> Create([FromBody] CreateWorkOrderRequest request, CancellationToken ct)
+    public async Task<ActionResult<WorkOrderResponse>> Create(
+        [FromBody] CreateWorkOrderRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!IsScheduleWindowValid(request.ScheduledFor, request.ScheduledWindowEnd))
         {
             return BadRequest(new { error = "The arrival window end must be after its start." });
         }
 
-        var created = await _service.CreateAsync(GetPortfolioId(), request, GetUserId(), "Staff", ct);
+        var created = await _service.CreateAuthorizedAsync(
+            GetWorkspaceReadScope(), request, operationKey, ct);
         return created == null
-            ? NotFound(new { error = "Referenced property, unit, tenant, lease, or vendor not found in this portfolio" })
+            ? NotFound(new { error = "Referenced property, unit, tenant, lease relationship, or vendor not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
@@ -85,14 +108,37 @@ public class WorkOrderController : ManagementControllerBase
     [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<WorkOrderResponse>> Update(int id, [FromBody] UpdateWorkOrderRequest request, CancellationToken ct)
+    public async Task<ActionResult<WorkOrderResponse>> Update(
+        int id, [FromBody] UpdateWorkOrderRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!IsScheduleWindowValid(request.ScheduledFor, request.ScheduledWindowEnd))
         {
             return BadRequest(new { error = "The arrival window end must be after its start." });
         }
 
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, GetUserId(), "Staff", ct);
+        var updated = await _service.UpdateAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
+        return updated == null ? NotFound(new { error = "Work order not found" }) : Ok(updated);
+    }
+
+    [HttpPost("{id:int}/comments")]
+    [ProducesResponseType(typeof(WorkOrderMutationReceipt), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WorkOrderMutationReceipt>> Comment(
+        int id,
+        [FromBody] WorkOrderCommentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
+        var updated = await _service.CommentAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Work order not found" }) : Ok(updated);
     }
 
@@ -108,9 +154,12 @@ public class WorkOrderController : ManagementControllerBase
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Work order not found" });
     }
 
@@ -125,7 +174,8 @@ public class WorkOrderController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<VendorDispatchResponse>> Dispatch(int id, [FromBody] DispatchWorkOrderRequest request, CancellationToken ct)
     {
-        var result = await _dispatch.DispatchAsync(GetPortfolioId(), id, request, GetUserId(), ct);
+        var result = await _dispatch.DispatchAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, GetUserId(), ct);
         return result.Outcome switch
         {
             DispatchOutcome.Dispatched => CreatedAtAction(nameof(Get), new { id }, result.Dispatch),
@@ -133,5 +183,80 @@ public class WorkOrderController : ManagementControllerBase
             DispatchOutcome.AlreadyDispatched => BadRequest(new { error = "This work order is already dispatched to this vendor; wait for their DONE reply or reassign it." }),
             _ => NotFound(new { error = "Work order or vendor not found in this portfolio" }),
         };
+    }
+
+    /// <summary>
+    /// Cancel one still-open vendor dispatch without deleting the historical dispatch row.
+    /// </summary>
+    [HttpPost("{id:int}/dispatches/{dispatchId:int}/cancel")]
+    [ProducesResponseType(typeof(CancelVendorDispatchResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<CancelVendorDispatchResponse>> CancelDispatch(
+        int id,
+        int dispatchId,
+        [FromBody] CancelVendorDispatchRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey) || request.IdempotencyKey.Length > 100)
+        {
+            return BadRequest(new { error = "IdempotencyKey is required and must be at most 100 characters." });
+        }
+
+        var result = await _dispatch.CancelAuthorizedAsync(
+            GetWorkspaceReadScope(), id, dispatchId, request, GetUserId(), ct);
+        return result.Outcome switch
+        {
+            CancelDispatchOutcome.Cancelled => Ok(result.Dispatch),
+            CancelDispatchOutcome.AlreadyClosed => BadRequest(new { error = "This vendor dispatch is already closed." }),
+            _ => NotFound(new { error = "Open vendor dispatch not found in this portfolio" }),
+        };
+    }
+
+    /// <summary>
+    /// Repairs an exact, still-pending vendor dispatch whose committed business chronology was
+    /// contaminated by runtime wall-clock time. No replacement SMS is created.
+    /// </summary>
+    [HttpPost("{workOrderId:int}/dispatches/{dispatchId:int}/recover-chronology")]
+    [ProducesResponseType(typeof(RecoverVendorDispatchChronologyResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<RecoverVendorDispatchChronologyResponse>> RecoverDispatchChronology(
+        int workOrderId,
+        int dispatchId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] RecoverVendorDispatchChronologyRequest request,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new
+            {
+                error = "A request key is required and cannot exceed 128 characters.",
+            });
+
+        try
+        {
+            return Ok(await _dispatch.RecoverChronologyAuthorizedAsync(
+                GetWorkspaceReadScope(),
+                workOrderId,
+                dispatchId,
+                request,
+                GetUserId(),
+                operationKey,
+                ct));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
     }
 }

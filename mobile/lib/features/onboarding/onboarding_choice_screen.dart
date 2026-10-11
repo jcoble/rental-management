@@ -7,12 +7,13 @@ import '../../core/auth/auth_controller.dart';
 import 'onboarding_models.dart';
 import 'onboarding_repository.dart';
 
-/// First-login Sandbox-vs-Live choice gate.
+/// First-login welcome screen.
 ///
 /// Shown once, right after a brand-new account's first login. The router keeps an undecided account
-/// on this screen until a choice is made (see `app_router.dart`).
-///   - Sandbox → hand off to the theatrical seeding screen, which records the choice + seeds demo data.
-///   - Live    → record the choice (empty real portfolio) and drop straight into the app.
+/// on this screen until a choice is made (see `app_router.dart`). The screen leads with the real
+/// job — adding the first rental — and offers the sample data as a quieter second option:
+///   - Add your first rental → record the choice (empty real portfolio) and go to the add-rental step.
+///   - Explore with sample data → hand off to the seeding screen, which records the choice + seeds it.
 class OnboardingChoiceScreen extends ConsumerStatefulWidget {
   const OnboardingChoiceScreen({super.key});
 
@@ -54,10 +55,16 @@ class _OnboardingChoiceScreenState
         _submitting = false;
         _selected = null;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
+  }
+
+  Future<void> _signInWithDifferentAccount() async {
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    await ref.read(authControllerProvider.notifier).logout();
   }
 
   @override
@@ -112,8 +119,8 @@ class _OnboardingChoiceScreenState
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'How would you like to begin? You can switch from the sample '
-                    'data to your real portfolio at any time.',
+                    "Let's get your first rental in. It takes a couple of "
+                    'minutes, and you can add the rest whenever you like.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),
@@ -121,67 +128,49 @@ class _OnboardingChoiceScreenState
                   ),
                   const SizedBox(height: 28),
 
-                  // Sandbox option
-                  _ChoiceCard(
-                    testKey: const Key('choose-sandbox'),
-                    icon: Icons.science_outlined,
-                    accent: scheme.tertiary,
-                    accentContainer: scheme.tertiaryContainer,
-                    onAccentContainer: scheme.onTertiaryContainer,
-                    title: 'Explore with sample data',
-                    badge: 'Example data',
-                    body:
-                        "Jump into a fully loaded demo portfolio — properties, "
-                        "tenants, leases, payments and work orders — so you can try "
-                        "everything risk-free. It's all sample data; nothing sends "
-                        "real emails or texts, or charges any cards.",
-                    cta: 'Start exploring',
-                    selected: _selected == OnboardingMode.sandbox,
-                    busy: _selected == OnboardingMode.sandbox && _submitting,
-                    enabled: !_submitting,
-                    onTap: _chooseSandbox,
-                  ),
-                  const SizedBox(height: 14),
-
-                  // Live option
+                  // The real job, front and centre.
                   _ChoiceCard(
                     testKey: const Key('choose-live'),
-                    icon: Icons.rocket_launch_outlined,
+                    icon: Icons.add_home_work_rounded,
                     accent: scheme.primary,
                     accentContainer: scheme.primaryContainer,
                     onAccentContainer: scheme.onPrimaryContainer,
-                    title: 'Set up my real portfolio',
+                    title: 'Add your first rental',
                     badge: 'My real rentals',
                     body:
-                        'Start with a clean, empty account and add your own '
-                        'properties, tenants and leases. No sample data — this is '
-                        'the real thing.',
-                    cta: 'Set up my portfolio',
+                        'Start with a clean, empty account and add a rental you '
+                        'own. Tenants, leases and everything else follow from '
+                        'there.',
+                    cta: 'Add your first rental',
                     selected: _selected == OnboardingMode.live,
                     busy: _selected == OnboardingMode.live && _submitting,
                     enabled: !_submitting,
                     onTap: _chooseLive,
                   ),
 
-                  const SizedBox(height: 22),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.check_rounded,
-                          size: 15, color: scheme.primary),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          'Not sure? Start with the example data — switching to '
-                          'your real rentals later clears it and starts you '
-                          'clean.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ],
+                  const SizedBox(height: 18),
+                  // Quieter second option: look around with made-up data first.
+                  TextButton(
+                    key: const Key('choose-sandbox'),
+                    onPressed: _submitting ? null : _chooseSandbox,
+                    child: const Text('Explore with sample data'),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Sample data lets you try everything risk-free — nothing '
+                    'sends real emails or texts, or charges any cards. Switching '
+                    'to your real rentals later clears it and starts you clean.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton.icon(
+                    key: const Key('onboarding-sign-out'),
+                    onPressed: _submitting ? null : _signInWithDifferentAccount,
+                    icon: const Icon(Icons.logout_rounded),
+                    label: const Text('Sign in with a different account'),
                   ),
                 ],
               ),
@@ -270,8 +259,10 @@ class _ChoiceCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: accentContainer,
                     borderRadius: BorderRadius.circular(999),
@@ -322,8 +313,11 @@ class _ChoiceCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Icon(Icons.arrow_forward_rounded,
-                          size: 18, color: accent),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 18,
+                        color: accent,
+                      ),
                     ],
                   ],
                 ),

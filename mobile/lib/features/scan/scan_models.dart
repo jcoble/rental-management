@@ -133,6 +133,79 @@ class ScanLineItem {
 // ScanDraft
 // ---------------------------------------------------------------------------
 
+class ScanCaptureContext {
+  const ScanCaptureContext({
+    this.experience,
+    this.accessContextId,
+    this.accessRevision,
+    this.propertyId,
+    this.unitId,
+    this.leaseManagementId,
+    this.leaseAgreementId,
+    this.tenantAccountId,
+    this.tenantLedgerEntryId,
+    this.workOrderId,
+    this.applicationId,
+    this.rentalListingId,
+    this.sourceLabel,
+  });
+
+  final String? experience;
+  final int? accessContextId;
+  final int? accessRevision;
+  final int? propertyId;
+  final int? unitId;
+  final int? leaseManagementId;
+  final int? leaseAgreementId;
+  final int? tenantAccountId;
+  final int? tenantLedgerEntryId;
+  final int? workOrderId;
+  final int? applicationId;
+  final int? rentalListingId;
+  final String? sourceLabel;
+
+  bool get hasBusinessContext =>
+      propertyId != null ||
+      unitId != null ||
+      leaseManagementId != null ||
+      leaseAgreementId != null ||
+      tenantAccountId != null ||
+      tenantLedgerEntryId != null ||
+      workOrderId != null ||
+      applicationId != null ||
+      rentalListingId != null;
+
+  List<String> get userFacingParts => [
+    if (propertyId != null) 'Property #$propertyId',
+    if (unitId != null) 'Unit #$unitId',
+    if (leaseManagementId != null) 'Tenancy #$leaseManagementId',
+    if (leaseAgreementId != null) 'Current lease #$leaseAgreementId',
+    if (tenantAccountId != null) 'Tenant balance #$tenantAccountId',
+    if (tenantLedgerEntryId != null) 'Charge or payment #$tenantLedgerEntryId',
+    if (workOrderId != null) 'Repair #$workOrderId',
+    if (applicationId != null) 'Application #$applicationId',
+    if (rentalListingId != null) 'Listing #$rentalListingId',
+  ];
+
+  factory ScanCaptureContext.fromJson(Map<String, dynamic> json) {
+    return ScanCaptureContext(
+      experience: json['experience'] as String?,
+      accessContextId: (json['accessContextId'] as num?)?.toInt(),
+      accessRevision: (json['accessRevision'] as num?)?.toInt(),
+      propertyId: (json['propertyId'] as num?)?.toInt(),
+      unitId: (json['unitId'] as num?)?.toInt(),
+      leaseManagementId: (json['leaseManagementId'] as num?)?.toInt(),
+      leaseAgreementId: (json['leaseAgreementId'] as num?)?.toInt(),
+      tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
+      tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num?)?.toInt(),
+      workOrderId: (json['workOrderId'] as num?)?.toInt(),
+      applicationId: (json['applicationId'] as num?)?.toInt(),
+      rentalListingId: (json['rentalListingId'] as num?)?.toInt(),
+      sourceLabel: json['sourceLabel'] as String?,
+    );
+  }
+}
+
 class ScanDraft {
   const ScanDraft({
     required this.id,
@@ -144,16 +217,21 @@ class ScanDraft {
     this.modelId,
     this.tokensUsed,
     this.costUsd,
+    this.failureReason,
     required this.createdAt,
     this.reviewedAt,
     this.confirmedAt,
     this.leaseProposal,
+    this.captureContext,
+    this.createdEntityType,
+    this.createdEntityId,
+    this.createdUnitId,
   });
 
   final int id;
   final int portfolioId;
 
-  /// 'Expense', 'Payment', 'WorkOrder', or 'Lease'
+  /// 'Expense', 'Payment', 'WorkOrder', 'LeaseAgreement', 'Application', 'Loan', or 'LeaseEndingNotice'
   final String targetEntityType;
 
   /// Lifecycle: 'Pending' -> 'Processing' -> 'Reviewing' -> 'Confirmed'
@@ -167,6 +245,7 @@ class ScanDraft {
   final String? modelId;
   final int? tokensUsed;
   final double? costUsd;
+  final String? failureReason;
   final DateTime createdAt;
   final DateTime? reviewedAt;
   final DateTime? confirmedAt;
@@ -175,6 +254,15 @@ class ScanDraft {
   /// Null for non-lease drafts, or when the server didn't attach one.
   final LeaseImportProposal? leaseProposal;
 
+  /// Server-preserved launch context used to preselect the exact account when
+  /// a payment scan starts from a Unit or account surface.
+  final ScanCaptureContext? captureContext;
+
+  /// Canonical destination populated after confirmation.
+  final String? createdEntityType;
+  final int? createdEntityId;
+  final int? createdUnitId;
+
   /// Target is a Payment draft (vs. an Expense draft).
   bool get isPayment => targetEntityType == 'Payment';
 
@@ -182,11 +270,17 @@ class ScanDraft {
   bool get isWorkOrder => targetEntityType == 'WorkOrder';
 
   /// Target is a lease draft (scanned/imported lease agreement).
-  bool get isLease => targetEntityType == 'Lease';
+  bool get isLease => targetEntityType == 'LeaseAgreement';
 
   /// Target is a scanned completed paper rental application; confirming creates
   /// a RentalApplication (applicant), mirroring the public apply form.
   bool get isApplication => targetEntityType == 'Application';
+
+  /// Target is a scanned mortgage statement or closing disclosure.
+  bool get isLoan => targetEntityType == 'Loan';
+
+  /// Target is a tenant move-out / non-renewal notice for an existing rental.
+  bool get isLeaseEndingNotice => targetEntityType == 'LeaseEndingNotice';
 
   /// Queued for extraction; the Engine has not picked it up yet.
   bool get isPending => status == 'Pending';
@@ -201,9 +295,8 @@ class ScanDraft {
   /// Extraction finished; awaiting user review/confirmation.
   bool get isReviewing => status == 'Reviewing';
 
-  /// Reached a final state — confirmed, rejected, or failed (no more work).
-  bool get isTerminal =>
-      status == 'Confirmed' || status == 'Rejected' || status == 'Failed';
+  /// Reached a non-resubmittable final state.
+  bool get isTerminal => status == 'Confirmed' || status == 'Rejected';
 
   /// True when the server ran in no-op mode (no OpenAI key configured).
   bool get isNoOp => modelId == 'noop';
@@ -223,8 +316,10 @@ class ScanDraft {
       modelId: json['modelId'] as String?,
       tokensUsed: (json['tokensUsed'] as num?)?.toInt(),
       costUsd: (json['costUsd'] as num?)?.toDouble(),
+      failureReason: json['failureReason'] as String?,
       createdAt:
-          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
+          (DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0))
+              .toLocal(),
       reviewedAt: json['reviewedAt'] != null
           ? DateTime.tryParse(json['reviewedAt'] as String)
           : null,
@@ -236,6 +331,14 @@ class ScanDraft {
               json['leaseProposal'] as Map<String, dynamic>,
             )
           : null,
+      captureContext: json['captureContext'] is Map<String, dynamic>
+          ? ScanCaptureContext.fromJson(
+              json['captureContext'] as Map<String, dynamic>,
+            )
+          : null,
+      createdEntityType: json['createdEntityType'] as String?,
+      createdEntityId: (json['createdEntityId'] as num?)?.toInt(),
+      createdUnitId: (json['createdUnitId'] as num?)?.toInt(),
     );
   }
 

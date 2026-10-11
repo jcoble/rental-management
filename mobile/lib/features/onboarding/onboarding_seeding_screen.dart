@@ -37,7 +37,7 @@ class _OnboardingSeedingScreenState
     _Stage('Adding tenants & leases…', Icons.group_rounded, 4200),
     _Stage('Generating 6 months of payment history…',
         Icons.account_balance_wallet_rounded, 4600),
-    _Stage('Seeding maintenance & work orders…', Icons.build_rounded, 4200),
+    _Stage('Setting up repairs…', Icons.build_rounded, 4200),
     _Stage('Finishing up…', Icons.auto_awesome_rounded, 2800),
   ];
 
@@ -203,7 +203,7 @@ class _OnboardingSeedingScreenState
             ),
             const SizedBox(height: 22),
             Text(
-              'Setting up your sandbox…',
+              'Setting up your sample portfolio…',
               style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w700,
                 color: scheme.onSurface,
@@ -212,7 +212,7 @@ class _OnboardingSeedingScreenState
             ),
             const SizedBox(height: 8),
             Text(
-              "We're filling your demo portfolio with realistic sample data so "
+              "We're filling your sample portfolio with realistic sample data so "
               'you can explore everything.',
               style: theme.textTheme.bodyMedium
                   ?.copyWith(color: scheme.onSurfaceVariant),

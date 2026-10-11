@@ -9,12 +9,19 @@ import {
 	maskPhoneInput,
 	maskZipInput,
 } from './input-masks.ts';
+import { workOrderDetailSchema } from '../schemas/index.ts';
 
 describe('input masks', () => {
 	it('keeps currency input numeric and limited to cents', () => {
 		assert.equal(maskCurrencyInput('$1,234.567'), '1234.56');
 		assert.equal(maskCurrencyInput('.5'), '0.5');
 		assert.equal(maskCurrencyInput('12.'), '12.');
+		assert.equal(maskCurrencyInput('-50'), '-50');
+	});
+
+	it('rejects a negative actual cost', () => {
+		const result = workOrderDetailSchema.safeParse({ actualCost: '-50' });
+		assert.equal(result.error?.issues.some((issue) => issue.message === 'Actual cost must be a non-negative number'), true);
 	});
 
 	it('keeps percentage input numeric without appending a percent sign', () => {

@@ -1,7 +1,7 @@
 namespace RentalCommand.Core.Configuration;
 
 /// <summary>
-/// JWT access-token and refresh-token settings. Bound from the "Jwt" configuration section.
+/// JWT access-token settings. Bound from the "Jwt" configuration section.
 /// </summary>
 public class JwtSettings
 {
@@ -15,7 +15,4 @@ public class JwtSettings
 
     /// <summary>Access-token lifetime in minutes.</summary>
     public int AccessTokenExpirationMinutes { get; set; } = 15;
-
-    /// <summary>Refresh-token lifetime in days.</summary>
-    public int RefreshTokenExpirationDays { get; set; } = 7;
 }

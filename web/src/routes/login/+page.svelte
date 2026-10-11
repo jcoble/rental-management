@@ -1,23 +1,32 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Building, Loader2 } from '@lucide/svelte';
+	import { Loader2 } from '@lucide/svelte';
 	import type { ActionData, PageData } from './$types';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
+	import BrandMark from '$lib/components/BrandMark.svelte';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import { auth } from '$lib/api/endpoints/auth';
+	import type { EffectiveAccessContextOption } from '$lib/types/user';
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
+	let submissionError = $state('');
 
 	// Field values are bound so the dev quick-fill button below can populate them.
 	let email = $state('');
 	let password = $state('');
+	let accessContextId = $state('');
+	const contextChoices: EffectiveAccessContextOption[] = $derived(
+		form && 'contexts' in form && Array.isArray(form.contexts) ? form.contexts : []
+	);
 
 	// "Resend verification" affordance, shown only when the API flags the login as EMAIL_NOT_VERIFIED.
 	let resendingVerification = $state(false);
 	let resendSuccess = $state(false);
 	const emailNotVerified = $derived(form?.emailNotVerified === true);
+	const visibleLoginError = $derived(submissionError || form?.error || '');
 
 	// Repopulate the email after a failed submit (the action echoes it back).
 	$effect(() => {
@@ -63,11 +72,7 @@
 		<div class="w-full max-w-sm">
 			<!-- Compact brand for narrow screens (the split panel is hidden there) -->
 			<div class="mb-8 flex items-center gap-2 lg:hidden">
-				<span
-					class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
-				>
-					<Building class="h-5 w-5" />
-				</span>
+				<BrandMark class="h-9 w-9 shadow-sm" />
 				<span class="text-lg font-semibold tracking-tight text-foreground">Rental Command</span>
 			</div>
 
@@ -81,15 +86,47 @@
 				data-testid="login-form"
 				use:enhance={() => {
 					submitting = true;
-					return async ({ update }) => {
-						await update();
-						submitting = false;
+					submissionError = '';
+					return async ({ result, update }) => {
+						try {
+							if (result.type === 'error') {
+								submissionError =
+									'Rental Command could not complete sign-in. Please try again or contact support.';
+								return;
+							}
+							await update();
+						} catch {
+							submissionError =
+								'Rental Command could not complete sign-in. Please try again or contact support.';
+						} finally {
+							submitting = false;
+						}
 					};
 				}}
 				class="space-y-4"
 			>
 				{#if data.redirectTo}
 					<input type="hidden" name="redirectTo" value={data.redirectTo} />
+				{/if}
+				{#if contextChoices.length > 1}
+					<div class="rounded-lg bg-card/60 p-3">
+						<p class="mb-1.5 block text-sm font-medium text-foreground">Which workspace do you want to open?</p>
+						<input type="hidden" name="accessContextId" value={accessContextId} />
+						<SimpleSelect
+							bind:value={accessContextId}
+							options={contextChoices.map((context) => ({
+								value: String(context.accessContextId),
+								label: context.workspaceName
+							}))}
+							placeholder="Choose a workspace"
+							ariaLabel="Workspace"
+							triggerClass="h-11 w-full"
+							testid="login-context"
+						/>
+						<p class="mt-1.5 text-xs text-muted-foreground">
+							You can switch workspaces later from the app menu.
+						</p>
+					</div>
 				{/if}
 
 				<div>
@@ -131,7 +168,7 @@
 					/>
 				</div>
 
-				{#if form?.error}
+				{#if visibleLoginError}
 					{#if emailNotVerified}
 						<div
 							class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm"
@@ -170,14 +207,15 @@
 						<div
 							class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
 							role="alert"
+							aria-live="polite"
 							data-testid="login-error"
 						>
-							{form.error}
+							{visibleLoginError}
 						</div>
 					{/if}
 				{/if}
 
-				<Button type="submit" data-testid="login-submit" disabled={submitting} class="h-11 w-full">
+				<Button type="submit" data-testid="login-submit" disabled={submitting || (contextChoices.length > 1 && !accessContextId)} class="h-11 w-full">
 					{#if submitting}
 						<Loader2 class="h-4 w-4 animate-spin" />
 						Signing in…

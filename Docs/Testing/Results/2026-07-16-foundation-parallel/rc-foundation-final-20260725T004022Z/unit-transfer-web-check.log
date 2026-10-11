@@ -1,0 +1,166 @@
+Loading svelte-check in workspace: /srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web
+Getting Svelte diagnostics...
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/applications/PrepareMoveInDialog.svelte:39:37
+Warn: This reference only captures the initial value of `prefill`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	const queryClient = useQueryClient();
+	const seededApplicationId = Number(prefill.applicationId) || 0;
+	const requiredTenantId = Number(prefill.tenantId) || 0;
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/applications/PrepareMoveInDialog.svelte:40:34
+Warn: This reference only captures the initial value of `prefill`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	const seededApplicationId = Number(prefill.applicationId) || 0;
+	const requiredTenantId = Number(prefill.tenantId) || 0;
+	let form = $state<PrepareMoveInForm>(createPrepareMoveInForm(prefill));
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/applications/PrepareMoveInDialog.svelte:41:63
+Warn: This reference only captures the initial value of `prefill`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	const requiredTenantId = Number(prefill.tenantId) || 0;
+	let form = $state<PrepareMoveInForm>(createPrepareMoveInForm(prefill));
+	let errors = $state<PrepareMoveInFormErrors>({});
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementIssuedRecoveryDialog.svelte:25:32
+Warn: This reference only captures the initial value of `source`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	let validationError = $state('');
+	const alreadyVoided = Boolean(source.voidedAtUtc);
+	const operationKey = crypto.randomUUID();
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:35:24
+Warn: This reference only captures the initial value of `changeType`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+
+	const isReplacement = changeType === 'Correction' || changeType === 'Restatement';
+	const isRenewal = changeType === 'Renewal' || changeType === 'MonthToMonth';
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:35:55
+Warn: This reference only captures the initial value of `changeType`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+
+	const isReplacement = changeType === 'Correction' || changeType === 'Restatement';
+	const isRenewal = changeType === 'Renewal' || changeType === 'MonthToMonth';
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:36:20
+Warn: This reference only captures the initial value of `changeType`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	const isReplacement = changeType === 'Correction' || changeType === 'Restatement';
+	const isRenewal = changeType === 'Renewal' || changeType === 'MonthToMonth';
+	function dayAfter(value: string) {
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:36:48
+Warn: This reference only captures the initial value of `changeType`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	const isReplacement = changeType === 'Correction' || changeType === 'Restatement';
+	const isRenewal = changeType === 'Renewal' || changeType === 'MonthToMonth';
+	function dayAfter(value: string) {
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:42:42
+Warn: This reference only captures the initial value of `businessDate`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	}
+	const initialReplacementGoverningDate = businessDate > source.governingFromOn
+		? businessDate
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:42:57
+Warn: This reference only captures the initial value of `source`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	}
+	const initialReplacementGoverningDate = businessDate > source.governingFromOn
+		? businessDate
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:43:5
+Warn: This reference only captures the initial value of `businessDate`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	const initialReplacementGoverningDate = businessDate > source.governingFromOn
+		? businessDate
+		: dayAfter(source.governingFromOn);
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:44:14
+Warn: This reference only captures the initial value of `source`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+		? businessDate
+		: dayAfter(source.governingFromOn);
+	let termStartOn = $state(isReplacement ? source.termStartOn : '');
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:45:43
+Warn: This reference only captures the initial value of `source`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+		: dayAfter(source.governingFromOn);
+	let termStartOn = $state(isReplacement ? source.termStartOn : '');
+	let termEndOn = $state(isReplacement ? (source.termEndOn ?? '') : '');
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/AgreementSuccessorDialog.svelte:46:42
+Warn: This reference only captures the initial value of `source`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	let termStartOn = $state(isReplacement ? source.termStartOn : '');
+	let termEndOn = $state(isReplacement ? (source.termEndOn ?? '') : '');
+	let governingFromOn = $state(isReplacement ? initialReplacementGoverningDate : '');
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/EndingDispositionDialog.svelte:24:61
+Warn: This reference only captures the initial value of `summary`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+
+	let disposition = $state<LeaseManagementEndingDisposition>(summary.endingDisposition);
+	let noticeDate = $state(summary.noticeGivenAtUtc?.slice(0, 10) ?? '');
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/EndingDispositionDialog.svelte:25:26
+Warn: This reference only captures the initial value of `summary`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	let disposition = $state<LeaseManagementEndingDisposition>(summary.endingDisposition);
+	let noticeDate = $state(summary.noticeGivenAtUtc?.slice(0, 10) ?? '');
+	let moveOutDate = $state(summary.plannedMoveOutAtUtc?.slice(0, 10) ?? '');
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/EndingDispositionDialog.svelte:26:27
+Warn: This reference only captures the initial value of `summary`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	let noticeDate = $state(summary.noticeGivenAtUtc?.slice(0, 10) ?? '');
+	let moveOutDate = $state(summary.plannedMoveOutAtUtc?.slice(0, 10) ?? '');
+	let decisionReason = $state('');
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/HouseholdManagementDialog.svelte:41:47
+Warn: This reference only captures the initial value of `party`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	let tenantId = $state(0);
+	let role = $state<LeaseManagementPartyRole>((party?.role as LeaseManagementPartyRole) ?? 'Occupant');
+	let effectiveDate = $state(mode === 'end'
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/HouseholdManagementDialog.svelte:42:29
+Warn: This reference only captures the initial value of `mode`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	let role = $state<LeaseManagementPartyRole>((party?.role as LeaseManagementPartyRole) ?? 'Occupant');
+	let effectiveDate = $state(mode === 'end'
+		? new Date(new Date(`${summary.businessDate}T12:00:00`).getTime() - 86400000).toISOString().slice(0, 10)
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/HouseholdManagementDialog.svelte:43:26
+Warn: This reference only captures the initial value of `summary`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	let effectiveDate = $state(mode === 'end'
+		? new Date(new Date(`${summary.businessDate}T12:00:00`).getTime() - 86400000).toISOString().slice(0, 10)
+		: summary.businessDate);
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/lib/components/leases/HouseholdManagementDialog.svelte:44:5
+Warn: This reference only captures the initial value of `summary`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+		? new Date(new Date(`${summary.businessDate}T12:00:00`).getTime() - 86400000).toISOString().slice(0, 10)
+		: summary.businessDate);
+	let reason = $state('');
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/routes/(protected)/owner/statements/+page.svelte:18:24
+Warn: This reference only captures the initial value of `selectedYear`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	let distributionSkip = $state(0);
+	let lastYear = $state(selectedYear);
+	$effect(() => {
+
+/srv/agent-handoffs/rc-foundation-final-20260725T004022Z/source/web/src/routes/forgot-password/+page.svelte:12:21
+Warn: This reference only captures the initial value of `data`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+	let submitting = $state(false);
+	let email = $state(data.email ?? '');
+</script>
+
+====================================
+svelte-check found 0 errors and 23 warnings in 7 files

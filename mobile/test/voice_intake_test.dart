@@ -32,14 +32,14 @@ void main() {
       expect(turn.transcript, contains('123 Main'));
     });
 
-    test('defaults complete=true / empty missing / not ambiguous when those keys are absent', () {
+    test('defaults complete=false / empty missing / not ambiguous when those keys are absent', () {
       final turn = VoiceTurn.fromJson({
         'id': 1,
         'targetEntityType': 'Expense',
         'fields': <dynamic>[],
       });
 
-      expect(turn.complete, isTrue);
+      expect(turn.complete, isFalse);
       expect(turn.ambiguous, isFalse);
       expect(turn.missingRequired, isEmpty);
       expect(turn.nextPrompt, isNull);

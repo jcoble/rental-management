@@ -11,8 +11,8 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { clearFieldError } from '$lib/forms/form-errors';
+	import { formErrorsFromApiError } from '$lib/forms/form-errors';
+	import TenantFields from '$lib/components/forms/TenantFields.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
@@ -21,6 +21,7 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { getTenantsEmptyStateCopy } from '$lib/tenants/tenant-list-state';
 	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
+	import { withBlanksAsEmpty } from '$lib/utils/with-blanks-as-empty';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { Plus, Pencil, Trash2, Users } from '@lucide/svelte';
 
@@ -85,21 +86,6 @@
 		['email', 'phone', 'emergencyContact'],
 	] as const;
 
-	function clearTenantError(field: string) {
-		const next = clearFieldError(formErrors, field);
-		if (next !== formErrors) formErrors = next;
-	}
-
-	$effect(() => {
-		if (form.firstName.trim()) clearTenantError('firstName');
-	});
-	$effect(() => {
-		if (form.lastName.trim()) clearTenantError('lastName');
-	});
-	$effect(() => {
-		if (!form.email.trim() || form.email.includes('@')) clearTenantError('email');
-	});
-
 	function invalidate() {
 		queryClient.invalidateQueries({ queryKey: ['tenants', portfolioId] });
 	}
@@ -112,7 +98,19 @@
 			closeForm();
 			invalidate();
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			const validationErrors = formErrorsFromApiError(err);
+			if (Object.keys(validationErrors).length > 0) {
+				formErrors = validationErrors;
+				const firstErrorStep = firstTenantErrorStep(validationErrors);
+				if (firstErrorStep >= 0) {
+					tenantStep = firstErrorStep;
+					markTenantStepInvalid(firstErrorStep);
+				}
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	const deleteMutation = createMutation(() => ({
@@ -210,7 +208,10 @@
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ id: editingId, data: { portfolioId, ...result.data } });
+		saveMutation.mutate({
+			id: editingId,
+			data: { portfolioId, ...(editingId == null ? result.data : withBlanksAsEmpty(result.data)) }
+		});
 	}
 
 	// DataGrid column definitions
@@ -299,12 +300,20 @@
 		band
 		art={4}
 		tone="mint"
+		density="compact"
 		eyebrow="Rentals"
 		title="Tenants"
 		description="Resident contacts and lease participation."
 		data-testid="tenants-header"
 	/>
 
+	{#if tenantsQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="tenants-list-error">
+			<p class="font-medium text-destructive">Could not load tenants.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. An unavailable list is not an empty tenant directory.</p>
+			<Button class="mt-4" variant="outline" onclick={() => tenantsQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={list}
 		{columns}
@@ -337,6 +346,7 @@
 			</Button>
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>
 
 <!-- Edit/Create dialog — actions column kept inside the row via the edit button -->
@@ -354,36 +364,12 @@
 			testid="tenant-stepper"
 		>
 			<div data-testid="tenant-form">
-				{#if tenantStep === 0}
-					<div class="grid gap-3 md:grid-cols-2">
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">First name</span>
-							<Input data-testid="tenant-first-name-input" bind:value={form.firstName} placeholder="First name" />
-							{#if formErrors.firstName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-first-name-error">{formErrors.firstName}</p>{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Last name</span>
-							<Input data-testid="tenant-last-name-input" bind:value={form.lastName} placeholder="Last name" />
-							{#if formErrors.lastName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-last-name-error">{formErrors.lastName}</p>{/if}
-						</div>
-					</div>
-				{:else}
-					<div class="grid gap-3 md:grid-cols-2">
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
-							<Input data-testid="tenant-email-input" bind:value={form.email} placeholder="Email" type="email" autocomplete="email" />
-							{#if formErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="tenant-email-error">{formErrors.email}</p>{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-							<Input data-testid="tenant-phone-input" bind:value={form.phone} placeholder="Phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
-						</div>
-						<div class="md:col-span-2">
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Emergency contact</span>
-							<Input data-testid="tenant-emergency-input" bind:value={form.emergencyContact} placeholder="Emergency contact" />
-						</div>
-					</div>
-				{/if}
+				<TenantFields
+					bind:form
+					bind:errors={formErrors}
+					section={tenantStep === 0 ? 'identity' : 'contact'}
+					testidPrefix="tenant"
+				/>
 			</div>
 		</FormStepper>
 		<div class="mt-4 flex justify-end gap-2">

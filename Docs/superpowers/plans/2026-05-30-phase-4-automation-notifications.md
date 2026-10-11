@@ -175,7 +175,7 @@
 
 **Steps:**
 
-- [ ] Create `SendGridNotificationChannel.cs`: inject HttpClient + ILogger + config (SendGridApiKey); `SendEmailAsync()` calls SendGrid API `POST /v3/mail/send` with from (noreply@rentalcommand.app), to, subject, body (HTML + plain text), attachments. On 202 Accepted, extract X-Message-Id header, create OutboxMessage (Channel=Email, Status=Sent, ExternalReference=MessageId, ProcessedAt=now). On error, OutboxMessage(Status=Failed, FailureReason=error). **Note:** for MVP, save OutboxMessage directly (synchronous); Phase 4 can defer to a job if needed.
+- [ ] Create/configure the transactional email channel: inject HttpClient + ILogger + config for SendGrid or SMTP; `SendEmailAsync()` sends from the configured `@rentalcommand.net` mailbox, to, subject, body (HTML + plain text), attachments. On provider acceptance, extract the provider message id when available, create OutboxMessage (Channel=Email, Status=Sent, ExternalReference=MessageId, ProcessedAt=now). On error, OutboxMessage(Status=Failed, FailureReason=error). **Note:** for MVP, save OutboxMessage directly (synchronous); Phase 4 can defer to a job if needed.
 
 - [ ] Create `TwilioNotificationChannel.cs`: inject HttpClient + ILogger + config (AccountSid, AuthToken, PhoneNumber); `SendSmsAsync()` calls Twilio Send API `POST https://api.twilio.com/2010-04-01/Accounts/{SID}/Messages.json` with From, To, Body, StatusCallback (post to `/api/sms/status` for delivery tracking). Extract MessageSid, save OutboxMessage (Channel=Sms, Status=Pending, ExternalReference=MessageSid, InboundWebhookKey=replyCallbackKey, ProcessedAt=null until status callback). On error, OutboxMessage(Status=Failed, FailureReason=error).
 

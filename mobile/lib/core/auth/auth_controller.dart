@@ -1,13 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_exception.dart';
+import '../router/mobile_restoration_state.dart';
 import '../push/push_service.dart';
 import '../../features/onboarding/onboarding_repository.dart';
 import 'auth_models.dart';
 import 'auth_repository.dart';
+import 'biometric_auth_service.dart';
 import 'token_store.dart';
 
-/// The three possible auth states for the app.
+/// The possible auth states for the app.
 sealed class AuthState {
   const AuthState();
 }
@@ -32,19 +36,47 @@ final class AuthStateUnknown extends AuthState {
 /// re-checked and gated almost immediately rather than slipping past once. See I7.
 final class AuthStateAuthenticated extends AuthState {
   const AuthStateAuthenticated(
-    this.user, {
+    this.user,
+    this.access, {
+    required this.activeExperience,
     this.onboardingPending = false,
     this.onboardingResolved = true,
   });
   final AuthUser user;
+  final AccessEnvelope access;
+  final WorkspaceExperience activeExperience;
   final bool onboardingPending;
   final bool onboardingResolved;
+
+  Set<String> get capabilities => access.capabilitiesFor(activeExperience);
+  bool hasCapability(String capability) => capabilities.contains(capability);
+  bool get isTenantExperience => activeExperience == WorkspaceExperience.tenant;
 }
 
 /// No valid session.
-final class AuthStateUnauthenticated extends AuthState {
+class AuthStateUnauthenticated extends AuthState {
   const AuthStateUnauthenticated({this.error});
   final String? error;
+}
+
+/// A stored server session exists but remains locally gated by biometrics.
+final class AuthStateBiometricLocked extends AuthStateUnauthenticated {
+  const AuthStateBiometricLocked({this.lastResult});
+
+  final BiometricAuthenticationResult? lastResult;
+}
+
+bool accessAuthorityChanged(AuthState? previous, AuthState next) {
+  if (previous is! AuthStateAuthenticated || next is! AuthStateAuthenticated) {
+    return false;
+  }
+  final previousContext = previous.access.selectedContext;
+  final nextContext = next.access.selectedContext;
+  return previous.access.identity.userId != next.access.identity.userId ||
+      previousContext.accessContextId != nextContext.accessContextId ||
+      previousContext.portfolioId != nextContext.portfolioId ||
+      previousContext.accessRevision != nextContext.accessRevision ||
+      previous.activeExperience != next.activeExperience;
 }
 
 /// Manages authentication state for the app.
@@ -53,6 +85,8 @@ final class AuthStateUnauthenticated extends AuthState {
 /// verify it against `GET /auth/me`. If valid, transitions to
 /// [AuthStateAuthenticated]; otherwise [AuthStateUnauthenticated].
 class AuthController extends Notifier<AuthState> {
+  Future<void>? _accessSelectionInFlight;
+
   @override
   AuthState build() {
     // React to forced logout signals from the AuthInterceptor.
@@ -61,12 +95,17 @@ class AuthController extends Notifier<AuthState> {
         notifyLogout();
       }
     });
+    ref.listen<AccessEnvelope?>(accessChangeSignalProvider, (previous, next) {
+      if (next != null) notifyAccessChanged(next);
+    });
     return const AuthStateUnknown();
   }
 
   AuthRepository get _repository => ref.read(authRepositoryProvider);
   TokenStore get _tokenStore => ref.read(tokenStoreProvider);
-  OnboardingRepository get _onboarding => ref.read(onboardingRepositoryProvider);
+  BiometricAuthService get _biometric => ref.read(biometricAuthServiceProvider);
+  OnboardingRepository get _onboarding =>
+      ref.read(onboardingRepositoryProvider);
 
   /// Resolves whether the freshly-authenticated user still owes the first-login Sandbox-vs-Live
   /// choice.
@@ -90,39 +129,97 @@ class AuthController extends Notifier<AuthState> {
   Future<void> restoreSession() async {
     final token = await _tokenStore.getAccessToken();
     if (token == null || token.isEmpty) {
+      await _biometric.clearEnabled();
       state = const AuthStateUnauthenticated();
       return;
     }
 
+    if (await _biometric.isEnabled()) {
+      state = const AuthStateBiometricLocked();
+      return;
+    }
+
+    await _revalidateStoredSession(fromBiometricUnlock: false);
+  }
+
+  /// Prompts for biometrics and revalidates the existing server session on success.
+  Future<void> unlockBiometricSession() async {
+    if (state is! AuthStateBiometricLocked) return;
+
+    final result = await _biometric.authenticate();
+    if (result != BiometricAuthenticationResult.authenticated) {
+      state = AuthStateBiometricLocked(lastResult: result);
+      return;
+    }
+
+    await _revalidateStoredSession(fromBiometricUnlock: true);
+  }
+
+  Future<void> _revalidateStoredSession({
+    required bool fromBiometricUnlock,
+  }) async {
     try {
       final user = await _repository.currentUser();
+      final access = await _repository.currentAccess();
       final onboarding = await _resolveOnboardingPending();
+      if (fromBiometricUnlock) {
+        // A biometric cold start is a fresh app entry, not a continuation of
+        // the previous navigation stack. Clear only the saved navigation; the
+        // authenticated server session remains intact.
+        await ref.read(mobileRestorationStateStoreProvider).clear();
+      }
       state = AuthStateAuthenticated(
         user,
+        access,
+        activeExperience: access.selectedContext.activeExperience,
         onboardingPending: onboarding.pending,
         onboardingResolved: onboarding.resolved,
       );
-    } on ApiException {
-      // Stored token is invalid or expired and refresh also failed.
-      await _tokenStore.clearTokens();
-      state = const AuthStateUnauthenticated();
+    } on ApiException catch (error) {
+      if (error.statusCode == 401) {
+        // The server definitively rejected both the stored access token and its
+        // refresh path. Only that confirmed auth failure may destroy the saved
+        // session and its biometric opt-in.
+        await _tokenStore.clearTokens();
+        await _biometric.clearEnabled();
+        state = const AuthStateUnauthenticated();
+        return;
+      }
+
+      // Offline, timeout, 5xx, and malformed-response failures do not prove the
+      // session is invalid. Preserve the compact Fingerprint retry only when
+      // this revalidation followed biometric unlock; normal stored sessions
+      // must never gain biometric eligibility from a network failure.
+      state = fromBiometricUnlock
+          ? const AuthStateBiometricLocked()
+          : AuthStateUnauthenticated(error: error.message);
     }
   }
 
   /// Signs in with [email] and [password].
   ///
   /// Throws [ApiException] on failure so the UI can display the error.
-  Future<void> login(String email, String password) async {
+  Future<void> login(
+    String email,
+    String password, {
+    int? accessContextId,
+  }) async {
     // Do NOT flip to AuthStateUnknown here: the router shows a full-screen splash
     // for that state, which unmounts the login screen. On failure the router then
     // rebuilds a FRESH /login with no error, swallowing the message. The login
     // screen owns its own `_isLoading` spinner and stays mounted, so its local
     // error (and our AuthStateUnauthenticated.error backstop) render correctly.
     try {
-      final response = await _repository.login(email, password);
+      final response = await _repository.login(
+        email,
+        password,
+        accessContextId: accessContextId,
+      );
       final onboarding = await _resolveOnboardingPending();
       state = AuthStateAuthenticated(
         response.user,
+        response.access,
+        activeExperience: response.access.selectedContext.activeExperience,
         onboardingPending: onboarding.pending,
         onboardingResolved: onboarding.resolved,
       );
@@ -204,6 +301,8 @@ class AuthController extends Notifier<AuthState> {
       final onboarding = await _resolveOnboardingPending();
       state = AuthStateAuthenticated(
         response.user,
+        response.access,
+        activeExperience: response.access.selectedContext.activeExperience,
         onboardingPending: onboarding.pending,
         onboardingResolved: onboarding.resolved,
       );
@@ -232,6 +331,8 @@ class AuthController extends Notifier<AuthState> {
     if (latest is! AuthStateAuthenticated) return;
     state = AuthStateAuthenticated(
       latest.user,
+      latest.access,
+      activeExperience: latest.activeExperience,
       onboardingPending: onboarding.pending,
       onboardingResolved: true,
     );
@@ -245,6 +346,8 @@ class AuthController extends Notifier<AuthState> {
     if (current is AuthStateAuthenticated && current.onboardingPending) {
       state = AuthStateAuthenticated(
         current.user,
+        current.access,
+        activeExperience: current.activeExperience,
         onboardingPending: false,
         onboardingResolved: true,
       );
@@ -262,13 +365,86 @@ class AuthController extends Notifier<AuthState> {
       // ignore — logout proceeds regardless
     }
     await _repository.logout();
+    await _biometric.clearEnabled();
     state = const AuthStateUnauthenticated();
   }
 
   /// Called by the interceptor's logout signal — resets state without an
   /// extra server call (tokens are already invalid).
   void notifyLogout() {
+    unawaited(_biometric.clearEnabled());
     state = const AuthStateUnauthenticated();
+  }
+
+  /// Replaces the client authority snapshot after a refresh detects that the
+  /// server-side access revision changed. Shell listeners own cache and
+  /// realtime cleanup; this state transition supplies the new revision.
+  void notifyAccessChanged(AccessEnvelope access) {
+    final current = state;
+    if (current is! AuthStateAuthenticated) return;
+    if (current.access.selectedContext.accessContextId ==
+            access.selectedContext.accessContextId &&
+        current.access.selectedContext.accessRevision ==
+            access.selectedContext.accessRevision &&
+        current.activeExperience == access.selectedContext.activeExperience) {
+      return;
+    }
+    state = AuthStateAuthenticated(
+      current.user,
+      access,
+      activeExperience: access.selectedContext.activeExperience,
+      onboardingPending: current.onboardingPending,
+      onboardingResolved: current.onboardingResolved,
+    );
+  }
+
+  Future<void> selectExperience(WorkspaceExperience experience) =>
+      _runAccessSelection(() async {
+        final current = state;
+        if (current is! AuthStateAuthenticated ||
+            !current.access.availableExperiences.contains(experience)) {
+          return;
+        }
+        final access = await _repository.selectExperience(experience);
+        final latest = state;
+        if (latest is! AuthStateAuthenticated) return;
+        state = AuthStateAuthenticated(
+          latest.user,
+          access,
+          activeExperience: access.selectedContext.activeExperience,
+          onboardingPending: latest.onboardingPending,
+          onboardingResolved: latest.onboardingResolved,
+        );
+      });
+
+  Future<void> selectContext(int accessContextId) =>
+      _runAccessSelection(() async {
+        final current = state;
+        if (current is! AuthStateAuthenticated) return;
+        final result = await _repository.selectContext(accessContextId);
+        final latest = state;
+        if (latest is! AuthStateAuthenticated) return;
+        state = AuthStateAuthenticated(
+          latest.user,
+          result.access,
+          activeExperience: result.access.selectedContext.activeExperience,
+          onboardingPending: latest.onboardingPending,
+          onboardingResolved: latest.onboardingResolved,
+        );
+      });
+
+  Future<void> _runAccessSelection(Future<void> Function() selection) {
+    final inFlight = _accessSelectionInFlight;
+    if (inFlight != null) return inFlight;
+
+    late final Future<void> operation;
+    operation = selection().whenComplete(() {
+      if (identical(_accessSelectionInFlight, operation)) {
+        _accessSelectionInFlight = null;
+      }
+    });
+    _accessSelectionInFlight = operation;
+    return operation;
   }
 }
 

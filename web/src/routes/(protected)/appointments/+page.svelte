@@ -4,18 +4,20 @@
 	import { appointments } from '$lib/api/endpoints/appointments';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Appointment } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { appointmentSchema, parseForm } from '$lib/schemas';
+	import { isOptionalEmailValid, appointmentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import { Plus, CalendarDays, List as ListIcon } from '@lucide/svelte';
@@ -33,6 +35,9 @@
 		localWallClockToUtcIso
 	} from './calendar-utils';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { clearFieldErrorWhen, formErrorsFromApiError } from '$lib/forms/form-errors';
+	import AppointmentDetailsFields from '$lib/components/forms/AppointmentDetailsFields.svelte';
+	import AppointmentScheduleFields from '$lib/components/forms/AppointmentScheduleFields.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -46,8 +51,18 @@
 	const appointmentStepFields = [
 		['title', 'type', 'status'],
 		['scheduledStart', 'scheduledEnd'],
-		['propertyId', 'tenantId', 'assignedTo', 'prospectName', 'prospectEmail'],
+		['propertyId', 'tenantId', 'workOrderId', 'assignedTo', 'prospectName', 'prospectEmail'],
 	] as const;
+	type AppointmentWorkOrderOption = {
+		id: number;
+		label: string;
+		description: string | null;
+		propertyId: number | null;
+		unitId: number | null;
+		tenantId: number | null;
+		propertyName: string | null;
+		tenantName: string | null;
+	};
 
 	// ── View toggle: Calendar (default) / List ──────────────────────────────────
 	type AppointmentView = 'calendar' | 'list';
@@ -93,19 +108,61 @@
 	}));
 	const calendarQuery = createQuery(() => ({
 		queryKey: ['appointments', portfolioId, 'calendar', debouncedSearch.value, typeFilter, statusFilter],
-		queryFn: () => appointments.list(portfolioId, {
+		queryFn: () => appointments.listPage(portfolioId, {
 			search: debouncedSearch.value,
 			type: typeFilter || undefined,
 			status: statusFilter || undefined,
-			take: 500,
+			sort: 'scheduledStart',
+			take: PAGE_SIZE,
 		}),
 	}));
-	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
-	const tenantsQuery = createQuery(() => ({ queryKey: ['tenants', portfolioId], queryFn: () => tenants.list(portfolioId, { take: 200 }) }));
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
+	async function loadTenantOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await tenants.listPage(portfolioId, { ...params, sort: 'lastName' });
+		return {
+			...result,
+			items: result.items.map((tenant) => ({
+				id: tenant.id,
+				label: tenant.fullName || `${tenant.firstName} ${tenant.lastName}`,
+				description: tenant.email || tenant.phone || null
+			}))
+		};
+	}
+	async function loadWorkOrderOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await workOrders.listPage(portfolioId, { ...params, sort: '-requestedAt' });
+		return {
+			...result,
+			items: result.items.map((workOrder) => ({
+				id: workOrder.id,
+				label: `#${workOrder.id} ${workOrder.title}`,
+				description: [
+					workOrder.propertyName,
+					workOrder.unitNumber ? `Unit ${workOrder.unitNumber}` : null,
+					workOrder.tenantName,
+					workOrder.status
+				].filter(Boolean).join(' - ') || null,
+				propertyId: workOrder.propertyId ?? null,
+				unitId: workOrder.unitId ?? null,
+				tenantId: workOrder.tenantId ?? null,
+				propertyName: workOrder.propertyName ?? null,
+				tenantName: workOrder.tenantName ?? null
+			}))
+		};
+	}
 
 	const empty = {
 		title: '', type: 'Showing', scheduledStart: '', scheduledEnd: '',
-		propertyId: '', tenantId: '', prospectName: '', prospectEmail: '', assignedTo: '', status: 'Scheduled',
+		propertyId: '', unitId: '', tenantId: '', workOrderId: '', prospectName: '', prospectEmail: '', assignedTo: '', status: 'Scheduled',
 	};
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
@@ -114,25 +171,14 @@
 	let appointmentStep = $state(0);
 	let completedAppointmentSteps = $state<number[]>([]);
 	let deleteTarget = $state<Appointment | null>(null);
-
-	function clearFormError(field: string) {
-		if (!formErrors[field]) return;
-		const next = { ...formErrors };
-		delete next[field];
-		formErrors = next;
-	}
+	let selectedPropertyLabel = $state<string | null>(null);
+	let selectedTenantLabel = $state<string | null>(null);
+	let selectedWorkOrderLabel = $state<string | null>(null);
+	const calendarInitialDate = $derived(typeof window === 'undefined' ? undefined : new Date());
 
 	$effect(() => {
-		if (form.title) clearFormError('title');
-	});
-	$effect(() => {
-		if (form.scheduledStart) clearFormError('scheduledStart');
-	});
-	$effect(() => {
-		if (form.scheduledEnd) clearFormError('scheduledEnd');
-	});
-	$effect(() => {
-		if (form.prospectEmail) clearFormError('prospectEmail');
+		const next = clearFieldErrorWhen(formErrors, 'prospectEmail', isOptionalEmailValid(form.prospectEmail));
+		if (next !== formErrors) formErrors = next;
 	});
 
 	function invalidate() {
@@ -189,7 +235,19 @@
 			closeForm();
 			invalidate();
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			const validationErrors = formErrorsFromApiError(err);
+			if (Object.keys(validationErrors).length > 0) {
+				formErrors = validationErrors;
+				const firstErrorStep = firstAppointmentErrorStep(validationErrors);
+				if (firstErrorStep >= 0) {
+					appointmentStep = firstErrorStep;
+					markAppointmentStepInvalid(firstErrorStep);
+				}
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	const rescheduleMutation = createMutation(() => ({
@@ -206,7 +264,7 @@
 	}));
 
 	const deleteMutation = createMutation(() => ({
-		mutationFn: (id: number) => appointments.delete(id),
+		mutationFn: (appointment: Appointment) => appointments.delete(appointment.id, appointment.propertyId),
 		onSuccess: () => {
 			showSuccess('Appointment deleted.');
 			deleteTarget = null;
@@ -221,6 +279,9 @@
 		formErrors = {};
 		appointmentStep = 0;
 		completedAppointmentSteps = [];
+		selectedPropertyLabel = null;
+		selectedTenantLabel = null;
+		selectedWorkOrderLabel = null;
 		showForm = true;
 	}
 	// Calendar: clicked an empty day/slot → create prefilled with that local time.
@@ -230,6 +291,9 @@
 		formErrors = {};
 		appointmentStep = 0;
 		completedAppointmentSteps = [];
+		selectedPropertyLabel = null;
+		selectedTenantLabel = null;
+		selectedWorkOrderLabel = null;
 		showForm = true;
 	}
 	function openEdit(a: Appointment) {
@@ -240,10 +304,15 @@
 			scheduledStart: utcIsoToLocalWallClock(a.scheduledStart),
 			scheduledEnd: utcIsoToLocalWallClock(a.scheduledEnd),
 			propertyId: a.propertyId != null ? String(a.propertyId) : '',
+			unitId: a.unitId != null ? String(a.unitId) : '',
 			tenantId: a.tenantId != null ? String(a.tenantId) : '',
+			workOrderId: a.workOrderId != null ? String(a.workOrderId) : '',
 			prospectName: a.prospectName ?? '', prospectEmail: a.prospectEmail ?? '', assignedTo: a.assignedTo ?? '',
 		};
 		formErrors = {};
+		selectedPropertyLabel = a.propertyName ?? null;
+		selectedTenantLabel = a.tenantName ?? null;
+		selectedWorkOrderLabel = a.workOrderId != null ? `#${a.workOrderId}` : null;
 		appointmentStep = 0;
 		completedAppointmentSteps = [];
 		showForm = true;
@@ -254,6 +323,18 @@
 		formErrors = {};
 		appointmentStep = 0;
 		completedAppointmentSteps = [];
+		selectedPropertyLabel = null;
+		selectedTenantLabel = null;
+		selectedWorkOrderLabel = null;
+	}
+	function applyWorkOrderSelection(option: AppointmentWorkOrderOption | null) {
+		selectedWorkOrderLabel = option?.label ?? null;
+		if (!option) return;
+		form.propertyId = option.propertyId != null ? String(option.propertyId) : '';
+		form.unitId = option.unitId != null ? String(option.unitId) : '';
+		form.tenantId = option.tenantId != null ? String(option.tenantId) : '';
+		selectedPropertyLabel = option.propertyName;
+		selectedTenantLabel = option.tenantName;
 	}
 	function submit() {
 		const result = parseForm(appointmentSchema, form);
@@ -285,7 +366,7 @@
 
 	const list = $derived(appointmentsQuery.data?.items ?? []);
 	const totalCount = $derived(appointmentsQuery.data?.totalCount ?? 0);
-	const calendarList = $derived(calendarQuery.data ?? []);
+	const calendarList = $derived(calendarQuery.data?.items ?? []);
 
 	const columns: ColumnDef<Appointment>[] = [
 		{ key: 'title', title: 'Title', sortable: true, mobileRole: 'title' },
@@ -395,11 +476,11 @@
 				</Select.Root>
 				<Select.Root type="single" bind:value={statusFilter}>
 					<Select.Trigger class="w-full max-w-[160px]" data-testid="appointment-calendar-status-filter">
-						{statusFilter ? statusFilter : 'All statuses'}
+						{statusFilter ? formatStatusLabel(statusFilter) : 'All statuses'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="All statuses">All statuses</Select.Item>
-						{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+						{#each APPT_STATUSES as s}<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>{/each}
 					</Select.Content>
 				</Select.Root>
 				<!-- Legend: Type → color -->
@@ -417,6 +498,7 @@
 			{#if view === 'calendar'}
 				<AppointmentCalendar
 					appointments={calendarList}
+					initialDate={calendarInitialDate}
 					onSelectAppointment={openEdit}
 					onCreateAt={openCreateAt}
 					onReschedule={reschedule}
@@ -460,11 +542,11 @@
 				</Select.Root>
 				<Select.Root type="single" bind:value={statusFilter}>
 					<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-status-filter">
-						{statusFilter ? statusFilter : 'All statuses'}
+						{statusFilter ? formatStatusLabel(statusFilter) : 'All statuses'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="All statuses">All statuses</Select.Item>
-						{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+						{#each APPT_STATUSES as s}<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>{/each}
 					</Select.Content>
 				</Select.Root>
 			{/snippet}
@@ -496,96 +578,69 @@
 						<div class="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
 							Start with what kind of appointment this is. The date comes next.
 						</div>
-						<div class="space-y-4">
-							<div>
-								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-title">Appointment title</label>
-								<Input id="appointment-title" data-testid="appointment-title-input" bind:value={form.title} placeholder="Appointment title" />
-								{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
-							</div>
-							<div class="grid gap-4 sm:grid-cols-2">
-								<div>
-									<span class="mb-2 block text-sm font-medium text-muted-foreground">Type</span>
-									<Select.Root type="single" bind:value={form.type}>
-										<Select.Trigger class="w-full" data-testid="appointment-type-input">
-											{form.type ? labelForType(form.type) : 'Select type'}
-										</Select.Trigger>
-										<Select.Content>
-											{#each APPT_TYPES as t}<Select.Item value={t} label={labelForType(t)}>{labelForType(t)}</Select.Item>{/each}
-										</Select.Content>
-									</Select.Root>
-								</div>
-								<div>
-									<span class="mb-2 block text-sm font-medium text-muted-foreground">Status</span>
-									<Select.Root type="single" bind:value={form.status}>
-										<Select.Trigger class="w-full" data-testid="appointment-status-input">
-											{form.status ? form.status : 'Select status'}
-										</Select.Trigger>
-										<Select.Content>
-											{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
-										</Select.Content>
-									</Select.Root>
-								</div>
-							</div>
-						</div>
+						<AppointmentDetailsFields bind:form bind:errors={formErrors} testidPrefix="appointment" />
 					{:else if appointmentStep === 1}
 						<div class="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
 							Choose the start time first. End time can stay blank for a single-point appointment.
 						</div>
-						<div class="grid gap-4">
-							<div>
-								<span class="mb-2 block text-sm font-medium text-muted-foreground">Start</span>
-								<DateTimePicker bind:value={form.scheduledStart} testid="appointment-start-input" />
-								{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
-							</div>
-							<div>
-								<span class="mb-2 block text-sm font-medium text-muted-foreground">End</span>
-								<DateTimePicker bind:value={form.scheduledEnd} testid="appointment-end-input" />
-							</div>
-						</div>
+						<AppointmentScheduleFields bind:form bind:errors={formErrors} testidPrefix="appointment" />
 					{:else}
 						<div class="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
 							Link this to a property, tenant, prospect, or staff member when you have that context.
 						</div>
 						<div class="grid gap-4 sm:grid-cols-2">
-							<div>
-								<span class="mb-2 block text-sm font-medium text-muted-foreground">Property</span>
-								<Select.Root type="single" bind:value={form.propertyId}>
-									<Select.Trigger class="w-full" data-testid="appointment-property-input">
-										{form.propertyId ? (propertiesQuery.data?.find((p) => String(p.id) === form.propertyId)?.name ?? form.propertyId) : 'No property'}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No property">No property</Select.Item>
-										{#each propertiesQuery.data || [] as property}<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<div>
-								<span class="mb-2 block text-sm font-medium text-muted-foreground">Tenant</span>
-								<Select.Root type="single" bind:value={form.tenantId}>
-									<Select.Trigger class="w-full" data-testid="appointment-tenant-input">
-										{#if form.tenantId}
-											{tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.fullName || (() => { const t = tenantsQuery.data?.find((t) => String(t.id) === form.tenantId); return t ? `${t.firstName} ${t.lastName}` : form.tenantId; })()}
-										{:else}
-											No tenant
-										{/if}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No tenant">No tenant</Select.Item>
-										{#each tenantsQuery.data || [] as tenant}<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>{/each}
-									</Select.Content>
-								</Select.Root>
+							<RemoteRecordSelect
+								queryKey={['appointment-property', portfolioId]}
+								label="Property"
+								bind:value={form.propertyId}
+								selectedLabel={selectedPropertyLabel}
+								placeholder="No property"
+								clearLabel="No property"
+								searchPlaceholder="Search properties…"
+								emptyLabel="No matching properties"
+								loadPage={loadPropertyOptions}
+								onValueChange={(_value, option) => (selectedPropertyLabel = option?.label ?? null)}
+								testid="appointment-property-input"
+							/>
+							<RemoteRecordSelect
+								queryKey={['appointment-tenant', portfolioId]}
+								label="Tenant"
+								bind:value={form.tenantId}
+								selectedLabel={selectedTenantLabel}
+								placeholder="No tenant"
+								clearLabel="No tenant"
+								searchPlaceholder="Search tenants…"
+								emptyLabel="No matching tenants"
+								loadPage={loadTenantOptions}
+								onValueChange={(_value, option) => (selectedTenantLabel = option?.label ?? null)}
+								testid="appointment-tenant-input"
+							/>
+							<div class="sm:col-span-2">
+								<RemoteRecordSelect
+									queryKey={['appointment-work-order', portfolioId]}
+									label="Work order"
+									bind:value={form.workOrderId}
+									selectedLabel={selectedWorkOrderLabel}
+									placeholder="No work order"
+									clearLabel="No work order"
+									searchPlaceholder="Search work orders..."
+									emptyLabel="No matching work orders"
+									loadPage={loadWorkOrderOptions}
+									onValueChange={(_value, option) => applyWorkOrderSelection(option as AppointmentWorkOrderOption | null)}
+									testid="appointment-work-order-input"
+								/>
 							</div>
 							<div>
 								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-assigned">Assigned to</label>
-								<Input id="appointment-assigned" data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" />
+								<Input id="appointment-assigned" data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" maxlength={120} />
 							</div>
 							<div>
 								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-prospect-name">Prospect name</label>
-								<Input id="appointment-prospect-name" data-testid="appointment-prospect-name-input" bind:value={form.prospectName} placeholder="Prospect name" />
+								<Input id="appointment-prospect-name" data-testid="appointment-prospect-name-input" bind:value={form.prospectName} placeholder="Prospect name" maxlength={200} />
 							</div>
 							<div class="sm:col-span-2">
 								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-prospect-email">Prospect email</label>
-								<Input id="appointment-prospect-email" data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} placeholder="Prospect email" />
+								<Input id="appointment-prospect-email" data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} placeholder="Prospect email" maxlength={200} />
 								{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-destructive" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
 							</div>
 						</div>
@@ -619,6 +674,6 @@
 	message={deleteTarget ? `Delete "${deleteTarget.title}"?` : ''}
 	busy={deleteMutation.isPending}
 	testid="appointment-delete"
-	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget)}
 	oncancel={() => (deleteTarget = null)}
 />

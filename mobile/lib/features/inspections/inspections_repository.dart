@@ -2,16 +2,84 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart';
 import 'inspections_models.dart';
+
+class InspectionListQuery {
+  const InspectionListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.propertyId,
+    this.unitId,
+    this.search,
+    this.sort = '-scheduledFor',
+  });
+
+  final int skip;
+  final int take;
+  final int? propertyId;
+  final int? unitId;
+  final String? search;
+  final String sort;
+
+  @override
+  bool operator ==(Object other) {
+    return other is InspectionListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.propertyId == propertyId &&
+        other.unitId == unitId &&
+        other.search == search &&
+        other.sort == sort;
+  }
+
+  @override
+  int get hashCode => Object.hash(skip, take, propertyId, unitId, search, sort);
+}
+
+class InspectionListPage {
+  const InspectionListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Inspection> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory InspectionListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(Inspection.fromJson)
+              .toList()
+        : <Inspection>[];
+
+    return InspectionListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
 
 /// Repository for the inspections smart-checklist workflow.
 ///
 /// Endpoints (all JWT portfolio-scoped):
-///   GET    /inspections                          — list
+///   GET    /inspections/page                     — paged list
 ///   GET    /inspections/templates                — available checklist templates
 ///   GET    /inspections/{id}                     — detail (with items)
 ///   POST   /inspections                          — create (optional templateId)
@@ -26,16 +94,35 @@ class InspectionsRepository {
   final Dio _dio;
 
   Future<List<Inspection>> list({int? propertyId}) async {
+    final page = await listPage(InspectionListQuery(propertyId: propertyId));
+    return page.items;
+  }
+
+  Future<InspectionListPage> listPage([
+    InspectionListQuery query = const InspectionListQuery(),
+  ]) async {
+    final parameters = <String, dynamic>{
+      'propertyId': query.propertyId,
+      'unitId': query.unitId,
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+    }..removeWhere((_, value) => value == null || value == '');
+
     try {
-      final response = await _dio.get<List<dynamic>>(
-        '/inspections',
-        queryParameters:
-            propertyId == null ? null : {'propertyId': propertyId},
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/inspections/page',
+        queryParameters: parameters,
       );
-      return (response.data ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(Inspection.fromJson)
-          .toList();
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return InspectionListPage.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -43,8 +130,7 @@ class InspectionsRepository {
 
   Future<List<InspectionTemplate>> listTemplates() async {
     try {
-      final response =
-          await _dio.get<List<dynamic>>('/inspections/templates');
+      final response = await _dio.get<List<dynamic>>('/inspections/templates');
       return (response.data ?? [])
           .whereType<Map<String, dynamic>>()
           .map(InspectionTemplate.fromJson)
@@ -56,8 +142,7 @@ class InspectionsRepository {
 
   Future<InspectionDetail> get(int id) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/inspections/$id');
+      final response = await _dio.get<Map<String, dynamic>>('/inspections/$id');
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -75,8 +160,14 @@ class InspectionsRepository {
   /// inspector? }. With a templateId the response items are Pending.
   Future<InspectionDetail> create(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/inspections', data: data);
+      final response = await IdempotentMutation.run(
+        'inspections:create:$data',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/inspections',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
       final responseData = response.data;
       if (responseData == null) {
         throw const ApiException(
@@ -98,12 +189,14 @@ class InspectionsRepository {
     String? note,
   }) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/inspections/$inspectionId/items/$itemId',
-        data: {
-          'result': ?result,
-          'note': ?note,
-        },
+      final payload = {'result': ?result, 'note': ?note};
+      final response = await IdempotentMutation.run(
+        'inspections:$inspectionId:items:$itemId:update:$payload',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/inspections/$inspectionId/items/$itemId',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -125,6 +218,7 @@ class InspectionsRepository {
     required Uint8List bytes,
     required String fileName,
     required String contentType,
+    String? clientOperationId,
   }) async {
     try {
       final formData = FormData.fromMap({
@@ -136,9 +230,12 @@ class InspectionsRepository {
         'entityType': 'Inspection',
         'entityId': inspectionId,
         'category': 'Inspection photo',
+        'clientOperationId': clientOperationId ?? const Uuid().v4(),
       });
-      final response =
-          await _dio.post<Map<String, dynamic>>('/documents', data: formData);
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/documents',
+        data: formData,
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -159,9 +256,13 @@ class InspectionsRepository {
     int storedFileId,
   ) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/inspections/$inspectionId/items/$itemId/photo',
-        data: {'storedFileId': storedFileId},
+      final response = await IdempotentMutation.run(
+        'inspections:$inspectionId:items:$itemId:photo:$storedFileId',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/inspections/$inspectionId/items/$itemId/photo',
+          data: {'storedFileId': storedFileId},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -179,9 +280,13 @@ class InspectionsRepository {
   /// Completes the inspection (409 if already done).
   Future<CompleteInspectionResult> complete(int inspectionId) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/inspections/$inspectionId/complete',
-        data: {},
+      final response = await IdempotentMutation.run(
+        'inspections:$inspectionId:complete',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/inspections/$inspectionId/complete',
+          data: {},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -257,34 +362,41 @@ final inspectionsRepositoryProvider = Provider<InspectionsRepository>((ref) {
 });
 
 /// The inspections list (auto-disposes so it re-fetches on screen open).
-final inspectionsProvider =
-    FutureProvider.autoDispose<List<Inspection>>((ref) {
+final inspectionsProvider = FutureProvider.autoDispose<List<Inspection>>((ref) {
   return ref.watch(inspectionsRepositoryProvider).list();
 });
+
+final inspectionsPageProvider = FutureProvider.autoDispose
+    .family<InspectionListPage, InspectionListQuery>((ref, query) {
+      return ref.watch(inspectionsRepositoryProvider).listPage(query);
+    });
 
 /// Available checklist templates for the New-inspection flow.
 final inspectionTemplatesProvider =
     FutureProvider.autoDispose<List<InspectionTemplate>>((ref) {
-  return ref.watch(inspectionsRepositoryProvider).listTemplates();
-});
+      return ref.watch(inspectionsRepositoryProvider).listTemplates();
+    });
 
 /// Properties for the New-inspection picker.
-final inspectionPropertiesProvider =
-    FutureProvider.autoDispose<List<Property>>((ref) {
-  return ref.watch(inspectionsRepositoryProvider).listProperties();
-});
+final inspectionPropertiesProvider = FutureProvider.autoDispose<List<Property>>(
+  (ref) {
+    return ref.watch(inspectionsRepositoryProvider).listProperties();
+  },
+);
 
 /// Units for a property in the New-inspection picker.
-final inspectionUnitsProvider =
-    FutureProvider.autoDispose.family<List<Unit>, int>((ref, propertyId) {
-  return ref.watch(inspectionsRepositoryProvider).listUnits(propertyId);
-});
+final inspectionUnitsProvider = FutureProvider.autoDispose
+    .family<List<Unit>, int>((ref, propertyId) {
+      return ref.watch(inspectionsRepositoryProvider).listUnits(propertyId);
+    });
 
 /// Raw bytes for an inspection-item photo, by StoredFile id.
-final inspectionPhotoBytesProvider =
-    FutureProvider.autoDispose.family<Uint8List, int>((ref, storedFileId) {
-  return ref.watch(inspectionsRepositoryProvider).documentBytes(storedFileId);
-});
+final inspectionPhotoBytesProvider = FutureProvider.autoDispose
+    .family<Uint8List, int>((ref, storedFileId) {
+      return ref
+          .watch(inspectionsRepositoryProvider)
+          .documentBytes(storedFileId);
+    });
 
 /// Inspection detail (with items) as a notifier so the run screen can patch
 /// items optimistically and refresh after photos / completion.
@@ -325,7 +437,9 @@ class InspectionDetailNotifier extends Notifier<AsyncValue<InspectionDetail>> {
   }
 }
 
-final inspectionDetailProvider = NotifierProvider.family<
-    InspectionDetailNotifier, AsyncValue<InspectionDetail>, int>(
-  InspectionDetailNotifier.new,
-);
+final inspectionDetailProvider =
+    NotifierProvider.family<
+      InspectionDetailNotifier,
+      AsyncValue<InspectionDetail>,
+      int
+    >(InspectionDetailNotifier.new);

@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>TSK-747 Lane 3 UI rescue — second-pass audit</title>
+	<style>
+		:root {
+			color-scheme: light dark;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			background: #f6f7f9;
+			color: #17181b;
+		}
+		* { box-sizing: border-box; }
+		body { margin: 0; background: #f6f7f9; color: #17181b; }
+		main { width: min(1480px, calc(100% - 32px)); margin: 24px auto 64px; }
+		header, section { background: white; border: 1px solid #dde0e5; border-radius: 16px; }
+		header { padding: 28px; }
+		section { margin-top: 20px; padding: 24px; }
+		h1, h2, h3 { margin-top: 0; letter-spacing: -0.025em; }
+		h1 { font-size: clamp(1.75rem, 3vw, 2.5rem); }
+		h2 { font-size: 1.35rem; }
+		p, li { line-height: 1.55; }
+		.summary { max-width: 90ch; font-size: 1.05rem; }
+		.meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+		.pill, .status { display: inline-flex; align-items: center; border-radius: 999px; font-size: .78rem; font-weight: 700; padding: 5px 9px; }
+		.pill { background: #eef1f5; color: #343840; }
+		.status.pass, .status.fixed { background: #e4f5ea; color: #176232; }
+		.status.limited { background: #fff3cf; color: #735300; }
+		.status.bug { background: #ffe3e1; color: #8b1d19; }
+		.status.source { background: #e8edff; color: #2a458f; }
+		.table-wrap { overflow-x: auto; border: 1px solid #e4e6ea; border-radius: 12px; }
+		table { width: 100%; min-width: 920px; border-collapse: collapse; }
+		th, td { padding: 11px 12px; border-bottom: 1px solid #e4e6ea; text-align: left; vertical-align: top; line-height: 1.4; }
+		th { position: sticky; top: 0; background: #f1f3f6; color: #4a4e57; font-size: .78rem; text-transform: uppercase; letter-spacing: .045em; }
+		tr:last-child td { border-bottom: 0; }
+		code { border-radius: 5px; background: #f0f1f3; padding: 1px 5px; }
+		a { color: #315fc4; }
+		.callout { border-left: 4px solid #315fc4; background: #f1f5ff; padding: 12px 16px; border-radius: 8px; }
+		.issue { border-left-color: #b63830; background: #fff1f0; }
+		.decision-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+		.decision { border: 1px solid #e4e6ea; border-radius: 12px; padding: 16px; }
+		.decision h3 { font-size: 1rem; margin-bottom: 8px; }
+		.decision p { margin: 0; color: #4b4f57; font-size: .92rem; }
+		@media (prefers-color-scheme: dark) {
+			:root, body { background: #111317; color: #f0f1f3; }
+			header, section { background: #1a1d22; border-color: #343941; }
+			.pill { background: #2c3139; color: #e1e4e9; }
+			.table-wrap, th, td, .decision { border-color: #343941; }
+			th { background: #242830; color: #c5cad2; }
+			code { background: #292e36; }
+			a { color: #91b3ff; }
+			.callout { background: #1a2947; }
+			.callout.issue { background: #3b211f; }
+			.decision p { color: #c5cad2; }
+		}
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<h1>TSK-747 Lane 3 UI rescue — second-pass audit</h1>
+		<p class="summary">
+			Every route assigned to the money, intake, portal, and public-auth lane was opened in a real
+			Playwright browser at an in-page verified <strong>1710 × 1107 CSS-pixel viewport</strong>.
+			The local frontend at <code>http://127.0.0.1:5667</code> used the Azure-backed development data.
+			This pass concentrated on plain-English labels, progressive disclosure, control consistency,
+			loading and failure states, and whether the seeded data makes the screen credible.
+		</p>
+		<div class="meta">
+			<span class="pill">Date: 2026-07-25</span>
+			<span class="pill">Lane: money + intake + portal + public</span>
+			<span class="pill">Viewport: 1710 × 1107</span>
+			<span class="pill">Horizontal overflow found: none</span>
+			<span class="pill">Backend changes: none</span>
+		</div>
+	</header>
+
+	<section>
+		<h2>Outcome</h2>
+		<p>
+			The highest-confidence presentation defects were fixed without changing APIs or stored values:
+			report names now describe the question they answer; scan review no longer leads with model names,
+			hashes, tokens, raw IDs, or “exact proposed command”; banking’s debug and manual-import forms are
+			collapsed under “Advanced bank tools”; owner and tax accounting-basis explanations are optional;
+			owner “distributions” are described as payments to owners; missing scan types fall back to
+			“Document”; and portal account pickers use the app’s styled Select with rental names instead of
+			internal account numbers.
+		</p>
+		<div class="callout">
+			<strong>Superseded finding:</strong> this lane initially recorded zero owner totals, stalled
+			ledger reports, and a “Unit A” / “No unit” seed contradiction. The controller's later
+			cross-lane investigation fixed the ownership period, unit expense references, and General/Rent
+			Ledger production queries. See the final UI audit for current status and PostgreSQL proof; the
+			running Azure backend has not been redeployed or destructively reseeded.
+		</div>
+	</section>
+
+	<section>
+		<h2>Material 3 references and applied decisions</h2>
+		<div class="decision-grid">
+			<div class="decision">
+				<h3><a href="https://m3.material.io/components/cards/overview">Cards</a></h3>
+				<p>Use cards for related content, not every field. Keep surfaces low elevation and let one dominant work area lead.</p>
+			</div>
+			<div class="decision">
+				<h3><a href="https://m3.material.io/components/menus/overview">Menus</a></h3>
+				<p>Menus hold temporary choices; always-visible actions stay in the toolbar. Existing app menu and Select primitives remain the standard.</p>
+			</div>
+			<div class="decision">
+				<h3><a href="https://m3.material.io/components/date-pickers/overview">Date pickers</a></h3>
+				<p>Current and selected dates must be clear, targets must remain large enough, and the picker variant should match the task instead of exposing a browser-default control arbitrarily.</p>
+			</div>
+			<div class="decision">
+				<h3><a href="https://m3.material.io/components/progress-indicators/overview">Progress indicators</a></h3>
+				<p>Use one consistent linear or circular status indicator for actual processing. Keep the status near the work it describes and do not leave a page indefinitely ambiguous.</p>
+			</div>
+			<div class="decision">
+				<h3><a href="https://m3.material.io/components/text-fields/overview">Text fields</a></h3>
+				<p>Labels stay brief, visible, and actionable; errors explain the correction. Technical tokens and hashes are not ordinary form fields.</p>
+			</div>
+			<div class="decision">
+				<h3><a href="https://m3.material.io/components/lists/overview">Lists</a></h3>
+				<p>Order information logically, keep rows scannable, and align repeated content and actions consistently. This was also the nearest active M3 guidance for the app’s tabular list surfaces; no active M3 data-table page was available.</p>
+			</div>
+			<div class="decision">
+				<h3><a href="https://m3.material.io/foundations/layout/canonical-examples/overview">Canonical layouts</a></h3>
+				<p>Use adaptive scaffold, list-detail, and supporting-pane patterns. Focused tasks can layer over the main context; secondary explanations become disclosures.</p>
+			</div>
+		</div>
+	</section>
+
+	<section>
+		<h2>Money, accounting, reporting, and integrations checklist</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>Route</th><th>Status</th><th>Browser evidence and decision</th></tr></thead>
+				<tbody>
+					<tr><td><code>/accounting</code></td><td><span class="status fixed">Checked + improved</span></td><td>20 populated rows, paging, app Select controls, no overflow. Entry types/categories now use plain display labels and internal references are secondary.</td></tr>
+					<tr><td><code>/accounting/expenses/1</code></td><td><span class="status fixed">Checked + seed fixed</span></td><td>Detail hierarchy is readable and technical receipt material is disclosed. A later controller pass attached named-unit expenses to the corresponding seeded UnitId; the running Azure database was not destructively reseeded.</td></tr>
+					<tr><td><code>/accounting/past-due</code></td><td><span class="status fixed">Checked + improved</span></td><td>Five resident rows render with plain labels, paging, and no overflow. Resident, rental, amount, and action are the visible identity.</td></tr>
+					<tr><td><code>/accounting/year-end</code></td><td><span class="status fixed">Checked + improved</span></td><td>Header and filter area use app Select controls; no native select or overflow. Loading state was also observed.</td></tr>
+					<tr><td><code>/banking</code></td><td><span class="status fixed">Checked + improved</span></td><td>Primary page now ends with a closed “Advanced bank tools” disclosure. Refresh/import copy is outcome-based; sandbox and pasted export forms no longer form the default wall.</td></tr>
+					<tr><td><code>/plaid/auth</code></td><td><span class="status limited">Expired state</span></td><td>Expired callback state is understandable; a valid provider callback could not be created without a live Plaid handoff.</td></tr>
+					<tr><td><code>/deposits</code></td><td><span class="status fixed">Checked + improved</span></td><td>20 populated rows, resident/rental identity, paging, no overflow, and consistent controls.</td></tr>
+					<tr><td><code>/deposits/1</code></td><td><span class="status fixed">Checked + improved</span></td><td>Summary and actions are clear; internal record references are in a closed technical-details disclosure.</td></tr>
+					<tr><td><code>/owners-report</code></td><td><span class="status fixed">UI + seed fixed</span></td><td>Renamed Owner statements. “Still to pay” and “Payment to owner” replace internal accounting language. A later controller pass fixed ownership effective dates so they cover seeded financial history; the current Azure sample database still reflects its older seed.</td></tr>
+					<tr><td><code>/reports</code></td><td><span class="status fixed">Checked + improved</span></td><td>Every catalog entry now describes its outcome in plain English, categories are task-oriented, and the existing Reports help article is linked.</td></tr>
+					<tr><td><code>/tax</code></td><td><span class="status fixed">Checked + improved</span></td><td>“Rental tax summary” leads, Schedule E remains discoverable, the basis comparison is disclosed, and seeded totals render. No overflow.</td></tr>
+					<tr><td><code>/settings/accounting</code></td><td><span class="status fixed">Checked + improved</span></td><td>Unavailable QuickBooks state no longer tells an ordinary user to add server keys; it identifies the workspace administrator and confirms local records still work.</td></tr>
+					<tr><td><code>/settings/integrations/ai</code></td><td><span class="status pass">Checked</span></td><td>Compact hierarchy, app Select, plain availability/status copy, no overflow.</td></tr>
+					<tr><td><code>/tenant-accounts/1/entries/1</code></td><td><span class="status pass">Checked</span></td><td>Payment receipt is readable and audit/reference values are disclosed under technical details.</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>Every report route checklist</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>Route</th><th>Status</th><th>Observed state</th></tr></thead>
+				<tbody>
+					<tr><td><code>/reports/income-expense-statement</code></td><td><span class="status fixed">Checked</span></td><td>Plain “Income and expenses” title and description; filters/actions and result surface inspected.</td></tr>
+					<tr><td><code>/reports/property-pnl-summary</code></td><td><span class="status fixed">Checked</span></td><td>Plain “Income and expenses by property” title; result structure inspected.</td></tr>
+					<tr><td><code>/reports/general-ledger</code></td><td><span class="status fixed">Source fixed</span></td><td>Plain “Complete money history” title. Initial Azure proof stalled; a later controller pass replaced the per-row correlated authorization union with one PostgreSQL window query and passed a real PostgreSQL integration test. Deployment proof remains pending.</td></tr>
+					<tr><td><code>/reports/cash-flow</code></td><td><span class="status fixed">Checked</span></td><td>Plain “Cash flow by month” title and result structure inspected.</td></tr>
+					<tr><td><code>/reports/schedule-e</code></td><td><span class="status pass">Checked</span></td><td>External report route state inspected; display name is “Rental tax summary.”</td></tr>
+					<tr><td><code>/reports/year-end-packet</code></td><td><span class="status pass">Checked</span></td><td>External report route state inspected; display name is “Year-end accountant packet.”</td></tr>
+					<tr><td><code>/reports/rent-roll</code></td><td><span class="status limited">Loading observed</span></td><td>Plain “Current rent and lease summary”; loading state observed and relationship/agreement identifiers removed from the visible result table.</td></tr>
+					<tr><td><code>/reports/rent-ledger</code></td><td><span class="status limited">Loading observed</span></td><td>Plain “Rent charges and payments”; loading state observed and rental relationship numbers removed from visible result grouping.</td></tr>
+					<tr><td><code>/reports/delinquency</code></td><td><span class="status fixed">Checked</span></td><td>Plain “Who is behind”; overdue buckets and populated result structure inspected.</td></tr>
+					<tr><td><code>/reports/owner-statement</code></td><td><span class="status pass">Checked</span></td><td>External route state inspected; “Owner statement” remains a familiar document label.</td></tr>
+					<tr><td><code>/reports/owner-distributions</code></td><td><span class="status fixed">Checked</span></td><td>Display name changed to “Payments to owners,” with plain description.</td></tr>
+					<tr><td><code>/reports/occupancy</code></td><td><span class="status fixed">Checked</span></td><td>Display name changed to “Occupied and available rentals.”</td></tr>
+					<tr><td><code>/reports/lease-expirations</code></td><td><span class="status fixed">Checked</span></td><td>Display name changed to “Leases ending soon”; internal agreement number removed from visible rows.</td></tr>
+					<tr><td><code>/reports/security-deposit-register</code></td><td><span class="status limited">Loading observed</span></td><td>Display name changed to “Security deposits”; relationship number removed from visible rows.</td></tr>
+					<tr><td><code>/reports/vendor-1099</code></td><td><span class="status fixed">Checked</span></td><td>Display name changed to “Vendor tax forms and payments”; necessary 1099/W-9 terms remain in the detail.</td></tr>
+					<tr><td><code>/reports/work-orders</code></td><td><span class="status fixed">Checked</span></td><td>Display name changed to “Maintenance report”; category, priority, and status values use presentation formatters.</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>Scan, import, and applications checklist</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>Route</th><th>Status</th><th>Browser evidence and decision</th></tr></thead>
+				<tbody>
+					<tr><td><code>/scan</code></td><td><span class="status fixed">Checked + improved</span></td><td>Seeded failed row now displays “Document” instead of a blank Type cell. Loaded table, paging, controls, and failure state inspected.</td></tr>
+					<tr><td><code>/scan/1</code></td><td><span class="status fixed">Checked + improved</span></td><td>“Review scanned document,” “What will happen,” “Where it will be saved,” and “Needs your review” replace system jargon. Model, token, cost, hash, and record ID are in closed Technical details. Failure and manual-entry states inspected.</td></tr>
+					<tr><td><code>/scan/batch</code></td><td><span class="status pass">Checked</span></td><td>Focused bulk lease upload with understandable dropzone and action labels; no overflow.</td></tr>
+					<tr><td><code>/scan/batch/1</code></td><td><span class="status limited">Unseeded detail</span></td><td>Route opened but no valid seeded batch exists, so the visible load-error state was inspected and the valid progress/detail state was source-reviewed.</td></tr>
+					<tr><td><code>/scan/new-rental</code></td><td><span class="status fixed">Checked + improved</span></td><td>Valid browser title added. Two upload areas remain understandable but are still a consolidation candidate for a later, larger interaction change.</td></tr>
+					<tr><td><code>/import</code></td><td><span class="status pass">Checked</span></td><td>Two-step CSV flow, upload state, labels, and hierarchy inspected; no overflow.</td></tr>
+					<tr><td><code>/applications</code></td><td><span class="status pass">Checked</span></td><td>Empty state clearly explains that public applications appear here.</td></tr>
+					<tr><td><code>/applications/1</code></td><td><span class="status limited">Unseeded detail</span></td><td>“Application not found” state inspected; no valid application detail exists in the available seed.</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>Tenant portal checklist</h2>
+		<p class="callout">
+			All eleven routes were navigated in the real browser. The available authenticated identity is an
+			administrator, so every portal route correctly redirected to the staff dashboard before tenant
+			content rendered. The source states were reviewed; the two confirmed native account selectors were
+			replaced with the app Select. Full tenant-role runtime proof needs a tenant portal credential.
+		</p>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>Route</th><th>Status</th><th>Evidence</th></tr></thead>
+				<tbody>
+					<tr><td><code>/portal</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected to <code>/</code>; dashboard states reviewed. Rental picker now uses app Select and hides internal account number.</td></tr>
+					<tr><td><code>/portal/account</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; account summary, empty, loading, and error branches reviewed.</td></tr>
+					<tr><td><code>/portal/appointments</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; appointment list and state branches reviewed.</td></tr>
+					<tr><td><code>/portal/lease</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; lease document and unavailable states reviewed.</td></tr>
+					<tr><td><code>/portal/maintenance</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; list, filter, paging, and request states reviewed.</td></tr>
+					<tr><td><code>/portal/messages</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; conversation, empty, loading, and error states reviewed.</td></tr>
+					<tr><td><code>/portal/notifications</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; notification states reviewed.</td></tr>
+					<tr><td><code>/portal/payments</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; charges, payment-provider, autopay, paging, and error states reviewed. Rental picker now uses app Select and hides internal account number.</td></tr>
+					<tr><td><code>/portal/profile</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; profile form and mutation states reviewed.</td></tr>
+					<tr><td><code>/portal/security</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; shared password-security states reviewed.</td></tr>
+					<tr><td><code>/portal/unlinked</code></td><td><span class="status source">Redirect + source</span></td><td>Admin redirected; no-linked-rental guidance reviewed.</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>Public and authentication checklist</h2>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>Route</th><th>Status</th><th>Browser evidence</th></tr></thead>
+				<tbody>
+					<tr><td><code>/features</code></td><td><span class="status pass">Checked</span></td><td>Marketing hierarchy, copy, calls to action, and responsive width inspected; no overflow.</td></tr>
+					<tr><td><code>/login</code></td><td><span class="status pass">Checked</span></td><td>Clear sign-in task, field labels, recovery path, and registration path.</td></tr>
+					<tr><td><code>/register</code></td><td><span class="status fixed">Checked + improved</span></td><td>“Display name” changed to “Your name”; exact 1710 × 1107 browser recheck passed with no overflow.</td></tr>
+					<tr><td><code>/forgot-password</code></td><td><span class="status pass">Checked</span></td><td>Recovery instructions and return path inspected.</td></tr>
+					<tr><td><code>/reset-password</code></td><td><span class="status limited">Invalid-link state</span></td><td>Invalid or missing token state is clear; a valid recovery token was unavailable.</td></tr>
+					<tr><td><code>/verify-email</code></td><td><span class="status limited">Invalid-link state</span></td><td>Invalid or missing verification token state is clear; valid verification was unavailable.</td></tr>
+					<tr><td><code>/activate-team</code></td><td><span class="status limited">Invalid-link state</span></td><td>Invalid or missing invitation token state is clear; valid invitation was unavailable.</td></tr>
+					<tr><td><code>/apply/not-a-real-token</code></td><td><span class="status limited">Invalid-link state</span></td><td>Invalid public application state is clear; a valid property application token was unavailable.</td></tr>
+					<tr><td><code>/choose-setup</code></td><td><span class="status pass">Auth redirect</span></td><td>Unauthenticated visit redirected to sign in as expected.</td></tr>
+					<tr><td><code>/setting-up</code></td><td><span class="status pass">Auth redirect</span></td><td>Unauthenticated visit redirected to sign in as expected.</td></tr>
+					<tr><td><code>/welcome</code></td><td><span class="status pass">Checked</span></td><td>Public marketing/entry page hierarchy and calls to action inspected.</td></tr>
+					<tr><td><code>/privacy</code></td><td><span class="status pass">Checked</span></td><td>Readable line length, section hierarchy, and no horizontal overflow.</td></tr>
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section>
+		<h2>Final native-control cleanup</h2>
+		<ul>
+			<li>
+				The Received date, Deduction date, and Refund date fields in
+				<code>/deposits/[id]</code> now use the shared DatePicker while keeping the same bound
+				<code>yyyy-MM-dd</code> payload strings.
+			</li>
+			<li>
+				The screening Decision field in ApplicationDetail now uses the shared Select while
+				preserving the exact <code>Accept</code>, <code>Conditional</code>, and
+				<code>Decline</code> API values.
+			</li>
+			<li>
+				A source sweep of login, registration, password recovery, email/team activation,
+				public applications, public pages, and all portal pages found no remaining
+				first-party native <code>&lt;select&gt;</code> or <code>input[type=date]</code>
+				controls.
+			</li>
+			<li>
+				Valid exceptions remain inside the calendar/select primitives themselves, the shared
+				DateTimePicker time input, and file-upload inputs.
+			</li>
+		</ul>
+		<p class="callout">
+			Playwright HMR proof: <code>/deposits/1</code> at 1710 × 1107 opened the
+			“Record deposit funds” dialog with a text-backed shared date picker showing
+			<code>07/25/2026</code>, zero native date inputs, no horizontal overflow, and the dialog’s
+			original submit payload state unchanged.
+		</p>
+	</section>
+
+	<section>
+		<h2>Remaining evidence-bound work</h2>
+		<ul>
+			<li>Deploy the fixed backend before claiming Azure runtime proof for General Ledger and Rent Ledger.</li>
+			<li>Re-prove Security Deposit Register against the deployed backend; it was not part of the later query rewrite.</li>
+			<li>Re-prove owner and expense sample data after a safe fresh seed; the persistent Azure sample database was intentionally not reset.</li>
+			<li>Run tenant-role browser proof for every portal route when a tenant credential is available.</li>
+			<li>Run valid-token proof for public applications, password reset, email verification, and team activation when safe tokens are available.</li>
+		</ul>
+		<p>
+			No local or remote build/test suite was run in this lane. The controller owns serialized
+			verification for the shared worktree.
+		</p>
+	</section>
+</main>
+</body>
+</html>

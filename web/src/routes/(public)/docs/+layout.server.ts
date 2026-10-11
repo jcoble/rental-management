@@ -1,4 +1,4 @@
-import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { serverGet } from '$lib/api/server-fetch';
 import type { DocsIndex } from '$lib/api/endpoints/docs';
 import type { LayoutServerLoad } from './$types';
 
@@ -8,12 +8,8 @@ import type { LayoutServerLoad } from './$types';
  * sidebar rather than erroring the whole surface (the page loaders handle the
  * hard error for their own content).
  */
-export const load: LayoutServerLoad = async ({ fetch }) => {
-	try {
-		const res = await fetch(`${SERVER_API_BASE_URL}/docs`);
-		if (res.ok) return { index: (await res.json()) as DocsIndex };
-	} catch {
-		/* ignore — fall through to empty index */
-	}
+export const load: LayoutServerLoad = async () => {
+	const result = await serverGet<DocsIndex>('/docs');
+	if (result.data) return { index: result.data };
 	return { index: { categories: [] } as DocsIndex };
 };

@@ -55,6 +55,11 @@ Engine + API + web. Requires `dotnet`, `pnpm`, `docker`, and `mkcert` (`mkcert -
 - **DB connection** comes from **.NET User Secrets** in Development (not committed). Do
   NOT export `ConnectionStrings__DefaultConnection` in the dev script — it would override
   the secret. Set it via `dotnet user-secrets set "ConnectionStrings:DefaultConnection" "<conn>" --project RentalCommand.Api`.
+  `DefaultConnection` supplies the credential, but steady-state API/Engine connections immediately
+  assume the NOLOGIN `rentalcommand_api` / `rentalcommand_engine` roles. Startup migrations use
+  `ConnectionStrings:MigratorConnection` without a runtime-role interceptor; it defaults to
+  `DefaultConnection` for local development. In deployed environments set both explicitly to the
+  owner/migrator credential. Never put a runtime-role password in configuration—the roles are NOLOGIN.
 - **HTTPS** is real mkcert TLS for both web and API; Node trusts the API cert via
   `NODE_EXTRA_CA_CERTS` (set by the dev script). **Never disable TLS verification**
   (`NODE_TLS_REJECT_UNAUTHORIZED=0`) — use the mkcert CA instead.
@@ -65,30 +70,32 @@ Logs: `/tmp/rentalcommand-api.log`, `/tmp/rentalcommand-engine.log`.
 
 ## Production & deployment (CI/CD)
 
-Live at **https://rc.coblesolutions.com** on a small Hetzner box (`/opt/rental-command`,
+Live at **https://rentalcommand.net** on a small Hetzner box (`/opt/rental-command`,
 `deploy/docker-compose.prod.yml`: Traefik + Postgres + API + Engine + Web). Secrets live in
 `/opt/rental-command/.env` on the box (never committed).
 
 - **NEVER build images on the VPS.** It's a 2-vCPU / 3.7 GB box — compiling there starves the
   live app. The prod compose has **no `build:` blocks**; the box only `docker compose pull`s
   GHCR images. Building belongs in CI.
-- **Deploys are CI-driven** via `.github/workflows/deploy.yml`: GitHub Actions builds
+- **Deploys are CI-driven** via `.github/workflows/deploy.yml`: GitHub-hosted Actions runners build
   `api`/`engine`/`web`, pushes them to `ghcr.io/jcoble/rentalcommand-*`, then SSHes in to pull +
   `up -d`. The web image bakes **`VITE_API_URL=/api/v1`** (the API mounts under `/api/v1/*`; the
   client appends bare paths — a bare `/api` 404s every browser call).
-- **Triggering a deploy** (it does NOT run on a plain push — that's CI/`ci.yml` only):
-  - Push a version tag → deploys that exact commit: `git tag vX.Y.Z && git push --tags`
+- **Triggering a deploy** (ordinary branch pushes and merges do not run this workflow):
+  - Push a version tag → deploys that exact commit: `git tag vX.Y.Z && git push origin vX.Y.Z`
   - Or **Actions ▸ Deploy ▸ Run workflow** (optionally paste a SHA/ref).
 - Deploy needs repo secrets `DEPLOY_SSH_KEY` (dedicated `rc-deploy` key, **not** the personal
   multi-machine key), `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KNOWN_HOSTS`. Migrations self-apply
   on boot under a shared Postgres advisory lock. Hetzner **blocks outbound SMTP 25/465** — use
-  Zoho on **587/STARTTLS**. Full box/SSH details are in agent memory (`rental-command-deployment`).
+  Google Workspace SMTP relay or another provider on **587/STARTTLS**. Full box/SSH details are in agent memory
+  (`rental-command-deployment`).
 
 ## Auth model
 
 - ASP.NET Identity with **int keys** (`ApplicationUser : IdentityUser<int>`), matching the
   int-keyed domain entities. JWT access tokens (~15 min) + single-use **rotated** refresh
-  tokens. `ApiKeyAuthenticationHandler` covers webhook/server callers.
+  tokens. Machine callers require a future canonical service-principal authority; the removed
+  portfolio-claim API-key scheme is not a supported authentication path.
 - The web app stores tokens in **app-namespaced httpOnly cookies first-party to the SvelteKit origin**.
   Current names are `rc_access_token`, `rc_access_token_expiration`, and `rc_refresh_token`;
   avoid generic names like `access_token`/`refresh_token` because localhost cookies are shared

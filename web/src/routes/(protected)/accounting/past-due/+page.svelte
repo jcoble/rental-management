@@ -1,5 +1,5 @@
 <!--
-  "Who's behind" — one row per tenant/lease currently behind on rent, with one-tap Mark-paid and Text
+  "Who's behind" — one row per tenant account currently behind on rent, with Record payment and Text
   actions. This is the web counterpart of the mobile OverdueScreen and the destination behind the
   dashboard "tenants behind" KPI.
 
@@ -12,53 +12,67 @@
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { accounting } from '$lib/api/endpoints/accounting';
-	import { payments } from '$lib/api/endpoints/payments';
+	import { tenantMoney } from '$lib/api/endpoints/tenant-money';
 	import type { PastDueLease } from '$lib/types';
-	import { recordHref } from '$lib/navigation/record-href';
+	import { loadAllOpenCharges } from '$lib/accounting/past-due-preview';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
-	import { daysFromTodayUtc } from '$lib/utils/date';
 	import * as Card from '$lib/components/ui/card';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
-	import { AlertTriangle, CheckCircle2, MessageSquare, ChevronRight, Loader2, CircleCheckBig } from '@lucide/svelte';
+	import PastDuePaymentDialog, { type PastDuePaymentSubmission } from '$lib/components/accounting/PastDuePaymentDialog.svelte';
+	import { AlertTriangle, CheckCircle2, MessageSquare, ChevronLeft, ChevronRight, CircleCheckBig, Loader2 } from '@lucide/svelte';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
+	let skip = $state(0);
 
 	const pastDueQuery = createQuery(() => ({
-		queryKey: ['accounting-past-due', portfolioId],
+		queryKey: ['accounting-past-due', portfolioId, skip, PAGE_SIZE],
 		enabled: portfolioId > 0,
-		queryFn: () => accounting.pastDue(),
+		queryFn: () => accounting.pastDue({ skip, take: PAGE_SIZE }),
 	}));
 
 	const result = $derived(pastDueQuery.data);
 	const behind = $derived(result?.items ?? []);
+	const hasPrevious = $derived((result?.skip ?? skip) > 0);
+	const hasNext = $derived(
+		result != null && result.skip + result.items.length < result.totalCount
+	);
 
+	$effect(() => {
+		if (result && result.totalCount > 0 && result.items.length === 0 && skip > 0) {
+			skip = Math.max(0, skip - PAGE_SIZE);
+		}
+	});
+
+	// Past-due amounts read as whole dollars on this page.
 	function money(value: number) {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
+		return formatAccountingCurrency(value || 0, 'USD', true);
 	}
 
 	function displayName(lease: PastDueLease): string {
 		if (lease.tenantName && lease.tenantName.trim()) return lease.tenantName.trim();
-		if (lease.leaseNumber) return `Lease ${lease.leaseNumber}`;
-		return `Lease #${lease.leaseId}`;
+		if (lease.relationshipNumber && lease.relationshipNumber.trim()) return lease.relationshipNumber.trim();
+		if (lease.unitNumber && lease.unitNumber.trim()) return `Unit ${lease.unitNumber.trim()}`;
+		return 'Tenant account';
 	}
 
-	function daysLate(lease: PastDueLease): number {
-		const d = daysFromTodayUtc(lease.oldestDueDate);
-		return d === null ? 0 : Math.max(0, -d);
+	function daysLate(lease: PastDueLease): number | null {
+		if (!result?.businessDate) return null;
+		const due = Date.parse(`${lease.oldestDueOn.slice(0, 10)}T00:00:00Z`);
+		const business = Date.parse(`${result.businessDate.slice(0, 10)}T00:00:00Z`);
+		if (!Number.isFinite(due) || !Number.isFinite(business)) return null;
+		return Math.max(0, Math.floor((business - due) / 86_400_000));
 	}
 
 	function rowSubtitle(lease: PastDueLease): string {
 		const parts: string[] = [];
 		if (lease.overduePaymentCount > 1) {
-			parts.push(`${lease.overduePaymentCount} payments`);
+			parts.push(`${lease.overduePaymentCount} charges`);
 		}
 		if (lease.propertyName && lease.propertyName.trim()) {
 			parts.push(
@@ -70,84 +84,71 @@
 		return parts.join(' · ');
 	}
 
-	// Which lease's row is currently being marked caught-up (its buttons show a spinner).
-	let busyLeaseId = $state<number | null>(null);
-
-	// --- Mark Paid modal ---
-	// Capture how/when the money arrived once, then apply it to every still-owed payment on the lease.
-	// Smart defaults: date = today, method = last-used (remembered in localStorage). The mark-paid
-	// endpoint accepts paidDate / method / externalReference / notes. Methods come from the shared
-	// canonical list so web + mobile offer identical values.
-	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
-	function loadLastMethod(): string {
-		if (typeof localStorage === 'undefined') return '';
-		try {
-			return localStorage.getItem(LAST_METHOD_KEY) ?? '';
-		} catch {
-			return '';
-		}
-	}
-	function rememberLastMethod(method: string) {
-		if (!method || typeof localStorage === 'undefined') return;
-		try {
-			localStorage.setItem(LAST_METHOD_KEY, method);
-		} catch {
-			/* storage may be unavailable */
-		}
-	}
-	function todayLocal(): string {
-		const d = new Date();
-		const p = (n: number) => String(n).padStart(2, '0');
-		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-	}
+	// Which tenant account is currently receiving a payment (its buttons show a spinner).
+	let busyAccountId = $state<number | null>(null);
 
 	let showMarkPaidForm = $state(false);
 	let markPaidTarget = $state<PastDueLease | null>(null);
-	let markPaidForm = $state({ paidDate: '', method: '', externalReference: '', notes: '' });
+	let receiptOperationKey = $state<string | null>(null);
 
 	function openMarkPaid(lease: PastDueLease) {
 		markPaidTarget = lease;
-		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '', notes: '' };
 		showMarkPaidForm = true;
+		receiptOperationKey = null;
 	}
 	function closeMarkPaid() {
 		showMarkPaidForm = false;
 		markPaidTarget = null;
+		receiptOperationKey = null;
 	}
 
-	// Mark every still-owed past-due payment on a lease as paid in one server-side action. Afterwards we
+	const openChargesQuery = createQuery(() => {
+		const tenantAccountId = markPaidTarget?.tenantAccountId;
+		return {
+			queryKey: ['past-due-open-charges', portfolioId, tenantAccountId],
+			enabled: showMarkPaidForm && tenantAccountId != null,
+			queryFn: () => loadAllOpenCharges(tenantAccountId as number)
+		};
+	});
+	const openCharges = $derived(openChargesQuery.data ?? []);
+
+	// Record one receipt against the continuous tenant account. Afterwards we
 	// refresh the shared sources (past-due list + dashboard snapshot) so the KPI count and these rows
 	// update together and stay in lockstep.
 	const markPaidMutation = createMutation(() => ({
-		mutationFn: async ({ lease, data }: { lease: PastDueLease; data: Record<string, unknown> }) => {
-			const result = await payments.markLeasePastDuePaid(lease.leaseId, data);
-			return result.markedPaidCount;
+		mutationFn: async ({ lease, data }: { lease: PastDueLease; data: PastDuePaymentSubmission }) => {
+			receiptOperationKey ??= crypto.randomUUID();
+			return tenantMoney.recordReceipt(lease.tenantAccountId, receiptOperationKey, {
+				amount: data.amount,
+				effectiveOn: data.paidDate,
+				description: data.notes || `Payment for ${lease.relationshipNumber || 'tenant account'}`,
+				paymentMethodSummary: data.method,
+				externalReference: data.externalReference,
+				payerName: data.payerName || lease.tenantName || undefined,
+				targetChargeEntryId: null,
+				allocateOldestCharges: true
+			});
 		},
 		onMutate: ({ lease }) => {
-			busyLeaseId = lease.leaseId;
+			busyAccountId = lease.tenantAccountId;
 		},
-		onSuccess: (count, vars) => {
-			showSuccess(count > 1 ? `${count} payments marked paid.` : 'Payment marked paid.');
-			rememberLastMethod(String(vars.data.method ?? ''));
+		onSuccess: (_result, _vars) => {
+			showSuccess('Payment recorded and allocated oldest-first.');
 			closeMarkPaid();
+			skip = 0;
 			queryClient.invalidateQueries({ queryKey: ['accounting-past-due', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-snapshot', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['payments'] });
 		},
-		onError: (err) => showError(apiErrorMessage(err, "Couldn't mark this lease paid. Please try again.")),
+		onError: (err) => showError(apiErrorMessage(err, "Couldn't record this payment. Please try again.")),
 		onSettled: () => {
-			busyLeaseId = null;
+			busyAccountId = null;
 		},
 	}));
 
-	function submitMarkPaid() {
+	function submitMarkPaid(data: PastDuePaymentSubmission) {
 		if (!markPaidTarget) return;
-		const data: Record<string, unknown> = {};
-		data.paidDate = markPaidForm.paidDate || todayLocal();
-		if (markPaidForm.method) data.method = markPaidForm.method;
-		if (markPaidForm.externalReference.trim()) data.externalReference = markPaidForm.externalReference.trim();
-		if (markPaidForm.notes.trim()) data.notes = markPaidForm.notes.trim();
 		markPaidMutation.mutate({ lease: markPaidTarget, data });
 	}
 
@@ -163,10 +164,8 @@
 		window.location.href = phone ? `sms:${phone}?body=${body}` : `sms:?body=${body}`;
 	}
 
-	function openOldestPayment(lease: PastDueLease) {
-		if (lease.oldestPaymentId > 0) {
-			goto(recordHref('payment', { id: lease.oldestPaymentId, unitId: lease.unitId }));
-		}
+	function openTenantAccount(lease: PastDueLease) {
+		goto(`/units/${lease.unitId}?tab=money&view=tenant-account&tenantAccount=${lease.tenantAccountId}`);
 	}
 </script>
 
@@ -181,20 +180,18 @@
 		art={3}
 		eyebrow="Money"
 		title="Who's behind"
-		description="Tenants currently behind on rent. Send a reminder or mark them caught up."
+		description="Tenants currently behind on rent. Send a reminder or record money received."
 		data-testid="past-due-header"
 	/>
 
 	{#if pastDueQuery.isLoading}
-		<div class="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground" data-testid="past-due-loading">
-			<Loader2 class="h-4 w-4 animate-spin" />
-			Loading…
-		</div>
+		<LoadingState label="Loading past-due accounts" variant="page" testid="past-due-loading" />
 	{:else if pastDueQuery.isError}
-		<div class="flex h-48 items-center justify-center text-sm text-destructive" data-testid="past-due-error">
-			Couldn't load who's behind.
+		<div class="flex min-h-48 flex-wrap items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="past-due-error">
+			<p class="text-sm text-destructive">Couldn't load who's behind.</p>
+			<Button size="sm" variant="outline" onclick={() => pastDueQuery.refetch()}>Retry past-due accounts</Button>
 		</div>
-	{:else if behind.length === 0}
+	{:else if (result?.totalCount ?? 0) === 0}
 		<Card.Root data-testid="past-due-empty">
 			<Card.Content class="flex flex-col items-center gap-3 py-14 text-center">
 				<CircleCheckBig class="h-12 w-12 text-success" />
@@ -205,6 +202,10 @@
 				</p>
 			</Card.Content>
 		</Card.Root>
+	{:else if !result?.businessDate}
+		<div class="flex h-48 items-center justify-center text-sm text-destructive" data-testid="past-due-error">
+			Couldn't read the portfolio business date.
+		</div>
 	{:else}
 		<!-- Headline summary: restates the KPI number so the dashboard "N behind" ties to these rows. -->
 		<div
@@ -220,17 +221,16 @@
 		</div>
 
 		<div class="space-y-3" data-testid="past-due-list">
-			{#each behind as lease (lease.leaseId)}
+			{#each behind as lease (lease.tenantAccountId)}
 				{@const days = daysLate(lease)}
 				{@const subtitle = rowSubtitle(lease)}
-				{@const busy = busyLeaseId === lease.leaseId}
-				<Card.Root data-testid="past-due-row" data-lease-id={lease.leaseId}>
+				{@const busy = busyAccountId === lease.tenantAccountId}
+				<Card.Root data-testid="past-due-row" data-tenant-account-id={lease.tenantAccountId}>
 					<Card.Content class="p-4">
 						<button
 							type="button"
-							class="flex w-full items-center gap-3 text-left {lease.oldestPaymentId > 0 ? 'cursor-pointer' : 'cursor-default'}"
-							onclick={() => openOldestPayment(lease)}
-							disabled={lease.oldestPaymentId <= 0}
+							class="flex w-full items-center gap-3 text-left"
+							onclick={() => openTenantAccount(lease)}
 							data-testid="past-due-row-open"
 						>
 							<span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
@@ -239,15 +239,13 @@
 							<span class="min-w-0 flex-1">
 								<span class="block truncate font-semibold text-foreground" data-testid="past-due-row-name">{displayName(lease)}</span>
 								<span class="block text-sm font-medium text-destructive">
-									{money(lease.pastDueAmount)} · {days > 0 ? `${days} ${days === 1 ? 'day' : 'days'} late` : 'Past due'}
+									{money(lease.pastDueAmount)} · {days !== null && days > 0 ? `${days} ${days === 1 ? 'day' : 'days'} late` : 'Past due'}
 								</span>
 								{#if subtitle}
 									<span class="block truncate text-xs text-muted-foreground">{subtitle}</span>
 								{/if}
 							</span>
-							{#if lease.oldestPaymentId > 0}
-								<ChevronRight class="h-5 w-5 shrink-0 text-muted-foreground" />
-							{/if}
+							<ChevronRight class="h-5 w-5 shrink-0 text-muted-foreground" />
 						</button>
 
 						<div class="mt-3 flex gap-2">
@@ -264,7 +262,7 @@
 								{:else}
 									<CheckCircle2 class="h-4 w-4" />
 								{/if}
-								{lease.overduePaymentCount > 1 ? 'Mark all paid' : 'Mark paid'}
+								Record payment
 							</Button>
 							<Button
 								variant="outline"
@@ -281,71 +279,44 @@
 				</Card.Root>
 			{/each}
 		</div>
+
+		{#if hasPrevious || hasNext}
+			<div class="mt-4 flex items-center justify-between gap-3" data-testid="past-due-pagination">
+				<Button
+					variant="outline"
+					disabled={!hasPrevious || pastDueQuery.isFetching}
+					onclick={() => { skip = Math.max(0, skip - PAGE_SIZE); }}
+					data-testid="past-due-previous"
+				>
+					<ChevronLeft class="h-4 w-4" />
+					Previous
+				</Button>
+				<span class="text-xs text-muted-foreground">
+					Showing {(result?.skip ?? 0) + 1}–{(result?.skip ?? 0) + behind.length} of {result?.totalCount ?? 0}
+				</span>
+				<Button
+					variant="outline"
+					disabled={!hasNext || pastDueQuery.isFetching}
+					onclick={() => { skip += PAGE_SIZE; }}
+					data-testid="past-due-next"
+				>
+					Next
+					<ChevronRight class="h-4 w-4" />
+				</Button>
+			</div>
+		{/if}
 	{/if}
 </div>
 
-<!-- Mark Paid: capture how/when the money arrived once, then settle every owed payment on the lease.
-	 Smart defaults (today + last-used method) keep it a quick confirm. -->
-<Dialog.Root
+<PastDuePaymentDialog
 	open={showMarkPaidForm}
-	onOpenChange={(v) => { if (!v) closeMarkPaid(); }}
->
-	<Dialog.Content class="max-w-md" data-testid="past-due-mark-paid-dialog">
-		<Dialog.Header>
-			<Dialog.Title>Mark paid</Dialog.Title>
-			{#if markPaidTarget}
-				<Dialog.Description data-testid="past-due-mark-paid-summary">
-					{displayName(markPaidTarget)} · {money(markPaidTarget.pastDueAmount)}
-					{#if markPaidTarget.overduePaymentCount > 1}
-						· {markPaidTarget.overduePaymentCount} payments
-					{/if}
-				</Dialog.Description>
-			{/if}
-		</Dialog.Header>
-		<div class="space-y-3" data-testid="past-due-mark-paid-form">
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Date received</span>
-				<DatePicker testid="past-due-mark-paid-date-input" bind:value={markPaidForm.paidDate} placeholder="Date received" />
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Method</span>
-				<Select.Root type="single" bind:value={markPaidForm.method}>
-					<Select.Trigger class="w-full" data-testid="past-due-mark-paid-method-input">
-						{markPaidForm.method || 'Select method'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="No method">No method</Select.Item>
-						{#each PAYMENT_METHODS as m}
-							<Select.Item value={m} label={m}>{m}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Reference</span>
-				<Input
-					data-testid="past-due-mark-paid-reference-input"
-					bind:value={markPaidForm.externalReference}
-					placeholder="Check #, confirmation #, etc. (optional)"
-				/>
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
-				<textarea
-					data-testid="past-due-mark-paid-notes-input"
-					bind:value={markPaidForm.notes}
-					rows={2}
-					maxlength={2000}
-					placeholder="Anything to remember about this payment (optional)"
-					class="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-				></textarea>
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button data-testid="past-due-mark-paid-cancel" variant="outline" onclick={closeMarkPaid}>Cancel</Button>
-			<Button data-testid="past-due-mark-paid-confirm" onclick={submitMarkPaid} disabled={markPaidMutation.isPending}>
-				{markPaidMutation.isPending ? 'Saving…' : 'Mark paid'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
+	target={markPaidTarget}
+	openCharges={openCharges}
+	totalOpenAmount={markPaidTarget?.totalOpenBalance ?? 0}
+	businessDate={result?.businessDate}
+	openChargesLoading={openChargesQuery.isLoading}
+	openChargesError={openChargesQuery.isError}
+	pending={markPaidMutation.isPending}
+	onclose={closeMarkPaid}
+	onsubmit={submitMarkPaid}
+/>

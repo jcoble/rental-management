@@ -8,7 +8,11 @@
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { conversationReadKey, markConversationRead } from '$lib/messages/conversation-read-state';
-	import { conversationSelectionUrl, readConversationId } from '$lib/messages/conversation-url-state';
+	import {
+		CONVERSATION_SUBJECT_MAX_LENGTH,
+		conversationSubjectError
+	} from '$lib/messages/conversation-compose';
+	import { defaultReplyChannels } from '$lib/notifications/notification-sections';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
 	import { ApiError, type FairHousingConcern } from '$lib/api/client';
@@ -26,9 +30,12 @@
 
 	// --- Selected thread --------------------------------------------------------
 	let selectedId = $state<number | null>(null);
+	const canonicalConversationId = $derived.by(() => {
+		const routeId = Number(page.params.id);
+		return Number.isInteger(routeId) && routeId > 0 ? routeId : null;
+	});
 	$effect(() => {
-		const queryId = readConversationId(page.url.searchParams);
-		if (selectedId !== queryId) selectedId = queryId;
+		if (selectedId !== canonicalConversationId) selectedId = canonicalConversationId;
 	});
 
 	// --- Conversation list (left pane) -----------------------------------------
@@ -40,6 +47,7 @@
 			skip: (conversationPage - 1) * CONVERSATION_PAGE_SIZE,
 			take: CONVERSATION_PAGE_SIZE,
 		}),
+		enabled: canonicalConversationId === null
 	}));
 
 	$effect(() => {
@@ -96,8 +104,7 @@
 
 	function openConversation(id: number) {
 		selectedId = id;
-		void goto(conversationSelectionUrl(page.url, id), {
-			replaceState: true,
+		void goto(`/messages/${id}`, {
 			noScroll: true,
 			keepFocus: true
 		});
@@ -105,8 +112,7 @@
 
 	function backToList() {
 		selectedId = null;
-		void goto(conversationSelectionUrl(page.url, null), {
-			replaceState: true,
+		void goto('/messages', {
 			noScroll: true,
 			keepFocus: true
 		});
@@ -116,6 +122,7 @@
 	const portfolioQuery = createQuery(() => ({
 		queryKey: ['portfolio', portfolioId],
 		queryFn: () => portfolios.get(portfolioId),
+		enabled: canonicalConversationId === null
 	}));
 
 	// Read Email/SMS defaults out of Portfolio.settings JSON ("messaging" key).
@@ -163,6 +170,17 @@
 	// --- Reply compose (right pane, pinned bottom) -----------------------------
 	let replyBody = $state('');
 	let replyChannels = $state({ portal: true, email: false, sms: false });
+	let deliveryOpen = $state(false);
+
+	// How the last reply in this thread went out. The server records it on each landlord message
+	// as a comma-separated list (ConversationMessage.channels).
+	const lastLandlordChannels = $derived.by(() => {
+		const sent = (conversation?.messages ?? []).filter((m) => m.senderRole === 'Landlord');
+		return (sent.at(-1)?.channels ?? '')
+			.split(',')
+			.map((channel) => channel.trim())
+			.filter(Boolean);
+	});
 
 	// L-15: the reply box must be cleared ONLY on an actual thread switch — never when the
 	// portfolio query resolves/invalidates (e.g. a SignalR Portfolio event), which would
@@ -178,25 +196,40 @@
 		replyBody = '';
 		replyChannels = { portal: true, email: false, sms: false };
 		channelsSeededFor = null;
+		deliveryOpen = false;
 	});
 	$effect(() => {
 		const defaults = messagingDefaults; // re-run when defaults become available/change
-		if (selectedId !== null && channelsSeededFor !== selectedId) {
+		const lastChannels = lastLandlordChannels;
+		if (selectedId !== null && conversation?.id === selectedId && channelsSeededFor !== selectedId) {
 			channelsSeededFor = selectedId;
-			replyChannels = { portal: true, email: defaults.email, sms: defaults.sms };
+			replyChannels = defaultReplyChannels({ hasPhone: defaults.sms, lastChannels });
 		}
+	});
+
+	const deliveryLine = $derived.by(() => {
+		const places: string[] = [];
+		if (replyChannels.portal) places.push('in the tenant app');
+		if (replyChannels.email) places.push('by email');
+		if (replyChannels.sms) places.push('by text');
+		if (places.length === 0) return 'Choose where this reply should go.';
+		if (places.length === 1) return `Delivered ${places[0]}`;
+		return `Delivered ${places.slice(0, -1).join(', ')} and ${places.at(-1)}`;
 	});
 
 	const replyAnyChannel = $derived(replyChannels.portal || replyChannels.email || replyChannels.sms);
 	const canSendReply = $derived(!!replyBody.trim() && replyAnyChannel && selectedId !== null);
+	let replyOperationKey = $state<string | null>(null);
 
 	const replyMutation = createMutation(() => ({
-		mutationFn: () =>
+		mutationFn: (operationKey: string) =>
 			messages.sendMessage(selectedId as number, {
+				operationKey,
 				body: replyBody.trim(),
 				channels: channelsToList(replyChannels),
 			}),
 		onSuccess: (updated) => {
+			replyOperationKey = null;
 			replyBody = '';
 			// Seed the detail cache with the server's fresh thread, then refresh the list.
 			queryClient.setQueryData(['conversation', updated.id], updated);
@@ -208,7 +241,8 @@
 
 	function sendReply() {
 		if (!canSendReply || replyMutation.isPending) return;
-		replyMutation.mutate();
+		replyOperationKey ??= crypto.randomUUID();
+		replyMutation.mutate(replyOperationKey);
 	}
 
 	// Enter sends, Shift+Enter makes a newline.
@@ -227,11 +261,13 @@
 	const composeAnyChannel = $derived(
 		composeChannels.portal || composeChannels.email || composeChannels.sms
 	);
+	const composeSubjectError = $derived(conversationSubjectError(composeForm.subject));
 	const canStart = $derived(
 		!!composeForm.tenantId &&
 			!!composeForm.subject.trim() &&
 			!!composeForm.body.trim() &&
-			composeAnyChannel
+			composeAnyChannel &&
+			composeSubjectError === null
 	);
 
 	function openCompose() {
@@ -243,6 +279,7 @@
 
 	function closeCompose() {
 		composeOpen = false;
+		composeOperationKey = null;
 		composeForm = { ...composeEmpty };
 		tenantSearch = '';
 	}
@@ -252,10 +289,12 @@
 	let fhReviewOpen = $state(false);
 	let fhDetail = $state('');
 	let fhConcerns = $state<FairHousingConcern[]>([]);
+	let composeOperationKey = $state<string | null>(null);
 
 	const startMutation = createMutation(() => ({
 		mutationFn: (acknowledgedFairHousingReview: boolean = false) =>
 			messages.start({
+				operationKey: (composeOperationKey ??= crypto.randomUUID()),
 				tenantId: Number(composeForm.tenantId),
 				subject: composeForm.subject.trim(),
 				body: composeForm.body.trim(),
@@ -263,6 +302,7 @@
 				...(acknowledgedFairHousingReview ? { acknowledgedFairHousingReview: true } : {}),
 			}),
 		onSuccess: (created) => {
+			composeOperationKey = null;
 			fhReviewOpen = false;
 			queryClient.setQueryData(['conversation', created.id], created);
 			refreshConversationList();
@@ -282,6 +322,7 @@
 
 	function startConversation() {
 		if (!canStart || startMutation.isPending) return;
+		composeOperationKey ??= crypto.randomUUID();
 		startMutation.mutate(false);
 	}
 
@@ -324,6 +365,7 @@
 	<div class="flex min-h-0 flex-1 overflow-hidden">
 		<!-- LEFT: thread list ------------------------------------------------ -->
 		<aside
+			class:hidden={canonicalConversationId !== null}
 			class="flex w-full shrink-0 flex-col border-r border-border md:w-80 lg:w-96
 				{selectedId !== null ? 'hidden md:flex' : 'flex'}"
 			data-testid="conversation-list-pane"
@@ -370,6 +412,9 @@
 							{@render conversationRow(c)}
 						{/each}
 					</ul>
+					<p class="border-t border-border px-3 py-2 text-xs text-muted-foreground" data-testid="conversation-list-range">
+						Showing {conversations.length} of {conversationTotalCount} conversation{conversationTotalCount === 1 ? '' : 's'}
+					</p>
 					{#if hasMoreConversations}
 						<div class="border-t border-border/60 p-3">
 							<Button
@@ -408,8 +453,13 @@
 			{:else if conversationQuery.isError}
 				<div class="flex h-full flex-col items-center justify-center p-8 text-center text-destructive" data-testid="conversation-error">
 					<MailWarning class="mb-2 h-8 w-8" />
-					<p class="text-sm">Couldn't load this conversation.</p>
-					<Button variant="outline" size="sm" class="mt-3" onclick={() => conversationQuery.refetch()}>Try again</Button>
+					<p class="text-sm" data-testid="conversation-error-title">Couldn't load this conversation.</p>
+					<div class="mt-3 flex flex-wrap justify-center gap-2" data-testid="conversation-error-actions">
+						<Button variant="outline" size="sm" onclick={() => conversationQuery.refetch()} data-testid="conversation-error-retry">Try again</Button>
+						<Button variant="ghost" size="sm" onclick={backToList} data-testid="conversation-error-back">
+							<ArrowLeft class="h-4 w-4" /> Back to conversations
+						</Button>
+					</div>
 				</div>
 			{:else if conversation}
 				<!-- Thread header -->
@@ -417,7 +467,7 @@
 					<Button
 						variant="ghost"
 						size="icon"
-						class="md:hidden"
+						class={canonicalConversationId === null ? 'md:hidden' : ''}
 						data-testid="conversation-back"
 						onclick={backToList}
 						aria-label="Back to conversations"
@@ -464,25 +514,40 @@
 						</Button>
 					</div>
 
-					<!-- Channel picker for this reply (pre-filled from settings; per-send only) -->
-					<div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-						<span class="text-muted-foreground">Send via:</span>
-						<label class="flex items-center gap-1.5">
-							<Checkbox bind:checked={replyChannels.portal} data-testid="reply-channel-portal" />
-							<span>Portal</span>
-						</label>
-						<label class="flex items-center gap-1.5">
-							<Checkbox bind:checked={replyChannels.email} data-testid="reply-channel-email" />
-							<span>Email</span>
-						</label>
-						<label class="flex items-center gap-1.5">
-							<Checkbox bind:checked={replyChannels.sms} data-testid="reply-channel-sms" />
-							<span>Text</span>
-						</label>
-						{#if !replyAnyChannel}
-							<span class="text-destructive" data-testid="reply-channel-error">Pick at least one.</span>
-						{/if}
+					<!-- How this reply is delivered. The picker stays out of the way until asked for. -->
+					<div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+						<span class="text-muted-foreground" data-testid="reply-delivery-line">{deliveryLine}</span>
+						<button
+							type="button"
+							class="inline-flex min-h-11 items-center font-medium text-primary hover:underline"
+							data-testid="reply-delivery-menu"
+							aria-expanded={deliveryOpen}
+							aria-controls="reply-delivery-options"
+							onclick={() => (deliveryOpen = !deliveryOpen)}
+						>
+							Delivery
+						</button>
 					</div>
+
+					{#if deliveryOpen}
+						<div id="reply-delivery-options" class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+							<label class="flex items-center gap-1.5">
+								<Checkbox bind:checked={replyChannels.portal} data-testid="reply-channel-portal" />
+								<span>Tenant app</span>
+							</label>
+							<label class="flex items-center gap-1.5">
+								<Checkbox bind:checked={replyChannels.email} data-testid="reply-channel-email" />
+								<span>Email</span>
+							</label>
+							<label class="flex items-center gap-1.5">
+								<Checkbox bind:checked={replyChannels.sms} data-testid="reply-channel-sms" />
+								<span>Text</span>
+							</label>
+							{#if !replyAnyChannel}
+								<span class="text-destructive" data-testid="reply-channel-error">Pick at least one.</span>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</section>
@@ -595,7 +660,9 @@
 					data-testid="conversation-compose-subject"
 					bind:value={composeForm.subject}
 					placeholder="What's this about?"
+					maxlength={CONVERSATION_SUBJECT_MAX_LENGTH}
 				/>
+				{#if composeSubjectError}<p class="mt-1 text-xs text-destructive" data-testid="conversation-compose-subject-error">{composeSubjectError}</p>{/if}
 			</div>
 
 			<!-- First message -->

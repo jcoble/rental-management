@@ -44,6 +44,7 @@
 	<Drawer.Content
 		class="w-[min(30rem,calc(100vw-1rem))] sm:max-w-md"
 		data-testid="unit-activity-flyout"
+		data-dismiss-policy="dismissible"
 		aria-label="Recent unit activity"
 	>
 		<Drawer.Header class="border-b px-5 py-4 text-left">

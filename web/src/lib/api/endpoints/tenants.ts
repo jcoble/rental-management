@@ -1,6 +1,7 @@
 import type { Tenant } from '$lib/types';
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
+import { idempotentMutation } from '../idempotency';
 
 export interface TenantListResponse {
 	items: Tenant[];
@@ -11,23 +12,7 @@ export interface TenantListResponse {
 
 export interface TenantListParams extends ListParams {
 	availableForLease?: boolean;
-}
-
-/** Portal-login state for a tenant. */
-export type PortalAccessState = 'none' | 'active' | 'disabled';
-
-export interface PortalAccessResponse {
-	/** The resulting portal-login state after the toggle. */
-	portalAccess: PortalAccessState;
-	/** The email the tenant signs in with, when known. */
-	email?: string;
-}
-
-export interface PortalInviteResponse {
-	/** The email the invite was sent to. */
-	email?: string;
-	/** True when the tenant already had a portal login (this was a resend). */
-	alreadyExisted: boolean;
+	includeLeaseManagementId?: number;
 }
 
 export const tenants = {
@@ -38,14 +23,28 @@ export const tenants = {
 			`/tenants/page${buildListQuery(params, {
 				portfolioId,
 				availableForLease: params?.availableForLease ? 'true' : undefined,
+				includeLeaseManagementId: params?.includeLeaseManagementId,
 			})}`
 		),
 	get: (id: number) => api.get<Tenant>(`/tenants/${id}`),
-	create: (data: Record<string, unknown>) => api.post<Tenant>('/tenants', data),
-	update: (id: number, data: Record<string, unknown>) => api.patch<Tenant>(`/tenants/${id}`, data),
-	delete: (id: number) => api.delete(`/tenants/${id}`),
-	setPortalAccess: (id: number, enabled: boolean) =>
-		api.post<PortalAccessResponse>(`/tenants/${id}/portal-access`, { enabled }),
-	sendPortalInvite: (id: number) =>
-		api.post<PortalInviteResponse>(`/tenants/${id}/portal-invite`),
+	create: (data: Record<string, unknown>) =>
+		idempotentMutation(`tenants:create:${JSON.stringify(data)}`, (key) =>
+			api.post<Tenant>('/tenants', data, { headers: { 'Idempotency-Key': key } })
+		),
+	createGuidedSetupBatch: (reviewedTenants: Record<string, unknown>[]) =>
+		idempotentMutation(`tenants:guided-setup:${JSON.stringify(reviewedTenants)}`, (key) =>
+			api.post<Tenant[]>(
+				'/tenants/guided-setup',
+				{ tenants: reviewedTenants },
+				{ headers: { 'Idempotency-Key': key } }
+			)
+		),
+	update: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`tenants:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<Tenant>(`/tenants/${id}`, data, { headers: { 'Idempotency-Key': key } })
+		),
+	delete: (id: number) =>
+		idempotentMutation(`tenants:delete:${id}`, (key) =>
+			api.delete(`/tenants/${id}`, { headers: { 'Idempotency-Key': key } })
+		),
 };

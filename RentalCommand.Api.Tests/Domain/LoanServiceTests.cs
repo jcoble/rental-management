@@ -1,123 +1,83 @@
+using System.Data.Common;
 using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Portfolio-scoped CRUD for loans: create validates the property in-portfolio (rejects
-/// out-of-portfolio refs — the IDOR guard), update/soft-delete behave, the amortization schedule is
-/// readable and IDOR-guarded, and the soft-delete query filter hides removed loans.
+/// Portfolio-scoped loan reads, SQL-side paging, amortization schedule access, and the contract that
+/// all business mutations flow through scoped receipt-backed commands.
 /// </summary>
-public class LoanServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name2)]
+public class LoanServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
-    private readonly LoanService _sut;
+    private readonly List<string> _commands = [];
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private LoanService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public LoanServiceTests()
+    public LoanServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _sut = new LoanService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        _fixture = fixture;
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(LoanServiceTests));
+        _sut = new LoanService(_ctx.Db, TimeProvider.System, Mock.Of<IWriteExecutor>());
+    }
+
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
-    public async Task CreateAsync_PersistsLoan_DefaultsBalanceToOriginal()
+    public void MutationsExposeOnlyScopedReceiptBackedOverloads()
+    {
+        var mutationMethods = typeof(ILoanService).GetMethods()
+            .Where(method => method.Name is "CreateAsync" or "UpdateAsync" or "DeleteAsync")
+            .ToArray();
+
+        mutationMethods.Should().HaveCount(3);
+        mutationMethods.Should().OnlyContain(method =>
+            method.GetParameters().First().ParameterType == typeof(RentalCommand.Core.Authorization.WorkspaceReadScope) &&
+            method.GetParameters().Any(parameter => parameter.Name == "idempotencyKey"));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_FiltersByStartDate_AndReturnsPagedMetadata()
     {
         var property = SeedProperty();
+        SeedLoan(property.Id, lender: "January Bank", startDate: new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc));
+        SeedLoan(property.Id, lender: "February Bank", startDate: new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc));
+        SeedLoan(property.Id, lender: "March Bank", startDate: new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc));
 
-        var result = await _sut.CreateAsync(PortfolioId, new CreateLoanRequest
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var page = await _sut.ListPageAsync(_scope, property.Id, new ListQuery
         {
-            PropertyId = property.Id,
-            Lender = "Acme Bank",
-            OriginalAmount = 200_000m,
-            AnnualInterestRatePct = 6m,
-            TermMonths = 360,
-            StartDate = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            MonthlyPrincipalInterest = 1199.10m,
-            MonthlyEscrow = 350m,
-            EscrowCoversTaxes = true,
+            From = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            To = new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc),
+            Sort = "-startDate",
+            Skip = 0,
+            Take = 1,
         });
 
-        result.Should().NotBeNull();
-        result!.Lender.Should().Be("Acme Bank");
-        result.CurrentBalance.Should().Be(200_000m);  // defaulted from original
-        result.PropertyName.Should().Be(property.Name);
-        result.Status.Should().Be(LoanStatus.Active);
-        _ctx.Db.Loans.Should().HaveCount(1);
-    }
-
-    [Fact]
-    public async Task CreateAsync_RejectsPropertyOutsidePortfolio()
-    {
-        SeedPortfolio(999);
-        var foreign = SeedProperty(portfolioId: 999);
-
-        var result = await _sut.CreateAsync(PortfolioId, new CreateLoanRequest
-        {
-            PropertyId = foreign.Id,
-            Lender = "Should not link",
-            OriginalAmount = 100_000m,
-            TermMonths = 360,
-            StartDate = DateTime.UtcNow,
-            MonthlyPrincipalInterest = 600m,
-        });
-
-        result.Should().BeNull();
-        _ctx.Db.Loans.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task UpdateAsync_ChangesFields()
-    {
-        var property = SeedProperty();
-        var loan = SeedLoan(property.Id);
-
-        var result = await _sut.UpdateAsync(PortfolioId, loan.Id, new UpdateLoanRequest
-        {
-            Lender = "Renamed Lender",
-            Status = LoanStatus.Closed,
-            MonthlyEscrow = 400m,
-        });
-
-        result.Should().NotBeNull();
-        result!.Lender.Should().Be("Renamed Lender");
-        result.Status.Should().Be(LoanStatus.Closed);
-        result.MonthlyEscrow.Should().Be(400m);
-    }
-
-    [Fact]
-    public async Task GetAsync_AndUpdate_RejectCrossPortfolio()
-    {
-        var property = SeedProperty();
-        var loan = SeedLoan(property.Id);
-
-        // A different portfolio cannot read or mutate this loan.
-        (await _sut.GetAsync(portfolioId: 2, loan.Id)).Should().BeNull();
-        (await _sut.UpdateAsync(portfolioId: 2, loan.Id, new UpdateLoanRequest { Lender = "hax" })).Should().BeNull();
-        (await _sut.DeleteAsync(portfolioId: 2, loan.Id)).Should().BeFalse();
-        (await _sut.GetPaymentsAsync(portfolioId: 2, loan.Id)).Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DeleteAsync_SoftDeletes_AndHidesFromReads()
-    {
-        var property = SeedProperty();
-        var loan = SeedLoan(property.Id);
-
-        (await _sut.DeleteAsync(PortfolioId, loan.Id)).Should().BeTrue();
-
-        (await _sut.GetAsync(PortfolioId, loan.Id)).Should().BeNull();
-        (await _sut.ListAsync(PortfolioId, propertyId: null, new ListQuery())).Should().BeEmpty();
-        _ctx.Db.Loans.IgnoreQueryFilters().Should().HaveCount(1); // soft, not hard
+        page.TotalCount.Should().Be(2);
+        page.Skip.Should().Be(0);
+        page.Take.Should().Be(1);
+        page.Items.Should().ContainSingle();
+        page.Items[0].Lender.Should().Be("March Bank");
+        page.Items[0].PropertyName.Should().Be(property.Name);
     }
 
     [Fact]
@@ -131,7 +91,8 @@ public class LoanServiceTests : IDisposable
             MakePayment(loan, "2024-01", 199_800.90m));
         _ctx.Db.SaveChanges();
 
-        var schedule = await _sut.GetPaymentsAsync(PortfolioId, loan.Id);
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var schedule = await _sut.GetPaymentsAsync(_scope, loan.Id);
 
         schedule.Should().NotBeNull();
         schedule!.Should().HaveCount(2);
@@ -139,23 +100,52 @@ public class LoanServiceTests : IDisposable
         schedule[1].PeriodKey.Should().Be("2024-02");
     }
 
+    [Fact]
+    public async Task GetPaymentsAsync_AppliesStatusDueDateSortAndPagingServerSide()
+    {
+        var property = SeedProperty();
+        var loan = SeedLoan(property.Id);
+
+        _ctx.Db.LoanPayments.AddRange(
+            MakePayment(loan, "2024-01", 199_800.90m,
+                dueDate: new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                status: LoanPaymentStatus.Paid),
+            MakePayment(loan, "2024-02", 199_600.80m,
+                dueDate: new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc)),
+            MakePayment(loan, "2024-03", 199_400.70m,
+                dueDate: new DateTime(2024, 3, 1, 0, 0, 0, DateTimeKind.Utc)),
+            MakePayment(loan, "2024-04", 199_200.60m,
+                dueDate: new DateTime(2024, 4, 1, 0, 0, 0, DateTimeKind.Utc)));
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var schedule = await _sut.GetPaymentsAsync(_scope, loan.Id, new LoanPaymentQuery
+        {
+            Status = LoanPaymentStatus.Scheduled,
+            Sort = "dueDate",
+            Skip = 1,
+            Take = 1,
+        });
+
+        schedule.Should().NotBeNull();
+        schedule!.Should().ContainSingle();
+        schedule[0].PeriodKey.Should().Be("2024-03");
+        _commands.Should().HaveCount(2,
+            "the loan read uses one scope check and one effective schedule reader");
+        var scheduleSql = _commands.Single(sql =>
+            sql.Contains("\"LoanPaymentCorrections\"", StringComparison.OrdinalIgnoreCase));
+        scheduleSql.Should()
+            .Contain("\"LoanPayments\"")
+            .And.Contain("\"LoanPaymentCorrections\"")
+            .And.Contain("ORDER BY")
+            .And.Contain("LIMIT")
+            .And.Contain("OFFSET");
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
-
-    private void SeedPortfolio(int id)
-    {
-        var now = DateTime.UtcNow;
-        _ctx.Db.Portfolios.Add(new Portfolio
-        {
-            Id = id,
-            Name = $"Portfolio {id}",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _ctx.Db.SaveChanges();
-    }
 
     private Property SeedProperty(int portfolioId = PortfolioId)
     {
@@ -176,19 +166,23 @@ public class LoanServiceTests : IDisposable
         return property;
     }
 
-    private Loan SeedLoan(int propertyId)
+    private Loan SeedLoan(
+        int propertyId,
+        string lender = "Acme Bank",
+        DateTime? startDate = null,
+        decimal currentBalance = 200_000m)
     {
         var now = DateTime.UtcNow;
         var loan = new Loan
         {
             PortfolioId = PortfolioId,
             PropertyId = propertyId,
-            Lender = "Acme Bank",
+            Lender = lender,
             OriginalAmount = 200_000m,
-            CurrentBalance = 200_000m,
+            CurrentBalance = currentBalance,
             AnnualInterestRatePct = 6m,
             TermMonths = 360,
-            StartDate = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            StartDate = startDate ?? new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             DayOfMonthDue = 1,
             MonthlyPrincipalInterest = 1199.10m,
             Status = LoanStatus.Active,
@@ -200,18 +194,45 @@ public class LoanServiceTests : IDisposable
         return loan;
     }
 
-    private static LoanPayment MakePayment(Loan loan, string periodKey, decimal balanceAfter) => new()
+    private static LoanPayment MakePayment(
+        Loan loan,
+        string periodKey,
+        decimal balanceAfter,
+        DateTime? dueDate = null,
+        LoanPaymentStatus status = LoanPaymentStatus.Scheduled) => new()
     {
         PortfolioId = loan.PortfolioId,
         LoanId = loan.Id,
         PeriodKey = periodKey,
-        DueDate = DateTime.UtcNow,
+        DueDate = dueDate ?? DateTime.UtcNow,
         InterestAmount = 1000m,
         PrincipalAmount = 199.10m,
         EscrowAmount = 0m,
         TotalAmount = 1199.10m,
         BalanceAfter = balanceAfter,
-        Status = LoanPaymentStatus.Scheduled,
+        Status = status,
         CreatedAt = DateTime.UtcNow,
     };
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
 }

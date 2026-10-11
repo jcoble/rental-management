@@ -121,21 +121,27 @@ public sealed class YearEndPacketPdfGenerator : IYearEndPacketPdfGenerator
         col.Item().PaddingBottom(2).Text(
             "IRS Schedule E income and deductible-expense totals across the portfolio for the tax year.")
             .FontSize(8).Italic().FontColor(MutedColor);
+        col.Item().PaddingBottom(2).Text("Cash basis — paid expenses only (cash expenses).")
+            .FontSize(8).Italic().FontColor(MutedColor);
+        col.Item().PaddingBottom(2).Text("Depreciation is non-cash and shown separately.")
+            .FontSize(8).Italic().FontColor(MutedColor);
 
-        if (report.Properties.Count == 0)
+        if (report.UnallocatedActivity.RequiresAllocation)
+        {
+            col.Item().PaddingTop(6).Border(1).BorderColor(Colors.Orange.Lighten1).Padding(8).Text(
+                $"Needs allocation before filing: {report.UnallocatedActivity.IncomeEntryCount} income entries " +
+                $"({report.UnallocatedActivity.RentalIncome:C}) and {report.UnallocatedActivity.ExpenseCount} expenses " +
+                $"({report.UnallocatedActivity.TotalExpenses:C}) are not assigned to a property. " +
+                "They are excluded from the property Schedule E lines below.")
+                .FontSize(8).FontColor(Colors.Orange.Darken3);
+        }
+
+        if (report.Properties.Count == 0 && !report.UnallocatedActivity.RequiresAllocation)
         {
             col.Item().PaddingTop(6).Text("No rental income or deductible expenses recorded for this year.")
                 .Italic().FontColor(MutedColor);
             return;
         }
-
-        // Roll category totals across all properties so the summary reads like the IRS form's lines.
-        var categoryTotals = report.Properties
-            .SelectMany(p => p.ExpensesByCategory)
-            .GroupBy(c => c.Category)
-            .Select(g => new ScheduleECategoryAmount(g.Key, g.Sum(c => c.Amount)))
-            .OrderByDescending(c => c.Amount)
-            .ToList();
 
         col.Item().PaddingTop(6).Table(table =>
         {
@@ -153,14 +159,22 @@ public sealed class YearEndPacketPdfGenerator : IYearEndPacketPdfGenerator
 
             MoneyRow(table, "Rental income received", report.TotalRentalIncome);
 
-            foreach (var cat in categoryTotals)
+            foreach (var cat in report.ExpensesByCategory)
             {
-                MoneyRow(table, $"  {SplitCamel(cat.Category)}", -cat.Amount);
+                MoneyRow(table, $"  {ExpenseLabel(cat.Category)}", -cat.Amount);
             }
 
             MoneyRow(table, "Total expenses", -report.TotalExpenses, bold: true);
             MoneyRow(table, "Net income (loss)", report.NetIncome, bold: true);
         });
+
+        if (report.UnallocatedActivity.RequiresAllocation)
+        {
+            col.Item().PaddingTop(5).Text(
+                $"Reconciled activity including unallocated: income {report.ReconciledTotalRentalIncome:C}; " +
+                $"expenses {report.ReconciledTotalExpenses:C}; net {report.ReconciledNetIncome:C}.")
+                .FontSize(8).FontColor(MutedColor);
+        }
     }
 
     // ── Section 2: Per-property P&L ────────────────────────────────────────────────────────────────
@@ -168,6 +182,10 @@ public sealed class YearEndPacketPdfGenerator : IYearEndPacketPdfGenerator
     private static void ComposePropertyPnL(ColumnDescriptor col, IReadOnlyList<YearEndPropertyPnL> properties)
     {
         SectionTitle(col, "Per-Property Profit & Loss");
+        col.Item().PaddingBottom(2).Text("Cash basis — paid expenses only (cash expenses).")
+            .FontSize(8).Italic().FontColor(MutedColor);
+        col.Item().PaddingBottom(2).Text("Depreciation is non-cash and shown separately.")
+            .FontSize(8).Italic().FontColor(MutedColor);
 
         if (properties.Count == 0)
         {
@@ -198,7 +216,7 @@ public sealed class YearEndPacketPdfGenerator : IYearEndPacketPdfGenerator
 
                 foreach (var cat in prop.ExpensesByCategory)
                 {
-                    MoneyRow(table, $"  {SplitCamel(cat.Category)}", -cat.Amount);
+                    MoneyRow(table, $"  {ExpenseLabel(cat.Category)}", -cat.Amount);
                 }
 
                 MoneyRow(table, "Total expenses", -prop.TotalExpenses);
@@ -346,6 +364,11 @@ public sealed class YearEndPacketPdfGenerator : IYearEndPacketPdfGenerator
     /// <summary>Formats money: negatives parenthesized, accountant-style.</summary>
     private static string Money(decimal value) =>
         value.ToString("$#,0.00;($#,0.00);$0.00");
+
+    private static string ExpenseLabel(string category) =>
+        string.Equals(category, "Depreciation", StringComparison.Ordinal)
+            ? "Depreciation (non-cash)"
+            : SplitCamel(category);
 
     private static string SplitCamel(string value)
     {

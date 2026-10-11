@@ -37,6 +37,17 @@ void main() {
     expect(gradle, contains('enabled = false'));
   });
 
+  test(
+    'Android debug builds may reach the local HTTP API through adb reverse',
+    () {
+      final manifest = File(
+        'android/app/src/debug/AndroidManifest.xml',
+      ).readAsStringSync();
+
+      expect(manifest, contains('android:usesCleartextTraffic="true"'));
+    },
+  );
+
   test('voice deep-link helper can target the dev package', () {
     final script = File('scripts/voice-test.sh').readAsStringSync();
 

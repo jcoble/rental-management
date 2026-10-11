@@ -3,48 +3,25 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import 'leases_repository.dart';
-
-const _monthNames = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-];
-
-String _fmtDate(DateTime d) {
-  if (d.year <= 1) return '';
-  return '${_monthNames[d.month]} ${d.day}, ${d.year}';
-}
-
-String _money(double value) {
-  final negative = value < 0;
-  final rounded = value.abs().toStringAsFixed(2);
-  final parts = rounded.split('.');
-  final whole = parts[0];
-  final buf = StringBuffer();
-  final start = whole.length % 3;
-  if (start > 0) buf.write(whole.substring(0, start));
-  for (var i = start; i < whole.length; i += 3) {
-    if (i > 0) buf.write(',');
-    buf.write(whole.substring(i, i + 3));
-  }
-  return '${negative ? '-' : ''}\$$buf.${parts[1]}';
-}
+import '../../core/presentation/formatting.dart';
 
 /// A self-contained, scrollable "account history" for one lease: the running
 /// totals card followed by every charge/payment with its plain-English "why".
 ///
 /// Used both on the tenant portal (transparency) and the landlord lease detail.
 class LeaseLedgerView extends ConsumerWidget {
-  const LeaseLedgerView({super.key, required this.leaseId});
+  const LeaseLedgerView({super.key, required this.leaseManagementId});
 
-  final int leaseId;
+  final int leaseManagementId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final ledgerAsync = ref.watch(leaseLedgerProvider(leaseId));
+    final ledgerAsync = ref.watch(leaseLedgerProvider(leaseManagementId));
 
     return RefreshIndicator(
-      onRefresh: () async => ref.invalidate(leaseLedgerProvider(leaseId)),
+      onRefresh: () async =>
+          ref.invalidate(leaseLedgerProvider(leaseManagementId)),
       child: ledgerAsync.when(
         loading: () => ListView(
           children: const [
@@ -78,7 +55,8 @@ class LeaseLedgerView extends ConsumerWidget {
             const SizedBox(height: 16),
             Center(
               child: FilledButton.tonal(
-                onPressed: () => ref.invalidate(leaseLedgerProvider(leaseId)),
+                onPressed: () =>
+                    ref.invalidate(leaseLedgerProvider(leaseManagementId)),
                 child: const Text('Retry'),
               ),
             ),
@@ -131,7 +109,7 @@ class LeaseLedgerView extends ConsumerWidget {
 class _BalanceCard extends StatelessWidget {
   const _BalanceCard({required this.ledger});
 
-  final LeaseLedger ledger;
+  final LeaseManagementLedger ledger;
 
   @override
   Widget build(BuildContext context) {
@@ -167,7 +145,7 @@ class _BalanceCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              owes || credit ? _money(ledger.balance.abs()) : _money(0),
+              owes || credit ? moneyFmt(ledger.balance.abs()) : moneyFmt(0),
               style: theme.textTheme.headlineMedium?.copyWith(
                 fontFeatures: const [FontFeature.tabularFigures()],
                 fontWeight: FontWeight.w700,
@@ -182,13 +160,13 @@ class _BalanceCard extends StatelessWidget {
                 Expanded(
                   child: _Total(
                     label: 'Charged',
-                    value: _money(ledger.totalCharged),
+                    value: moneyFmt(ledger.totalCharged),
                   ),
                 ),
                 Expanded(
                   child: _Total(
                     label: 'Paid',
-                    value: _money(ledger.totalPaid),
+                    value: moneyFmt(ledger.totalPaid),
                   ),
                 ),
               ],
@@ -244,7 +222,7 @@ class _LedgerEntryCard extends StatelessWidget {
     final isPayment = entry.type.toLowerCase() == 'payment';
     final amountColor = isPayment ? Colors.green.shade700 : cs.onSurface;
     final signedAmount =
-        '${isPayment ? '-' : ''}${_money(entry.amount.abs())}';
+        '${isPayment ? '-' : ''}${moneyFmt(entry.amount.abs())}';
 
     return Card(
       child: Padding(
@@ -277,16 +255,41 @@ class _LedgerEntryCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        entry.description.isEmpty ? entry.type : entry.description,
+                        entry.description.isEmpty
+                            ? entry.type
+                            : entry.description,
                         style: theme.textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      if (_fmtDate(entry.date).isNotEmpty) ...[
+                      if (entry.isProrated) ...[
+                        const SizedBox(height: 4),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: cs.primaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              'Prorated',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: cs.onPrimaryContainer,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (dateFmt(entry.date).isNotEmpty) ...[
                         const SizedBox(height: 2),
                         Text(
                           [
-                            _fmtDate(entry.date),
+                            dateFmt(entry.date),
                             if (entry.status.isNotEmpty) entry.status,
                           ].join(' · '),
                           style: theme.textTheme.bodySmall?.copyWith(

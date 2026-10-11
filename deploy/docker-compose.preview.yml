@@ -1,0 +1,167 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: preview
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rentalcommand
+    volumes:
+      # The host path lives outside the disposable stack source/state directory.
+      # Container replacement, stop, and TTL cleanup therefore preserve preview data.
+      - ${PREVIEW_POSTGRES_DATA}:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U preview -d rentalcommand"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 1g
+    # Docker Desktop's local preview VM is provisioned with two CPUs.
+    cpus: 2.0
+
+  migrate:
+    image: ${API_IMAGE}
+    restart: "no"
+    command: ["--migrate-only"]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__MigratorConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_api;Password=${API_DB_PASSWORD:?API_DB_PASSWORD is required}
+      ConnectionStrings__EngineConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:?ENGINE_DB_PASSWORD is required}
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [internal]
+
+  api:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      Seed__DemoData: "true"
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_api;Password=${API_DB_PASSWORD:?API_DB_PASSWORD is required}
+      Jwt__SecretKey: ${JWT_SECRET_KEY}
+      Jwt__Issuer: RentalCommandPreview
+      Jwt__Audience: RentalCommandWeb
+      Cors__AllowedOrigins__0: ${WEB_ORIGIN}
+      App__WebBaseUrl: ${WEB_ORIGIN}
+      Simulation__Enabled: "true"
+      Upload__BasePath: /var/lib/rentalcommand/uploads
+      DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
+      Assistant__Provider: ${ASSISTANT_PROVIDER:-openai}
+      Assistant__ModelId: ${ASSISTANT_MODEL_ID:-gpt-4o}
+      Assistant__ApiKey: ${ASSISTANT_API_KEY:-}
+      GooglePlaces__ApiKey: ${GOOGLE_PLACES_API_KEY:-}
+      Stripe__SecretKey: ""
+      Authentication__Google__ClientId: ${GOOGLE_CLIENT_ID:-}
+      Authentication__Google__ClientSecret: ${GOOGLE_CLIENT_SECRET:-}
+      PlatformAdmin__Emails__0: ${PLATFORM_ADMIN_EMAILS:-}
+      # The mode-600 preview env pins the callbacks to the preview origin:
+      # Plaid /plaid/auth; QuickBooks /api/v1/integrations/accounting/callback.
+      Plaid__Environment: ${PLAID_ENVIRONMENT:-sandbox}
+      Plaid__ClientId: ${PLAID_CLIENT_ID:-}
+      Plaid__Secret: ${PLAID_SECRET:-}
+      Plaid__RedirectUri: ${PLAID_REDIRECT_URI:-}
+      Plaid__AndroidPackageName: ${PLAID_ANDROID_PACKAGE_NAME:-com.rentalcommand.rental_command.dev}
+      QuickBooks__ClientId: ${QUICKBOOKS_CLIENT_ID:-}
+      QuickBooks__ClientSecret: ${QUICKBOOKS_CLIENT_SECRET:-}
+      QuickBooks__Environment: ${QUICKBOOKS_ENVIRONMENT:-sandbox}
+      QuickBooks__RedirectUri: ${QUICKBOOKS_REDIRECT_URI:-}
+      Notifications__NotifyTenants: "false"
+      Notifications__PublicWebhookBaseUrl: ${WEB_ORIGIN}
+      Notifications__Twilio__AccountSid: ${TWILIO_ACCOUNT_SID:-}
+      Notifications__Twilio__AuthToken: ${TWILIO_AUTH_TOKEN:-}
+      Notifications__Twilio__FromNumber: ${TWILIO_FROM_NUMBER:-}
+    volumes:
+      - uploads:/var/lib/rentalcommand/uploads
+      - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 1g
+    cpus: 2.0
+
+  engine:
+    image: ${ENGINE_IMAGE}
+    restart: unless-stopped
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:?ENGINE_DB_PASSWORD is required}
+      Simulation__Enabled: "true"
+      Upload__BasePath: /var/lib/rentalcommand/uploads
+      DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
+      Assistant__Provider: ${ASSISTANT_PROVIDER:-openai}
+      Assistant__ModelId: ${ASSISTANT_MODEL_ID:-gpt-4o}
+      Assistant__ApiKey: ${ASSISTANT_API_KEY:-}
+      Stripe__SecretKey: ""
+      QuickBooks__ClientId: ${QUICKBOOKS_CLIENT_ID:-}
+      QuickBooks__ClientSecret: ${QUICKBOOKS_CLIENT_SECRET:-}
+      QuickBooks__Environment: ${QUICKBOOKS_ENVIRONMENT:-sandbox}
+      QuickBooks__RedirectUri: ${QUICKBOOKS_REDIRECT_URI:-}
+      Notifications__NotifyTenants: "false"
+      Notifications__EnableRentCharges: "false"
+      Notifications__EnableLateFees: "false"
+      Notifications__EnableRecurringMaintenance: "false"
+      Notifications__Email__Transport: ${EMAIL_TRANSPORT:-SendGrid}
+      Notifications__SendGrid__ApiKey: ${SENDGRID_API_KEY:-}
+      Notifications__SendGrid__FromEmail: ${SENDGRID_FROM_EMAIL:-}
+      Notifications__SendGrid__FromName: ${SENDGRID_FROM_NAME:-Rental Command}
+      Notifications__Twilio__AccountSid: ${TWILIO_ACCOUNT_SID:-}
+      Notifications__Twilio__AuthToken: ${TWILIO_AUTH_TOKEN:-}
+      Notifications__Twilio__FromNumber: ${TWILIO_FROM_NUMBER:-}
+    volumes:
+      - uploads:/var/lib/rentalcommand/uploads
+      - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [edge, internal]
+    mem_limit: 1g
+    cpus: 1.0
+
+  web:
+    image: ${WEB_IMAGE}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      ORIGIN: ${WEB_ORIGIN}
+      API_URL: http://api:8080
+      PUBLIC_SIMULATION_ENABLED: "true"
+      PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-}
+    depends_on: [api]
+    networks: [edge]
+    mem_limit: 512m
+    cpus: 0.75
+
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      # Bind to a loopback-only address; the preview is never public. The local
+      # stack (scripts/local/preview-stack-local.sh) sets this to 127.0.0.1.
+      - "${PREVIEW_BIND_IP}:${PREVIEW_WEB_PORT}:8080"
+    volumes:
+      - ./preview-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_started }
+    networks: [edge]
+    mem_limit: 128m
+    cpus: 0.25
+
+networks:
+  edge:
+  internal:
+    internal: true
+
+volumes:
+  uploads:
+  dataprotection_keys:

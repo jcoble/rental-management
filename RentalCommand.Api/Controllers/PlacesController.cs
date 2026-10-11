@@ -22,6 +22,7 @@ namespace RentalCommand.Api.Controllers;
 [Route("api/v1/places")]
 public sealed class PlacesController : ControllerBase
 {
+    private const int MaxSessionTokenLength = 128;
     private readonly GooglePlacesService _places;
 
     public PlacesController(GooglePlacesService places) => _places = places;
@@ -31,6 +32,8 @@ public sealed class PlacesController : ControllerBase
     public async Task<IActionResult> Autocomplete(
         [FromQuery] string? q, [FromQuery] string? session, CancellationToken ct)
     {
+        if (ValidateSessionToken(session) is { } invalid)
+            return invalid;
         if (TooManyRequests(session) is { } limited)
             return limited;
 
@@ -46,6 +49,8 @@ public sealed class PlacesController : ControllerBase
     public async Task<IActionResult> Details(
         [FromQuery] string? placeId, [FromQuery] string? session, CancellationToken ct)
     {
+        if (ValidateSessionToken(session) is { } invalid)
+            return invalid;
         if (TooManyRequests(session) is { } limited)
             return limited;
 
@@ -62,19 +67,36 @@ public sealed class PlacesController : ControllerBase
     }
 
     /// <summary>
-    /// Returns a 429 result if the caller is over the rate limit, otherwise <c>null</c>. Keyed by the
-    /// caller's remote IP plus the autocomplete session token when present, so a single page's typing
-    /// session (which fires many keystroke requests) and abusive clients are both bounded, while distinct
-    /// legitimate users on different IPs are independent.
+    /// Returns a 429 result if the caller is over either the IP-wide cost ceiling or the narrower
+    /// autocomplete-session budget. The IP bucket is mandatory: a client-controlled session token must
+    /// never be able to mint a fresh billed-request budget.
     /// </summary>
     private IActionResult? TooManyRequests(string? session)
     {
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        var key = string.IsNullOrWhiteSpace(session) ? ip : $"{ip}|{session}";
+        if (!PlacesRateLimiter.Allow($"ip:{ip}", PlacesRateLimiter.IpLimit, out var retryAfter))
+            return RateLimited(retryAfter);
 
-        if (PlacesRateLimiter.Allow(key, out var retryAfter))
+        if (!string.IsNullOrWhiteSpace(session) &&
+            !PlacesRateLimiter.Allow(
+                $"session:{ip}:{session}",
+                PlacesRateLimiter.SessionLimit,
+                out retryAfter))
+            return RateLimited(retryAfter);
+
+        return null;
+    }
+
+    private IActionResult? ValidateSessionToken(string? session)
+    {
+        if (session is null || session.Length <= MaxSessionTokenLength)
             return null;
 
+        return BadRequest(new { error = $"session cannot exceed {MaxSessionTokenLength} characters." });
+    }
+
+    private IActionResult RateLimited(TimeSpan retryAfter)
+    {
         Response.Headers.RetryAfter = ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString();
         return StatusCode(
             StatusCodes.Status429TooManyRequests,
@@ -90,10 +112,11 @@ public sealed class PlacesController : ControllerBase
 /// </summary>
 internal static class PlacesRateLimiter
 {
-    // Allow up to <c>Limit</c> requests per <c>Window</c> for a given key. Sized for interactive
-    // address autocomplete (a fast typist fires a handful of keystroke requests per second, debounced
-    // client-side) while cutting off scripted abuse of the billed upstream.
-    private static readonly int Limit = 30;
+    // A page session gets the normal interactive budget. The mandatory IP ceiling is deliberately
+    // higher so normal parallel forms are unaffected, while token rotation still cannot make the
+    // upstream billing exposure unbounded.
+    internal const int SessionLimit = 30;
+    internal const int IpLimit = 60;
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(10);
 
     private static readonly ConcurrentDictionary<string, Counter> Counters = new();
@@ -109,7 +132,7 @@ internal static class PlacesRateLimiter
     /// Records a hit for <paramref name="key"/> and returns true if it is within the allowed budget. When
     /// false, <paramref name="retryAfter"/> is the time until the current window resets.
     /// </summary>
-    public static bool Allow(string key, out TimeSpan retryAfter)
+    public static bool Allow(string key, int limit, out TimeSpan retryAfter)
     {
         var now = DateTime.UtcNow;
         MaybeSweep(now);
@@ -124,7 +147,7 @@ internal static class PlacesRateLimiter
             }
 
             counter.Count++;
-            if (counter.Count <= Limit)
+            if (counter.Count <= limit)
             {
                 retryAfter = TimeSpan.Zero;
                 return true;
@@ -140,7 +163,11 @@ internal static class PlacesRateLimiter
     }
 
     // Test seam: reset all state so rate-limit tests don't bleed into one another.
-    internal static void Reset() => Counters.Clear();
+    internal static void Reset()
+    {
+        Counters.Clear();
+        _lastSweep = DateTime.UtcNow;
+    }
 
     // Opportunistically drop counters whose window has long elapsed so the map can't grow unbounded
     // from a flood of distinct IP/session keys. Cheap: at most once per window.

@@ -2,19 +2,21 @@
  * Server hooks for authentication.
  *
  * On every request we validate the app-namespaced access-token cookie against the API
- * (GET /auth/me), refreshing on 401, and populate event.locals.user /
- * event.locals.accessToken for downstream load functions and guards.
+ * (GET /auth/access), refreshing on 401, and populate event.locals.user,
+ * event.locals.access, and event.locals.accessToken for downstream load functions and guards.
  *
  * Mirrors EdiPlatform's hooks.server.ts, adapted to RentalCommand's int user
  * keys and rental routes (no Sentry dependency here).
  */
 
-import type { Handle, HandleFetch, RequestEvent } from '@sveltejs/kit';
+import type { Handle, HandleFetch } from '@sveltejs/kit';
 import type { Cookies } from '@sveltejs/kit';
-import type { User } from '$lib/types/user';
+import { env } from '$env/dynamic/public';
+import type { AccessEnvelope, User } from '$lib/types/user';
+import { userFromAccessEnvelope } from '$lib/types/user';
 import { serverRefreshToken, applyRefreshCookies } from '$lib/server/token-refresh';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
-import { userFromAccessToken } from '$lib/server/jwt-claims';
+import { SIM_CLOCK_SHIM_PLACEHOLDER, simClockShimScript } from '$lib/dev/sim-clock-shim';
 import {
 	deleteAccessCookies,
 	getAccessToken,
@@ -38,18 +40,20 @@ async function fetchWithAuthTimeout(input: string, init: RequestInit): Promise<R
 export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;
 	event.locals.accessToken = null;
+	event.locals.access = null;
 
 	const accessToken = getAccessToken(event.cookies);
 
 	if (accessToken) {
 		try {
-			const response = await fetchWithAuthTimeout(`${SERVER_API_BASE_URL}/auth/me`, {
+			const response = await fetchWithAuthTimeout(`${SERVER_API_BASE_URL}/auth/access`, {
 				headers: { Authorization: `Bearer ${accessToken}` }
 			});
 
 			if (response.ok) {
-				const user: User = await response.json();
-				event.locals.user = user;
+				const access: AccessEnvelope = await response.json();
+				event.locals.access = access;
+				event.locals.user = userFromAccessEnvelope(access);
 				event.locals.accessToken = accessToken;
 				const storedExpiration = getAccessTokenExpiration(event.cookies);
 				if (storedExpiration) {
@@ -60,23 +64,21 @@ export const handle: Handle = async ({ event, resolve }) => {
 				const refreshed = await tryRefreshToken(event.cookies);
 				if (refreshed) {
 					event.locals.user = refreshed.user;
+					event.locals.access = refreshed.access;
 					event.locals.accessToken = refreshed.accessToken;
 					event.locals.accessTokenExpiration = refreshed.accessTokenExpiration;
 				} else {
 					deleteAccessCookies(event.cookies);
 				}
 			} else {
-				// Transient server error (429/500/...) — NOT a real 401, so keep the session alive
-				// rather than bouncing every logged-in user to /login during a brief API blip.
+				// The canonical bearer contains only authority coordinates, never display or workspace
+				// facts. Keep the cookies for a later retry but fail this request closed.
 				console.warn(
-					`Auth /me returned ${response.status} — preserving existing session for this request`
+					`Auth /access returned ${response.status} — canonical session could not be validated`
 				);
-				preserveSessionFromToken(event, accessToken);
 			}
 		} catch (error) {
-			// Network/cert/timeout error reaching the API — keep the session alive through the blip.
-			console.warn('Auth validation error (preserving session):', error);
-			preserveSessionFromToken(event, accessToken);
+			console.warn('Auth validation error; canonical session could not be validated:', error);
 		}
 	} else {
 		// No access token — fall back to the refresh token if present.
@@ -85,35 +87,23 @@ export const handle: Handle = async ({ event, resolve }) => {
 			const refreshed = await tryRefreshToken(event.cookies);
 			if (refreshed) {
 				event.locals.user = refreshed.user;
+				event.locals.access = refreshed.access;
 				event.locals.accessToken = refreshed.accessToken;
 				event.locals.accessTokenExpiration = refreshed.accessTokenExpiration;
 			}
 		}
 	}
 
-	return resolve(event);
+	// Dev-only: inline the master simulation-clock Date shim into <head> (replacing the app.html
+	// placeholder) so Date is patched before app boot. Gated on PUBLIC_SIMULATION_ENABLED via
+	// $env/dynamic/public (M2 — dynamic, so an unset var never breaks the build); replaced with '' in
+	// production so the served HTML is unchanged.
+	const simClockEnabled = env.PUBLIC_SIMULATION_ENABLED === 'true';
+	return resolve(event, {
+		transformPageChunk: ({ html }) =>
+			html.replace(SIM_CLOCK_SHIM_PLACEHOLDER, simClockEnabled ? simClockShimScript : '')
+	});
 };
-
-/**
- * Transient /auth/me failure (a 5xx, or the fetch threw on network/cert/timeout — anything that is
- * NOT a real 401): keep the user signed in through the blip instead of 303-bouncing every logged-in
- * user to /login on a brief API hiccup. Forward the still-valid token AND reconstruct locals.user by
- * decoding the token's own claims locally — but only when the token has not expired. An expired or
- * malformed token leaves locals.user null, so a genuinely stale session still falls through to the
- * guards' /login redirect rather than being silently extended.
- */
-function preserveSessionFromToken(event: RequestEvent, accessToken: string): void {
-	event.locals.accessToken = accessToken;
-	const storedExpiration = getAccessTokenExpiration(event.cookies);
-	if (storedExpiration) {
-		event.locals.accessTokenExpiration = storedExpiration;
-	}
-
-	const user = userFromAccessToken(accessToken);
-	if (user) {
-		event.locals.user = user;
-	}
-}
 
 /**
  * Refresh the access token from the app-namespaced refresh cookie, using the shared
@@ -121,7 +111,7 @@ function preserveSessionFromToken(event: RequestEvent, accessToken: string): voi
  */
 async function tryRefreshToken(
 	cookies: Cookies
-): Promise<{ user: User; accessToken: string; accessTokenExpiration: string } | null> {
+): Promise<{ user: User; access: AccessEnvelope; accessToken: string; accessTokenExpiration: string } | null> {
 	const refreshTokenValue = getRefreshToken(cookies);
 	if (!refreshTokenValue) return null;
 
@@ -132,6 +122,7 @@ async function tryRefreshToken(
 
 	return {
 		user: result.user,
+		access: result.access,
 		accessToken: result.accessToken,
 		accessTokenExpiration: result.accessTokenExpiration
 	};

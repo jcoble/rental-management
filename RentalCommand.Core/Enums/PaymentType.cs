@@ -6,5 +6,5 @@ public enum PaymentType
     SecurityDeposit,
     LateFee,
     Utility,
-    Other
+    Other,
 }
