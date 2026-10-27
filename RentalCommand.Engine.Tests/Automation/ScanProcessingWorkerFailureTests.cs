@@ -664,9 +664,10 @@ public class ScanProcessingWorkerFailureTests : IDisposable
 
         public Task<WorkspaceLlmRuntimeCredential?> ResolveActiveAsync(
             int portfolioId,
+            string purpose,
             CancellationToken ct = default) =>
             Task.FromResult<WorkspaceLlmRuntimeCredential?>(
-                Credential is null
+                Credential is null || purpose == WorkspaceLlmCredentialPurposes.Decisions
                     ? null
                     : Credential with { PortfolioId = portfolioId });
     }

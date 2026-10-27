@@ -27,7 +27,8 @@ public sealed record ActivateWorkspaceLlmCredentialCommand(
     string ModelId,
     string ApiKeyIntentDigest,
     [property: AtomicFingerprintIgnore] string ApiKeyCipherText,
-    [property: AtomicFingerprintIgnore] DateTime TestedAtUtc) : IAiIntegrationActorCommand;
+    [property: AtomicFingerprintIgnore] DateTime TestedAtUtc,
+    [property: AtomicFingerprintIgnore] string Purpose) : IAiIntegrationActorCommand;
 
 public sealed record RotateWorkspaceLlmCredentialCommand(
     int PortfolioId,
@@ -39,7 +40,8 @@ public sealed record RotateWorkspaceLlmCredentialCommand(
     string ModelId,
     string ApiKeyIntentDigest,
     [property: AtomicFingerprintIgnore] string ApiKeyCipherText,
-    [property: AtomicFingerprintIgnore] DateTime TestedAtUtc) : IAiIntegrationActorCommand;
+    [property: AtomicFingerprintIgnore] DateTime TestedAtUtc,
+    [property: AtomicFingerprintIgnore] string Purpose) : IAiIntegrationActorCommand;
 
 public sealed record RemoveWorkspaceLlmCredentialCommand(
     int PortfolioId,
@@ -47,7 +49,8 @@ public sealed record RemoveWorkspaceLlmCredentialCommand(
     Guid ActorAuthSessionId,
     int ActorAccessContextId,
     long ActorAccessRevision,
-    [property: AtomicFingerprintIgnore] DateTime RemovedAtUtc) : IAiIntegrationActorCommand;
+    [property: AtomicFingerprintIgnore] DateTime RemovedAtUtc,
+    [property: AtomicFingerprintIgnore] string Purpose) : IAiIntegrationActorCommand;
 
 public sealed record RemoveWorkspaceLlmCredentialResult(
     bool Removed);

@@ -158,10 +158,14 @@ internal static class NotificationAutomationModelConfiguration
         modelBuilder.Entity<WorkspaceLlmCredential>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.Purpose)
+                .IsRequired()
+                .HasMaxLength(16)
+                .HasDefaultValue(WorkspaceLlmCredentialPurposes.Extraction);
             entity.Property(e => e.Provider).IsRequired().HasMaxLength(32);
             entity.Property(e => e.ModelId).IsRequired().HasMaxLength(128);
             entity.Property(e => e.ApiKeyCipherText).IsRequired().HasMaxLength(4000);
-            entity.HasIndex(e => e.PortfolioId).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.Purpose }).IsUnique();
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)

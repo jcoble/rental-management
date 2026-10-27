@@ -56,7 +56,8 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
                 "sk-do-not-return")
             {
                 ClientOperationId = "credential-write-only-activate",
-            });
+            },
+            WorkspaceLlmCredentialPurposes.Extraction);
 
         status.Configured.Should().BeTrue();
         status.Provider.Should().Be("openai");
@@ -98,19 +99,22 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             new ActivateAiCredentialRequest("openai", "gpt-4o", "sk-same-secret")
             {
                 ClientOperationId = "credential-stable-intent-first",
-            });
+            },
+            WorkspaceLlmCredentialPurposes.Extraction);
         await service.ActivateAsync(
             access,
             new ActivateAiCredentialRequest("openai", "gpt-4o", "sk-same-secret")
             {
                 ClientOperationId = "credential-stable-intent-retry",
-            });
+            },
+            WorkspaceLlmCredentialPurposes.Extraction);
         await service.ActivateAsync(
             access,
             new ActivateAiCredentialRequest("openai", "gpt-4o", "sk-changed-secret")
             {
                 ClientOperationId = "credential-stable-intent-changed",
-            });
+            },
+            WorkspaceLlmCredentialPurposes.Extraction);
 
         var first = atomic.Commands[0].Should().BeOfType<ActivateWorkspaceLlmCredentialCommand>().Which;
         var retry = atomic.Commands[1].Should().BeOfType<ActivateWorkspaceLlmCredentialCommand>().Which;
@@ -119,6 +123,50 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
         retry.ApiKeyIntentDigest.Should().Be(first.ApiKeyIntentDigest);
         retry.ApiKeyCipherText.Should().NotBe(first.ApiKeyCipherText);
         changed.ApiKeyIntentDigest.Should().NotBe(first.ApiKeyIntentDigest);
+    }
+
+    [Fact]
+    public async Task ExtractionAndDecisionsKeys_CoexistPerWorkspace()
+    {
+        var portfolioId = await CreatePortfolioAsync("credential-purposes");
+        var service = CreateService();
+        var access = Access(portfolioId);
+
+        await service.ActivateAsync(
+            access,
+            new ActivateAiCredentialRequest("openai", "gpt-4o", "extraction-key")
+            {
+                ClientOperationId = "same-operation",
+            },
+            WorkspaceLlmCredentialPurposes.Extraction);
+        await service.ActivateAsync(
+            access,
+            new ActivateAiCredentialRequest("typesafe", "jev-1.13.0", "decisions-key")
+            {
+                ClientOperationId = "same-operation",
+            },
+            WorkspaceLlmCredentialPurposes.Decisions);
+
+        var rows = await _context.Db.WorkspaceLlmCredentials
+            .IgnoreQueryFilters()
+            .Where(row => row.PortfolioId == portfolioId)
+            .OrderBy(row => row.Purpose)
+            .ToListAsync();
+        rows.Should().HaveCount(2);
+        (await service.ResolveActiveAsync(portfolioId, WorkspaceLlmCredentialPurposes.Extraction))!
+            .Provider.Should().Be("openai");
+        (await service.ResolveActiveAsync(portfolioId, WorkspaceLlmCredentialPurposes.Decisions))!
+            .Provider.Should().Be("typesafe");
+
+        await service.RemoveAsync(
+            access,
+            "remove-decisions",
+            WorkspaceLlmCredentialPurposes.Decisions);
+
+        (await service.ResolveActiveAsync(portfolioId, WorkspaceLlmCredentialPurposes.Extraction))
+            .Should().NotBeNull();
+        (await service.ResolveActiveAsync(portfolioId, WorkspaceLlmCredentialPurposes.Decisions))
+            .Should().BeNull();
     }
 
     [Fact]
@@ -133,7 +181,8 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             new ActivateAiCredentialRequest("openai", "gpt-4o", "first-secret")
             {
                 ClientOperationId = "runtime-first-activate",
-            });
+            },
+            WorkspaceLlmCredentialPurposes.Extraction);
         await service.ActivateAsync(
             Access(secondId),
             new ActivateAiCredentialRequest(
@@ -142,10 +191,13 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
                 "second-secret")
             {
                 ClientOperationId = "runtime-second-activate",
-            });
+            },
+            WorkspaceLlmCredentialPurposes.Extraction);
 
-        var first = await service.ResolveActiveAsync(firstId);
-        var second = await service.ResolveActiveAsync(secondId);
+        var first = await service.ResolveActiveAsync(
+            firstId, WorkspaceLlmCredentialPurposes.Extraction);
+        var second = await service.ResolveActiveAsync(
+            secondId, WorkspaceLlmCredentialPurposes.Extraction);
 
         first.Should().NotBeNull();
         first!.PortfolioId.Should().Be(firstId);
@@ -269,7 +321,8 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
                 "not-a-customer-api-key")
             {
                 ClientOperationId = "claude-cli-activate-rejected",
-            });
+            },
+            WorkspaceLlmCredentialPurposes.Extraction);
         await activate.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*OpenAI or Anthropic*");
     }
@@ -336,7 +389,12 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
         return new WorkspaceLlmCredentialService(
             _context.Db,
             dataProtection ?? new TestDataProtectionProvider(),
-            [new SuccessfulProbe("openai"), new SuccessfulProbe("anthropic")],
+            [
+                new SuccessfulProbe("openai"),
+                new SuccessfulProbe("anthropic"),
+                new SuccessfulProbe("typesafe"),
+                new SuccessfulProbe("openrouter"),
+            ],
             authorization.Object,
             TimeProvider.System,
             writes ?? new InlineWorkspaceLlmAtomicUnitOfWork(_context.Db));
@@ -426,12 +484,14 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             CancellationToken ct)
         {
             var row = await db.WorkspaceLlmCredentials
-                .SingleOrDefaultAsync(item => item.PortfolioId == command.PortfolioId, ct);
+                .SingleOrDefaultAsync(item =>
+                    item.PortfolioId == command.PortfolioId && item.Purpose == command.Purpose, ct);
             if (row is null)
             {
                 row = new WorkspaceLlmCredential
                 {
                     PortfolioId = command.PortfolioId,
+                    Purpose = command.Purpose,
                     CreatedAtUtc = command.TestedAtUtc,
                 };
                 db.WorkspaceLlmCredentials.Add(row);
@@ -451,7 +511,8 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             CancellationToken ct)
         {
             var row = await db.WorkspaceLlmCredentials
-                .SingleAsync(item => item.PortfolioId == command.PortfolioId, ct);
+                .SingleAsync(item =>
+                    item.PortfolioId == command.PortfolioId && item.Purpose == command.Purpose, ct);
             row.Provider = command.Provider;
             row.ModelId = command.ModelId;
             row.ApiKeyCipherText = command.ApiKeyCipherText;
@@ -467,7 +528,8 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             CancellationToken ct)
         {
             var row = await db.WorkspaceLlmCredentials
-                .SingleAsync(item => item.PortfolioId == command.PortfolioId, ct);
+                .SingleAsync(item =>
+                    item.PortfolioId == command.PortfolioId && item.Purpose == command.Purpose, ct);
             db.WorkspaceLlmCredentials.Remove(row);
             await db.SaveChangesAsync(ct);
             return new RemoveWorkspaceLlmCredentialResult(true);

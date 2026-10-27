@@ -124,6 +124,8 @@ builder.Services.AddHttpClient<AnthropicLlmProvider>(c =>
     c.BaseAddress = new Uri("https://api.anthropic.com/");
     c.Timeout = TimeSpan.FromSeconds(90);
 });
+builder.Services.AddHttpClient<JevDecisionClient>(c =>
+    c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddScoped<IWorkspaceLlmExtractionProvider>(sp =>
     sp.GetRequiredService<OpenAiLlmProvider>());
 builder.Services.AddScoped<IWorkspaceLlmExtractionProvider>(sp =>

@@ -151,7 +151,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                 if (!useDevelopmentSubscriptionProvider)
                 {
                     credential = await credentialResolver.ResolveActiveAsync(
-                        draft.PortfolioId, ct);
+                        draft.PortfolioId, WorkspaceLlmCredentialPurposes.Extraction, ct);
                     if (credential is null)
                     {
                         await MarkFailedAsync(
@@ -201,6 +201,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                 Task<ExtractedFields> InvokeExtractionAsync(
                     ExtractionSchema extractionSchema,
                     string feature,
+                    string? grounding,
                     CancellationToken token)
                 {
                     var invocation = usageInvocationCounts.TryGetValue(feature, out var prior)
@@ -219,7 +220,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                             bytes,
                             contentType,
                             extractionSchema,
-                            groundingContext,
+                            grounding,
                             token)
                         : InvokeWorkspaceExtractionAsync(
                             workspaceProvider!,
@@ -231,7 +232,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                             bytes,
                             contentType,
                             extractionSchema,
-                            groundingContext,
+                            grounding,
                             token);
                 }
 
@@ -239,35 +240,120 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                 ExtractedFields? classification = null;
                 if (string.IsNullOrWhiteSpace(resolvedTargetEntityType))
                 {
-                    var classificationSchema = new ExtractionSchema(
-                        DocumentClassificationExtractionSchema.Instructions,
-                        DocumentClassificationExtractionSchema.Fields);
-                    classification = await ExtractWithRetryAsync(
-                        token => InvokeExtractionAsync(
-                            classificationSchema,
-                            "scan.classification",
-                            token),
-                        draft.Id,
-                        logger,
-                        ct);
-                    var classificationFailure = GetExtractionFailureReason(
-                        classification, classificationSchema.Fields);
-                    if (classificationFailure is not null
-                        || !classification.Fields.TryGetValue("target_entity_type", out var targetField)
-                        || !SupportedTargets.Contains(targetField.Value))
+                    var decisionCredential = await credentialResolver.ResolveActiveAsync(
+                        draft.PortfolioId, WorkspaceLlmCredentialPurposes.Decisions, ct);
+                    if (decisionCredential is not null)
                     {
-                        await MarkFailedAsync(
-                            scoped, draft.PortfolioId, draft.Id,
-                            draft.ClaimOwner, draft.ClaimToken, logger,
-                            classificationFailure ?? "document destination could not be classified");
-                        continue;
+                        var isPdf = contentType.Contains("pdf", StringComparison.OrdinalIgnoreCase)
+                            || (bytes.Length >= 4 && bytes[0] == 0x25 && bytes[1] == 0x50
+                                && bytes[2] == 0x44 && bytes[3] == 0x46);
+                        var text = isPdf
+                            ? PdfTextExtractor.TryExtractText(bytes)
+                            : scoped.GetRequiredService<IImageTextExtractor>()
+                                .TryExtractText(bytes, contentType);
+                        if (ImageOcrRouting.IsUseful(text))
+                        {
+                            try
+                            {
+                                var readableText = text!;
+                                var stopwatch = Stopwatch.StartNew();
+                                var choice = await scoped.GetRequiredService<JevDecisionClient>()
+                                    .ChooseAsync(
+                                        decisionCredential,
+                                        new
+                                        {
+                                            text = readableText[..Math.Min(readableText.Length, 1_500)],
+                                            fileName = storedFile?.FileName,
+                                        },
+                                        "Pick the rental-management document type this text comes from.",
+                                        DocumentClassificationExtractionSchema.TargetDescriptions,
+                                        ct);
+                                stopwatch.Stop();
+                                await usageRecorder.RecordUsageAsync(
+                                    draft.PortfolioId,
+                                    decisionCredential.Provider,
+                                    decisionCredential.ModelId,
+                                    "scan.classification",
+                                    (int)stopwatch.ElapsedMilliseconds,
+                                    0,
+                                    0,
+                                    0m,
+                                    ct,
+                                    $"scan:{draft.Id}:claim:{draft.ClaimToken:N}:scan.classification.jev:1");
+                                if (choice.Probabilities.TryGetValue(choice.Choice, out var probability)
+                                    && probability >= 0.8
+                                    && SupportedTargets.Contains(choice.Choice))
+                                {
+                                    resolvedTargetEntityType = SupportedTargets.First(target =>
+                                        string.Equals(target, choice.Choice, StringComparison.OrdinalIgnoreCase));
+                                    classification = new ExtractedFields
+                                    {
+                                        ModelId = decisionCredential.ModelId,
+                                    };
+                                    var confidence = (decimal)probability;
+                                    classification.Fields["target_entity_type"] = new FieldExtraction
+                                    {
+                                        Value = resolvedTargetEntityType,
+                                        Confidence = confidence,
+                                    };
+                                    classification.Fields["document_kind"] = new FieldExtraction
+                                    {
+                                        Value = resolvedTargetEntityType,
+                                        Confidence = confidence,
+                                    };
+                                    classification.Fields["classification_reason"] = new FieldExtraction
+                                    {
+                                        Value = $"Jev, {Math.Round(probability * 100)}% sure",
+                                        Confidence = confidence,
+                                    };
+                                    logger.LogInformation(
+                                        "Scan draft {DraftId} classified as {Target} by Jev; starting typed extraction",
+                                        draft.Id, resolvedTargetEntityType);
+                                }
+                            }
+                            catch (Exception ex) when (!ct.IsCancellationRequested)
+                            {
+                                logger.LogWarning(
+                                    ex,
+                                    "Jev classification failed for scan draft {DraftId}; using image classification",
+                                    draft.Id);
+                            }
+                        }
                     }
 
-                    resolvedTargetEntityType = SupportedTargets.First(target =>
-                        string.Equals(target, targetField.Value, StringComparison.OrdinalIgnoreCase));
-                    logger.LogInformation(
-                        "Scan draft {DraftId} classified as {Target}; starting typed extraction",
-                        draft.Id, resolvedTargetEntityType);
+                    if (string.IsNullOrWhiteSpace(resolvedTargetEntityType))
+                    {
+                        var classificationSchema = new ExtractionSchema(
+                            DocumentClassificationExtractionSchema.Instructions,
+                            DocumentClassificationExtractionSchema.Fields);
+                        classification = await ExtractWithRetryAsync(
+                            token => InvokeExtractionAsync(
+                                classificationSchema,
+                                "scan.classification",
+                                null,
+                                token),
+                            draft.Id,
+                            logger,
+                            ct);
+                        var classificationFailure = GetExtractionFailureReason(
+                            classification, classificationSchema.Fields);
+                        if (classificationFailure is not null
+                            || !classification.Fields.TryGetValue("target_entity_type", out var targetField)
+                            || !SupportedTargets.Contains(targetField.Value))
+                        {
+                            await MarkFailedAsync(
+                                scoped, draft.PortfolioId, draft.Id,
+                                draft.ClaimOwner, draft.ClaimToken, logger,
+                                classificationFailure ?? "document destination could not be classified");
+                            continue;
+                        }
+
+                        resolvedTargetEntityType = SupportedTargets.First(target =>
+                            string.Equals(target, targetField.Value, StringComparison.OrdinalIgnoreCase));
+                        logger.LogInformation(
+                            "Scan draft {DraftId} classified as {Target}; starting typed extraction",
+                            draft.Id, resolvedTargetEntityType);
+                    }
                 }
 
                 var schema = ChooseExtractionSchema(resolvedTargetEntityType);
@@ -275,6 +361,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                     token => InvokeExtractionAsync(
                         schema,
                         "scan.extraction",
+                        groundingContext,
                         token),
                     draft.Id,
                     logger,
@@ -313,6 +400,7 @@ public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleServic
                             var repaired = await InvokeExtractionAsync(
                                 repairSchema,
                                 "scan.quality-repair",
+                                groundingContext,
                                 ct);
                             ApplyQualityRepair(resolvedTargetEntityType, extracted, repaired);
                         }

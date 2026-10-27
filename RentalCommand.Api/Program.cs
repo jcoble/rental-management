@@ -84,10 +84,18 @@ builder.Services.AddHttpClient<RentalCommand.Api.Scanning.AnthropicLlmProvider>(
     c.BaseAddress = new Uri("https://api.anthropic.com/");
     c.Timeout = TimeSpan.FromSeconds(90);
 });
+builder.Services.AddHttpClient<RentalCommand.Api.Scanning.JevDecisionClient>(c =>
+    c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddScoped<RentalCommand.Core.Interfaces.ILlmCredentialProbe>(sp =>
     sp.GetRequiredService<RentalCommand.Api.Scanning.OpenAiLlmProvider>());
 builder.Services.AddScoped<RentalCommand.Core.Interfaces.ILlmCredentialProbe>(sp =>
     sp.GetRequiredService<RentalCommand.Api.Scanning.AnthropicLlmProvider>());
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.ILlmCredentialProbe>(sp =>
+    new RentalCommand.Api.Scanning.JevCredentialProbe(
+        "typesafe", sp.GetRequiredService<RentalCommand.Api.Scanning.JevDecisionClient>()));
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.ILlmCredentialProbe>(sp =>
+    new RentalCommand.Api.Scanning.JevCredentialProbe(
+        "openrouter", sp.GetRequiredService<RentalCommand.Api.Scanning.JevDecisionClient>()));
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.AnthropicLlmProvider>(c =>

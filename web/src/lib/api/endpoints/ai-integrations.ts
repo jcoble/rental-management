@@ -37,3 +37,41 @@ export const rotateAiCredential = (input: AiCredentialInput) =>
 
 export const removeAiCredential = () =>
 	api.delete<void>('/integrations/ai');
+
+export type AiDecisionProvider = 'typesafe' | 'openrouter';
+
+export type AiDecisionStatus = {
+	configured: boolean;
+	provider: AiDecisionProvider | null;
+	modelId: string | null;
+	lastTestedAtUtc: string | null;
+	updatedAtUtc: string | null;
+};
+
+export type AiDecisionCredentialInput = {
+	provider: AiDecisionProvider;
+	modelId: string;
+	apiKey: string;
+};
+
+export type AiDecisionCredentialTestResult = {
+	succeeded: boolean;
+	provider: AiDecisionProvider;
+	modelId: string;
+	error: string | null;
+};
+
+export const getAiDecisionStatus = () =>
+	api.get<AiDecisionStatus>('/integrations/ai/decisions');
+
+export const testAiDecisionCredential = (input: AiDecisionCredentialInput) =>
+	api.post<AiDecisionCredentialTestResult>('/integrations/ai/decisions/test', input);
+
+export const activateAiDecisionCredential = (input: AiDecisionCredentialInput) =>
+	api.put<AiDecisionStatus>('/integrations/ai/decisions', input);
+
+export const rotateAiDecisionCredential = (input: AiDecisionCredentialInput) =>
+	api.put<AiDecisionStatus>('/integrations/ai/decisions/rotate', input);
+
+export const removeAiDecisionCredential = () =>
+	api.delete<void>('/integrations/ai/decisions');

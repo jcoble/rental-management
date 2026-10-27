@@ -52,6 +52,7 @@ public interface IWorkspaceLlmCredentialResolver
 {
     Task<WorkspaceLlmRuntimeCredential?> ResolveActiveAsync(
         int portfolioId,
+        string purpose,
         CancellationToken ct = default);
 }
 

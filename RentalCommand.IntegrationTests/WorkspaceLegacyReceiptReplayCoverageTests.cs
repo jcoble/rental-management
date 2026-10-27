@@ -284,10 +284,11 @@ public sealed class WorkspaceLegacyReceiptReplayCoverageTests : IAsyncLifetime
         var outboxRows = await db.OutboxMessages.CountAsync();
 
         (await credentials.ActivateAsync(access, new("openai", "gpt-4o", "sk-frozen")
-            { ClientOperationId = "frozen-activate" })).Configured.Should().BeTrue();
+            { ClientOperationId = "frozen-activate" }, WorkspaceLlmCredentialPurposes.Extraction)).Configured.Should().BeTrue();
         (await credentials.RotateAsync(access, new("openai", "gpt-4o", "sk-frozen")
-            { ClientOperationId = "frozen-rotate" })).Configured.Should().BeTrue();
-        await credentials.RemoveAsync(access, "frozen-remove");
+            { ClientOperationId = "frozen-rotate" }, WorkspaceLlmCredentialPurposes.Extraction)).Configured.Should().BeTrue();
+        await credentials.RemoveAsync(
+            access, "frozen-remove", WorkspaceLlmCredentialPurposes.Extraction);
         await credentials.RecordUsageAsync(1, "openai", "gpt-4o", "portfolio.qa",
             10, 20, 5, 0.01m, usageEventIdentity: "frozen-usage");
 
@@ -310,7 +311,7 @@ public sealed class WorkspaceLegacyReceiptReplayCoverageTests : IAsyncLifetime
         context.RevokedAtUtc = Now;
         await db.SaveChangesAsync();
         var denied = () => credentials.ActivateAsync(access, new("openai", "gpt-4o", "sk-frozen")
-            { ClientOperationId = "frozen-activate" });
+            { ClientOperationId = "frozen-activate" }, WorkspaceLlmCredentialPurposes.Extraction);
         await denied.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
