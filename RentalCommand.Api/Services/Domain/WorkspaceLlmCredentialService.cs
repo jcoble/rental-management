@@ -18,30 +18,39 @@ public interface IWorkspaceLlmCredentialService :
     ILlmUsageEvidenceRecorder
 {
     Task<bool> AuthorizeAsync(ActiveAccessContext access, CancellationToken ct = default);
-    Task<AiIntegrationStatusDto> GetStatusAsync(int portfolioId, CancellationToken ct = default);
+    Task<AiIntegrationStatusDto> GetStatusAsync(
+        int portfolioId,
+        string purpose,
+        CancellationToken ct = default);
     Task<AiCredentialTestResultDto> TestAsync(
         ActiveAccessContext access,
         TestAiCredentialRequest request,
+        string purpose,
         CancellationToken ct = default);
     Task<AiIntegrationStatusDto> ActivateAsync(
         ActiveAccessContext access,
         ActivateAiCredentialRequest request,
+        string purpose,
         CancellationToken ct = default);
     Task<AiIntegrationStatusDto> RotateAsync(
         ActiveAccessContext access,
         RotateAiCredentialRequest request,
+        string purpose,
         CancellationToken ct = default);
     Task RemoveAsync(
         ActiveAccessContext access,
-        string? clientOperationId = null,
+        string? clientOperationId,
+        string purpose,
         CancellationToken ct = default);
 }
 
 public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialService
 {
     private const string ProtectorPurpose = "RentalCommand.WorkspaceLlmCredential.v1";
-    private static readonly HashSet<string> ApprovedProviders =
+    private static readonly HashSet<string> ExtractionProviders =
         new(StringComparer.OrdinalIgnoreCase) { "openai", "anthropic" };
+    private static readonly HashSet<string> DecisionProviders =
+        new(StringComparer.OrdinalIgnoreCase) { "typesafe", "openrouter" };
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
@@ -76,10 +85,11 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
 
     public Task<AiIntegrationStatusDto> GetStatusAsync(
         int portfolioId,
+        string purpose,
         CancellationToken ct = default) =>
         _db.WorkspaceLlmCredentials
             .AsNoTracking()
-            .Where(row => row.PortfolioId == portfolioId)
+            .Where(row => row.PortfolioId == portfolioId && row.Purpose == purpose)
             .Select(row => new AiIntegrationStatusDto(
                 true,
                 row.Provider,
@@ -96,10 +106,11 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
     public async Task<AiCredentialTestResultDto> TestAsync(
         ActiveAccessContext access,
         TestAiCredentialRequest request,
+        string purpose,
         CancellationToken ct = default)
     {
         await DemandAuthorityAsync(access, ct);
-        var normalized = NormalizeAndValidate(request.Provider, request.ModelId, request.ApiKey);
+        var normalized = NormalizeAndValidate(request.Provider, request.ModelId, request.ApiKey, purpose);
         var result = await _probes[normalized.Provider]
             .TestCredentialAsync(normalized.ApiKey, normalized.ModelId, ct);
         return new AiCredentialTestResultDto(
@@ -109,10 +120,11 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
     public async Task<AiIntegrationStatusDto> ActivateAsync(
         ActiveAccessContext access,
         ActivateAiCredentialRequest request,
+        string purpose,
         CancellationToken ct = default)
     {
         await DemandAuthorityAsync(access, ct);
-        var normalized = NormalizeAndValidate(request.Provider, request.ModelId, request.ApiKey);
+        var normalized = NormalizeAndValidate(request.Provider, request.ModelId, request.ApiKey, purpose);
         await DemandValidCredentialAsync(normalized, ct);
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
@@ -126,7 +138,8 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             normalized.ModelId,
             ApiKeyIntentDigest(normalized.Provider, normalized.ModelId, normalized.ApiKey),
             Encrypt(normalized.ApiKey),
-            now);
+            now,
+            purpose);
         var outcome = await _writes.ExecuteAsync(
             MutationIdentity(access.PortfolioId, request.ClientOperationId),
             AiIntegrationWriteSupport.Write<ActivateWorkspaceLlmCredentialCommand, AiIntegrationStatusResult>(
@@ -137,10 +150,11 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
     public async Task<AiIntegrationStatusDto> RotateAsync(
         ActiveAccessContext access,
         RotateAiCredentialRequest request,
+        string purpose,
         CancellationToken ct = default)
     {
         await DemandAuthorityAsync(access, ct);
-        var normalized = NormalizeAndValidate(request.Provider, request.ModelId, request.ApiKey);
+        var normalized = NormalizeAndValidate(request.Provider, request.ModelId, request.ApiKey, purpose);
         await DemandValidCredentialAsync(normalized, ct);
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
@@ -154,7 +168,8 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             normalized.ModelId,
             ApiKeyIntentDigest(normalized.Provider, normalized.ModelId, normalized.ApiKey),
             Encrypt(normalized.ApiKey),
-            now);
+            now,
+            purpose);
         var outcome = await _writes.ExecuteAsync(
             MutationIdentity(access.PortfolioId, request.ClientOperationId),
             AiIntegrationWriteSupport.Write<RotateWorkspaceLlmCredentialCommand, AiIntegrationStatusResult>(
@@ -164,7 +179,8 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
 
     public async Task RemoveAsync(
         ActiveAccessContext access,
-        string? clientOperationId = null,
+        string? clientOperationId,
+        string purpose,
         CancellationToken ct = default)
     {
         await DemandAuthorityAsync(access, ct);
@@ -174,7 +190,8 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             access.SessionId,
             access.AccessContextId,
             access.AccessRevision,
-            _timeProvider.GetUtcNow().UtcDateTime);
+            _timeProvider.GetUtcNow().UtcDateTime,
+            purpose);
         await _writes.ExecuteAsync(
             MutationIdentity(access.PortfolioId, clientOperationId),
             AiIntegrationWriteSupport.Write<RemoveWorkspaceLlmCredentialCommand, RemoveWorkspaceLlmCredentialResult>(
@@ -183,11 +200,12 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
 
     public async Task<WorkspaceLlmRuntimeCredential?> ResolveActiveAsync(
         int portfolioId,
+        string purpose,
         CancellationToken ct = default)
     {
         var encrypted = await _db.WorkspaceLlmCredentials
             .AsNoTracking()
-            .Where(row => row.PortfolioId == portfolioId)
+            .Where(row => row.PortfolioId == portfolioId && row.Purpose == purpose)
             .Select(row => new
             {
                 row.PortfolioId,
@@ -289,9 +307,10 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
     private NormalizedCredential NormalizeAndValidate(
         string provider,
         string modelId,
-        string apiKey)
+        string apiKey,
+        string purpose)
     {
-        var normalizedProvider = NormalizeProvider(provider);
+        var normalizedProvider = NormalizeProvider(provider, purpose);
         if (!_probes.ContainsKey(normalizedProvider))
         {
             throw new InvalidOperationException(
@@ -304,12 +323,23 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
             Required(apiKey, nameof(apiKey), 4000));
     }
 
-    private static string NormalizeProvider(string provider)
+    private static string NormalizeProvider(string provider, string purpose)
     {
         var normalized = Required(provider, nameof(provider), 32).ToLowerInvariant();
-        if (!ApprovedProviders.Contains(normalized))
+        if (purpose == WorkspaceLlmCredentialPurposes.Extraction &&
+            !ExtractionProviders.Contains(normalized))
         {
             throw new ArgumentException("Provider must be OpenAI or Anthropic.", nameof(provider));
+        }
+        if (purpose == WorkspaceLlmCredentialPurposes.Decisions &&
+            !DecisionProviders.Contains(normalized))
+        {
+            throw new ArgumentException("Provider must be TypeSafe or OpenRouter.", nameof(provider));
+        }
+        if (purpose is not WorkspaceLlmCredentialPurposes.Extraction and
+            not WorkspaceLlmCredentialPurposes.Decisions)
+        {
+            throw new ArgumentOutOfRangeException(nameof(purpose));
         }
         return normalized;
     }
@@ -317,10 +347,12 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
     private static string NormalizeUsageProvider(string provider)
     {
         var normalized = Required(provider, nameof(provider), 32).ToLowerInvariant();
-        if (!ApprovedProviders.Contains(normalized) && normalized != "claude-cli")
+        if (!ExtractionProviders.Contains(normalized) &&
+            !DecisionProviders.Contains(normalized) &&
+            normalized != "claude-cli")
         {
             throw new ArgumentException(
-                "Usage provider must be OpenAI, Anthropic, or claude-cli.",
+                "Usage provider must be OpenAI, Anthropic, TypeSafe, OpenRouter, or claude-cli.",
                 nameof(provider));
         }
         return normalized;

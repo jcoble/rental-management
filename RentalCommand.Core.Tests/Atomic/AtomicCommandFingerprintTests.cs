@@ -5,6 +5,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Core.Tests.Atomic;
 
@@ -192,7 +193,8 @@ public sealed class AtomicCommandFingerprintTests
             ModelId: "gpt-4o",
             ApiKeyIntentDigest: new string('a', 64),
             ApiKeyCipherText: "ciphertext-one",
-            TestedAtUtc: new DateTime(2026, 7, 29, 10, 0, 0, DateTimeKind.Utc));
+            TestedAtUtc: new DateTime(2026, 7, 29, 10, 0, 0, DateTimeKind.Utc),
+            Purpose: WorkspaceLlmCredentialPurposes.Extraction);
         var retry = command with
         {
             ActorAuthSessionId = Guid.NewGuid(),

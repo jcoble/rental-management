@@ -14,6 +14,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import AiDecisionCard from './AiDecisionCard.svelte';
 
 	const queryClient = useQueryClient();
 	const statusQuery = createQuery(() => ({
@@ -185,4 +186,6 @@
 			{/if}
 		</Card.Content>
 	</Card.Root>
+
+	<AiDecisionCard />
 </div>

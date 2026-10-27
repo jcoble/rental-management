@@ -10431,6 +10431,13 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("extraction");
+
                     b.Property<DateTime?>("RotatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -10439,7 +10446,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("PortfolioId")
+                    b.HasIndex("PortfolioId", "Purpose")
                         .IsUnique();
 
                     b.ToTable("WorkspaceLlmCredentials");

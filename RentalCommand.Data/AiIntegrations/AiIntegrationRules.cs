@@ -23,15 +23,15 @@ public static class AiIntegrationWriteSupport
         object write = command switch
         {
             ActivateWorkspaceLlmCredentialCommand value => Build(
-                "ai.integration.credential.activate", "ai.integration.status.v1", value,
+                OperationName(value.Purpose, "activate"), "ai.integration.status.v1", value,
                 new ActivateWorkspaceLlmCredentialRule(db).ExecuteAsync,
                 new ActivateWorkspaceLlmCredentialRule(db).AuthorizeReplayAsync),
             RotateWorkspaceLlmCredentialCommand value => Build(
-                "ai.integration.credential.rotate", "ai.integration.status.v1", value,
+                OperationName(value.Purpose, "rotate"), "ai.integration.status.v1", value,
                 new RotateWorkspaceLlmCredentialRule(db).ExecuteAsync,
                 new RotateWorkspaceLlmCredentialRule(db).AuthorizeReplayAsync),
             RemoveWorkspaceLlmCredentialCommand value => Build(
-                "ai.integration.credential.remove", "ai.integration.remove.v1", value,
+                OperationName(value.Purpose, "remove"), "ai.integration.remove.v1", value,
                 new RemoveWorkspaceLlmCredentialRule(db).ExecuteAsync,
                 new RemoveWorkspaceLlmCredentialRule(db).AuthorizeReplayAsync),
             RecordLlmUsageEvidenceCommand value => Build(
@@ -46,6 +46,11 @@ public static class AiIntegrationWriteSupport
         };
         return (TransactionalWrite<TCommand, TResult>)write;
     }
+
+    private static string OperationName(string purpose, string action) =>
+        purpose == WorkspaceLlmCredentialPurposes.Decisions
+            ? $"ai.integration.decisions.credential.{action}"
+            : $"ai.integration.credential.{action}";
 
     private static TransactionalWrite<TCommand, TResult> Build<TCommand, TResult>(
         string operationName,
@@ -81,13 +86,15 @@ public sealed class ActivateWorkspaceLlmCredentialRule
             ct);
         await context.AcquireLockAsync("WorkspaceLlmCredential", command.PortfolioId, ct);
         var row = await _db.Set<WorkspaceLlmCredential>()
-            .SingleOrDefaultAsync(item => item.PortfolioId == command.PortfolioId, ct);
+            .SingleOrDefaultAsync(item =>
+                item.PortfolioId == command.PortfolioId && item.Purpose == command.Purpose, ct);
         var operation = row is null ? AuditLogOperation.Created : AuditLogOperation.Updated;
         if (row is null)
         {
             row = new WorkspaceLlmCredential
             {
                 PortfolioId = command.PortfolioId,
+                Purpose = command.Purpose,
                 CreatedAtUtc = command.TestedAtUtc,
             };
             _db.Add(row);
@@ -144,7 +151,8 @@ public sealed class RotateWorkspaceLlmCredentialRule
             ct);
         await context.AcquireLockAsync("WorkspaceLlmCredential", command.PortfolioId, ct);
         var row = await _db.Set<WorkspaceLlmCredential>()
-            .SingleOrDefaultAsync(item => item.PortfolioId == command.PortfolioId, ct)
+            .SingleOrDefaultAsync(item =>
+                item.PortfolioId == command.PortfolioId && item.Purpose == command.Purpose, ct)
             ?? throw new InvalidOperationException(
                 "No AI provider is configured. Activate a credential before rotating it.");
 
@@ -195,7 +203,8 @@ public sealed class RemoveWorkspaceLlmCredentialRule
             ct);
         await context.AcquireLockAsync("WorkspaceLlmCredential", command.PortfolioId, ct);
         var row = await _db.Set<WorkspaceLlmCredential>()
-            .SingleOrDefaultAsync(item => item.PortfolioId == command.PortfolioId, ct);
+            .SingleOrDefaultAsync(item =>
+                item.PortfolioId == command.PortfolioId && item.Purpose == command.Purpose, ct);
         if (row is null)
         {
             throw new InvalidOperationException("No AI provider credential is configured.");

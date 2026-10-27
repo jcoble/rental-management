@@ -12,6 +12,18 @@ public static class DocumentClassificationExtractionSchema
     public static readonly string[] AllowedTargets =
         ["Expense", "Payment", "WorkOrder", "LeaseAgreement", "Application", "Loan", "LeaseEndingNotice"];
 
+    public static IReadOnlyDictionary<string, string> TargetDescriptions { get; } =
+        new Dictionary<string, string>
+        {
+            ["Expense"] = "Receipts, bills, invoices, tax bills, and utility bills.",
+            ["Payment"] = "Tenant rent checks or payment confirmations.",
+            ["WorkOrder"] = "Maintenance requests, estimates, and contractor job notes.",
+            ["LeaseAgreement"] = "Actual leases, renewals, and lease addenda.",
+            ["Application"] = "Rental applications and applicant identity or income packets.",
+            ["Loan"] = "Mortgage statements and closing disclosures.",
+            ["LeaseEndingNotice"] = "Tenant move-out notices, notices to vacate, non-renewal notices, and early termination notices.",
+        };
+
     public const string Instructions =
         "Classify this rental-management document before extracting it. Choose exactly one target from " +
         "Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan, or LeaseEndingNotice. " +
