@@ -1,92 +1,35 @@
-# Rental Command — Agent Instructions
+[Notion Command Center](https://app.notion.com/p/376394b0689d810cb51dcebc28ceaa5b) is the source of truth for Rental Command tasks, decisions and all documentation: plans, specs, recon, handoffs and artifact records. Keep task material on its task and reusable docs under the [Rental Command project](https://app.notion.com/p/376394b0689d81d5a191fb89c98a4fe4); proof assets live on Google Drive, linked from Notion and PRs.
 
-Full project context, architecture, auth model, and conventions are in
-[`CLAUDE.md`](./CLAUDE.md). Read it. The rules below are the ones agents most
-often get wrong, repeated here so they are not missed.
+# Rental Command instructions
 
-## Transaction atomicity — HARD RULE (all apps, no matter what)
+These project rules supplement the global instructions in `~/.codex/AGENTS.md`.
 
-Every user action that writes an aggregate or workflow must be all-or-nothing inside **one explicit database transaction**. Multiple `SaveChanges` / `SaveChangesAsync` calls are allowed when generated IDs or ordered writes require them, but every one of those calls must participate in the same transaction. Never split one user action across independently committed HTTP requests or saves.
+## Product and architecture
 
-- Composite workflows (for example tenant + lease + memberships + occupancy + deposit + opening balance + initial payments) belong in one server-side transaction.
-- On any failure, the transaction must roll back every row written by that action; no half-created or "half-cooked" state is acceptable.
-- Realtime broadcasts, emails, provider calls, and other external side effects run only after commit. Use the outbox for side effects that must be guaranteed or retried.
-- Validating before save is not enough for concurrency safety; retain database constraints and use appropriate isolation or locking where races are possible.
-- Prefer building the complete tracked object graph and saving once. If multiple saves are structurally required, use the EF execution strategy with an explicit transaction and commit only after the final save succeeds.
-- Never keep a database transaction open across an AI, storage, payment, e-sign, email, SMS, or other remote call. Persist an idempotent intent/inbox/outbox atomically, perform the remote work, then persist its result as a new explicit atomic command.
-- Required audit, ledger, inbox, and outbox rows fail and roll back with the business mutation. Do not preserve them independently after the business transaction fails.
-- Every intentionally separate commit requires a unique idempotency/business key plus a documented recovery and reconciliation path.
-- When changing a write path, inspect every `SaveChanges`, transaction, audit, ledger, inbox, outbox, signature, and document boundary in that operation and add failure-injection proof for all-or-nothing behavior.
+Residential property management for nontechnical landlords, primarily using a phone. Keep the surface simple. Document intake is capture/scan, extraction with confidence, owner confirmation of a draft, then record creation; AI output never approves itself.
 
-## TypeScript 7 native compiler and Svelte compatibility
+The stack is .NET 10, EF Core/Npgsql and PostgreSQL, a SvelteKit 5 web app and Flutter mobile client sharing the API. Core holds domain contracts; Data owns persistence; Api exposes authenticated commands and queries; Engine runs outbox/background work. Use the database outbox and SignalR for reliable side effects and pushed updates.
 
-The web app intentionally installs the Go-based TypeScript 7 compiler side-by-side with the TypeScript 6 compatibility package:
+## Project requirements
 
-- `@typescript/native` aliases TypeScript 7 and provides the native `tsc` binary used by `pnpm --dir web check:native`.
-- `typescript` aliases `@typescript/typescript6` because SvelteKit and `svelte-check` still require the JavaScript compiler API that TypeScript 7.0 does not expose.
-- Never replace the `typescript` compatibility alias with TypeScript 7 until Svelte officially supports the new API; doing so makes `svelte-check` crash before diagnostics run.
-- The native check supplements rather than replaces `pnpm --dir web check`: native `tsc` checks the generated TypeScript/JavaScript graph, while `svelte-check` also validates `.svelte` templates.
-- For web TypeScript changes, run both `pnpm --dir web check:native` and `pnpm --dir web check`.
+- Enforce portfolio authorization on the server, including every incoming foreign-key reference. Delete unsafe overloads when a scope-authorized replacement lands.
+- A logical business action is all-or-nothing in one explicit transaction. Multiple `SaveChangesAsync` calls must share it, including required audit, ledger, inbox and outbox rows. Keep database constraints and appropriate isolation; prove rollback when changing a write boundary.
+- Never hold a database transaction across AI, payment, storage, e-sign, email or other remote calls. Commit an idempotent intent/outbox, perform the external work, then commit its result atomically. Publish notifications after commit.
+- Preserve ASP.NET Identity's integer keys, JWT and rotated refresh tokens. Keep app-namespaced `rc_*` httpOnly cookies, same-origin refresh and single-flight refresh handling; token reuse revokes its family.
+- Enforce database runtime roles separately from migrations. Keep secrets out of code and output; never disable TLS verification.
+- Web API calls use `web/src/lib/api/client.ts`. Share formatters in `web/src/lib/utils` and `mobile/lib/core/presentation`; do not duplicate them in screens.
+- Preserve the dual TypeScript setup: `@typescript/native` supplies the native compiler; `typescript` aliases `@typescript/typescript6` for Svelte compatibility. For web TypeScript changes, run both `pnpm --dir web check:native` and `pnpm --dir web check`.
+- Use existing components/theme tokens. Required services stay required; do not add optional-for-tests dependencies or configuration with no real choice/reader.
 
-## Worktrees (read before creating any worktree)
+## Locations and verification
 
-Create git worktrees under a **single shared root**, one subfolder per repo, one
-worktree per task:
+| | Mac | Workbox |
+| --- | --- | --- |
+| Repo | `/Users/blackcolours/dev/work/rental-management` | `/home/blackcolours/dev/work/rental-management` |
+| Worktrees | `/Users/blackcolours/dev/work/worktrees/rental-management/<task>` | `/home/blackcolours/dev/work/worktrees/rental-management/<task>` |
 
-```bash
-git worktree add ~/dev/work/worktrees/rental-management/<task-slug> -b <branch>
-```
+The Mac preview uses `scripts/local/preview-stack-local.sh` and `http://127.0.0.1:15667`. Its database, uploads, credentials, keys and Docker volumes are persistent owner data; do not reset/delete them without explicit permission. Give each verification lane isolated data and ports.
 
-**Never** create worktrees:
-- inside the repo (`./worktrees/`, `.claude/`, `.claire/`), or
-- under `~/.codex/worktrees/`.
+Follow global independent verification and Drive evidence rules. Exercise affected web and phone flows against the real API, with realistic data; use focused behavior checks and transaction failure proof where relevant. Compilation or a source inspection alone is not completion.
 
-Scattered/in-repo worktrees get indexed by the IDE and Spotlight, bloat the
-checkout, and get lost track of.
-
-**Clean up the moment you're done.** As soon as the branch is merged (or the task
-is abandoned), remove the worktree — do not leave clean/finished worktrees behind:
-
-```bash
-git worktree remove ~/dev/work/worktrees/rental-management/<task-slug>
-git worktree prune
-```
-
-The default after finishing is **remove it now.** Keep a worktree only if it has
-uncommitted or unmerged work that must survive — and if so, state its path, branch,
-and dirty status explicitly rather than leaving it silently.
-
-## Commit conventions
-
-Do **NOT** add a `Co-Authored-By: Claude …` trailer (or any AI-attribution line) to
-commit messages. Keep messages to a clear subject + body only.
-
-## Keep it simple — rules from the 2026-08-25 structure audit
-
-Four independent audits (`Docs/Reviews/2026-08-25-structure-audit/`) found the same recurring
-shapes of waste. These rules stop them coming back.
-
-- **Finish a migration in the PR that finishes it.** When a vocabulary or pattern changes, rename
-  the files, delete the compatibility shims, throw-only "retired path" methods and migration
-  markers in the same change. Thirty-five `*Handler.cs` files full of `*Rule` classes and 52
-  `throw RetiredPath()` methods came from not doing this.
-- **No enum, attribute, flag or config property with one legal value or zero readers.** If there is
-  one value it is not a choice; if nothing reads it, it is not configuration. `rg` the name before
-  adding it and before leaving it behind.
-- **No `IFoo? foo = null` constructor parameters for services that are always registered.** Make
-  the dependency required; tests pass a mock. Optional-for-tests dependencies produced 61
-  `RequireFoo()` guards.
-- **Never keep two overloads of a read that differ in authorization.** When a scope-authorized
-  overload lands, the unauthorized one is deleted in the same change — otherwise the next caller
-  can pick the unsafe one.
-- **One formatter per concern per app**, in `web/src/lib/utils` / `mobile/lib/core/presentation`.
-  Never define `_formatCurrency`, `_formatDate`, a month-name table or an `Intl.NumberFormat`
-  inside a screen, route or component. Thirty-two web and twenty-nine mobile copies disagreed
-  about cents and sign placement.
-- **No source-text assertion tests.** Do not `readFileSync`/`readAsStringSync` a source file and
-  regex it. Assert on rendered output, returned values or captured requests. 120 of 226 web test
-  files and 40 of 109 mobile test files did this, and every legitimate cleanup broke dozens of
-  them for reasons unrelated to behaviour. Existing ones are migrated when touched, not preserved.
-- **Node's test runner needs explicit `.ts` extensions** on relative imports in any module a
-  `*.test.ts` file imports directly (`import x from '../list-params.ts'`). Vite does not care;
-  `node --test` does.
+Production images build in CI, never on the production VPS. Do not deploy without an explicit request.
